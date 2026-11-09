@@ -672,6 +672,29 @@ func _holder_volumes() -> void:
 		v_free[i] = clampf(v, cap * HOLDER_MIN, cap)
 
 
+## What a running engine is asked for (kW electric). A set with a floor
+## (`min_kw`, the small generator's 350 W) is governed by the gas in hand:
+## its floor while the holder is low, full output once it is well up
+## (GOVERNOR_LOW..GOVERNOR_HIGH of the holder's fill). With no holder on the
+## line, or no floor, it runs at full output.
+const GOVERNOR_LOW := 0.2
+const GOVERNOR_HIGH := 0.7
+
+
+func engine_setpoint_kw(u: Dictionary) -> float:
+	var full := float(u.get("rated_kw", 2.5))
+	var lo := float(u.get("min_kw", 0.0))
+	if lo <= 0.0 or lo >= full:
+		return full
+	var fill := -1.0
+	for h in units:
+		if str(h["kind"]) == "holder":
+			fill = maxf(fill, holder_fill(h))
+	if fill < 0.0:
+		return full
+	return lerpf(lo, full, clampf((fill - GOVERNOR_LOW) / (GOVERNOR_HIGH - GOVERNOR_LOW), 0.0, 1.0))
+
+
 ## The fill of a holder (0..1).
 func holder_fill(u: Dictionary) -> float:
 	var cap := float(u["cap_m3"])
@@ -1225,7 +1248,7 @@ func _flow_step(dt: float) -> void:
 						lhv = maxf(lhv, _lhv_of(gas[o0]))
 			ring = nxt
 		if lhv >= ENGINE_MIN_LHV:
-			_eng_q[ei] = float(u.get("rated_kw", 2.5)) * 1000.0 / float(u.get("efficiency", 0.22)) / lhv
+			_eng_q[ei] = engine_setpoint_kw(u) * 1000.0 / float(u.get("efficiency", 0.22)) / lhv
 	# Link conductances at the current state.
 	var G := PackedFloat64Array()
 	G.resize(nl)
@@ -1753,6 +1776,61 @@ func readings() -> Dictionary:
 	if dry_pct >= 0.0:
 		r["dryer_pct"] = dry_pct
 	return r
+
+
+## Carbon in slow-pyrolysis wood char made at 450–600 °C: 75–85 % by mass
+## (Lehmann & Joseph, Biochar for Environmental Management, 2015, ch. 5).
+const CHAR_C_FRAC := 0.80
+## The share of that carbon still in the soil after 100 years for char made
+## at 450–600 °C (IPCC 2019 Refinement, Vol. 4 Ch. 2 Appendix 4, F_perm).
+const CHAR_PERM := 0.80
+const CO2_PER_C := 44.01 / 12.011
+const GAS_MADE_SPECIES := ["CO", "CO2", "H2", "CH4", "C3H6"]
+
+
+## What the batch has made and used so far (a function of the state: it
+## scrubs): the char and the carbon locked in it, the CO2 that keeps out of
+## the air, the gas made (wherever it went: out, burned, vented, held), the
+## electricity in and out, the liquids collected.
+func batch_stats() -> Dictionary:
+	var s := {"heat_kwh": e_in / 3.6e6, "gen_kwh": engine_kwh, "has_bed": false, "wood": false}
+	var char_kg := 0.0
+	if bed != null and not bed.is_empty():
+		var bt := bed.totals()
+		char_kg = float(bt["char_kg"])
+		s["has_bed"] = true
+		s["wood"] = float(bt["plastic_kg"]) <= 0.0 and (float(bt["wood_kg"]) > 0.0 or char_kg > 0.0)
+		s["feed_dry_kg"] = bed.initial_dry_kg
+		s["feed_kg"] = bed.initial_dry_kg + bed.initial_moisture_kg
+		s["done_pct"] = float(bt["pyro_frac"]) * 100.0
+		s["charge_kg"] = bed.mass_kg()
+		s["volume_frac"] = bed.volume_frac()
+	s["char_kg"] = char_kg
+	s["carbon_kg"] = char_kg * CHAR_C_FRAC
+	s["co2e_kg"] = char_kg * CHAR_C_FRAC * CHAR_PERM * CO2_PER_C
+	var mol := 0.0
+	var joule := 0.0
+	for name in GAS_MADE_SPECIES:
+		var k := SP.find(name)
+		var m := product_mol[k] + burned_mol[k] + vented_mol[k]
+		for i in n_cv:
+			if not (str(net["cvs"][i]["role"]) in ["coolant", "jacket"]):
+				m += (gas[i] as PackedFloat64Array)[k]
+		mol += m
+		joule += m * TcSpecies.lhv_j_per_mol(name)
+	s["gas_nl"] = mol * 22.414
+	s["gas_mj"] = joule * 1e-6
+	var vin := 0.0
+	var tar := 0.0
+	for k2 in COND:
+		var kg := drained_mol[k2] * MKG[k2]
+		if SP[k2] in ["H2O", "acetic", "ethanol"]:
+			vin += kg
+		else:
+			tar += kg
+	s["vinegar_kg"] = vin
+	s["tar_kg"] = tar
+	return s
 
 
 func _named_kg(a: PackedFloat64Array) -> Dictionary:

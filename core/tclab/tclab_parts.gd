@@ -60,6 +60,8 @@ const TYPES := {
 		"why": "A clamp cap carrying a smaller clamp end on a short stub (like ½\" on a 1½\" cap)."},
 	"reducer":      {"label": "Concentric reducer", "category": "reducers", "designation": "31MP concentric reducer",
 		"why": "A cone between two clamp sizes."},
+	"bowl_reducer": {"label": "Bowl reducer", "category": "reducers", "designation": "Hemispherical (bowl) reducer",
+		"why": "A dished dome between a large clamp end and a small one on its crown: the end of a wide column or a material tube, where a cone would be too long."},
 	"tc_npt_m":     {"label": "TC × male NPT", "category": "reducers", "designation": "TC × MNPT adapter",
 		"why": "A clamp face on one end, a male pipe thread on the other."},
 	"tc_barb":      {"label": "TC × hose barb", "category": "reducers", "designation": "TC × hose barb",
@@ -110,18 +112,18 @@ const TYPES := {
 		"why": "A cleaning spray ball through a top port."},
 	"heating_element": {"label": "Heating element", "category": "brewing", "designation": "Clamp immersion heating element",
 		"why": "An immersion element on a clamp face; its loops reach into the vessel."},
-	"gas_holder":   {"label": "Gas holder", "category": "process", "designation": "Water-sealed bell gas holder",
-		"why": "Stores the gas at a low, steady pressure: the bell rises as gas comes in. Its level tells a genset when to run."},
+	"gas_holder":   {"label": "Gasometer (gas holder)", "category": "process", "designation": "Water-sealed gas holder",
+		"why": "Stores the gas at a low, steady pressure: a barrel floats upside down in a barrel of water and rises as gas comes in. Its level tells a generator when to run."},
 	"dryer":        {"label": "Gas dryer", "category": "process", "designation": "Packed desiccant drying column",
 		"why": "Silica gel (or activated carbon) takes the water vapour out of the gas until it is spent."},
-	"genset":       {"label": "Gas genset (48 V DC)", "category": "process", "designation": "Gas engine generator, 48 V DC",
+	"genset":       {"label": "Gas generator (48 V DC)", "category": "process", "designation": "Gas engine generator, 48 V DC",
 		"why": "Burns the gas and charges a battery: its power is the gas's heating value times its efficiency."},
 	"flare":        {"label": "Flare", "category": "process", "designation": "Flare stack with flame arrestor",
 		"why": "Burns off gas nobody can use, so it is not vented raw."},
 }
 
 const TYPE_ORDER := ["vessel", "spool", "elbow90", "elbow45", "bend", "tee", "reducing_tee", "cross", "lateral",
-	"ferrule", "cap", "cap_npt", "reducing_cap", "reducer", "tc_npt_m", "tc_barb",
+	"ferrule", "cap", "cap_npt", "reducing_cap", "reducer", "bowl_reducer", "tc_npt_m", "tc_barb",
 	"butterfly", "ball_valve", "ball_valve_3way", "check_valve", "diaphragm_valve", "relief_valve",
 	"actuator_pneumatic", "actuator_electric", "sight_glass", "thermometer", "gauge", "thermowell",
 	"dephlegmator", "column", "bubble_plate", "inline_strainer", "y_strainer", "cartridge_housing",
@@ -179,15 +181,20 @@ static func param_specs(type: String) -> Array:
 		"heating_element":
 			return [_fl("length_mm", "Reach", 60.0, 1000.0, 5.0, "How far the loops reach into the vessel")]
 		"gas_holder":
-			return [{"key": "volume_l", "label": "Capacity", "kind": "float", "unit": "L", "min": 20.0, "max": 20000.0, "step": 10.0},
-				{"key": "hold_kpa", "label": "Holds at", "kind": "float", "unit": "kPa", "min": 0.1, "max": 10.0, "step": 0.1,
-					"tip": "The bell's weight: the gauge pressure it keeps the gas at"}]
+			return [{"key": "style", "label": "Built as", "kind": "choice", "options": TcUnits.HOLDER_STYLES},
+				{"key": "volume_l", "label": "Capacity", "kind": "float", "unit": "L", "min": 20.0, "max": 20000.0, "step": 10.0,
+					"tip": "A barrel gasometer's capacity is its float's: this sets the steel bell's size"},
+				{"key": "hold_kpa", "label": "Holds at", "kind": "float", "unit": "kPa", "min": 0.1, "max": 10.0, "step": 0.05,
+					"tip": "The float's weight over its area: the gauge pressure it keeps the gas at. Add weight on top for more."}]
 		"dryer":
 			return [_fl("length_mm", "Length", 150.0, 2000.0, 5.0), {"key": "packing", "label": "Packing", "kind": "choice", "options": TcUnits.PACKINGS}]
 		"genset":
-			return [{"key": "rated_kw", "label": "Rating", "kind": "float", "unit": "kW", "min": 0.3, "max": 30.0, "step": 0.1},
+			return [{"key": "model", "label": "Model", "kind": "choice", "options": TcUnits.GENSET_MODELS},
+				{"key": "rated_kw", "label": "Full output", "kind": "float", "unit": "kW", "min": 0.3, "max": 30.0, "step": 0.05},
+				{"key": "min_kw", "label": "Lowest output", "kind": "float", "unit": "kW", "min": 0.0, "max": 30.0, "step": 0.05,
+					"tip": "Its governor runs it between this and full output, by how much gas the holder has (0 = always full output)"},
 				{"key": "efficiency", "label": "Efficiency", "kind": "float", "unit": "", "min": 0.05, "max": 0.45, "step": 0.01,
-					"tip": "Gas heating value to DC electricity (small gas engines 18–28 %)"}]
+					"tip": "Gas heating value to DC electricity (small gas engines 15–28 %)"}]
 		"flare":
 			return [_fl("height_mm", "Stack height", 300.0, 4000.0, 10.0)]
 		"spool":
@@ -207,7 +214,7 @@ static func param_specs(type: String) -> Array:
 			return [{"key": "npt", "label": "Thread", "kind": "npt"}]
 		"tc_barb":
 			return [{"key": "barb", "label": "Hose ID", "kind": "barb"}]
-		"reducing_cap", "reducer":
+		"reducing_cap", "reducer", "bowl_reducer":
 			return [{"key": "small", "label": "Small end", "kind": "size"}]
 		"reducing_tee":
 			return [{"key": "branch", "label": "Branch size", "kind": "size"}]
@@ -248,11 +255,11 @@ static func default_params(type: String, size: String) -> Dictionary:
 		"heating_element":
 			return {"length_mm": 300.0}
 		"gas_holder":
-			return {"volume_l": 300.0, "hold_kpa": 0.8}
+			return {"volume_l": TcUnits.barrel_capacity_l("barrel_30"), "hold_kpa": snappedf(TcUnits.barrel_hold_kpa("barrel_30"), 0.05), "style": "barrel_30"}
 		"dryer":
 			return {"length_mm": 450.0, "packing": "silica"}
 		"genset":
-			return {"rated_kw": 2.5, "efficiency": 0.22}
+			return {"rated_kw": 0.75, "min_kw": 0.35, "efficiency": 0.18, "model": "small"}
 		"flare":
 			return {"height_mm": 1500.0}
 		"spool":
@@ -267,7 +274,7 @@ static func default_params(type: String, size: String) -> Dictionary:
 			return {"barb": "0.5"}
 		"reducing_cap":
 			return {"small": "0.5"}
-		"reducer":
+		"reducer", "bowl_reducer":
 			return {"small": _next_smaller(size)}
 		"reducing_tee":
 			return {"branch": _next_smaller(size)}
@@ -297,7 +304,7 @@ static func resolve_params(type: String, size: String, params: Dictionary) -> Di
 		"bend":
 			p["angle_deg"] = clampf(float(p["angle_deg"]), 1.0, 180.0)
 			p["radius_mm"] = maxf(float(p["radius_mm"]), 0.0)
-		"reducer", "reducing_cap":
+		"reducer", "reducing_cap", "bowl_reducer":
 			var s := str(p.get("small", "0.5"))
 			if not TcStandards.has_size(s) or TcStandards.SIZES.find(s) >= TcStandards.SIZES.find(size):
 				s = _next_smaller(size)
@@ -327,6 +334,13 @@ static func resolve_params(type: String, size: String, params: Dictionary) -> Di
 			if not str(p["packing"]) in ["copper_mesh", "raschig", "none"]:
 				p["packing"] = "none"
 		"gas_holder":
+			# A holder saved before the barrel gasometers is the steel bell.
+			if not params.has("style") and params.has("volume_l"):
+				p["style"] = "bell"
+			if not (TcUnits.is_barrel(str(p["style"])) or str(p["style"]) == "bell"):
+				p["style"] = "barrel_30"
+			if TcUnits.is_barrel(str(p["style"])):
+				p["volume_l"] = TcUnits.barrel_capacity_l(str(p["style"]))
 			p["volume_l"] = clampf(float(p["volume_l"]), 20.0, 20000.0)
 			p["hold_kpa"] = clampf(float(p["hold_kpa"]), 0.1, 10.0)
 		"dryer":
@@ -334,7 +348,14 @@ static func resolve_params(type: String, size: String, params: Dictionary) -> Di
 			if not str(p["packing"]) in ["silica", "carbon"]:
 				p["packing"] = "silica"
 		"genset":
+			# A genset saved before the small generator is the skid set, always at full output.
+			if not params.has("model") and params.has("rated_kw"):
+				p["model"] = "skid"
+				p["min_kw"] = float(params.get("min_kw", 0.0))
+			if not str(p["model"]) in ["small", "skid"]:
+				p["model"] = "small"
 			p["rated_kw"] = clampf(float(p["rated_kw"]), 0.3, 30.0)
+			p["min_kw"] = clampf(float(p["min_kw"]), 0.0, float(p["rated_kw"]))
 			p["efficiency"] = clampf(float(p["efficiency"]), 0.05, 0.45)
 		"flare":
 			p["height_mm"] = clampf(float(p["height_mm"]), 300.0, 4000.0)
@@ -362,7 +383,7 @@ static func part_name(type: String, size: String, params: Dictionary) -> String:
 	match type:
 		"spool":
 			return "%s spool %d mm" % [s, roundi(float(params.get("length_mm", 0.0)))]
-		"reducer", "reducing_cap":
+		"reducer", "reducing_cap", "bowl_reducer":
 			return "%s × %s %s" % [s, TcStandards.size_label(str(params.get("small", ""))), label_of(type).to_lower()]
 		"reducing_tee":
 			return "%s × %s reducing tee" % [s, TcStandards.size_label(str(params.get("branch", "")))]
@@ -385,10 +406,15 @@ static func part_name(type: String, size: String, params: Dictionary) -> String:
 		"actuator_pneumatic", "actuator_electric":
 			return "%s (for %s valves)" % [label_of(type), s]
 		"gas_holder":
+			var st := str(params.get("style", "bell"))
+			if TcUnits.is_barrel(st):
+				return "%d L barrel gasometer (%s gal base)" % [roundi(float(params.get("volume_l", 0.0))), "30" if st == "barrel_30" else "55"]
 			return "%d L gas holder" % roundi(float(params.get("volume_l", 0.0)))
 		"dryer":
 			return "%s %s dryer %d mm" % [s, "silica gel" if str(params.get("packing", "")) == "silica" else "carbon", roundi(float(params.get("length_mm", 0.0)))]
 		"genset":
+			if float(params.get("min_kw", 0.0)) > 0.0:
+				return "%d–%d W gas generator (48 V DC)" % [roundi(float(params.get("min_kw", 0.0)) * 1000.0), roundi(float(params.get("rated_kw", 0.0)) * 1000.0)]
 			return "%.1f kW gas genset (48 V DC)" % float(params.get("rated_kw", 0.0))
 	return "%s %s" % [s, label_of(type).to_lower()]
 
@@ -509,6 +535,7 @@ static func build(type: String, size: String, params: Dictionary = {}) -> Dictio
 		"cap_npt": r = _cap(g, size, str(p["npt"]))
 		"reducing_cap": r = _reducing_cap(g, size, str(p["small"]))
 		"reducer": r = _reducer(g, size, str(p["small"]))
+		"bowl_reducer": r = _bowl_reducer(g, size, str(p["small"]))
 		"tc_npt_m": r = _tc_npt(g, size, str(p["npt"]))
 		"tc_barb": r = _tc_barb(g, size, str(p["barb"]))
 		"vessel": r = TcVessel.build(g, p)
@@ -534,9 +561,9 @@ static func build(type: String, size: String, params: Dictionary = {}) -> Dictio
 		"funnel": r = TcSpecialty.funnel(g, size, float(p["rim_mm"]), float(p["height_mm"]))
 		"spray_ball": r = TcSpecialty.spray_ball(g, size)
 		"heating_element": r = TcSpecialty.heating_element(g, size, float(p["length_mm"]))
-		"gas_holder": r = TcUnits.gas_holder(g, size, float(p["volume_l"]), float(p["hold_kpa"]))
+		"gas_holder": r = TcUnits.gas_holder(g, size, float(p["volume_l"]), float(p["hold_kpa"]), str(p["style"]))
 		"dryer": r = TcUnits.dryer(g, size, float(p["length_mm"]), str(p["packing"]))
-		"genset": r = TcUnits.genset(g, size, float(p["rated_kw"]), float(p["efficiency"]))
+		"genset": r = TcUnits.genset(g, size, float(p["rated_kw"]), float(p["efficiency"]), str(p["model"]), float(p["min_kw"]))
 		"flare": r = TcUnits.flare(g, size, float(p["height_mm"]))
 		_:
 			r = _cap(g, size, "")
@@ -812,6 +839,48 @@ static func _reducer(g: TcGeom, size: String, small: String) -> Dictionary:
 		[Vector3(0, 0, mid), Vector3(0, 0, L), float(b["r_flange"])]],
 		"mass_kg": (_tube_kg_per_mm(size) + _tube_kg_per_mm(small)) * 0.5 * L + _flange_kg(size) + _flange_kg(small),
 		"volume_l": (_bore_l_per_mm(size) + _bore_l_per_mm(small)) * 0.5 * L}
+
+
+## Bowl reducer: the big ferrule, a short straight, a dished dome (a
+## quarter ellipse half as deep as the tube is wide) and the small ferrule
+## on its crown. Drawn from the user's parts photo (2026-11-08); the dome's
+## depth is an estimate (no catalogue table fetched).
+static func _bowl_reducer(g: TcGeom, size: String, small: String) -> Dictionary:
+	var a := TcStandards.tube(size)
+	var b := TcStandards.tube(small)
+	var ra := float(a["r_out"])
+	var rb := float(b["r_out"])
+	var w := maxf(ra - float(a["r_in"]), 1.2)
+	var pa := port("a", "tc", size, Vector3.ZERO, Vector3(0, 0, -1), Vector3.UP)
+	var ha := g.ferrule_end(into_xform(pa), size)
+	var z0 := ha + 8.0                       # the straight before the dome
+	var depth := maxf(ra * 0.5, 10.0)        # the dome's rise
+	var neck := float(TcStandards.ferrule(small)["hub"]) + 6.0
+	var L := z0 + depth + neck
+	var pb := port("b", "tc", small, Vector3(0, 0, L), Vector3(0, 0, 1), Vector3.UP)
+	var hb := g.ferrule_end(into_xform(pb), small)
+	var n := TcGeom.segs_for(float(a["r_flange"]))
+	# Outside: the straight, the dome from the rim in to the neck, the neck.
+	var outer: Array = [Vector2(ra, ha), Vector2(ra, z0)]
+	var inner: Array = []
+	var steps := 12
+	for i in range(1, steps + 1):
+		var t := PI * 0.5 * float(i) / float(steps)
+		var r := maxf(ra * cos(t), rb)
+		outer.append(Vector2(r, z0 + depth * sin(t)))
+		if r <= rb:
+			break
+	outer.append(Vector2(rb, L - hb))
+	for q in outer:
+		var v: Vector2 = q
+		inner.append(Vector2(maxf(v.x - w, float(b["r_in"])), v.y))
+	inner.reverse()
+	g.lathe(STEEL, outer, Transform3D.IDENTITY, n, 0.0, TAU, true)
+	g.lathe(STEEL, inner, Transform3D.IDENTITY, n, 0.0, TAU, true)
+	return {"ports": [pa, pb], "capsules": [[Vector3.ZERO, Vector3(0, 0, z0 + depth * 0.5), float(a["r_flange"])],
+		[Vector3(0, 0, z0 + depth * 0.5), Vector3(0, 0, L), float(b["r_flange"])]],
+		"mass_kg": _tube_kg_per_mm(size) * (z0 + depth) + _flange_kg(size) + _flange_kg(small),
+		"volume_l": _bore_l_per_mm(size) * (z0 + depth * 0.66) + _bore_l_per_mm(small) * neck}
 
 
 ## TC × male NPT: ferrule, a short neck, a hex, then the thread (port b at

@@ -77,6 +77,8 @@ static func sensors(sim: TcProcSim, d: Dictionary, proc: Dictionary) -> Array:
 		add.call("charge_mean_temp", "Charge, mean", "°C", {"kind": "bed_mean"})
 		add.call("moisture_left", "Water left in the charge", "kg", {"kind": "bed_moisture"})
 		add.call("char", "Char made", "kg", {"kind": "bed_char"})
+		add.call("charge_done", "Charge converted", "%", {"kind": "bed_done"})
+		add.call("charge_mass", "Charge mass", "kg", {"kind": "bed_mass"})
 	if sim.vessel_cv >= 0:
 		add.call("vessel_temp", "Vessel gas", "°C", {"kind": "cv_t", "cv": sim.vessel_cv})
 		add.call("vessel_pressure", "Vessel pressure", "kPa", {"kind": "cv_p", "cv": sim.vessel_cv})
@@ -184,6 +186,10 @@ static func read_all(sim: TcProcSim, list: Array, only: Dictionary = {}) -> Dict
 				v = float(tot["moisture_kg"])
 			"bed_char":
 				v = float(tot["char_kg"])
+			"bed_done":
+				v = float(tot["pyro_frac"]) * 100.0
+			"bed_mass":
+				v = sim.bed.mass_kg()
 			"cv_t":
 				v = sim.gas_t(int(src["cv"])) - 273.15
 			"cv_p":
@@ -408,7 +414,10 @@ static func templates(sim: TcProcSim, d: Dictionary) -> Array:
 				"conditions": [], "actions": [{"kind": "scene_node", "command": "turn_off"}]},
 			{"alias": "Elements back on below 400 °C", "enabled": true,
 				"triggers": [{"kind": "numeric", "entity_id": hot, "below": 400.0, "for_seconds": 60.0}],
-				"conditions": [], "actions": [{"kind": "scene_node", "command": "turn_on"}]}]})
+				# Not once the charge is done: then it is left to cool.
+				"conditions": [{"kind": "numeric", "entity_id": "sensor.%s_charge_done" % s, "below": 97.0}],
+				"actions": [{"kind": "scene_node", "command": "turn_on"}]}]})
+		out.append({"label": "Elements off when the charge is done", "specs": [done_rule(s)]})
 		var to_outlet := false
 		for b0 in sim.net["boundaries"]:
 			to_outlet = to_outlet or str(b0["role"]) == "product"
@@ -453,6 +462,15 @@ static func templates(sim: TcProcSim, d: Dictionary) -> Array:
 				"triggers": [{"kind": "numeric", "entity_id": "sensor.%s_cooling_out_temp" % s, "above": 45.0}],
 				"conditions": [], "actions": [{"kind": "set_value", "entity_id": "number.%s_cooling_flow" % s, "value": 6.0}]}]})
 	return out
+
+
+## The rule the reactor presets ship with: once nearly every cell of the
+## charge has converted (char, or cracked plastic) and stayed so for twenty
+## minutes, the elements go off and the charge cools. `s` = the design's slug.
+static func done_rule(s: String) -> Dictionary:
+	return {"id": "elements_off_done", "alias": "Elements off when the charge is done", "enabled": true,
+		"triggers": [{"kind": "numeric", "entity_id": "sensor.%s_charge_done" % s, "above": 97.0, "for_seconds": 1200.0}],
+		"conditions": [], "actions": [{"kind": "scene_node", "command": "turn_off"}]}
 
 
 ## The design's automations as Home Assistant YAML (automations.yaml).

@@ -11,7 +11,12 @@ extends RefCounted
 ##               "update_s": -1,      (-1 = the part's default)
 ##               "measures": {},      (entity k -> source id, overrides the part's)
 ##               "filters": {},       (entity k -> extra ESPHome filters, after the part's)
-##               "opts": {}}],        (num_leds, inverted…)
+##               "opts": {},          (num_leds, inverted…)
+##               "ents": {}}],        (entity k -> {name, unit, dc}: the exact
+##                                     entity name / unit this instance's
+##                                     entity carries; a controller board made
+##                                     for a TC process names its entities
+##                                     after the process's own, TcProcBoard)
 ##    "locks": {"p1:SDA": 21},        (pins wired by hand: kept by the solver)
 ##    "real": {},                     (entity k -> the real board's entity_id)
 ##    "layout": {"p1": [x, y]}}       (where the diagram draws each part; never
@@ -71,6 +76,8 @@ static func resolve(spec: Dictionary) -> Dictionary:
 			"filters": (raw.get("filters", {}) as Dictionary).duplicate(true) if raw.get("filters", {}) is Dictionary else {},
 			"opts": (raw.get("opts", {}) as Dictionary).duplicate(true) if raw.get("opts", {}) is Dictionary else {},
 		}
+		if raw.has("ents") and raw["ents"] is Dictionary and not (raw["ents"] as Dictionary).is_empty():
+			inst["ents"] = (raw["ents"] as Dictionary).duplicate(true)
 		(out["parts"] as Array).append(inst)
 	var locks: Dictionary = spec.get("locks", {}) if spec.get("locks", {}) is Dictionary else {}
 	for k in locks:

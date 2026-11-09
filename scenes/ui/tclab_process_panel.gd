@@ -51,6 +51,12 @@ var transport: HBoxContainer
 var _scenario: VBoxContainer
 var _tiles: GridContainer
 var _tile_vals := {}
+var _tile_subs := {}
+var _prerun_resume := -1.0       # where a pre-run puts the view back (-1 = the end of the batch)
+var _now_rows := {}              # id → KVRow
+var _batch_head: SectionHeader
+var _board_note: Label
+var _probe_hint: Label
 var _card: VBoxContainer
 var _events: ItemList
 var _chart: Control
@@ -144,6 +150,7 @@ func exit() -> void:
 	_clear_tint()
 	set_lens(false)
 	if view != null:
+		view.call("release")
 		view.get_parent().remove_child(view)
 		view.queue_free()
 		view = null
@@ -161,6 +168,7 @@ func design_changed(d: Dictionary) -> void:
 			view.call("apply_mode")
 		_apply_tint()
 		_refresh_use()
+		_refresh_board_note()
 		return
 	design = d
 	proc = new_proc
@@ -196,8 +204,9 @@ func _same_run(d: Dictionary, new_proc: Dictionary) -> bool:
 		return false
 	var a := proc.duplicate(true)
 	var b := new_proc.duplicate(true)
-	a.erase("recipe")
-	b.erase("recipe")
+	for k in ["recipe", "board"]:
+		a.erase(k)
+		b.erase(k)
 	return TcProcSpec.key_of(a) == TcProcSpec.key_of(b)
 
 
@@ -225,6 +234,7 @@ func set_speed(mult: float) -> void:
 
 ## Compute the whole batch (proc.duration_h) in frame-budgeted chunks.
 func prerun_batch() -> void:
+	_prerun_resume = sim.t_s if sim != null and sim.t_s > 1e-6 and sim.t_s < done_s - 1.0 else -1.0
 	prerunning = true
 	playing = false
 	_sync_transport()
@@ -267,14 +277,19 @@ func _process(delta: float) -> void:
 		return
 	var end := float(proc["duration_h"]) * 3600.0
 	if prerunning:
-		var resume := sim.t_s if sim.t_s < done_s else 0.0
+		# When it is done the view stays on the END of the batch (its final
+		# results), or goes back to where the player had scrubbed to in a run
+		# already worked out. Only Restart goes back to the start.
+		var resume := _prerun_resume if _prerun_resume >= 0.0 else end
 		if done_s < end:
 			if sim.t_s < done_s:
 				sim.seek(done_s)
 			_advance(end, PRERUN_BUDGET_US)
 		if done_s >= end - 1e-6:
 			prerunning = false
-			sim.seek(resume)
+			if absf(sim.t_s - resume) > 1e-6:
+				sim.seek(resume)
+			_refresh_all()
 			_sync_transport()
 			if _use_after_prerun:
 				_use_after_prerun = false
@@ -483,13 +498,27 @@ func _edit(path: Array, v: Variant) -> void:
 # Readouts (right)
 # ---------------------------------------------------------------------------
 
-const TILES := [
-	["bed_max", "Hottest charge", "°C"], ["vessel", "Vessel gas", "°C"],
-	["pressure", "Pressure", "kPa"], ["element", "Elements", "°C"],
-	["dry_front", "Drying front", "mm"], ["pyro_front", "Char front", "mm"],
-	["gas", "Gas out", "L/min"], ["lhv", "Gas LHV", "MJ/Nm³"],
-	["cond", "Condensate", "kg"], ["char", "Char", "kg"],
-	["energy", "Energy in", "kWh"], ["cool", "Cooling out", "°C"],
+## What the batch has made and used: [id, caption, unit, what it means].
+const RESULT_TILES := [
+	["carbon", "Carbon locked in the char", "kg C", "The carbon held in the biochar made so far: char from wood at 450–600 °C is about 80 % carbon by mass (Lehmann & Joseph 2015)."],
+	["co2e", "CO₂ kept out of the air", "kg CO₂e", "The char's carbon as CO₂, counting the 80 % of it still in the soil after 100 years (IPCC 2019 Refinement, char made at 450–600 °C). Electricity used is not netted off."],
+	["char", "Biochar made", "kg", "Char in the vessel now, and its share of the dry wood loaded."],
+	["gas", "Gas made", "L", "Burnable gas and CO₂ the charge has given off (normal litres, dry), wherever it went: stored, burned, vented or still in the pipes. Under it, the fuel energy in that gas."],
+	["energy", "Heater electricity in", "kWh", "Electricity the heating elements have drawn so far."],
+	["gen", "Generator electricity out", "kWh", "Electricity the generator has made from the gas so far, at 48 V DC."],
+	["cond", "Liquids collected", "kg", "What has run out of the condenser's drains: wood vinegar (water, acids) and tar."],
+	["done", "Charge converted", "%", "How much of the charge has pyrolysed. Under it, what is left of it by mass and volume."],
+]
+## The process right now: [id, label, what it means].
+const NOW_ROWS := [
+	["bed_max", "Hottest charge", "The hottest point in the charge (next to an element)."],
+	["vessel", "Vessel gas", "Gas temperature and gauge pressure in the vessel's headspace."],
+	["element", "Elements", "Each heating element's surface temperature."],
+	["fronts", "Drying / char front", "How far out from the elements the charge has dried, and charred."],
+	["gas_flow", "Gas leaving", "Gas at the labelled outlet, and its heating value."],
+	["holder", "Gasometer", "How full the gas holder is."],
+	["genset", "Generator", "What the generator is making now."],
+	["cool", "Cooling water out", "The warmest cooling water leaving a condenser."],
 ]
 
 
@@ -497,8 +526,8 @@ func _build_right() -> void:
 	var tabs := HBoxContainer.new()
 	tabs.add_theme_constant_override("separation", 4)
 	right_box.add_child(tabs)
-	for t in [["readings", "Readings", "What the process is doing now and over the batch"],
-			["control", "Control", "Sensors, switches and the automations that run the batch"]]:
+	for t in [["readings", "Results", "What the batch has made and used, and what the process is doing now"],
+			["control", "Control", "Rules, switches and sensors, and the controller board that makes them real"]]:
 		var b := Button.new()
 		b.name = "right_%s" % str(t[0])
 		b.text = str(t[1])
@@ -520,33 +549,71 @@ func _build_right() -> void:
 	_control_box.visible = false
 	right_box.add_child(_control_box)
 	var rb := _readings_box
-	rb.add_child(SectionHeader.make("Now", "gauge"))
+	_batch_head = SectionHeader.make("This batch so far", "sprout")
+	rb.add_child(_batch_head)
 	_tiles = GridContainer.new()
 	_tiles.name = "tiles"
 	_tiles.columns = 2
 	_tiles.add_theme_constant_override("h_separation", 6)
 	_tiles.add_theme_constant_override("v_separation", 6)
 	rb.add_child(_tiles)
-	for t in TILES:
+	for t in RESULT_TILES:
 		var p := PanelContainer.new()
 		p.add_theme_stylebox_override("panel", UITheme.card_style())
 		p.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		p.tooltip_text = str(t[3])
 		var v := VBoxContainer.new()
 		v.add_theme_constant_override("separation", 0)
+		v.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var cap := Label.new()
 		cap.text = str(t[1])
 		cap.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		cap.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+		cap.clip_text = true
+		cap.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		v.add_child(cap)
+		var line := HBoxContainer.new()
+		line.add_theme_constant_override("separation", 5)
+		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var val := Label.new()
 		val.name = "tile_%s" % str(t[0])
 		val.text = "—"
 		val.add_theme_font_override("font", UITheme.font("semibold", true))
 		val.add_theme_font_size_override("font_size", UITheme.FONT_LG)
-		v.add_child(val)
+		val.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		line.add_child(val)
+		var un := Label.new()
+		un.name = "unit_%s" % str(t[0])
+		un.text = str(t[2])
+		un.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		un.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+		un.size_flags_vertical = Control.SIZE_SHRINK_END
+		un.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		line.add_child(un)
+		v.add_child(line)
+		var sub := Label.new()
+		sub.name = "sub_%s" % str(t[0])
+		sub.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		sub.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+		sub.clip_text = true
+		sub.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		v.add_child(sub)
 		p.add_child(v)
 		_tiles.add_child(p)
 		_tile_vals[str(t[0])] = val
+		_tile_subs[str(t[0])] = sub
+	rb.add_child(SectionHeader.make("Right now", "gauge"))
+	var now := VBoxContainer.new()
+	now.name = "now_rows"
+	now.add_theme_constant_override("separation", 1)
+	rb.add_child(now)
+	for t in NOW_ROWS:
+		var row := KVRow.make(str(t[1]), "—", str(t[2]))
+		row.name = "now_%s" % str(t[0])
+		now.add_child(row)
+		_now_rows[str(t[0])] = row
 	rb.add_child(SectionHeader.make("Selected volume", "target", "click a part"))
 	_card = VBoxContainer.new()
 	_card.name = "cv_card"
@@ -602,34 +669,99 @@ func _rebuild_control() -> void:
 	_sensor_vals = {}
 	_act_ctrls = {}
 	_card_editor = null
+	_board_note = null
+	_probe_hint = null
 	if sim == null:
 		return
 	var box := _control_box
-	box.add_child(SectionHeader.make("Sensors", "gauge", "what the rules can read"))
+	var intro := _muted("Rules read the sensors and flip the switches, and run inside the model as the batch plays. The last section builds the same sensors and switches as an ESP32 board for Home Assistant.")
+	intro.name = "control_intro"
+	box.add_child(intro)
+
+	# 1. Rules.
+	box.add_child(SectionHeader.make("Rules", "zap", "when this, then that"))
+	_card_editor = CardEditor.new()
+	_card_editor.name = "automation_cards"
+	_card_editor.set("auto_rebuild", true)
+	_card_editor.set("show_ab", false)
+	_card_editor.set("show_push", false)
+	_card_editor.set("expanded", _auto_expanded)
+	_card_editor.set("empty_hint", "No rules yet. Pick a preset (hold the charge at a temperature, empty a trap when it fills…) or build one.")
+	box.add_child(_card_editor)
+	_card_editor.call("setup", proc.get("automations", []), _provider())
+	_card_editor.connect("automations_changed", func(autos: Array) -> void:
+		_editing_autos = true
+		_edit(["automations"], autos)
+		_editing_autos = false)
+
+	# 2. Switches and numbers (by hand, for this run from now).
+	box.add_child(SectionHeader.make("Switches", "sliders-horizontal", "by hand, from this moment"))
+	for a in sim.control_acts:
+		var key := str(a["key"])
+		if str(a["kind"]) == "switch":
+			var cb := CheckButton.new()
+			cb.name = "act_%s" % key.replace(".", "_")
+			cb.text = str(a["label"])
+			cb.tooltip_text = "%s\nFlipping it changes the run from this moment on." % key
+			cb.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+			cb.clip_text = true
+			cb.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			cb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			cb.button_pressed = TcProcControl.is_on(sim, str(a["act"]))
+			cb.toggled.connect(func(on: bool) -> void: _manual(key, "turn_on" if on else "turn_off", 0.0))
+			box.add_child(cb)
+			_act_ctrls[key] = cb
+		else:
+			var sp := SpinBox.new()
+			sp.name = "act_%s" % key.replace(".", "_")
+			sp.min_value = float(a.get("min", 0.0))
+			sp.max_value = float(a.get("max", 100.0))
+			sp.step = float(a.get("step", 1.0))
+			sp.suffix = str(a.get("unit", ""))
+			sp.value = TcProcControl.value_of(sim, a)
+			sp.custom_minimum_size = Vector2(118, 0)
+			sp.value_changed.connect(func(v: float) -> void: _manual(key, "set_value", v))
+			var nr := KVRow.make_with(str(a["label"]), sp, key)
+			box.add_child(nr)
+			_act_ctrls[key] = sp
+
+	# 3. Sensors: the ones a real instrument can read, then the model's own.
+	var rws := TcProcBoard.rows(sim, proc)
+	box.add_child(SectionHeader.make("Sensors", "gauge", "tick = on the controller board"))
 	var grid := GridContainer.new()
 	grid.name = "sensor_list"
-	grid.columns = 2
-	grid.add_theme_constant_override("h_separation", 8)
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 6)
+	grid.add_theme_constant_override("v_separation", 1)
 	box.add_child(grid)
-	for e in sim.control_sensors:
-		var l := Label.new()
-		l.text = str(e["label"])
-		l.tooltip_text = str(e["key"])
-		l.mouse_filter = Control.MOUSE_FILTER_PASS
-		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		l.clip_text = true
-		l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-		l.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-		grid.add_child(l)
-		var v := Label.new()
-		v.name = "sv_%s" % str(e["key"]).replace(".", "_")
-		v.add_theme_font_override("font", UITheme.font("medium", true))
-		v.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-		v.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		grid.add_child(v)
-		_sensor_vals[str(e["key"])] = [v, str(e.get("unit", ""))]
+	var virt: Array = []
+	for r in rws:
+		if str(r["domain"]) != "sensor":
+			continue
+		if str(r["part"]) == "":
+			virt.append(r)
+			continue
+		grid.add_child(_board_tick(r))
+		grid.add_child(_sensor_name(r, "%s\nRead by: %s" % [str(r["key"]), str(r["note"])]))
+		grid.add_child(_sensor_value(r))
+	if not virt.is_empty():
+		var fold := Collapsible.make("Worked out by the model (%d)" % virt.size(), false,
+			"Readings with no stock sensor (how far the charge has converted, totals). Rules can use them here; on real hardware they need a Home Assistant template or a different trigger.")
+		fold.name = "model_sensors"
+		box.add_child(fold)
+		var vg := GridContainer.new()
+		vg.name = "model_list"
+		vg.columns = 2
+		vg.add_theme_constant_override("h_separation", 6)
+		vg.add_theme_constant_override("v_separation", 1)
+		fold.body.add_child(vg)
+		for r2 in virt:
+			vg.add_child(_sensor_name(r2, str(r2["key"])))
+			vg.add_child(_sensor_value(r2))
 	# Probes the player drops on a volume.
+	_probe_hint = _muted("")
+	_probe_hint.name = "probe_hint"
+	box.add_child(_probe_hint)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
 	box.add_child(row)
@@ -638,12 +770,14 @@ func _rebuild_control() -> void:
 	for i in TcProcControl.PROBE_KINDS.size():
 		_probe_kind.add_item(str(TcProcControl.PROBE_KINDS[i][1]), i)
 	_probe_kind.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_probe_kind.tooltip_text = "What the new probe measures"
 	row.add_child(_probe_kind)
 	var add := Button.new()
 	add.name = "proc_add_probe"
 	add.text = "Add probe"
-	add.tooltip_text = "A probe on the selected volume (click a part first): it becomes a sensor the rules can read"
+	add.tooltip_text = "Put a probe of this kind on the part you clicked in the view: it becomes a sensor the rules can read"
 	UITheme.style_button(add)
+	UiIcons.apply(add, "plus", "")
 	add.pressed.connect(add_probe)
 	row.add_child(add)
 	var probes: Array = proc.get("sensors", [])
@@ -655,75 +789,117 @@ func _rebuild_control() -> void:
 		pr_row.add_child(pl)
 		var idx: int = pi
 		var rm := IconButton.make("trash-2", "Remove this probe", func() -> void:
-			var a: Array = (proc.get("sensors", []) as Array).duplicate(true)
-			if idx < a.size():
-				a.remove_at(idx)
-			_edit(["sensors"], a))
+			var a2: Array = (proc.get("sensors", []) as Array).duplicate(true)
+			if idx < a2.size():
+				a2.remove_at(idx)
+			_edit(["sensors"], a2))
 		pr_row.add_child(rm)
 		box.add_child(pr_row)
-	# Switches and numbers (by hand, for this run from now).
-	box.add_child(SectionHeader.make("Switches", "sliders-horizontal", "by hand, from now"))
-	for a in sim.control_acts:
-		var key := str(a["key"])
-		if str(a["kind"]) == "switch":
-			var cb := CheckButton.new()
-			cb.name = "act_%s" % key.replace(".", "_")
-			cb.text = str(a["label"])
-			cb.tooltip_text = key
-			cb.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-			cb.button_pressed = TcProcControl.is_on(sim, str(a["act"]))
-			cb.toggled.connect(func(on: bool) -> void: _manual(key, "turn_on" if on else "turn_off", 0.0))
-			box.add_child(cb)
-			_act_ctrls[key] = cb
-		else:
-			var nr := HBoxContainer.new()
-			var nl := Label.new()
-			nl.text = str(a["label"])
-			nl.tooltip_text = key
-			nl.mouse_filter = Control.MOUSE_FILTER_PASS
-			nl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			nl.clip_text = true
-			nl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-			nl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-			nr.add_child(nl)
-			var sp := SpinBox.new()
-			sp.name = "act_%s" % key.replace(".", "_")
-			sp.min_value = float(a.get("min", 0.0))
-			sp.max_value = float(a.get("max", 100.0))
-			sp.step = float(a.get("step", 1.0))
-			sp.suffix = str(a.get("unit", ""))
-			sp.value = TcProcControl.value_of(sim, a)
-			sp.custom_minimum_size = Vector2(110, 0)
-			sp.value_changed.connect(func(v: float) -> void: _manual(key, "set_value", v))
-			nr.add_child(sp)
-			box.add_child(nr)
-			_act_ctrls[key] = sp
-	# Automations.
-	box.add_child(SectionHeader.make("Automations", "zap", "run in the model"))
-	_card_editor = CardEditor.new()
-	_card_editor.name = "automation_cards"
-	_card_editor.set("auto_rebuild", true)
-	_card_editor.set("show_ab", false)
-	_card_editor.set("show_push", false)
-	_card_editor.set("expanded", _auto_expanded)
-	_card_editor.set("empty_hint", "No automations yet. Pick a preset (hold the charge at a temperature, empty a trap when it fills…) or build a rule.")
-	box.add_child(_card_editor)
-	_card_editor.call("setup", proc.get("automations", []), _provider())
-	_card_editor.connect("automations_changed", func(autos: Array) -> void:
-		_editing_autos = true
-		_edit(["automations"], autos)
-		_editing_autos = false)
+
+	# 4. The controller board.
+	box.add_child(SectionHeader.make("Controller board", "cpu", "ESPHome → Home Assistant"))
+	_board_note = _muted("")
+	_board_note.name = "board_note"
+	box.add_child(_board_note)
+	var sw_fold := Collapsible.make("Switches on the board", false, "Each ticked switch gets a relay output on the board")
+	sw_fold.name = "board_switches"
+	box.add_child(sw_fold)
+	for r3 in rws:
+		if str(r3["domain"]) != "switch" or str(r3["part"]) == "":
+			continue
+		var line := HBoxContainer.new()
+		line.add_theme_constant_override("separation", 6)
+		line.add_child(_board_tick(r3))
+		line.add_child(_sensor_name(r3, "%s\nDriven by: %s" % [str(r3["key"]), str(r3["note"])]))
+		sw_fold.body.add_child(line)
+	var ob := Button.new()
+	ob.name = "proc_open_esp"
+	ob.text = "Open the board in the ESP designer"
+	ob.tooltip_text = "An ESP32 with a part for every ticked sensor and switch, named so Home Assistant gives each the id the rules above use. Wire it, export its ESPHome YAML and flash it there."
+	UITheme.style_button(ob)
+	UiIcons.apply(ob, "cpu", "")
+	ob.pressed.connect(open_board)
+	box.add_child(ob)
 	var yb := Button.new()
 	yb.name = "proc_ha_yaml"
-	yb.text = "Copy as Home Assistant YAML"
-	yb.tooltip_text = "The rules as automations.yaml, with this design's sensor / switch / number entities"
+	yb.text = "Copy the rules for Home Assistant"
+	yb.tooltip_text = "The rules as automations.yaml. They name the board's entities, so they run as they are once the board is flashed and added to Home Assistant."
 	UITheme.style_button(yb)
+	UiIcons.apply(yb, "copy", "")
 	yb.pressed.connect(func() -> void: export_yaml())
 	box.add_child(yb)
 	_yaml_note = _muted("")
+	_yaml_note.name = "yaml_note"
 	box.add_child(_yaml_note)
+	_refresh_board_note()
 	_refresh_control()
 
+
+## The "on the board" tick of a sensor / switch row.
+func _board_tick(r: Dictionary) -> CheckBox:
+	var key := str(r["key"])
+	var cb := CheckBox.new()
+	cb.name = "board_%s" % key.replace(".", "_")
+	cb.button_pressed = bool(r["on"])
+	cb.tooltip_text = "On the controller board (%s)" % str(r["note"])
+	cb.toggled.connect(func(on: bool) -> void: set_on_board(key, on))
+	return cb
+
+
+func _sensor_name(r: Dictionary, tip: String) -> Label:
+	var l := Label.new()
+	l.text = str(r["label"])
+	l.tooltip_text = tip
+	l.mouse_filter = Control.MOUSE_FILTER_PASS
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	l.clip_text = true
+	l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	l.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	l.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	return l
+
+
+func _sensor_value(r: Dictionary) -> Label:
+	var v := Label.new()
+	v.name = "sv_%s" % str(r["key"]).replace(".", "_")
+	v.add_theme_font_override("font", UITheme.font("medium", true))
+	v.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	v.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	v.custom_minimum_size = Vector2(74, 0)
+	_sensor_vals[str(r["key"])] = [v, str(r.get("unit", ""))]
+	return v
+
+
+## Put a sensor or a switch on the controller board, or take it off.
+func set_on_board(key: String, on: bool) -> void:
+	var cur := {}
+	if proc.has("board") and proc["board"] is Dictionary and (proc["board"] as Dictionary).has("on"):
+		cur = (proc["board"]["on"] as Dictionary).duplicate()
+	cur[key] = on
+	_edit(["board"], {"on": cur})
+
+
+func _refresh_board_note() -> void:
+	if _board_note == null or sim == null:
+		return
+	var rws := TcProcBoard.rows(sim, proc)
+	var n := TcProcBoard.count_on(rws)
+	var t := "One ESP32 carrying %s. Its entities get the ids the rules use (sensor.%s_…), so the rules run on the real reactor as they do here." % [
+		TcProcBoard.summary(rws), TcProcControl.design_slug(design)]
+	if n > TcProcBoard.MAX_PARTS:
+		t += " %d parts is more than one board wires: untick some, or split them over two boards." % n
+	_board_note.text = t
+
+
+## The controller board in the ESP board designer, over this one.
+func open_board() -> Dictionary:
+	if sim == null:
+		return {}
+	var spec := TcProcBoard.esp_spec(design, sim, proc)
+	var main: Node = modal.get_tree().current_scene if modal != null and modal.get_tree() != null else null
+	if main != null and main.has_method("open_esplab"):
+		main.call("open_esplab", {"spec": spec})
+	return spec
 
 func _provider() -> Dictionary:
 	var numeric: Array = []
@@ -753,14 +929,21 @@ func _refresh_control() -> void:
 	for k in _sensor_vals.keys():
 		var e: Array = _sensor_vals[k]
 		var v: Variant = vals.get(k, null)
-		(e[0] as Label).text = ("%s %s" % [_fmt_num(float(v)), str(e[1])]) if v != null else "—"
+		var txt := ("%s %s" % [_fmt_num(float(v)), str(e[1])]) if v != null else "—"
+		if (e[0] as Label).text != txt:
+			(e[0] as Label).text = txt
 	for a in sim.control_acts:
 		var c: Variant = _act_ctrls.get(str(a["key"]), null)
 		if c is CheckButton:
 			(c as CheckButton).set_pressed_no_signal(TcProcControl.is_on(sim, str(a["act"])))
 		elif c is SpinBox and not (c as SpinBox).get_line_edit().has_focus():
 			(c as SpinBox).set_value_no_signal(TcProcControl.value_of(sim, a))
-
+	if _probe_hint != null:
+		var i := sel_cv if sel_cv >= 0 else sim.vessel_cv
+		var where := str(sim.net["cvs"][i]["label"]) if i >= 0 and i < sim.n_cv else "nothing"
+		var ht := "New probe goes on: %s (click another part in the view to change)" % where
+		if _probe_hint.text != ht:
+			_probe_hint.text = ht
 
 static func _fmt_num(v: float) -> String:
 	if absf(v) >= 100.0:
@@ -877,7 +1060,7 @@ func export_yaml() -> String:
 		f.store_string(y)
 		f.close()
 	if _yaml_note != null:
-		_yaml_note.text = "Copied, and saved as %s." % path.get_file()
+		_yaml_note.text = "Copied, and saved as %s. Paste it into Home Assistant's automations.yaml once the board is added." % path.get_file()
 	return y
 
 
@@ -977,7 +1160,7 @@ func _build_view_bar() -> void:
 	_lens_btn = CheckBox.new()
 	_lens_btn.name = "view_molecules"
 	_lens_btn.text = "Molecules"
-	_lens_btn.tooltip_text = "A close-up of the molecules in the selected volume, and the reactions the model says are happening there"
+	_lens_btn.tooltip_text = "A worked example of the main reaction in the selected volume, drawn molecule by molecule: what goes in, which bonds break, what comes out"
 	_lens_btn.toggled.connect(set_lens)
 	view_bar.add_child(_lens_btn)
 
@@ -1039,40 +1222,100 @@ static func _fmt_t(s: float) -> String:
 	return "%d h %02d min" % [m / 60, m % 60]
 
 
-func _set_tile(id: String, text: String) -> void:
+func _set_tile(id: String, text: String, sub: String = "") -> void:
 	var l: Label = _tile_vals.get(id)
 	if l != null and l.text != text:
 		l.text = text
+	var sl: Label = _tile_subs.get(id)
+	if sl != null and sl.text != sub:
+		sl.text = sub
+		sl.tooltip_text = sub
+
+
+func _set_now(id: String, text: String, shown: bool = true) -> void:
+	var r: KVRow = _now_rows.get(id)
+	if r == null:
+		return
+	if r.visible != shown:
+		r.visible = shown
+	if shown:
+		r.set_value(text)
+
+
+## Watts the elements are drawing at this moment.
+func _heater_w_now() -> float:
+	var w := 0.0
+	for pid in sim.heater_parts:
+		if TcProcControl.is_on(sim, "heater:%s" % pid):
+			w += float(sim.heater_w.get(str(pid), 0.0))
+	return w
 
 
 func _refresh_tiles() -> void:
 	var r := sim.readings()
-	var has_bed := r.has("bed_t_max_c")
-	_set_tile("bed_max", "%.0f" % float(r["bed_t_max_c"]) if has_bed else "—")
-	_set_tile("vessel", "%.0f" % float(r.get("vessel_t_c", 0.0)) if r.has("vessel_t_c") else "—")
-	_set_tile("pressure", "%+.1f" % float(r.get("vessel_p_kpa_g", 0.0)))
-	var et: Array = r.get("element_t_c", [])
+	var b := sim.batch_stats()
+	var has_bed := bool(b["has_bed"])
+	var wood := bool(b["wood"])
+	var end_h := float(proc["duration_h"])
+	if _batch_head != null:
+		_batch_head.set_note("%s of %s" % [_fmt_t(sim.t_s), _fmt_t(end_h * 3600.0)])
+	# What the batch has made and used.
+	if wood:
+		_set_tile("carbon", "%.2f" % float(b["carbon_kg"]), "char is about %d %% carbon" % roundi(TcProcSim.CHAR_C_FRAC * 100.0))
+		_set_tile("co2e", "%.2f" % float(b["co2e_kg"]), "the %d %% that lasts 100 years" % roundi(TcProcSim.CHAR_PERM * 100.0))
+		var dry := maxf(float(b.get("feed_dry_kg", 0.0)), 1e-9)
+		_set_tile("char", "%.2f" % float(b["char_kg"]), "%.0f %% of %.1f kg dry wood" % [float(b["char_kg"]) / dry * 100.0, dry])
+	else:
+		var why := "no char from this charge" if has_bed else "nothing loaded"
+		_set_tile("carbon", "—", why)
+		_set_tile("co2e", "—", why)
+		_set_tile("char", "—", why)
+	var gl := float(b["gas_nl"])
+	_set_tile("gas", ("%.0f" % gl) if gl >= 10.0 else ("%.1f" % gl),
+		("%.2f MJ of fuel · %.1f MJ/m³" % [float(b["gas_mj"]), float(b["gas_mj"]) / (gl * 0.001)]) if gl > 0.5 else "none yet")
+	var hw := _heater_w_now()
+	_set_tile("energy", "%.2f" % float(b["heat_kwh"]), ("%s now" % UiText.num(hw, "W")) if hw > 0.0 else "elements off now")
+	var has_engine := false
+	for u in sim.units:
+		has_engine = has_engine or str(u["kind"]) == "engine"
+	var ekw := float(r.get("engine_kw", 0.0))
+	if has_engine:
+		var share := float(b["gen_kwh"]) / maxf(float(b["heat_kwh"]), 1e-9) * 100.0
+		_set_tile("gen", "%.2f" % float(b["gen_kwh"]),
+			("%.0f W at 48 V now" % (ekw * 1000.0)) if ekw > 0.0 else ("off now · %.0f %% of the heat used" % share))
+	else:
+		_set_tile("gen", "—", "no generator on this line")
+	var liq := float(b["vinegar_kg"]) + float(b["tar_kg"])
+	_set_tile("cond", "%.2f" % liq, ("wood vinegar %.2f · tar %.2f" % [float(b["vinegar_kg"]), float(b["tar_kg"])]) if liq > 0.005 else "none yet")
+	if has_bed:
+		var loaded_kg := float(b["feed_kg"])
+		var loaded_l := PI * pow(float(sim.net["cvs"][sim.vessel_cv]["r_in_m"]), 2.0) * sim.bed.height_m * 1000.0
+		_set_tile("done", "%.0f" % float(b["done_pct"]), "%.1f of %.1f kg · %.0f of %.0f L" % [float(b["charge_kg"]), loaded_kg,
+			loaded_l * float(b["volume_frac"]), loaded_l])
+	else:
+		_set_tile("done", "—", "nothing loaded")
+	# The process at this moment.
+	_set_now("bed_max", "%.0f °C" % float(r.get("bed_t_max_c", 0.0)), has_bed)
+	_set_now("vessel", "%.0f °C · %+.1f kPa" % [float(r.get("vessel_t_c", 0.0)), float(r.get("vessel_p_kpa_g", 0.0))], r.has("vessel_t_c"))
 	var es: Array = []
-	for v in et:
+	for v in r.get("element_t_c", []):
 		es.append("%.0f" % float(v))
-	_set_tile("element", " / ".join(es) if not es.is_empty() else "—")
-	_set_tile("dry_front", "%.0f" % float(r.get("dry_front_mm", 0.0)) if has_bed else "—")
-	_set_tile("pyro_front", "%.0f" % float(r.get("pyro_front_mm", 0.0)) if has_bed else "—")
-	_set_tile("gas", "%.1f" % float(r.get("gas_out_l_min", 0.0)))
-	_set_tile("lhv", "%.1f" % float(r.get("gas_lhv_mj_nm3", 0.0)) if float(r.get("gas_out_dry_l_min", 0.0)) > 0.05 else "—")
-	var ckg := 0.0
-	for k in (r.get("condensate_total", {}) as Dictionary).keys():
-		ckg += float(r["condensate_total"][k])
-	_set_tile("cond", "%.2f" % ckg)
-	_set_tile("char", "%.2f" % float(r.get("char_kg", 0.0)) if has_bed else "—")
-	_set_tile("energy", "%.2f" % float(r.get("energy_in_kwh", 0.0)))
+	_set_now("element", "%s °C" % " / ".join(es), not es.is_empty())
+	_set_now("fronts", "%.0f mm / %.0f mm" % [float(r.get("dry_front_mm", 0.0)), float(r.get("pyro_front_mm", 0.0))], has_bed)
+	var flow := float(r.get("gas_out_l_min", 0.0))
+	var has_out := false
+	for bd in sim.net["boundaries"]:
+		has_out = has_out or str(bd["role"]) == "product"
+	_set_now("gas_flow", ("%.1f L/min · %.1f MJ/m³" % [flow, float(r.get("gas_lhv_mj_nm3", 0.0))]) if float(r.get("gas_out_dry_l_min", 0.0)) > 0.05
+		else "%.1f L/min" % flow, has_out)
+	_set_now("holder", "%.0f %% full" % float(r.get("holder_pct", 0.0)), r.has("holder_pct"))
+	_set_now("genset", ("%.0f W at 48 V" % (ekw * 1000.0)) if ekw > 0.0 else "off", has_engine)
 	var co: Array = r.get("coolant_out_c", [])
 	var cmax := -INF
-	for v in co:
-		cmax = maxf(cmax, float(v))
-	_set_tile("cool", "%.0f" % cmax if co.size() > 0 else "—")
+	for v2 in co:
+		cmax = maxf(cmax, float(v2))
+	_set_now("cool", "%.0f °C" % cmax, co.size() > 0)
 	_refresh_heat()
-
 
 func _refresh_card() -> void:
 	if sim == null:

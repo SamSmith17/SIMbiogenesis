@@ -8,7 +8,7 @@ extends SceneTree
 ## wires, RP2040 fixed pin sets, determinism), the electrical checks and the
 ## YAML (a golden file, secrets only by reference).
 
-const EXPECTED_CHECKS := 1608
+const EXPECTED_CHECKS := 1612
 
 var _pass := 0
 var _fail := 0
@@ -39,6 +39,7 @@ func _initialize() -> void:
 	_test_builder()
 	_test_bindings()
 	_test_compare()
+	_test_entity_overrides()
 	_test_breadth()
 	var total := _pass + _fail
 	print("esplab selftest: %d passed, %d failed (%d checks)" % [_pass, _fail, total])
@@ -811,6 +812,23 @@ func _test_compare() -> void:
 
 
 # ------------------------------------------------------------------ phase 7: breadth
+
+## An instance can name an entity outright and give it another unit (a
+## controller board made for a TC process: TcProcBoard).
+func _test_entity_overrides() -> void:
+	var spec := EspSpec.empty("Reactor")
+	spec["parts"] = [
+		{"iid": "p1", "part": "max6675", "label": "vessel temp", "ents": {"temperature": {"name": "vessel temp"}}},
+		{"iid": "p2", "part": "vl53l0x", "label": "p30 level", "ents": {"distance": {"name": "p30 level", "unit": "%", "dc": ""}}},
+		{"iid": "p3", "part": "max6675", "label": "plain"}]
+	spec = EspSpec.resolve(spec)
+	_ok((spec["parts"][0] as Dictionary).has("ents") and not (spec["parts"][2] as Dictionary).has("ents"), "resolve keeps an instance's entity overrides, and adds none")
+	var ents := EspDesign.entities_of(spec, "Reactor")
+	_ok(str(ents[0]["entity_id"]) == "sensor.reactor_vessel_temp", "a named entity gets exactly that id (%s)" % str(ents[0]["entity_id"]))
+	_ok(str(ents[1]["entity_id"]) == "sensor.reactor_p30_level" and str(ents[1]["unit"]) == "%" and (ents[1]["set"] as Array).has("unit"),
+		"and another unit, written to the YAML")
+	_ok(str(ents[2]["entity_id"]) == "sensor.reactor_plain_thermocouple", "an instance without one is named as before (%s)" % str(ents[2]["entity_id"]))
+
 
 func _test_breadth() -> void:
 	_ok(EspBoards.ids().size() >= 18, "at least 18 boards (%d)" % EspBoards.ids().size())

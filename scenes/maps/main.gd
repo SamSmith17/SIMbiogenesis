@@ -5140,7 +5140,7 @@ func _setup_esplab_ui() -> void :
 		return
 	var layer := CanvasLayer.new()
 	layer.name = "EspLabLayer"
-	layer.layer = UITheme.LAYER_MODAL + 1
+	layer.layer = UITheme.LAYER_MODAL + 2   # above the TC designer, which opens it on a process's controller
 	ui_layer.add_child( layer )
 	var ui := Control.new()
 	ui.name = "EspLabModal"

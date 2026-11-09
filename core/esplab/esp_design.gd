@@ -82,6 +82,22 @@ static func entities_of(spec: Dictionary, friendly: String) -> Array:
 			# the instance's own name: a relay called "Fan" is "Fan".
 			var en := str(e["name"])
 			var name := str(inst["label"]) if en == EspParts.short_label(part) else EspEntityNames.entity_name(str(inst["label"]), en)
+			# An instance may name an entity outright, and give it another unit
+			# (a distance sensor reading a gasometer's fill in %).
+			var ov: Dictionary = (inst.get("ents", {}) as Dictionary).get(str(e["k"]), {}) if inst.get("ents", {}) is Dictionary else {}
+			var unit := str(e.get("unit", ""))
+			var dc := str(e.get("dc", ""))
+			var sets: Array = (e.get("set", []) as Array).duplicate()
+			if str(ov.get("name", "")) != "":
+				name = str(ov["name"])
+			if ov.has("unit"):
+				unit = str(ov["unit"])
+				if not sets.has("unit"):
+					sets.append("unit")
+			if ov.has("dc"):
+				dc = str(ov["dc"])
+				if not sets.has("dc"):
+					sets.append("dc")
 			var filters: Array = (e.get("filters", []) as Array).duplicate(true)
 			for f in extra_f.get(str(e["k"]), []):
 				filters.append(f)
@@ -90,8 +106,8 @@ static func entities_of(spec: Dictionary, friendly: String) -> Array:
 				"kind": kind, "name": name, "short": str(e["name"]),
 				"entity_id": EspEntityNames.entity_id(kind, friendly, name),
 				"id": EspEntityNames.esphome_id(str(inst["iid"]), str(e["k"])),
-				"unit": str(e.get("unit", "")), "dc": str(e.get("dc", "")), "sc": str(e.get("sc", "")),
-				"dec": int(e.get("dec", 0)), "set": e.get("set", []), "filters": filters,
+				"unit": unit, "dc": dc, "sc": str(e.get("sc", "")),
+				"dec": int(e.get("dec", 0)), "set": sets, "filters": filters,
 				"part_filters": (e.get("filters", []) as Array).size(),
 				"src": str(measures.get(str(e["k"]), e.get("src", ""))),
 				"sim": _sim_of(e), "update_s": upd,

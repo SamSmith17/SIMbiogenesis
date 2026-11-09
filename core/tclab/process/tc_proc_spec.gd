@@ -140,6 +140,13 @@ static func resolve(raw: Variant) -> Dictionary:
 			if re[k2] is Dictionary:
 				en[str(k2)] = {"on": bool(re[k2].get("on", false))}
 	d["engines"] = en
+	# What goes on the controller board (TcProcBoard): {on: {entity: bool}}.
+	var bo: Variant = src.get("board", {})
+	var on := {}
+	if bo is Dictionary and (bo as Dictionary).has("on") and bo["on"] is Dictionary:
+		for k3 in bo["on"]:
+			on[str(k3)] = bool(bo["on"][k3])
+	d["board"] = {"on": on}
 	# A lab run fitted for the world's graph (TcProcSummary); a placed
 	# assembly's node runs it.
 	d["recipe"] = (src["recipe"] as Dictionary).duplicate(true) if src.get("recipe") is Dictionary else {}

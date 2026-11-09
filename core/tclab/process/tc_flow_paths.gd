@@ -48,7 +48,7 @@ const ATTACH_ROLES := ["blind", "probe_t", "probe_p", "probe_well", "heater", "b
 const TYPE_RULES := {
 	"spool": "pipe", "elbow90": "bend", "elbow45": "bend", "bend": "bend",
 	"tee": "junction", "reducing_tee": "junction", "cross": "junction", "lateral": "junction",
-	"ferrule": "pipe", "cap": "blind", "cap_npt": "cap_npt", "reducing_cap": "pipe", "reducer": "pipe",
+	"ferrule": "pipe", "cap": "blind", "cap_npt": "cap_npt", "reducing_cap": "pipe", "reducer": "pipe", "bowl_reducer": "pipe",
 	"tc_npt_m": "pipe", "tc_barb": "pipe",
 	"vessel": "vessel",
 	"butterfly": "valve", "ball_valve": "valve", "ball_valve_3way": "valve3", "check_valve": "check",

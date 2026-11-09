@@ -3,7 +3,7 @@ extends SceneTree
 ## The biochar reactor preset against the user's model (NOT a selftest):
 ## prints each nozzle's position against the collar measured in
 ## "Biochar Reactor.glb" (2026-11-06; the same model ships as
-## res://Imported Models/Biochar/biochar_reactor.glb) with PASS / FAIL
+## Imported Models/Biochar/biochar_reactor.glb in the project) with PASS / FAIL
 ## inside the tolerance, the overall size, the condenser's column spacing,
 ## and shoots both side by side from the front and from behind.
 ## WINDOWED; APPDATA at a scratch folder.
@@ -140,14 +140,18 @@ func _numbers(d: Dictionary) -> void:
 		print("parity %s: nozzle %s %.0f mm off the model's collar (ours %s, model %s)%s" % [
 			"PASS" if ok else "FAIL", id, dist, _v(ours), _v(theirs), (" — " + str(KNOWN[id])) if KNOWN.has(id) else ""])
 	var bb: AABB = d["stats"]["bounds_mm"]
-	print("parity: ours %.0f × %.0f × %.0f mm; the model 613 × 845 × 618 mm (its lid floats ~110 mm over the rim)" % [bb.size.x, bb.size.y, bb.size.z])
+	print("parity: ours %.0f × %.0f × %.0f mm; the model 613 × 845 × 618 mm (its lid is drawn lifted 116 mm off the rim)" % [bb.size.x, bb.size.y, bb.size.z])
 	var rim_ok := absf(TcVessel.jacket_r(params) * 2.0 - 396.0) < 1.0 and absf(float(params["height_mm"]) - 650.0) < 1.0
 	_fails += 0 if rim_ok else 1
 	print("parity %s: the jacketed shell is Ø%.0f × %.0f mm (model Ø396 × 650)" % ["PASS" if rim_ok else "FAIL",
 		TcVessel.jacket_r(params) * 2.0, float(params["height_mm"])])
-	var lid_ok := absf(TcVessel.lid_od(params) - 516.0) < 1.0
+	# The model's lid (meshes Geom3D_7 and Geom3D_8, drawn lifted 116 mm off
+	# the rim): a flange ring r 182–192 mm and a dome Ø342 × 59 mm.
+	var lid_ok := absf(TcVessel.lid_od(params) - 380.0) < 4.5 and absf(TcVessel.lid_dome_od(params) - 342.0) < 1.0
+	lid_ok = lid_ok and absf(TcVessel.lid_depth(params) - 59.0) < 1.0
 	_fails += 0 if lid_ok else 1
-	print("parity %s: the lid is Ø%.0f mm (model 516)" % ["PASS" if lid_ok else "FAIL", TcVessel.lid_od(params)])
+	print("parity %s: the lid is a Ø%.0f × %.0f mm dome on a Ø%.0f flange (model Ø342 × 59 on Ø384)" % ["PASS" if lid_ok else "FAIL",
+		TcVessel.lid_dome_od(params), TcVessel.lid_depth(params), TcVessel.lid_od(params)])
 	var xs: Array = []
 	for id in res["order"]:
 		var pb: Dictionary = res["parts"][id]["built"]

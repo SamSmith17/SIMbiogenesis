@@ -18,7 +18,7 @@ extends SceneTree
 ## (Bridgwater 2012: char ~35 %, liquids ~30 %, gas ~35 %), tar cracking,
 ## plastic half-lives, O2-limited combustion and the desiccant.
 
-const EXPECTED_CHECKS := 424
+const EXPECTED_CHECKS := 486
 
 var _pass := 0
 var _fail := 0
@@ -55,6 +55,7 @@ func _initialize() -> void:
 	_test_molecules()
 	_test_summary()
 	_test_units()
+	_test_results_and_board()
 	_test_scenarios()
 	var total := _pass + _fail
 	print("tc_proc selftest: %d passed, %d failed (%d checks)" % [_pass, _fail, total])
@@ -457,6 +458,20 @@ func _test_batch() -> void:
 	_ok(t_done > 2.0 * 3600.0, "and two 600 W elements take hours, not minutes (%.1f h)" % (t_done / 3600.0))
 	_ok(float(fronts[0][0]) < float(fronts[2][0]) or float(fronts[0][0]) >= 90.0, "the drying front moves out from the elements")
 	_ok(float(fronts[0][1]) <= float(fronts[2][1]), "and the pyrolysis front follows it (%s)" % [fronts.slice(0, 4)])
+	# After the charge is done the preset's rule switches the elements off:
+	# the charge cools below the glow (black char) and has settled.
+	var all_off := true
+	for hp in sim.heater_parts:
+		all_off = all_off and not bool(sim.heater_on.get(hp, true))
+	_ok(all_off, "the elements are off at the end (the charge-is-done rule)")
+	var t_end_c := float(sim.bed.totals()["t_max_k"]) - 273.15
+	print("batch end: hottest charge %.0f °C, volume %.0f %% of loaded, mass %.2f of %.2f kg" % [t_end_c,
+		sim.bed.volume_frac() * 100.0, sim.bed.mass_kg(), sim.bed.initial_dry_kg + sim.bed.initial_moisture_kg])
+	_ok(t_end_c < 420.0, "and the charge has cooled below the glow by the end (%.0f °C)" % t_end_c)
+	_ok(sim.bed.volume_frac() > 0.4 and sim.bed.volume_frac() < 0.62, "the char takes about half the room the chips did (%.2f)" % sim.bed.volume_frac())
+	_ok(sim.bed.mass_kg() < 0.4 * (sim.bed.initial_dry_kg + sim.bed.initial_moisture_kg), "and weighs about a third (%.2f kg)" % sim.bed.mass_kg())
+	var fresh := TcProcSim.create(TcDesign.solve(TcPresets.builtin("biochar_reactor")))
+	_near(fresh.bed.volume_frac(), 1.0, 1e-6, "a fresh charge fills what was loaded")
 	var char_frac := float(r["char_kg"]) / sim.bed.initial_dry_kg
 	_ok(char_frac > 0.25 and char_frac < 0.40, "about a third of the dry wood is left as char (%.2f)" % char_frac)
 	var cond: Dictionary = r["condensate_total"]
@@ -503,7 +518,7 @@ func _test_pressure() -> void:
 	print("capped outlet: %.0f kPa gauge after 30 min" % p_closed)
 	_ok(p_closed > 50.0, "a sealed retort pressurises (%.0f kPa)" % p_closed)
 	# A relief valve on the crown holds it near its set pressure.
-	var r2 := TcAssembly.add_part(r[0], "relief_valve", "2", {}, Transform3D.IDENTITY, {"target": "p1:crown", "own": "a"})
+	var r2 := TcAssembly.add_part(r[0], "relief_valve", "1.5", {}, Transform3D.IDENTITY, {"target": "p1:crown", "own": "a"})
 	var pr := TcProcSpec.resolve(r2[0].get("process", {}))
 	pr["relief_bar"] = 0.5
 	var sim2 := TcProcSim.create(TcDesign.solve(r2[0]), pr)
@@ -665,13 +680,43 @@ func _test_molecules() -> void:
 	var oil := TcMolecules.element_count("oil")
 	_ok(int(oil.get("H", 0)) == 2 * int(oil.get("C", 0)) + 2, "the oil chain is an alkane CnH2n+2 (%s)" % [oil])
 	var n_st := 0
-	for kind in TcMolecules.STORY.keys():
-		for st in TcMolecules.STORY[kind]:
+	var stories := TcMolecules.stories()
+	for kind in stories.keys():
+		for st in stories[kind]:
 			n_st += 1
 			_ok(TcMolecules.balanced(st), "%s keeps every atom (%s)" % [kind, str(st["text"]).get_slice(":", 0)])
 	_ok(n_st >= 7, "storyboards for every reaction the model reports (%d)" % n_st)
 	for k in ["drying", "boiling", "condensing", "pyrolysis", "cracking"]:
-		_ok(TcMolecules.STORY.has(k), "a storyboard for %s" % k)
+		_ok(stories.has(k), "a storyboard for %s" % k)
+	# The wood examples: what each piece is, and that the link that stays
+	# does not move.
+	_ok(TcMolecules.element_count("xylan") == {"C": 5, "H": 8, "O": 4}, "a xylose link is C5H8O4 (%s)" % [TcMolecules.element_count("xylan")])
+	_ok(TcMolecules.element_count("xylan2") == {"C": 10, "H": 16, "O": 8}, "two links of hemicellulose are C10H16O8")
+	_ok(TcMolecules.element_count("furfural") == {"C": 5, "H": 4, "O": 2}, "furfural is C5H4O2")
+	_ok(TcMolecules.element_count("cellulose2") == {"C": 12, "H": 20, "O": 10}, "two links of cellulose are C12H20O10")
+	_ok(TcMolecules.element_count("lignin") == {"C": 10, "H": 12, "O": 3}, "the lignin unit is C10H12O3")
+	_ok(TcMolecules.element_count("guaiacol") == {"C": 7, "H": 8, "O": 2}, "guaiacol is C7H8O2")
+	_ok(TcMolecules.element_count("ethylene") == {"C": 2, "H": 4}, "ethylene is C2H4")
+	var ids := {}
+	for st2 in stories["pyrolysis"]:
+		ids[str(st2["id"])] = st2
+	_ok(ids.has("hemicellulose") and ids.has("cellulose") and ids.has("lignin") and ids.has("charring"),
+		"pyrolysis has an example for hemicellulose, cellulose, lignin and charring")
+	var hs: Dictionary = ids["hemicellulose"]
+	var stay: Vector3 = hs["to"][0][2]
+	var a0: Vector3 = (TcMolecules.raw("xylan2")["atoms"][0][1] as Vector3) - TcMolecules.centroid("xylan2")
+	var a1: Vector3 = (TcMolecules.raw("xylan")["atoms"][0][1] as Vector3) - TcMolecules.centroid("xylan") + stay
+	_ok(a0.distance_to(a1) < 1e-4, "the link that stays in the chain stands where it stood (%.4f Å)" % a0.distance_to(a1))
+	# Bonds are bond-length: nothing drawn across a molecule.
+	for sp2 in ["xylan2", "cellulose2", "furfural", "lignin", "guaiacol", "ethylene", "tar"]:
+		var lay := TcMolecules.layout(sp2)
+		var worst := 0.0
+		var least := INF
+		for bd in lay["bonds"]:
+			var bl: float = (lay["atoms"][int(bd[0])][1] as Vector3).distance_to(lay["atoms"][int(bd[1])][1])
+			worst = maxf(worst, bl)
+			least = minf(least, bl)
+		_ok(worst < 1.75 and least > 0.9, "%s: every bond is a bond's length (%.2f–%.2f Å)" % [sp2, least, worst])
 	var c := TcMolecules.sample_counts({"H2O": 0.6, "CO": 0.25, "CO2": 0.14, "H2": 0.01}, 30)
 	var tot := 0
 	for k2 in c.keys():
@@ -770,6 +815,108 @@ func _test_summary() -> void:
 	_ok(not (TcProcSpec.resolve(p2)["recipe"] as Dictionary).is_empty(), "the process block keeps the recipe")
 
 
+## The batch's results (what the Results tiles show) and the controller
+## board: carbon and CO2e from the char, the gas made wherever it went, the
+## electricity in and out; the ESP board made from the design's sensors and
+## switches carries the Process Lab's own entity ids.
+func _test_results_and_board() -> void:
+	var d := TcDesign.solve(TcPresets.builtin("biochar_genset"))
+	var sim := TcProcSim.create(d)
+	var b0 := sim.batch_stats()
+	_ok(float(b0["char_kg"]) == 0.0 and float(b0["co2e_kg"]) == 0.0 and float(b0["gas_nl"]) < 0.5, "nothing made before the batch starts")
+	_ok(bool(b0["has_bed"]) and bool(b0["wood"]), "a wood charge is loaded")
+	sim.run_for(1.5 * 3600.0)
+	var b1 := sim.batch_stats()
+	sim.run_for(4.5 * 3600.0)
+	var b := sim.batch_stats()
+	var char_kg := float(sim.bed.totals()["char_kg"])
+	_near(float(b["char_kg"]), char_kg, 1e-9, "the char is the bed's (%.2f kg)" % char_kg)
+	_near(float(b["carbon_kg"]), char_kg * 0.8, 1e-9, "its carbon is 80 %% of it (%.2f kg C)" % float(b["carbon_kg"]))
+	_near(float(b["co2e_kg"]), char_kg * 0.8 * 0.8 * 44.01 / 12.011, 1e-9, "CO2e = carbon × 0.8 lasting × 44/12 (%.2f kg)" % float(b["co2e_kg"]))
+	_ok(float(b["co2e_kg"]) > 5.0 and float(b["co2e_kg"]) < 9.0, "a 10 kg batch keeps 5–9 kg of CO2 out of the air")
+	_ok(float(b["gas_nl"]) > 500.0 and float(b["gas_nl"]) < 2500.0, "it gives off of the order of a cubic metre of gas (%.0f L)" % float(b["gas_nl"]))
+	_ok(float(b["gas_nl"]) > float(b1["gas_nl"]) and float(b["heat_kwh"]) > float(b1["heat_kwh"]), "gas made and electricity in only count up")
+	_ok(float(b["gas_mj"]) / (float(b["gas_nl"]) * 0.001) > 3.0 and float(b["gas_mj"]) / (float(b["gas_nl"]) * 0.001) < 14.0,
+		"the gas carries a woodgas heating value (%.1f MJ/m³)" % (float(b["gas_mj"]) / (float(b["gas_nl"]) * 0.001)))
+	_near(float(b["heat_kwh"]), sim.e_in / 3.6e6, 1e-9, "electricity in is the elements' energy")
+	_near(float(b["gen_kwh"]), sim.engine_kwh, 1e-12, "electricity out is the generator's")
+	_ok(float(b["gen_kwh"]) > 0.1 and float(b["gen_kwh"]) < float(b["heat_kwh"]), "the generator gives back part of the heat's electricity (%.2f of %.2f kWh)" % [float(b["gen_kwh"]), float(b["heat_kwh"])])
+	_ok(float(b["vinegar_kg"]) > 1.0 and float(b["tar_kg"]) > 0.2, "wood vinegar and tar were collected (%.2f, %.2f kg)" % [float(b["vinegar_kg"]), float(b["tar_kg"])])
+	# It is a function of the state: seeking back gives the earlier figures.
+	sim.seek(1.5 * 3600.0)
+	var bb := sim.batch_stats()
+	_ok(absf(float(bb["gas_nl"]) - float(b1["gas_nl"])) < maxf(float(b1["gas_nl"]) * 0.05, 5.0) and float(bb["char_kg"]) <= char_kg,
+		"a seek back shows the batch as it stood then")
+	var pl := TcProcSim.create(TcDesign.solve(TcPresets.builtin("plastic_retort")))
+	_ok(not bool(pl.batch_stats()["wood"]), "a plastic charge claims no stored carbon")
+	# The controller board.
+	var proc: Dictionary = sim.proc
+	var rws := TcProcBoard.rows(sim, proc)
+	var by := {}
+	for r in rws:
+		by[str(r["key"])] = r
+	var slug := TcProcControl.design_slug(d)
+	_ok(str(by["sensor.%s_charge_max_temp" % slug]["part"]) == "max6675" and bool(by["sensor.%s_charge_max_temp" % slug]["on"]), "the charge's temperature is a thermocouple, on the board")
+	_ok(str(by["sensor.%s_charge_done" % slug]["part"]) == "" and not bool(by["sensor.%s_charge_done" % slug]["on"]), "what the model works out has no part")
+	_ok(str(by["sensor.%s_cooling_out_temp" % slug]["part"]) == "ds18b20", "cooling water is a DS18B20")
+	var lvl := ""
+	var gen_sw := ""
+	for k in by.keys():
+		if str(k).ends_with("_level") and str(by[k]["part"]) == "vl53l0x":
+			lvl = str(k)
+		if str(by[k]["domain"]) == "switch" and str(k) != "switch.%s_cooling" % slug and not str(k).ends_with("_drain") and not str(k).ends_with("_heaters"):
+			gen_sw = str(k)
+	_ok(lvl != "", "the gasometer's fill is a distance sensor over the float")
+	_ok(str(by["switch.%s_heaters" % slug]["part"]) == "", "the every-element group is not a pin")
+	_ok(not bool(by["sensor.%s_p2_temp" % slug]["on"]), "an element's own temperature is off the board until ticked")
+	var ids := TcProcBoard.entity_ids(d, sim, proc)
+	var all_match := not ids.is_empty()
+	var bad := ""
+	for k2 in ids.keys():
+		if str(ids[k2]) != str(k2):
+			all_match = false
+			bad = "%s → %s" % [k2, ids[k2]]
+	_ok(all_match, "every part on the board gets the Process Lab's own entity id in Home Assistant (%d checked%s)" % [ids.size(), (", " + bad) if bad != "" else ""])
+	var spec := TcProcBoard.esp_spec(d, sim, proc)
+	_ok(str(spec["name"]) == TcProcBoard.friendly(d) and EspEntityNames.ha_slug(str(spec["name"])) == slug, "the board is named after the design")
+	var ed := EspDesign.solve(spec)
+	var errs := 0
+	for c in ed["checks"]:
+		if str(c.get("level", "")) == "error":
+			errs += 1
+	_ok(errs == 0, "the default board wires on one ESP32 (%d parts, %d errors)" % [(spec["parts"] as Array).size(), errs])
+	var yaml := str(ed["yaml"])
+	_ok(yaml.contains("platform: max6675") and yaml.contains("platform: vl53l0x") and yaml.contains("platform: gpio"), "its ESPHome YAML has the thermocouples, the distance sensor and the relays")
+	_ok(yaml.contains("unit_of_measurement: \"%\"") or yaml.contains("unit_of_measurement: '%'") or yaml.contains("unit_of_measurement: %"), "the float's distance is published in %")
+	# The rules name entities the board has.
+	var on_board := {}
+	for k3 in ids.keys():
+		on_board[str(k3)] = true
+	var named := 0
+	var have := 0
+	for a in proc.get("automations", []):
+		for t in a.get("triggers", []):
+			var eid := str(t.get("entity_id", ""))
+			if eid == lvl:
+				named += 1
+				have += 1 if on_board.has(eid) else 0
+		for ac in a.get("actions", []):
+			var tg := str(ac.get("target", ""))
+			if tg == gen_sw:
+				named += 1
+				have += 1 if on_board.has(tg) else 0
+	_ok(named >= 4 and have == named, "the generator rules' sensor and switch are both on the board (%d of %d)" % [have, named])
+	# The player's choice.
+	var p2 := proc.duplicate(true)
+	p2["board"] = {"on": {"sensor.%s_p2_temp" % slug: true, lvl: false}}
+	p2 = TcProcSpec.resolve(p2)
+	var by2 := {}
+	for r2 in TcProcBoard.rows(sim, p2):
+		by2[str(r2["key"])] = r2
+	_ok(bool(by2["sensor.%s_p2_temp" % slug]["on"]) and not bool(by2[lvl]["on"]), "ticks are kept on the design's process block")
+	_ok(TcProcBoard.summary(rws).contains("thermocouple") and TcProcBoard.summary(rws).contains("relay"), "the board is summed up in words (%s)" % TcProcBoard.summary(rws))
+
+
 ## Phase 8: the process units and the whole chain. The bell holds its
 ## weight's pressure while it fills, blows off through its seal when full; the
 ## genset fires only on gas rich enough, draws it through the dryer at its
@@ -785,12 +932,12 @@ func _test_units() -> void:
 	_ok(pb.size() == 2 and str(pb[0][1]) == "holder" and str(pb[1][1]) == "genset", "the holder and the genset are bound parts (%s)" % [pb])
 	var hn := TcDesign.unit_node(d, str(pb[0][0]), "holder")
 	_ok(str(hn.get("node_type", "")) == "resource" and str((hn["specs"] as Dictionary)["resource_kind"]) == "woodgas"
-		and absf(float(hn["specs"]["capacity_qty"]) - 0.3) < 1e-9, "the holder becomes a 0.3 m³ woodgas tank on the graph")
+		and absf(float(hn["specs"]["capacity_qty"]) - TcUnits.barrel_capacity_l("barrel_30") * 0.001) < 1e-9, "the gasometer becomes a woodgas tank of its float's capacity on the graph (%.3f m³)" % float(hn["specs"]["capacity_qty"]))
 	var gn := TcDesign.unit_node(d, str(pb[1][0]), "genset")
 	var gs: Dictionary = gn.get("specs", {})
 	var wh := float(gs.get("energy_wh_per_unit", 0.0))
-	_near(wh, 5.0 / 3.6 * 1000.0 * 0.22, 1e-6, "the genset node's Wh per m³ is the reference gas × its efficiency")
-	_near(float((gs["inputs"] as Array)[0]["rate"]) * wh / 1000.0, 2.5, 1e-9, "at its fuel rate it makes its 2.5 kW rating")
+	_near(wh, 5.0 / 3.6 * 1000.0 * 0.18, 1e-6, "the genset node's Wh per m³ is the reference gas × its efficiency")
+	_near(float((gs["inputs"] as Array)[0]["rate"]) * wh / 1000.0, 0.75, 1e-9, "at its fuel rate it makes its 750 W rating")
 	_ok(str((gs["outputs"] as Array)[0]["kind"]) == "dc_electricity", "the genset puts out DC electricity")
 	var proc: Dictionary = (d["spec"] as Dictionary)["process"]
 	var sim := TcProcSim.create(d, proc)
@@ -828,8 +975,21 @@ func _test_units() -> void:
 		max_kw = maxf(max_kw, float(sim.engine_kw.get(str(pb[1][0]), 0.0)))
 	_ok(max_fill > 0.55, "the bell rises as the gas comes in (to %.0f %%)" % (max_fill * 100.0))
 	_ok(off_hold < 300.0, "while it is part full the bell holds its weight's pressure (off by %.0f Pa)" % off_hold)
-	_ok(max_kw > 2.0 and max_kw <= 2.5 + 1e-6, "the genset runs near its rating (%.2f kW)" % max_kw)
-	_ok(sim.engine_kwh > 0.25 and sim.engine_kwh < 1.0, "the batch's gas makes a fraction of a kWh (%.2f kWh)" % sim.engine_kwh)
+	_ok(max_kw > 0.34 and max_kw <= 0.75 + 1e-6, "the small generator runs inside its 350–750 W range (%.2f kW at most)" % max_kw)
+	_ok(sim.engine_kwh > 0.15 and sim.engine_kwh < 0.6, "the batch's gas makes a fraction of a kWh (%.2f kWh)" % sim.engine_kwh)
+	# The governor: the floor while the gasometer is low, full output once it is well up.
+	var eu: Dictionary = kinds["engine"]
+	_near(float(eu["min_kw"]), 0.35, 1e-9, "the generator's floor is 350 W")
+	_near(float(eu["rated_kw"]), 0.75, 1e-9, "and its full output 750 W")
+	var keep_v := sim.v_free[hi]
+	sim.v_free[hi] = float(hu["cap_m3"]) * (TcProcSim.HOLDER_MIN + (1.0 - TcProcSim.HOLDER_MIN) * 0.1)
+	_near(sim.engine_setpoint_kw(eu), 0.35, 1e-6, "asked for 350 W with the gasometer nearly empty")
+	sim.v_free[hi] = float(hu["cap_m3"]) * (TcProcSim.HOLDER_MIN + (1.0 - TcProcSim.HOLDER_MIN) * 0.45)
+	_near(sim.engine_setpoint_kw(eu), 0.55, 1e-6, "550 W at 45 % full")
+	sim.v_free[hi] = float(hu["cap_m3"])
+	_near(sim.engine_setpoint_kw(eu), 0.75, 1e-6, "750 W with it full")
+	sim.v_free[hi] = keep_v
+	_near(sim.engine_setpoint_kw({"rated_kw": 2.5}), 2.5, 1e-9, "a set with no floor always runs at full output")
 	var du: Dictionary = kinds["dryer"]
 	_ok(sim.ads_mol[int(du["cv"])] > 0.0, "the dryer takes water out of the gas")
 	var ons := 0
@@ -862,8 +1022,8 @@ func _test_units() -> void:
 	for e3 in sb.events:
 		blew = blew or str(e3["id"]).begins_with("bell_blow")
 	_ok(blew and sb.holder_fill(hu) > 0.99, "a full bell blows off through its water seal")
-	_ok(p_max < float(hu["hold_pa"]) - TcSpecies.P_ATM + TcProcSim.SEAL_BLOW_PA + 500.0,
-		"so it never builds pressure (%.1f kPa)" % (p_max * 0.001))
+	_ok(p_max < float(hu["hold_pa"]) - TcSpecies.P_ATM + TcProcSim.SEAL_BLOW_PA + 3000.0,
+		"so it never builds more than a few kPa (%.1f kPa; a 45 L float overshoots its seal a little inside one step)" % (p_max * 0.001))
 	# A genset switched on over air does not fire.
 	var p3 := proc.duplicate(true)
 	p3["automations"] = []

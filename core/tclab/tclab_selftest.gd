@@ -11,7 +11,7 @@ extends SceneTree
 ## and one clamp per joint), the spec key round trip, picking, the builder's
 ## nodes, and the files (GLB re-imported, STL size).
 
-const EXPECTED_CHECKS := 605
+const EXPECTED_CHECKS := 691
 
 var _pass := 0
 var _fail := 0
@@ -43,6 +43,7 @@ func _initialize() -> void:
 	_test_specialty()
 	_test_vessel()
 	_test_presets()
+	_test_photo_presets()
 	_test_world()
 	var total := _pass + _fail
 	print("tclab selftest: %d passed, %d failed (%d checks)" % [_pass, _fail, total])
@@ -398,6 +399,109 @@ func _test_vessel() -> void:
 	_ok((TcDesign.solve(r2[0])["clashes"] as Array).size() == 1, "a spool through the vessel is a clash")
 
 
+## 2026-11-08: the reactor's lid as the model has it, what a vessel can
+## stand on, the handle ring, the bowl reducer and the designs made from
+## the user's photos.
+func _test_photo_presets() -> void:
+	var rv := TcVessel.resolve(TcPresets.reactor_vessel())
+	_near(TcVessel.lid_od(rv), 380.0, 0.01, "the reactor's lid flange is Ø380 (the model's ring is r 182–192)")
+	_near(TcVessel.lid_dome_od(rv), 342.0, 0.01, "its dome Ø342")
+	_near(TcVessel.lid_depth(rv), 59.0, 0.01, "59 mm high")
+	_ok(TcVessel.lid_od(rv) < TcVessel.jacket_r(rv) * 2.0, "the lid sits inside the jacket's rim (it was Ø516, wider than the vessel)")
+	_near(TcVessel.lid_flange_t(rv), TcVessel.LID_FLANGE_MM, 0.01, "the dome stands on a flange ring")
+	_near(TcVessel.face_y(rv, "lid", 0.0), 650.0 + TcVessel.LID_FLANGE_MM + 59.0 + 2.0, 0.01, "the crown is flange + dome above the rim")
+	_near(TcVessel.face_y(rv, "lid", 185.0), 650.0 + TcVessel.LID_FLANGE_MM, 0.01, "past the dome the lid is the flat flange")
+	var plain := TcVessel.resolve({"od_mm": 300.0, "height_mm": 300.0})
+	_near(TcVessel.lid_flange_t(plain), 0.0, 0.01, "a lid with no dome diameter is all dome, as before")
+	_near(TcVessel.lid_dome_od(plain), TcVessel.lid_od(plain), 0.01, "its dome is the lid")
+	for key in ["ring_stand_reactor", "tall_tank", "horizontal_tank", "cylinder", "collection_pot"]:
+		_ok(TcVessel.PRESETS.has(key), "vessel preset %s" % key)
+		var vp := TcVessel.resolve(TcVessel.PRESETS[key]["params"])
+		var g := TcGeom.new()
+		var built := TcVessel.build(g, vp)
+		_ok(_bad_windings(g) == 0, "%s: every triangle on the front face (%d bad)" % [key, _bad_windings(g)])
+		_ok(float(built["volume_l"]) > 5.0, "%s holds %.0f L" % [key, float(built["volume_l"])])
+	# A ring stand reaches the floor: its lowest point is the legs' height below the bottom.
+	var rs := TcVessel.resolve(TcVessel.PRESETS["ring_stand_reactor"]["params"])
+	var g2 := TcGeom.new()
+	TcVessel.build(g2, rs)
+	var bb := g2.aabb()
+	_near(bb.position.y, -TcVessel.head_depth(rs, "bottom") - float(rs["leg_h_mm"]), 1.5, "the ring stand's casters reach the legs' height below the bottom head")
+	_ok(bb.size.x > float(rs["od_mm"]) * 1.15, "the floor ring is wider than the vessel (%.0f mm)" % bb.size.x)
+	_ok(bb.end.y > float(rs["height_mm"]) + float(rs["handle_ring_h_mm"]), "the handle ring stands over the top")
+	var no_ring := TcGeom.new()
+	TcVessel.build(no_ring, TcVessel.resolve((rs as Dictionary).merged({"handle_ring": false}, true)))
+	_ok(no_ring.aabb().end.y < bb.end.y - 50.0, "and goes with its box unticked")
+	# A skid hangs off the shell's −Z side.
+	var hz := TcVessel.resolve(TcVessel.PRESETS["horizontal_tank"]["params"])
+	var g3 := TcGeom.new()
+	TcVessel.build(g3, hz)
+	_near(g3.aabb().position.z, -(float(hz["od_mm"]) * 0.5 + float(hz["leg_h_mm"]) + 15.0), 1.5, "the skid's casters are the leg height below the shell, on its −Z side")
+	_near(g3.aabb().end.z, float(hz["od_mm"]) * 0.5, 1.0, "nothing on the other side")
+	# The bowl reducer.
+	var br := TcParts.build("bowl_reducer", "6", {"small": "2"})
+	var bp := {}
+	for q in br["ports"]:
+		bp[str(q["id"])] = q
+	_ok(str(bp["a"]["size"]) == "6" and str(bp["b"]["size"]) == "2", "a bowl reducer goes 6\" to 2\"")
+	var cone := TcParts.build("reducer", "6", {"small": "2"})
+	var cb := {}
+	for q2 in cone["ports"]:
+		cb[str(q2["id"])] = q2
+	_ok((bp["b"]["pos"] as Vector3).z < (cb["b"]["pos"] as Vector3).z * 0.7, "and is much shorter than the cone (%.0f vs %.0f mm)" % [(bp["b"]["pos"] as Vector3).z, (cb["b"]["pos"] as Vector3).z])
+	_ok(TcFlowPaths.TYPE_RULES.has("bowl_reducer"), "the process network knows it is a pipe")
+	# The barrel gasometers and the small generator (the user's models).
+	_near(TcUnits.barrel_capacity_l("barrel_30"), 56.8 * 0.8, 1e-6, "a 30 gal gasometer holds 0.8 of its 15 gal float (%.1f L)" % TcUnits.barrel_capacity_l("barrel_30"))
+	_near(TcUnits.barrel_capacity_l("barrel_55"), 113.6 * 0.8, 1e-6, "the 55 gal one 0.8 of a 30 gal float (%.1f L)" % TcUnits.barrel_capacity_l("barrel_55"))
+	_ok(absf(TcUnits.holder_stroke_mm("barrel_30", 0.0) - 440.0) < 40.0, "its float rises about as far as the model draws it (%.0f mm, model 440)" % TcUnits.holder_stroke_mm("barrel_30", 0.0))
+	_ok(TcUnits.barrel_hold_kpa("barrel_30") > 0.15 and TcUnits.barrel_hold_kpa("barrel_30") < 0.5, "the float's weight holds the gas at a few tenths of a kPa (%.2f)" % TcUnits.barrel_hold_kpa("barrel_30"))
+	var gh := TcParts.build("gas_holder", "2", {})
+	_ok(str(gh["params"]["style"]) == "barrel_30", "a new gas holder is the 30 gal barrel gasometer")
+	var gb: AABB = (gh["geo"] as TcGeom).aabb()
+	_near(gb.size.x, 526.0 + 14.0, 3.0, "its base barrel is Ø526 (hoops 14 mm more)")
+	_ok(gb.size.y > 866.0 and gb.size.y < 866.0 + 500.0, "drawn with the float part way up (%.0f mm tall)" % gb.size.y)
+	var g55 := TcParts.build("gas_holder", "2", {"style": "barrel_55"})
+	_near(float(g55["params"]["volume_l"]), TcUnits.barrel_capacity_l("barrel_55"), 1e-6, "the 55 gal style sets its own capacity")
+	_ok((g55["geo"] as TcGeom).aabb().size.x > gb.size.x + 40.0, "and is the bigger barrel")
+	var old := TcParts.build("gas_holder", "2", {"volume_l": 300.0, "hold_kpa": 0.8})
+	_ok(str(old["params"]["style"]) == "bell" and absf(float(old["params"]["volume_l"]) - 300.0) < 1e-9, "a holder saved before the barrels is still the 300 L steel bell")
+	for st in ["barrel_30", "barrel_55", "bell"]:
+		var gf := TcGeom.new()
+		var gbase := TcGeom.new()
+		TcUnits.gas_holder(gf, "2", 300.0, 0.5, st, "float", 0.0)
+		TcUnits.gas_holder(gbase, "2", 300.0, 0.5, st, "base")
+		_ok(_bad_windings(gf) == 0 and _bad_windings(gbase) == 0, "%s: float and base wound to the front" % st)
+		_ok(gf.get_mats().has("bell") and not gbase.get_mats().has("bell"), "%s: the float is its own surface, apart from the base" % st)
+	var gen := TcParts.build("genset", "2", {})
+	_ok(str(gen["params"]["model"]) == "small" and absf(float(gen["params"]["rated_kw"]) - 0.75) < 1e-9 and absf(float(gen["params"]["min_kw"]) - 0.35) < 1e-9,
+		"a new generator is the small one, 350–750 W")
+	var genb: AABB = (gen["geo"] as TcGeom).aabb()
+	_ok(absf(genb.size.x - 560.0) < 30.0 and absf(genb.size.y - 620.0) < 40.0, "drawn to the model's size (%.0f wide, %.0f high; model 560 × 620)" % [genb.size.x, genb.size.y])
+	_ok(_bad_windings(gen["geo"]) == 0, "wound to the front")
+	_ok(TcParts.part_name("genset", "2", gen["params"]).begins_with("350–750 W"), "named by its range (%s)" % TcParts.part_name("genset", "2", gen["params"]))
+	var old_gen := TcParts.build("genset", "2", {"rated_kw": 2.5, "efficiency": 0.22})
+	_ok(str(old_gen["params"]["model"]) == "skid" and float(old_gen["params"]["min_kw"]) == 0.0, "a genset saved before it is still the 2.5 kW skid set")
+	var chain := TcDesign.solve(TcPresets.builtin("biochar_genset"))
+	var kinds := {}
+	for cid in chain["res"]["order"]:
+		var cb2: Dictionary = chain["res"]["parts"][cid]["built"]
+		if str(cb2["type"]) in ["gas_holder", "genset"]:
+			kinds[str(cb2["type"])] = cb2["params"]
+	_ok(str((kinds.get("gas_holder", {}) as Dictionary).get("style", "")) == "barrel_30" and str((kinds.get("genset", {}) as Dictionary).get("model", "")) == "small",
+		"the reactor → genset chain uses the barrel gasometer and the small generator")
+	# The designs.
+	for id in ["ring_stand_reactor", "tall_tank", "horizontal_receiver", "parts_kit"]:
+		var d := TcDesign.solve(TcPresets.builtin(id))
+		var errs := (d["checks"] as Array).filter(func(c): return str(c["level"]) == "error")
+		_ok(not (d["res"]["order"] as Array).is_empty() and errs.is_empty(), "%s solves with no error (%d parts, %d errors)" % [id, (d["res"]["order"] as Array).size(), errs.size()])
+		_ok((d["clashes"] as Array).is_empty(), "%s: nothing clashes (%d)" % [id, (d["clashes"] as Array).size()])
+		var b3: AABB = d["stats"]["bounds_mm"]
+		_ok(b3.position.y > -8.0, "%s stands on the floor (lowest point %.0f mm)" % [id, b3.position.y])
+	var hd := TcDesign.solve(TcPresets.builtin("horizontal_receiver"))
+	var hb: AABB = hd["stats"]["bounds_mm"]
+	_ok(hb.size.z > hb.size.y and hb.size.z > 1000.0, "the receiver lies on its side (%.0f long, %.0f high)" % [hb.size.z, hb.size.y])
+
+
 func _test_presets() -> void:
 	for bi in TcPresets.builtins():
 		var d := TcDesign.solve(bi["spec"])
@@ -426,9 +530,10 @@ func _test_presets() -> void:
 			gas = true
 	_ok(gas, "the woodgas outlet is labelled")
 	var bb: AABB = d2["stats"]["bounds_mm"]
-	# On 160 mm legs so the two bottom elements' heads clear the floor:
+	# A flat double bottom (no legs): the jacket's own bottom is the floor,
+	# the two elements' heads sit between it and the inner bottom:
 	# the feet are the lowest thing.
-	_ok(bb.position.y > -170.0 and bb.position.y < -150.0, "the reactor stands on its legs, elements clear of the floor (lowest %.1f mm)" % bb.position.y)
+	_ok(bb.position.y > -170.0 and bb.position.y < -150.0, "the reactor stands on its jacket's flat bottom (lowest %.1f mm)" % bb.position.y)
 
 
 ## Phase 7–8: the placed assembly (catalog, world build, LOD + collision,

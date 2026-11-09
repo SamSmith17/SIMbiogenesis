@@ -533,6 +533,50 @@ func step(dt: float, heat_w: Array, t_wall: float, t_gas: float, t_boil: float, 
 	return out
 
 
+## How much room the charge takes now, as a share of what was loaded (for
+## the views and the readings; the heat model keeps its loaded grid). Wood
+## shrinks a little as it dries and a lot as it chars: single-particle
+## studies report 40–60 % of the volume lost on pyrolysis (Davidsson &
+## Pettersson 2002; Bryden & Hagge 2003) and 5–10 % on drying, so a bed of
+## chips settles to roughly half its height — CHAR_SHRINK and DRY_SHRINK are
+## estimates inside those ranges. Plastic pellets slump to a pool when they
+## melt (bulk 550 → melt ~750 kg/m³) and then crack away to nothing.
+const CHAR_SHRINK := 0.45
+const DRY_SHRINK := 0.06
+const PLASTIC_MELT_RHO := 750.0
+
+
+func volume_frac() -> float:
+	if domains.is_empty():
+		return 1.0
+	var v0 := 0.0
+	var left := 0.0
+	var mw := 0.0
+	var hot := 0.0
+	var n := 0
+	for d in domains:
+		for i in int(d["n"]):
+			v0 += float(d["v0"][i])
+			left += _volatile_at(d, i)
+			mw += float(d["mw"][i])
+			n += 1
+			if plastic != "" and float(d["T"][i]) >= float(MELT_K.get(plastic, 1e9)):
+				hot += 1.0
+	var conv := clampf(1.0 - left / maxf(v0, 1e-9), 0.0, 1.0)
+	if plastic != "":
+		var molten := hot / float(maxi(n, 1))
+		var fd: Dictionary = TcProcSpec.FEEDS.get(feed, {})
+		var bulk := float(fd.get("bulk_kg_m3", 550.0))
+		return clampf((1.0 - conv) * lerpf(1.0, bulk / PLASTIC_MELT_RHO, molten), 0.02, 1.0)
+	var dried := 1.0 - clampf(mw / maxf(initial_moisture_kg, 1e-9), 0.0, 1.0) if initial_moisture_kg > 0.0 else 1.0
+	return clampf((1.0 - DRY_SHRINK * dried) * (1.0 - CHAR_SHRINK * conv), 0.05, 1.0)
+
+
+## The charge's height now (m): the loaded height times its volume share.
+func height_now_m() -> float:
+	return height_m * volume_frac()
+
+
 ## How far a cell has pyrolysed: 0 fresh … 1 all reacted (char / gone).
 static func converted_at(d: Dictionary, i: int) -> float:
 	return clampf(1.0 - _volatile_at(d, i) / maxf(float(d["v0"][i]), 1e-9), 0.0, 1.0)

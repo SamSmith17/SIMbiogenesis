@@ -466,6 +466,7 @@ func _set_spec(s: Dictionary, push: bool = true) -> void:
 	if not _sel.is_empty() and not _sel_exists():
 		_sel = {}
 	_rebuild_studio()
+	_seat_ground()
 	_refresh_right()
 	if _proc_mode and _proc != null:
 		_proc.call("design_changed", _design)
@@ -577,6 +578,16 @@ func _rebuild_markers() -> void:
 		_markers.add_child(mi)
 
 
+## The studio floor sits under the design's lowest point (a gas line, a
+## drain elbow or a unit's feet can hang below the first part's y = 0), so
+## nothing is ever drawn below the ground.
+func _seat_ground() -> void:
+	if _studio == null or _studio.ground == null:
+		return
+	var bb: AABB = (_design.get("stats", {}) as Dictionary).get("bounds_mm", AABB())
+	_studio.ground.position.y = minf(bb.position.y, 0.0) * MM - 0.0005
+
+
 ## Fittings are small: frame on the assembly's own size (the kit's
 ## frame_sphere adds a metre of air, which left a 1½" run a speck).
 func _frame() -> void:
@@ -586,6 +597,7 @@ func _frame() -> void:
 	if bb.size.length() >= 1.0:
 		c = (bb.position + bb.size * 0.5) * MM
 		r = maxf(bb.size.length() * 0.5 * MM, 0.05)
+	_seat_ground()
 	_studio.target = c
 	_studio.dist = clampf(r * 2.7, StudioViewport.DIST_MIN, _studio.dist_max)
 	_studio.update_camera()
@@ -1291,7 +1303,13 @@ func _vessel_card(id: String) -> void:
 	_card.add_child(_vopt("Preset", presets, "", func(k: Variant) -> void:
 		if str(k).is_empty():
 			return
-		var pp: Dictionary = (TcVessel.PRESETS[str(k)]["params"] as Dictionary).duplicate(true)
+		# The whole shape from the preset (anything it leaves out goes back
+		# to the default); nozzles and internals stay.
+		var pp: Dictionary = TcVessel.defaults()
+		pp.erase("ports")
+		pp.erase("internals")
+		pp.erase("cutaway")
+		pp.merge((TcVessel.PRESETS[str(k)]["params"] as Dictionary).duplicate(true), true)
 		_set_vessel(id, pp), "vessel_preset", "Sets the vessel's shape and keeps its nozzles"))
 	_card.add_child(_vspin("Diameter", float(v["od_mm"]), 60.0, 3000.0, 1.0, setv.call("od_mm"), "Shell outside diameter", "v_od"))
 	_card.add_child(_vspin("Height", float(v["height_mm"]), 40.0, 5000.0, 1.0, setv.call("height_mm"), "The straight shell, seam to seam", "v_h"))
@@ -1310,17 +1328,38 @@ func _vessel_card(id: String) -> void:
 		if bool(v["lid"]):
 			_card.add_child(_vspin("Lid diameter", float(v["lid_od_mm"]), 0.0, 4000.0, 1.0, setv.call("lid_od_mm"), "0 = 30 mm over the shell"))
 			_card.add_child(_vspin("Lid rise", float(v["lid_depth_mm"]), 0.0, 1000.0, 1.0, setv.call("lid_depth_mm"), "0 = 12 % of its diameter"))
+			_card.add_child(_vspin("Lid dome", float(v["lid_dome_od_mm"]), 0.0, 4000.0, 1.0, setv.call("lid_dome_od_mm"),
+				"The dome's diameter when it stands on a flat flange ring (0 = the dome is the whole lid)", "v_lid_dome"))
+			_card.add_child(_vopt("Lid shape", [["dished", "Dished (flat on top)"], ["cap", "Spherical cap"]], str(v["lid_shape"]),
+				setv.call("lid_shape"), "v_lid_shape"))
+			var lc := FormRow.check("Lid clamp", "Band clamp", Callable(), "A band clamp round the rim holds the lid down", "v_lid_clamp")
+			lc.set_value(bool(v["lid_clamp"]))
+			(lc.control as CheckBox).toggled.connect(setv.call("lid_clamp"))
+			_card.add_child(lc)
 	_card.add_child(_vopt("Jacket", [["none", "None"], ["full", "Full height"], ["band", "Band"]], str(v["jacket"]), setv.call("jacket"), "v_jacket",
 		"A steam or water jacket round the shell; nozzles pass through it"))
 	if str(v["jacket"]) != "none":
 		_card.add_child(_vspin("Jacket gap", float(v["jacket_gap_mm"]), 4.0, 300.0, 1.0, setv.call("jacket_gap_mm")))
+		_card.add_child(_vspin("Double bottom", float(v.get("jacket_bottom_mm", 0.0)), 0.0, 600.0, 1.0, setv.call("jacket_bottom_mm")))
 		if str(v["jacket"]) == "band":
 			_card.add_child(_vspin("Jacket from", float(v["jacket_from_mm"]), 0.0, 5000.0, 1.0, setv.call("jacket_from_mm")))
 			_card.add_child(_vspin("Jacket to", float(v["jacket_to_mm"]), 0.0, 5000.0, 1.0, setv.call("jacket_to_mm"), "0 = the top"))
 	_card.add_child(_vspin("Insulation", float(v["insulation_mm"]), 0.0, 300.0, 1.0, setv.call("insulation_mm"), "Thickness outside the shell or jacket (0 = none)"))
-	_card.add_child(_vopt("Stands on", [["none", "Its bottom"], ["legs", "Legs"], ["skirt", "A skirt"]], str(v["legs"]), setv.call("legs"), "v_legs"))
+	_card.add_child(_vopt("Stands on", [["none", "Its bottom"], ["legs", "Legs"], ["skirt", "A skirt"],
+		["ring_stand", "A ring stand on casters"], ["casters", "Casters"], ["saddle", "A skid (tank on its side)"]],
+		str(v["legs"]), setv.call("legs"), "v_legs",
+		"A skid runs along the shell's back: turn the tank on its side so the skid is underneath"))
 	if str(v["legs"]) != "none":
 		_card.add_child(_vspin("Leg height", float(v["leg_h_mm"]), 10.0, 3000.0, 1.0, setv.call("leg_h_mm")))
+	if str(v["legs"]) in ["legs", "ring_stand", "casters"]:
+		_card.add_child(_vspin("Legs", float(v["leg_count"]), 3.0, 8.0, 1.0, func(val: Variant) -> void: _set_vessel(id, {"leg_count": int(val)})))
+	var hr := FormRow.check("Handle ring", "Ring over the top", Callable(), "A tube ring on three struts over the top: a handle and a roll bar", "v_handle_ring")
+	hr.set_value(bool(v["handle_ring"]))
+	(hr.control as CheckBox).toggled.connect(setv.call("handle_ring"))
+	_card.add_child(hr)
+	if bool(v["handle_ring"]):
+		_card.add_child(_vspin("Ring diameter", float(v["handle_ring_od_mm"]), 0.0, 4000.0, 1.0, setv.call("handle_ring_od_mm"), "0 = a little wider than the shell"))
+		_card.add_child(_vspin("Ring height", float(v["handle_ring_h_mm"]), 0.0, 2000.0, 1.0, setv.call("handle_ring_h_mm"), "Above the shell's top seam (0 = by the shell's size)"))
 	# Internals.
 	_card.add_child(SectionHeader.make("Inside", "layers"))
 	var ints: Array = (v["internals"] as Array).duplicate(true)
@@ -1647,8 +1686,18 @@ func _set_status(t: String) -> void:
 # Keys
 # ---------------------------------------------------------------------------
 
+## Another designer (the ESP board designer, on a process's controller) is
+## open over this one.
+func _covered() -> bool:
+	var main := get_tree().current_scene if get_tree() != null else null
+	if main == null:
+		return false
+	var esp: Variant = main.get("esplab_ui")
+	return esp is Control and is_instance_valid(esp) and (esp as Control).visible
+
+
 func _input(e: InputEvent) -> void:
-	if not _active or not (e is InputEventKey):
+	if not _active or not (e is InputEventKey) or _covered():
 		return
 	var ke := e as InputEventKey
 	if not ke.pressed or ke.echo:

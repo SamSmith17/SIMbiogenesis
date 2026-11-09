@@ -1,37 +1,53 @@
 extends PanelContainer
 
-## The TC Process Lab's molecule lens (Phase 6 of plans/TC_PROCESS_LAB_PLAN.md):
-## a picture-in-picture over the studio showing a handful of molecules from
-## the selected volume, read off the running TcProcSim.
+## The TC Process Lab's molecule lens: a picture-in-picture over the studio
+## that shows ONE worked example of the main reaction going on in the
+## selected volume, drawn as a bold ball-and-stick figure (dark carbon, red
+## oxygen, pale hydrogen, light sticks — a textbook plate).
 ##
-##   gas      the volume's gas, sampled by mole fraction (~32 molecules),
-##            flying at a speed that grows as √(T/M) and bouncing off the
-##            box and each other (elastic)
-##   liquid   what has condensed there, jostling in a layer at the bottom
-##   solid    the vessel's charge: glucose units of cellulose turning to
-##            carbon hexagons as it chars, with water held in the wood
-## When the model reports a reaction in the volume (drying, boiling,
-## condensing, pyrolysis, tar cracking, burning) the lens plays it on some
-## of its molecules at a rate that follows the model's: bonds stretch and
-## break, the atoms (matched by element, nothing appears or vanishes —
-## TcMolecules.STORY balances) move into the products, and a caption says
-## what happened.
+## It asks the running TcProcSim what is reacting there (drying, boiling,
+## condensing, pyrolysis, tar cracking, burning) and plays that reaction's
+## storyboard (TcMolecules.stories) as a loop:
+##   before      the reactant, named
+##   bonds break the bonds that will go heat up and shake
+##   after       the atoms move into the products (every atom is kept:
+##               the storyboards balance), which are named; gases drift off
+## For a wood charge the pyrolysis example follows what the bed is doing:
+## hemicellulose first (it goes at the lowest temperature), then cellulose,
+## then lignin, with charring in turn — picked from each component's rate in
+## the bed's own cells. With nothing reacting it shows what the volume
+## holds: its main molecules, side by side, with their shares.
 ##
-## Moles are not simulated: the lens is a picture of the model's numbers.
-## It moves on the lab's clock (frozen while the lab is paused) and costs
-## nothing while closed (the panel frees it).
+## Earlier this lens simulated ~60 molecules flying round a box; that read
+## as noise. It is a figure now, not a simulation: moles are not simulated,
+## the picture follows the model's numbers. It moves on the lab's clock
+## (frozen while the lab is paused) and costs nothing while closed (the
+## panel frees it).
 
-const BOX := 20.0                 # Å, the cube's edge
-const N_GAS := 30
-const N_LIQ := 18
-const N_SOLID := 16
-const GAS_ATOMS := 170            # the gas's atom budget (readability)
-const LIQ_ATOMS := 110
-const SYNC_S := 0.5
-const STORY_S := 2.4
-const MAX_STORIES := 2
-const ATOM_SCALE := 0.42          # display radius / TcSpecies radius
-const VIEW_SIZE := Vector2i(400, 300)
+const VIEW_SIZE := Vector2i(440, 320)
+## How the atoms are drawn (Å): big balls on thin sticks.
+const LOOK := {
+	"H": {"color": Color(0.93, 0.91, 0.84), "r": 0.33},
+	"C": {"color": Color(0.07, 0.07, 0.075), "r": 0.46},
+	"O": {"color": Color(0.80, 0.05, 0.04), "r": 0.44},
+	"N": {"color": Color(0.18, 0.32, 0.86), "r": 0.44},
+}
+const STICK_R := 0.085
+const STICK_COLOR := Color(0.72, 0.71, 0.67)
+const HOT := Color(1.0, 0.50, 0.08)
+const BACKDROP := Color(0.91, 0.92, 0.93)
+const INK := Color(0.10, 0.11, 0.13)
+## The loop (seconds of lens time).
+const T_SHOW := 1.7
+const T_BREAK := 0.9
+const T_MOVE := 1.9
+const T_HOLD := 2.8
+const T_FADE := 0.45
+const DRIFT := 1.3                # how far a freed gas molecule drifts, Å
+const RATE_EPS := 1.0e-8          # mol/s: below this a reaction is not shown
+const IDLE_CHECK_S := 1.0
+const KIND_ORDER := ["pyrolysis", "cracking", "combustion", "drying", "boiling", "condensing"]
+const MAX_LABELS := 8
 
 var sim: TcProcSim = null
 var cv := -1
@@ -39,28 +55,32 @@ var title_label: Label
 var caption: Label
 var legend: Label
 var viewport: SubViewport
+var close_requested: Callable = Callable()
+var shown_stories := 0            # for the harness
+
 var _world: Node3D
 var _cam: Camera3D
 var _atoms_mm: MultiMeshInstance3D
 var _bonds_mm: MultiMeshInstance3D
-var _mols: Array = []             # [{sp, region, pos, vel, rot, w, f}]
-var _stories: Array = []          # [{atoms, bonds_from, bonds_to, t, products, text}]
-var _acc := {}                    # reaction kind → events owed
-var _alt := {}                    # reaction kind → which storyboard next
-var _sync_acc := 0.0
-var _rng := RandomNumberGenerator.new()
-var _levels := {"liquid": 0.0, "solid": 0.0}
-var _slots := {}                  # region → next lattice slot
-var close_requested: Callable = Callable()
-var shown_stories := 0            # for the harness
+var _overlay: Control
+var _svc: SubViewportContainer
+var _phase_label: Label
+var _story_label: Label
+var _labels: Array = []
+var _scene := {}                  # the prepared storyboard (see _prepare)
+var _t := 0.0
+var _spin := 0.0
+var _seq := 0
+var _idle_acc := 0.0
+var _n_atoms := 0
+var _n_bonds := 0
 
 
 func _init() -> void:
 	name = "MoleculeLens"
-	_rng.seed = 1729
 	add_theme_stylebox_override("panel", UITheme.card_style())
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 2)
+	v.add_theme_constant_override("separation", 3)
 	add_child(v)
 	var head := HBoxContainer.new()
 	v.add_child(head)
@@ -75,18 +95,45 @@ func _init() -> void:
 		if close_requested.is_valid():
 			close_requested.call())
 	head.add_child(x)
-	var svc := SubViewportContainer.new()
-	svc.stretch = true
-	svc.custom_minimum_size = Vector2(VIEW_SIZE)
-	svc.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	v.add_child(svc)
+	var stack := Control.new()
+	stack.custom_minimum_size = Vector2(VIEW_SIZE)
+	stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stack.clip_contents = true
+	v.add_child(stack)
+	_svc = SubViewportContainer.new()
+	_svc.stretch = true
+	_svc.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_svc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stack.add_child(_svc)
 	viewport = SubViewport.new()
 	viewport.size = VIEW_SIZE
 	viewport.own_world_3d = true
 	viewport.msaa_3d = Viewport.MSAA_4X
 	viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
-	svc.add_child(viewport)
+	_svc.add_child(viewport)
 	_build_world()
+	_overlay = Control.new()
+	_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stack.add_child(_overlay)
+	_story_label = _ink_label(UITheme.FONT_SM, true)
+	_story_label.position = Vector2(8, 5)
+	_story_label.size = Vector2(VIEW_SIZE.x - 110, 20)
+	_story_label.clip_text = true
+	_story_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_overlay.add_child(_story_label)
+	_phase_label = _ink_label(UITheme.FONT_XS, true)
+	_phase_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_phase_label.position = Vector2(VIEW_SIZE.x - 108, 7)
+	_phase_label.size = Vector2(100, 18)
+	_overlay.add_child(_phase_label)
+	for _i in MAX_LABELS:
+		var l := _ink_label(UITheme.FONT_XS, false)
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		l.size = Vector2(150, 30)
+		l.visible = false
+		_overlay.add_child(l)
+		_labels.append(l)
 	caption = Label.new()
 	caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	caption.custom_minimum_size = Vector2(VIEW_SIZE.x, 0)
@@ -101,59 +148,52 @@ func _init() -> void:
 	v.add_child(legend)
 
 
+func _ink_label(size: int, bold: bool) -> Label:
+	var l := Label.new()
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_color_override("font_color", INK)
+	if bold:
+		l.add_theme_font_override("font", UITheme.font("semibold"))
+	return l
+
+
 func _build_world() -> void:
 	_world = Node3D.new()
 	viewport.add_child(_world)
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
 	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.05, 0.06, 0.08)
+	e.background_color = BACKDROP
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.55, 0.58, 0.65)
-	e.ambient_light_energy = 0.6
-	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	e.ambient_light_color = Color(0.86, 0.88, 0.92)
+	e.ambient_light_energy = 0.42
+	e.tonemap_mode = Environment.TONE_MAPPER_LINEAR
 	env.environment = e
 	_world.add_child(env)
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-40, 30, 0)
-	sun.light_energy = 1.1
-	_world.add_child(sun)
+	var key := DirectionalLight3D.new()
+	key.rotation_degrees = Vector3(-38, 28, 0)
+	key.light_energy = 0.95
+	_world.add_child(key)
+	var fill := DirectionalLight3D.new()
+	fill.rotation_degrees = Vector3(-10, -140, 0)
+	fill.light_energy = 0.18
+	_world.add_child(fill)
 	_cam = Camera3D.new()
-	_cam.fov = 40.0
-	_cam.position = Vector3(0, BOX * 0.62, BOX * 2.15)
+	_cam.fov = 28.0
+	_cam.position = Vector3(0, 0, 30)
 	_world.add_child(_cam)
-	_cam.look_at_from_position(_cam.position, Vector3(0, BOX * 0.42, 0), Vector3.UP)
 	_cam.current = true
-	# The box's edges.
-	var im := ImmediateMesh.new()
-	im.surface_begin(Mesh.PRIMITIVE_LINES)
-	var h := BOX * 0.5
-	var c := [Vector3(-h, 0, -h), Vector3(h, 0, -h), Vector3(h, 0, h), Vector3(-h, 0, h)]
-	for i in 4:
-		for y in [0.0, BOX]:
-			im.surface_add_vertex(c[i] + Vector3(0, y, 0))
-			im.surface_add_vertex(c[(i + 1) % 4] + Vector3(0, y, 0))
-		im.surface_add_vertex(c[i])
-		im.surface_add_vertex(c[i] + Vector3(0, BOX, 0))
-	im.surface_end()
-	var box := MeshInstance3D.new()
-	box.mesh = im
-	var bm := StandardMaterial3D.new()
-	bm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	bm.albedo_color = Color(0.35, 0.45, 0.6, 0.6)
-	bm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	box.material_override = bm
-	_world.add_child(box)
-	_atoms_mm = _multimesh(_sphere(), true)
-	_bonds_mm = _multimesh(_cylinder(), true)
+	_atoms_mm = _multimesh(_sphere(), 0.38, 0.35)
+	_bonds_mm = _multimesh(_cylinder(), 0.6, 0.2)
 
 
 func _sphere() -> Mesh:
 	var s := SphereMesh.new()
 	s.radius = 1.0
 	s.height = 2.0
-	s.radial_segments = 14
-	s.rings = 8
+	s.radial_segments = 28
+	s.rings = 14
 	return s
 
 
@@ -162,23 +202,23 @@ func _cylinder() -> Mesh:
 	c.top_radius = 1.0
 	c.bottom_radius = 1.0
 	c.height = 1.0
-	c.radial_segments = 8
+	c.radial_segments = 10
 	c.rings = 1
 	return c
 
 
-func _multimesh(mesh: Mesh, colors: bool) -> MultiMeshInstance3D:
+func _multimesh(mesh: Mesh, rough: float, spec: float) -> MultiMeshInstance3D:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = colors
+	mm.use_colors = true
 	mm.mesh = mesh
 	var mi := MultiMeshInstance3D.new()
 	mi.multimesh = mm
-	mi.custom_aabb = AABB(Vector3(-BOX, -2, -BOX), Vector3(BOX * 2, BOX + 4, BOX * 2))
+	mi.custom_aabb = AABB(Vector3(-40, -40, -40), Vector3(80, 80, 80))
 	var m := StandardMaterial3D.new()
 	m.vertex_color_use_as_albedo = true
-	m.roughness = 0.35
-	m.metallic_specular = 0.6
+	m.roughness = rough
+	m.metallic_specular = spec
 	mi.material_override = m
 	_world.add_child(mi)
 	return mi
@@ -188,15 +228,13 @@ func _multimesh(mesh: Mesh, colors: bool) -> MultiMeshInstance3D:
 # Following the model
 # ---------------------------------------------------------------------------
 
-## Point the lens at a volume (rebuilds its molecules).
+## Point the lens at a volume (starts its example again).
 func show_cv(s: TcProcSim, i: int) -> void:
 	sim = s
 	cv = i
-	_mols = []
-	_stories = []
-	_acc = {}
-	_slots = {}
-	_sync(true)
+	_seq = 0
+	_scene = {}
+	_next()
 
 
 ## Each frame from the panel. running: the lab clock moves; rate: lab
@@ -204,16 +242,24 @@ func show_cv(s: TcProcSim, i: int) -> void:
 func update_lens(delta: float, running: bool, rate: float) -> void:
 	if sim == null or cv < 0 or cv >= sim.n_cv:
 		return
-	var mult := clampf(sqrt(maxf(rate, 0.0)) / 6.0, 0.25, 1.5) if running else 0.0
-	_sync_acc += delta
-	if _sync_acc >= SYNC_S:
-		_sync_acc = 0.0
-		_sync(false)
+	var mult := clampf(sqrt(maxf(rate, 0.0)) / 6.0, 0.6, 1.4) if running else 0.0
 	var dt := delta * mult
-	if dt > 0.0:
-		_move(dt)
-		_react(delta * (1.0 if running else 0.0), rate)
-		_advance_stories(dt)
+	_spin += dt
+	if _scene.is_empty():
+		_next()
+	if bool(_scene.get("idle", false)):
+		# Nothing was reacting: look again now and then.
+		_idle_acc += delta
+		if _idle_acc >= IDLE_CHECK_S:
+			_idle_acc = 0.0
+			if not _candidates().is_empty() or _idle_key() != str(_scene.get("key", "")):
+				_next()
+			else:
+				_refresh_text()
+	else:
+		_t += dt
+		if _t >= T_SHOW + T_BREAK + T_MOVE + T_HOLD + T_FADE:
+			_next()
 	_draw_all()
 
 
@@ -221,365 +267,354 @@ func _cv_t() -> float:
 	return sim.gas_t(cv)
 
 
-## Region heights and target populations from the model.
-func _targets() -> Dictionary:
-	var out := {"gas": {}, "liquid": {}, "solid": {}}
-	var g: PackedFloat64Array = sim.gas[cv]
-	var fr := {}
-	for s in TcProcSim.NS:
-		fr[str(TcProcSim.SP[s])] = g[s]
-	out["gas"] = TcMolecules.sample_counts(fr, _n_for(fr, N_GAS, GAS_ATOMS))
-	var l: PackedFloat64Array = sim.liq[cv]
-	var lv := sim._liq_volume(l)
-	var vol := maxf(float(sim.net["cvs"][cv]["volume_m3"]), 1e-9)
-	var lfrac := clampf(lv / vol, 0.0, 1.0)
-	_levels["liquid"] = 0.0
-	if lv > 1e-7:
-		_levels["liquid"] = clampf(0.12 + lfrac * 0.6, 0.12, 0.5) * BOX
-		var lf := {}
-		for s in TcProcSim.COND:
-			lf[str(TcProcSim.SP[s])] = l[s]
-		out["liquid"] = TcMolecules.sample_counts(lf, _n_for(lf, int(round(N_LIQ * clampf(0.4 + lfrac, 0.4, 1.0))), LIQ_ATOMS))
-	_levels["solid"] = 0.0
-	if cv == sim.vessel_cv and sim.bed != null and not sim.bed.is_empty():
-		var t := sim.bed.totals()
-		var dry0 := maxf(sim.bed.initial_dry_kg, 1e-9)
-		var char_share := clampf(float(t["char_kg"]) / (dry0 * 0.35), 0.0, 1.0)
-		var wood_share := clampf(float(t["wood_kg"]) / dry0, 0.0, 1.0)
-		var units := int(round(N_SOLID * clampf(wood_share + char_share * 0.6, 0.25, 1.0)))
-		var n_char := int(round(units * char_share / maxf(char_share + wood_share, 1e-6)))
-		_levels["solid"] = 0.36 * BOX
-		out["solid"] = {"glucose": units - n_char, "char": n_char}
-		var wet := clampf(float(t["moisture_kg"]) / maxf(sim.bed.initial_moisture_kg, 1e-9), 0.0, 1.0)
-		var n_w := int(round(8.0 * wet))
-		if n_w > 0:
-			(out["solid"] as Dictionary)["H2O"] = n_w
+func _is_bed_cv() -> bool:
+	return cv == sim.vessel_cv and sim.bed != null and not sim.bed.is_empty()
+
+
+## How fast each wood component is breaking down in the bed right now
+## (kg/s): each dry cell's mass times its own first-step rate constant
+## (Miller & Bellan, the model's kinetics).
+func wood_rates() -> Dictionary:
+	var out := {"hemicellulose": 0.0, "cellulose": 0.0, "lignin": 0.0}
+	if not _is_bed_cv() or sim.bed.plastic != "":
+		return out
+	var keys := {"hemicellulose": "hem", "cellulose": "cel", "lignin": "lig"}
+	for d in sim.bed.domains:
+		for i in int(d["n"]):
+			if float(d["mw"][i]) > 1e-6:
+				continue
+			var t := float(d["T"][i])
+			if t < TcBed.MIN_REACT_K:
+				continue
+			for comp in keys.keys():
+				var p: Array = TcReactions.WOOD[comp]
+				out[comp] = float(out[comp]) + float(d[keys[comp]][i]) * TcReactions.arrhenius(float(p[0]), float(p[1]), t)
 	return out
 
 
-## How many molecules to draw so the atoms stay readable: a few big tar
-## molecules, or many small gas ones.
-static func _n_for(fracs: Dictionary, n_max: int, atom_budget: int) -> int:
-	var tot := 0.0
-	var at := 0.0
-	for k in fracs.keys():
-		var x := float(fracs[k])
-		var na := (TcMolecules.layout(str(k)).get("atoms", []) as Array).size()
-		if x <= 0.0 or na == 0:
-			continue
-		tot += x
-		at += x * float(na)
-	if tot <= 0.0:
-		return n_max
-	return clampi(int(float(atom_budget) / (at / tot)), mini(8, n_max), n_max)
-
-
-func _sync(fresh: bool) -> void:
-	var tg := _targets()
-	for region in ["gas", "liquid", "solid"]:
-		var want: Dictionary = tg[region]
-		var have := {}
-		for m in _mols:
-			if str(m["region"]) == region:
-				have[str(m["sp"])] = int(have.get(str(m["sp"]), 0)) + 1
-		# Remove extras (the oldest first), add what is missing.
-		for sp in have.keys():
-			var extra := int(have[sp]) - int(want.get(sp, 0))
-			var k := 0
-			while extra > 0 and k < _mols.size():
-				if str(_mols[k]["region"]) == region and str(_mols[k]["sp"]) == sp:
-					_mols.remove_at(k)
-					extra -= 1
-				else:
-					k += 1
-		for sp2 in want.keys():
-			var missing := int(want[sp2]) - int(have.get(sp2, 0))
-			for _j in maxi(missing, 0):
-				_mols.append(_new_mol(str(sp2), region))
-	_thermostat()
-	var name_cv := str(sim.net["cvs"][cv].get("label", "volume"))
-	title_label.text = "Molecules in %s · %.0f °C" % [name_cv, _cv_t() - 273.15]
-	var counts := {}
-	for m2 in _mols:
-		counts[str(m2["sp"])] = int(counts.get(str(m2["sp"]), 0)) + 1
-	var parts: Array = []
-	var ks := counts.keys()
-	ks.sort_custom(func(a, b) -> bool: return int(counts[a]) > int(counts[b]))
-	for k2 in ks:
-		parts.append("%s %s ×%d" % [TcMolecules.display_name(str(k2)), TcMolecules.formula(str(k2)), int(counts[k2])])
-	legend.text = " · ".join(parts) if not parts.is_empty() else "Nothing here yet."
-
-
-func _new_mol(sp: String, region: String) -> Dictionary:
-	var lay := TcMolecules.layout(sp)
-	var r := float(lay.get("radius", 1.0))
-	var pos := _spawn_pos(region, r)
-	var dir := Vector3(_rng.randf_range(-1, 1), _rng.randf_range(-1, 1), _rng.randf_range(-1, 1)).normalized()
-	var m := {"sp": sp, "region": region, "pos": pos, "vel": dir, "r": r,
-		"rot": Quaternion(Vector3(_rng.randf(), _rng.randf(), _rng.randf()).normalized(), _rng.randf() * TAU),
-		"w": Vector3(_rng.randf_range(-1, 1), _rng.randf_range(-1, 1), _rng.randf_range(-1, 1)) * 0.8,
-		"f": _rng.randf_range(0.6, 1.4)}
-	if region == "solid":
-		m["home"] = pos
-	return m
-
-
-func _bounds(region: String) -> AABB:
-	var h := BOX * 0.5
-	var lo := 0.0
-	var hi := BOX
-	if region == "gas":
-		lo = maxf(float(_levels["liquid"]), float(_levels["solid"]))
-	elif region == "liquid":
-		lo = float(_levels["solid"])
-		hi = maxf(float(_levels["liquid"]), lo + 2.0)
-	else:
-		hi = maxf(float(_levels["solid"]), 2.0)
-	return AABB(Vector3(-h, lo, -h), Vector3(BOX, hi - lo, BOX))
-
-
-func _spawn_pos(region: String, r: float) -> Vector3:
-	var b := _bounds(region)
-	if region == "solid":
-		# A loose lattice: 4 × 4 per layer.
-		var k := int(_slots.get(region, 0))
-		_slots[region] = k + 1
-		var col := k % 4
-		var row := (k / 4) % 4
-		var lay := (k / 16) % 2
-		return Vector3(-BOX * 0.375 + col * BOX * 0.25, 1.4 + lay * 2.4, -BOX * 0.375 + row * BOX * 0.25) + \
-			Vector3(_rng.randf_range(-0.4, 0.4), _rng.randf_range(0.0, 0.6), _rng.randf_range(-0.4, 0.4))
-	var m := minf(r, b.size.y * 0.45)
-	return Vector3(_rng.randf_range(b.position.x + r, b.end.x - r), _rng.randf_range(b.position.y + m, b.end.y - m),
-		_rng.randf_range(b.position.z + r, b.end.z - r))
-
-
-## Speeds follow the volume's temperature (gas), slower in a liquid, a
-## shiver in a solid.
-func _thermostat() -> void:
-	var t := _cv_t()
-	for m in _mols:
-		var v0: Vector3 = m["vel"]
-		var target := TcMolecules.display_speed(str(m["sp"]), t) * float(m["f"])
-		match str(m["region"]):
-			"liquid":
-				target *= 0.25
-			"solid":
-				target *= 0.08
-		if v0.length() < 1e-6:
-			v0 = Vector3(0.3, 0.2, -0.4)
-		m["vel"] = v0.normalized() * lerpf(v0.length(), target, 0.6)
-
-
-func _move(dt: float) -> void:
-	for m in _mols:
-		if bool(m.get("busy", false)):
-			continue
-		var region := str(m["region"])
-		var b := _bounds(region)
-		var r := minf(float(m["r"]), b.size.y * 0.45)
-		var p: Vector3 = m["pos"]
-		var v: Vector3 = m["vel"]
-		if region == "solid":
-			# Jiggle about a home position.
-			var home: Vector3 = m["home"]
-			v += (home - p) * 2.0 * dt + Vector3(_rng.randf_range(-1, 1), _rng.randf_range(-1, 1), _rng.randf_range(-1, 1)) * dt
-		elif region == "liquid":
-			v += Vector3(_rng.randf_range(-1, 1), _rng.randf_range(-1, 1), _rng.randf_range(-1, 1)) * dt * 2.0
-		p += v * dt
-		for ax in 3:
-			var lo := b.position[ax] + r
-			var hi := b.end[ax] - r
-			if lo > hi:
-				lo = (b.position[ax] + b.end[ax]) * 0.5
-				hi = lo
-			if p[ax] < lo:
-				p[ax] = lo
-				v[ax] = absf(v[ax])
-			elif p[ax] > hi:
-				p[ax] = hi
-				v[ax] = -absf(v[ax])
-		m["pos"] = p
-		m["vel"] = v
-		var w: Vector3 = m["w"]
-		if w.length() > 1e-6:
-			m["rot"] = (Quaternion(w.normalized(), w.length() * dt * (0.2 if region == "solid" else 1.0)) * (m["rot"] as Quaternion)).normalized()
-	# Gas molecules bounce off each other (elastic, by mass).
-	var gas: Array = []
-	for m in _mols:
-		if str(m["region"]) == "gas" and not bool(m.get("busy", false)):
-			gas.append(m)
-	for i in gas.size():
-		var a: Dictionary = gas[i]
-		for j in range(i + 1, gas.size()):
-			var b2: Dictionary = gas[j]
-			var d: Vector3 = (b2["pos"] as Vector3) - (a["pos"] as Vector3)
-			var rr := (float(a["r"]) + float(b2["r"])) * 0.7
-			var dl := d.length()
-			if dl < rr and dl > 1e-5:
-				var n := d / dl
-				var va: Vector3 = a["vel"]
-				var vb: Vector3 = b2["vel"]
-				var rel := (va - vb).dot(n)
-				if rel > 0.0:
-					var ma := TcMolecules.molar_mass(str(a["sp"]))
-					var mb := TcMolecules.molar_mass(str(b2["sp"]))
-					var jimp := 2.0 * rel / (ma + mb)
-					a["vel"] = va - n * jimp * mb
-					b2["vel"] = vb + n * jimp * ma
-
-
-# ---------------------------------------------------------------------------
-# Reactions
-# ---------------------------------------------------------------------------
-
-## The model's reaction rates (mol/s) → storyboards, a few a second at most.
-func _react(real_dt: float, rate: float) -> void:
-	if real_dt <= 0.0 or cv >= sim.react_rate.size():
-		return
+## The storyboards worth showing now, the most telling first.
+func _candidates() -> Array:
+	var out: Array = []
+	if cv >= sim.react_rate.size():
+		return out
 	var rr: Dictionary = sim.react_rate[cv]
-	for kind in rr.keys():
-		if not TcMolecules.STORY.has(str(kind)):
+	var all := TcMolecules.stories()
+	for kind in KIND_ORDER:
+		if float(rr.get(kind, 0.0)) <= RATE_EPS:
 			continue
-		var r := float(rr[kind])
-		if r <= 0.0:
-			continue
-		var per_s := clampf(0.18 * log(1.0 + r * 1.0e4) / log(10.0), 0.0, 1.2) * clampf(sqrt(rate) / 10.0, 0.5, 1.5)
-		_acc[kind] = float(_acc.get(kind, 0.0)) + per_s * real_dt
-		if float(_acc[kind]) >= 1.0 and _stories.size() < MAX_STORIES:
-			_acc[kind] = float(_acc[kind]) - 1.0
-			_start_story(str(kind))
-		elif float(_acc[kind]) > 2.0:
-			_acc[kind] = 2.0
+		if kind == "pyrolysis":
+			if _is_bed_cv() and sim.bed.plastic != "":
+				out.append_array(all["plastic"])
+				continue
+			var wr := wood_rates()
+			var comps: Array = wr.keys()
+			comps.sort_custom(func(a, b) -> bool: return float(wr[a]) > float(wr[b]))
+			var top := float(wr[comps[0]])
+			var by_id := {}
+			for st in all["pyrolysis"]:
+				by_id[str(st["id"])] = st
+			# The component reacting fastest, then charring, then any other
+			# component doing at least a sixth as much.
+			out.append(by_id[str(comps[0])] if top > 0.0 else by_id["hemicellulose"])
+			out.append(by_id["charring"])
+			for k in range(1, comps.size()):
+				if top > 0.0 and float(wr[comps[k]]) >= top / 6.0:
+					out.append(by_id[str(comps[k])])
+		elif all.has(kind):
+			out.append_array(all[kind])
+	return out
 
 
-func _pick(sp: String, region: String) -> int:
-	var cands: Array = []
-	for i in _mols.size():
-		var m: Dictionary = _mols[i]
-		if bool(m.get("busy", false)):
-			continue
-		var ok := false
-		match region:
-			"gas_condensable":
-				ok = str(m["region"]) == "gas" and TcSpecies.is_condensable(str(m["sp"])) and (sp == "*" or str(m["sp"]) == sp)
-			_:
-				ok = str(m["region"]) == region and (sp == "*" or str(m["sp"]) == sp)
-		if ok:
-			cands.append(i)
-	if cands.is_empty():
-		return -1
-	return int(cands[_rng.randi() % cands.size()])
+func _next() -> void:
+	if sim == null or cv < 0 or cv >= sim.n_cv:
+		return
+	var c := _candidates()
+	_t = 0.0
+	_idle_acc = 0.0
+	if c.is_empty():
+		_scene = _prepare_idle()
+	else:
+		_scene = _prepare(c[_seq % c.size()])
+		_seq += 1
+		shown_stories += 1
+	_frame_camera()
+	_refresh_text()
 
 
-func _start_story(kind: String) -> void:
-	var list: Array = TcMolecules.STORY[kind]
-	var k := int(_alt.get(kind, 0)) % list.size()
-	_alt[kind] = k + 1
-	var st: Dictionary = list[k]
-	var picked: Array = []
+## What "*" stands for here: the volume's main liquid, or its main
+## condensable vapour.
+func _wild(region: String) -> String:
+	var best := "H2O"
+	var bv := 0.0
+	var src: PackedFloat64Array = sim.liq[cv] if region == "liquid" else sim.gas[cv]
+	for s in TcProcSim.COND:
+		var sp := str(TcProcSim.SP[s])
+		if src[s] > bv and not TcMolecules.layout(sp).is_empty():
+			bv = src[s]
+			best = sp
+	return best
+
+
+## A storyboard made ready to draw:
+##   atoms   [[element, from, to, drift]] (stage Å)
+##   keep / gone / made   bonds [[i, j, order]] present throughout, only
+##           before, only after
+##   tags_from / tags_to  [[text, anchor, drift]] name tags under molecules
+func _prepare(st: Dictionary) -> Dictionary:
+	var atoms: Array = []
+	var bonds_from := {}
+	var tags_from: Array = []
 	var same := ""
 	for f in st["from"]:
-		var i := _pick(str(f[0]), str(f[1]))
-		if i < 0 or i in picked:
-			return
-		picked.append(i)
-		if str(f[0]) == "*":
-			same = str(_mols[i]["sp"])
-	# The reactants' atoms in the box.
-	var atoms: Array = []          # [[el, from, to]]
-	var bonds_from: Array = []
-	var centre := Vector3.ZERO
-	for i in picked:
-		var m: Dictionary = _mols[i]
-		m["busy"] = true
-		centre += m["pos"] as Vector3
-		var lay := TcMolecules.layout(str(m["sp"]))
+		var sp := str(f[0])
+		if sp == "*":
+			sp = _wild(str(f[1]))
+			same = sp
+		var lay := TcMolecules.layout(sp)
 		var base := atoms.size()
-		for a in lay["atoms"]:
-			atoms.append([str(a[0]), (m["pos"] as Vector3) + (m["rot"] as Quaternion) * (a[1] as Vector3), Vector3.ZERO, false])
-		for bd in lay["bonds"]:
-			bonds_from.append([base + int(bd[0]), base + int(bd[1]), int(bd[2])])
-	centre /= float(picked.size())
-	# Where the products go.
-	var products: Array = []
-	var to: Array = st["to"]
-	var spread := 1.6 + 0.35 * float(to.size())
-	for pi in to.size():
-		var sp := str(to[pi][0])
-		if sp == "=":
-			sp = same
-		var region := str(to[pi][1])
-		var ang := TAU * float(pi) / float(maxi(to.size(), 1))
-		var c := centre + Vector3(cos(ang), 0.0, sin(ang)) * (spread if to.size() > 1 else 0.0)
-		if region == "gas" and centre.y < float(maxf(_levels["liquid"], _levels["solid"])) + 1.0:
-			c.y = maxf(_levels["liquid"], _levels["solid"]) + 2.0 + 0.4 * float(pi % 3)
-		elif region == "liquid":
-			c.y = clampf(c.y, float(_levels["solid"]) + 1.0, maxf(float(_levels["liquid"]), float(_levels["solid"]) + 2.0) - 0.8)
-		var b := _bounds(region)
-		c.x = clampf(c.x, b.position.x + 1.0, b.end.x - 1.0)
-		c.z = clampf(c.z, b.position.z + 1.0, b.end.z - 1.0)
-		var rot := Quaternion(Vector3(_rng.randf(), _rng.randf(), _rng.randf()).normalized(), _rng.randf() * TAU)
-		products.append({"sp": sp, "region": region, "centre": c, "rot": rot, "atoms": []})
-	# Match the products' atoms to the reactants' by element (nearest free).
-	var bonds_to: Array = []
-	for p in products:
-		var lay2 := TcMolecules.layout(str(p["sp"]))
+		var c: Vector3 = f[2]
+		for a in lay.get("atoms", []):
+			atoms.append([str(a[0]), c + (a[1] as Vector3), Vector3.ZERO, Vector3.ZERO, false])
+		for b in lay.get("bonds", []):
+			bonds_from[_pair(base + int(b[0]), base + int(b[1]))] = int(b[2])
+		tags_from.append([sp, c, Vector3.ZERO, _low(lay, c)])
+	var bonds_to := {}
+	var tags_to: Array = []
+	for t in st["to"]:
+		var sp2 := str(t[0])
+		if sp2 == "=":
+			sp2 = same
+		var lay2 := TcMolecules.layout(sp2)
+		var c2: Vector3 = t[2]
+		var drift := Vector3.ZERO
+		if str(t[1]) == "gas":
+			drift = (c2 if c2.length() > 0.5 else Vector3.UP).normalized() * DRIFT
+			drift.z = 0.0
 		var idx: Array = []
-		for a2 in lay2["atoms"]:
-			var target: Vector3 = (p["centre"] as Vector3) + (p["rot"] as Quaternion) * (a2[1] as Vector3)
+		for a2 in lay2.get("atoms", []):
+			var target: Vector3 = c2 + (a2[1] as Vector3)
 			var best := -1
-			var bd2 := INF
+			var bd := INF
 			for ai in atoms.size():
 				var at: Array = atoms[ai]
-				if bool(at[3]) or str(at[0]) != str(a2[0]):
+				if bool(at[4]) or str(at[0]) != str(a2[0]):
 					continue
-				var d := (at[1] as Vector3).distance_to(target)
-				if d < bd2:
-					bd2 = d
+				var d := (at[1] as Vector3).distance_squared_to(target)
+				if d < bd:
+					bd = d
 					best = ai
 			if best < 0:
-				atoms.append([str(a2[0]), centre, target, true])
+				# An unbalanced storyboard would land here (the selftest keeps
+				# them balanced): the atom appears in place.
+				atoms.append([str(a2[0]), target, target, drift, true])
 				best = atoms.size() - 1
 			else:
 				atoms[best][2] = target
-				atoms[best][3] = true
+				atoms[best][3] = drift
+				atoms[best][4] = true
 			idx.append(best)
-		for bd3 in lay2["bonds"]:
-			bonds_to.append([int(idx[int(bd3[0])]), int(idx[int(bd3[1])]), int(bd3[2])])
-		p["atoms"] = idx
-	# A reactant atom with nowhere to go stays put (balanced storyboards have none).
+		for b2 in lay2.get("bonds", []):
+			bonds_to[_pair(int(idx[int(b2[0])]), int(idx[int(b2[1])]))] = int(b2[2])
+		tags_to.append([sp2, c2, drift, _low(lay2, c2)])
 	for at2 in atoms:
-		if not bool(at2[3]):
+		if not bool(at2[4]):
 			at2[2] = at2[1]
-	# Take the reactants out of the box; the story draws them now.
-	picked.sort()
-	picked.reverse()
-	for i2 in picked:
-		_mols.remove_at(i2)
-	_stories.append({"atoms": atoms, "bonds_from": bonds_from, "bonds_to": bonds_to, "t": 0.0,
-		"products": products, "text": str(st["text"]), "centre": centre})
-	caption.text = str(st["text"])
-	shown_stories += 1
-
-
-func _advance_stories(dt: float) -> void:
 	var keep: Array = []
-	for s in _stories:
-		s["t"] = float(s["t"]) + dt / STORY_S
-		if float(s["t"]) >= 1.0:
-			for p in s["products"]:
-				var m := _new_mol(str(p["sp"]), str(p["region"]))
-				m["pos"] = p["centre"]
-				m["rot"] = p["rot"]
-				if str(p["region"]) == "solid":
-					m["home"] = p["centre"]
-				var v := TcMolecules.display_speed(str(p["sp"]), _cv_t())
-				m["vel"] = ((p["centre"] as Vector3) - (s["centre"] as Vector3) + Vector3(0, 0.5, 0)).normalized() * v
-				_mols.append(m)
+	var gone: Array = []
+	var made: Array = []
+	for k in bonds_from.keys():
+		var pr: Vector2i = k
+		if bonds_to.has(k):
+			keep.append([pr.x, pr.y, int(bonds_to[k])])
 		else:
-			keep.append(s)
-	_stories = keep
+			gone.append([pr.x, pr.y, int(bonds_from[k])])
+	for k2 in bonds_to.keys():
+		if not bonds_from.has(k2):
+			var pr2: Vector2i = k2
+			made.append([pr2.x, pr2.y, int(bonds_to[k2])])
+	# Atoms on a bond that breaks shake before it goes.
+	var shaky := {}
+	for g in gone:
+		shaky[int(g[0])] = true
+		shaky[int(g[1])] = true
+	return {"id": str(st["id"]), "title": str(st["title"]), "text": str(st["text"]), "atoms": atoms,
+		"keep": keep, "gone": gone, "made": made, "shaky": shaky,
+		"tags_from": _merge_tags(tags_from), "tags_to": _merge_tags(tags_to), "idle": false}
+
+
+static func _pair(a: int, b: int) -> Vector2i:
+	return Vector2i(mini(a, b), maxi(a, b))
+
+
+## The lowest point of a molecule standing at `c` (its name goes under it).
+static func _low(lay: Dictionary, c: Vector3) -> float:
+	var y := 0.0
+	for a in lay.get("atoms", []):
+		y = minf(y, (a[1] as Vector3).y)
+	return c.y + y - 0.75
+
+
+## One tag per species: the first molecule carries the name and the count.
+func _merge_tags(tags: Array) -> Array:
+	var out: Array = []
+	var at := {}
+	for t in tags:
+		var sp := str(t[0])
+		if at.has(sp):
+			out[int(at[sp])][4] = int(out[int(at[sp])][4]) + 1
+			continue
+		at[sp] = out.size()
+		out.append([sp, Vector3((t[1] as Vector3).x, float(t[3]), (t[1] as Vector3).z), t[2], "", 1])
+	for o in out:
+		var n := int(o[4])
+		o[3] = "%s%s\n%s" % [("%d × " % n) if n > 1 else "", _short_name(str(o[0])), TcMolecules.formula(str(o[0]))]
+	return out
+
+
+static func _short_name(sp: String) -> String:
+	var n := TcMolecules.display_name(sp)
+	if sp == "tar":
+		return "Levoglucosan (tar)"
+	return n
+
+
+## Nothing reacting: what the volume holds, side by side.
+func _idle_species() -> Array:
+	var out: Array = []     # [[species, share, what]]
+	if _is_bed_cv():
+		var t := sim.bed.totals()
+		var parts := {}
+		if sim.bed.plastic != "":
+			parts["alkane:10"] = float(t["plastic_kg"])
+		else:
+			var wood := float(t["wood_kg"])
+			var fd: Dictionary = (TcProcSpec.FEEDS.get(sim.bed.feed, {}) as Dictionary).get("solid", {})
+			parts["cellulose2"] = wood * float(fd.get("cellulose", 0.42))
+			parts["lignin"] = wood * float(fd.get("lignin", 0.28))
+			parts["char"] = float(t["char_kg"])
+		var tot := 0.0
+		for k in parts.keys():
+			tot += float(parts[k])
+		var ks: Array = parts.keys()
+		ks.sort_custom(func(a, b) -> bool: return float(parts[a]) > float(parts[b]))
+		for k2 in ks:
+			if tot > 0.0 and float(parts[k2]) / tot > 0.04 and out.size() < 2:
+				out.append([str(k2), float(parts[k2]) / tot, "of the charge"])
+	var g: PackedFloat64Array = sim.gas[cv]
+	var n := 0.0
+	for s in g.size():
+		n += g[s]
+	var order: Array = []
+	for s2 in g.size():
+		if n > 0.0 and g[s2] / n > 0.04 and not TcMolecules.layout(str(TcProcSim.SP[s2])).is_empty():
+			order.append(s2)
+	order.sort_custom(func(a: int, b: int) -> bool: return g[a] > g[b])
+	for s3 in order:
+		if out.size() >= 3:
+			break
+		out.append([str(TcProcSim.SP[s3]), g[s3] / n, "of the gas"])
+	return out
+
+
+func _idle_key() -> String:
+	var k := PackedStringArray()
+	for e in _idle_species():
+		k.append(str(e[0]))
+	return ",".join(k)
+
+
+func _prepare_idle() -> Dictionary:
+	var list := _idle_species()
+	var atoms: Array = []
+	var keep: Array = []
+	var tags: Array = []
+	var x := 0.0
+	var key := PackedStringArray()
+	for e in list:
+		var sp := str(e[0])
+		key.append(sp)
+		var lay := TcMolecules.layout(sp)
+		var half := 0.0
+		for a in lay.get("atoms", []):
+			half = maxf(half, absf((a[1] as Vector3).x))
+		half += 1.2
+		var c := Vector3(x + half, 0.0, 0.0)
+		var base := atoms.size()
+		for a2 in lay.get("atoms", []):
+			atoms.append([str(a2[0]), c + (a2[1] as Vector3), c + (a2[1] as Vector3), Vector3.ZERO, true])
+		for b in lay.get("bonds", []):
+			keep.append([base + int(b[0]), base + int(b[1]), int(b[2])])
+		tags.append([sp, Vector3(c.x, _low(lay, c), 0.0), Vector3.ZERO,
+			"%s\n%s · %.0f %% %s" % [_short_name(sp), TcMolecules.formula(sp), float(e[1]) * 100.0, str(e[2])], 1])
+		x += half * 2.0
+	# Centre the row.
+	for at in atoms:
+		at[1] = (at[1] as Vector3) - Vector3(x * 0.5, 0, 0)
+		at[2] = at[1]
+	for t in tags:
+		t[1] = (t[1] as Vector3) - Vector3(x * 0.5, 0, 0)
+	return {"id": "idle", "title": "What is in here", "idle": true, "key": ",".join(key),
+		"text": "Nothing is reacting in this volume right now. These are the main molecules it holds." if not list.is_empty()
+			else "Nothing to show here yet.",
+		"atoms": atoms, "keep": keep, "gone": [], "made": [], "shaky": {}, "tags_from": tags, "tags_to": []}
+
+
+## Stand the camera back far enough to hold the whole example, before and after.
+func _frame_camera() -> void:
+	var lo := Vector3(INF, INF, INF)
+	var hi := -lo
+	for a in _scene.get("atoms", []):
+		for p in [a[1] as Vector3, (a[2] as Vector3) + (a[3] as Vector3)]:
+			lo = lo.min(p)
+			hi = hi.max(p)
+	if not is_finite(lo.x):
+		lo = Vector3(-3, -3, 0)
+		hi = Vector3(3, 3, 0)
+	var c := (lo + hi) * 0.5
+	var hx := (hi.x - lo.x) * 0.5 + 1.6
+	# Room for the name tags under the molecules and the title above.
+	var hy := (hi.y - lo.y) * 0.5 + 2.6
+	var th := tan(deg_to_rad(_cam.fov * 0.5))
+	var aspect := float(VIEW_SIZE.x) / float(VIEW_SIZE.y)
+	var dist := maxf(hy / th, hx / (th * aspect)) + 2.0
+	_cam.position = Vector3(c.x, c.y - 0.5, dist)
+	_cam.rotation = Vector3.ZERO
+	_cam.near = 0.5
+	_cam.far = dist + 60.0
+
+
+func _refresh_text() -> void:
+	var name_cv := str(sim.net["cvs"][cv].get("label", "volume"))
+	title_label.text = "Molecules in %s · %.0f °C" % [name_cv, _cv_t() - 273.15]
+	_story_label.text = str(_scene.get("title", ""))
+	caption.text = str(_scene.get("text", ""))
+	var bits: Array = []
+	if _is_bed_cv() and sim.bed.plastic == "":
+		var wr := wood_rates()
+		var tot := 0.0
+		for k in wr.keys():
+			tot += float(wr[k])
+		if tot > 1e-12:
+			var parts: Array = []
+			for k2 in ["hemicellulose", "cellulose", "lignin"]:
+				if float(wr[k2]) / tot >= 0.01:
+					parts.append("%s %.0f %%" % [k2, float(wr[k2]) / tot * 100.0])
+			bits.append("Breaking down now: " + ", ".join(parts))
+	var g: PackedFloat64Array = sim.gas[cv]
+	var n := 0.0
+	for s in g.size():
+		n += g[s]
+	if n > 0.0:
+		var order: Array = []
+		for s2 in g.size():
+			if g[s2] / n >= 0.01:
+				order.append(s2)
+		order.sort_custom(func(a: int, b: int) -> bool: return g[a] > g[b])
+		var gp: Array = []
+		for s3 in order.slice(0, 4):
+			gp.append("%s %.0f %%" % [TcMolecules.display_name(str(TcProcSim.SP[s3])).to_lower(), g[s3] / n * 100.0])
+		bits.append("Gas here: " + ", ".join(gp))
+	legend.text = " · ".join(bits)
 
 
 # ---------------------------------------------------------------------------
@@ -587,79 +622,132 @@ func _advance_stories(dt: float) -> void:
 # ---------------------------------------------------------------------------
 
 static func atom_color(el: String) -> Color:
+	if LOOK.has(el):
+		return LOOK[el]["color"]
 	return (TcSpecies.ATOMS.get(el, {"color": Color.GRAY}) as Dictionary)["color"]
 
 
 static func atom_r(el: String) -> float:
-	return float((TcSpecies.ATOMS.get(el, {"r": 0.6}) as Dictionary)["r"]) * ATOM_SCALE
+	if LOOK.has(el):
+		return float(LOOK[el]["r"])
+	return float((TcSpecies.ATOMS.get(el, {"r": 0.6}) as Dictionary)["r"]) * 0.6
 
 
 func _draw_all() -> void:
-	var ats: Array = []     # [pos, el]
-	var bds: Array = []     # [a, b, order, color]
-	for m in _mols:
-		var lay := TcMolecules.layout(str(m["sp"]))
-		var base := ats.size()
-		for a in lay.get("atoms", []):
-			ats.append([(m["pos"] as Vector3) + (m["rot"] as Quaternion) * (a[1] as Vector3), str(a[0])])
-		for b in lay.get("bonds", []):
-			bds.append([base + int(b[0]), base + int(b[1]), int(b[2]), Color(0.62, 0.64, 0.68)])
-	for s in _stories:
-		var t := float(s["t"])
-		# Stretch (shake), move, settle.
-		var u := smoothstep(0.25, 0.8, t)
-		var shake := sin(t * 60.0) * 0.12 * (1.0 - smoothstep(0.15, 0.3, t)) * smoothstep(0.0, 0.08, t)
-		var base2 := ats.size()
-		for a2 in s["atoms"]:
-			var p: Vector3 = (a2[1] as Vector3).lerp(a2[2] as Vector3, u)
-			p += Vector3(shake, -shake, shake * 0.5)
-			ats.append([p, str(a2[0])])
-		var hot := Color(1.0, 0.62, 0.2)
-		if u < 0.55:
-			for b2 in s["bonds_from"]:
-				bds.append([base2 + int(b2[0]), base2 + int(b2[1]), int(b2[2]), Color(0.62, 0.64, 0.68).lerp(hot, clampf(t * 3.0, 0.0, 1.0))])
-		if u > 0.45:
-			for b3 in s["bonds_to"]:
-				bds.append([base2 + int(b3[0]), base2 + int(b3[1]), int(b3[2]), hot.lerp(Color(0.62, 0.64, 0.68), smoothstep(0.6, 1.0, t))])
+	var idle := bool(_scene.get("idle", false))
+	var t := _t
+	var b0 := T_SHOW
+	var b1 := T_SHOW + T_BREAK
+	var b2 := b1 + T_MOVE
+	var b3 := b2 + T_HOLD
+	var u := 0.0 if idle else smoothstep(b1, b2, t)
+	var freed := 0.0 if idle else smoothstep(b2 - 0.2, b3, t)
+	var heat := 0.0 if idle else smoothstep(b0 * 0.6, b1, t) * (1.0 - smoothstep(b1, b1 + T_MOVE * 0.35, t))
+	# A slow rock about the upright axis, so the balls read as round.
+	var rock := Basis(Vector3.UP, sin(_spin * 0.7) * 0.16) * Basis(Vector3.RIGHT, sin(_spin * 0.45) * 0.07)
+	var atoms: Array = _scene.get("atoms", [])
+	var shaky: Dictionary = _scene.get("shaky", {})
+	var pos := PackedVector3Array()
+	pos.resize(atoms.size())
+	for i in atoms.size():
+		var a: Array = atoms[i]
+		var p: Vector3 = (a[1] as Vector3).lerp(a[2] as Vector3, u) + (a[3] as Vector3) * freed
+		if shaky.has(i) and heat > 0.0:
+			p += Vector3(sin(t * 47.0 + float(i) * 1.7), cos(t * 53.0 + float(i) * 2.3), 0.0) * 0.07 * heat
+		pos[i] = rock * p
 	var mm: MultiMesh = _atoms_mm.multimesh
-	if mm.instance_count != ats.size():
-		mm.instance_count = ats.size()
-	for i in ats.size():
-		var r := atom_r(str(ats[i][1]))
-		mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3.ONE * r), ats[i][0]))
-		mm.set_instance_color(i, atom_color(str(ats[i][1])))
-	var bm: MultiMesh = _bonds_mm.multimesh
-	var nb := 0
-	for b4 in bds:
-		var pa: Vector3 = ats[int(b4[0])][0]
-		var pb: Vector3 = ats[int(b4[1])][0]
-		if pa.distance_to(pb) > 3.2:
-			continue   # a bond pulled too far apart has broken
-		nb += 1
-	if bm.instance_count != nb:
-		bm.instance_count = nb
-	var k := 0
-	for b5 in bds:
-		var a: Vector3 = ats[int(b5[0])][0]
-		var b: Vector3 = ats[int(b5[1])][0]
-		var d := b - a
+	if mm.instance_count != atoms.size():
+		mm.instance_count = atoms.size()
+	for i2 in atoms.size():
+		var el := str(atoms[i2][0])
+		mm.set_instance_transform(i2, Transform3D(Basis.from_scale(Vector3.ONE * atom_r(el)), pos[i2]))
+		mm.set_instance_color(i2, atom_color(el))
+	_n_atoms = atoms.size()
+	# Sticks: [a, b, order, colour].
+	var sticks: Array = []
+	for k in _scene.get("keep", []):
+		sticks.append([int(k[0]), int(k[1]), int(k[2]), STICK_COLOR])
+	if u < 0.3:
+		for g in _scene.get("gone", []):
+			sticks.append([int(g[0]), int(g[1]), int(g[2]), STICK_COLOR.lerp(HOT, heat)])
+	if u > 0.8:
+		var settle := smoothstep(b2, b2 + 0.9, t)
+		for m in _scene.get("made", []):
+			sticks.append([int(m[0]), int(m[1]), int(m[2]), HOT.lerp(STICK_COLOR, settle)])
+	var xfs: Array = []
+	var cols: Array = []
+	for s in sticks:
+		var pa: Vector3 = pos[int(s[0])]
+		var pb: Vector3 = pos[int(s[1])]
+		var d := pb - pa
 		var l := d.length()
-		if l > 3.2:
+		if l < 1e-4 or l > 3.4:
 			continue
-		var y := d / maxf(l, 1e-5)
-		var x := y.cross(Vector3.UP if absf(y.y) < 0.95 else Vector3.RIGHT).normalized()
-		var z := x.cross(y)
-		var rad := 0.09 * sqrt(float(b5[2]))
-		bm.set_instance_transform(k, Transform3D(Basis(x * rad, y * l, z * rad), (a + b) * 0.5))
-		bm.set_instance_color(k, b5[3])
-		k += 1
+		var y := d / l
+		var side := y.cross(Vector3(0, 0, 1))
+		side = side.normalized() if side.length() > 0.05 else y.cross(Vector3.UP).normalized()
+		var z := side.cross(y)
+		var order := int(s[2])
+		var rad := STICK_R if order == 1 else STICK_R * 0.8
+		var offs: Array = [0.0]
+		if order == 2:
+			offs = [-0.13, 0.13]
+		elif order >= 3:
+			offs = [-0.19, 0.0, 0.19]
+		for o in offs:
+			xfs.append(Transform3D(Basis(side * rad, y * l, z * rad), (pa + pb) * 0.5 + side * float(o)))
+			cols.append(s[3])
+	var bm: MultiMesh = _bonds_mm.multimesh
+	if bm.instance_count != xfs.size():
+		bm.instance_count = xfs.size()
+	for k2 in xfs.size():
+		bm.set_instance_transform(k2, xfs[k2])
+		bm.set_instance_color(k2, cols[k2])
+	_n_bonds = sticks.size()
+	# Fade the picture between examples.
+	var vis := 1.0
+	if not idle:
+		vis = smoothstep(0.0, 0.3, t) * (1.0 - smoothstep(b3, b3 + T_FADE, t))
+	_svc.modulate = Color(1, 1, 1, 1)
+	_atoms_mm.transparency = 1.0 - vis
+	_bonds_mm.transparency = 1.0 - vis
+	# Name tags and the step.
+	var a_from := 1.0 if idle else (1.0 - smoothstep(b0, b1, t)) * smoothstep(0.0, 0.3, t)
+	var a_to := 0.0 if idle else smoothstep(b2 - 0.4, b2 + 0.2, t) * (1.0 - smoothstep(b3, b3 + T_FADE, t))
+	var li := 0
+	for grp in [[_scene.get("tags_from", []), a_from, 0.0], [_scene.get("tags_to", []), a_to, freed]]:
+		for tag in grp[0]:
+			if li >= _labels.size():
+				break
+			var lab: Label = _labels[li]
+			li += 1
+			var wp: Vector3 = rock * ((tag[1] as Vector3) + (tag[2] as Vector3) * float(grp[2]))
+			var sp := _cam.unproject_position(wp)
+			lab.text = str(tag[3])
+			lab.visible = float(grp[1]) > 0.02
+			lab.modulate = Color(1, 1, 1, float(grp[1]))
+			lab.position = Vector2(clampf(sp.x - lab.size.x * 0.5, 2.0, VIEW_SIZE.x - lab.size.x - 2.0),
+				clampf(sp.y, 26.0, VIEW_SIZE.y - 32.0))
+	for k3 in range(li, _labels.size()):
+		(_labels[k3] as Label).visible = false
+	if idle:
+		_phase_label.text = ""
+	elif t < b0:
+		_phase_label.text = "1 · Before"
+	elif t < b1 + T_MOVE * 0.3:
+		_phase_label.text = "2 · Bonds break"
+	else:
+		_phase_label.text = "3 · After"
 
 
-## For the harness: what is in the lens.
+## For the harness: what the lens is showing.
 func debug_state() -> Dictionary:
-	var by := {}
-	for m in _mols:
-		var key := "%s@%s" % [m["sp"], m["region"]]
-		by[key] = int(by.get(key, 0)) + 1
-	return {"cv": cv, "molecules": _mols.size(), "by": by, "stories": _stories.size(), "shown_stories": shown_stories,
-		"atoms": _atoms_mm.multimesh.instance_count, "bonds": _bonds_mm.multimesh.instance_count}
+	var tags := 0
+	for l in _labels:
+		if (l as Label).visible:
+			tags += 1
+	return {"cv": cv, "story": str(_scene.get("id", "")), "title": str(_scene.get("title", "")),
+		"idle": bool(_scene.get("idle", false)), "t": _t, "shown_stories": shown_stories,
+		"atoms": _n_atoms, "bonds": _n_bonds, "tags": tags, "phase": _phase_label.text,
+		"ball_r": atom_r("C"), "stick_r": STICK_R, "gone": (_scene.get("gone", []) as Array).size(),
+		"made": (_scene.get("made", []) as Array).size()}

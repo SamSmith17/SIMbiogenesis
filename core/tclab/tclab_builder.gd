@@ -335,6 +335,25 @@ static func material_for(key: String) -> Material:
 		m = StructureMaterials.make(StructureMaterials.Kind.PLASTIC, Color(0.80, 0.86, 0.95))
 	elif key == "carbon":
 		m = StructureMaterials.make(StructureMaterials.Kind.PLASTIC, Color(0.08, 0.08, 0.09))
+	elif key == "drum":
+		# A blue polyethylene barrel.
+		m = StructureMaterials.make(StructureMaterials.Kind.PLASTIC, Color(0.10, 0.27, 0.62))
+	elif key == "drum_dark":
+		m = StructureMaterials.make(StructureMaterials.Kind.PLASTIC, Color(0.07, 0.17, 0.40))
+	elif key == "bell":
+		# The gasometer's float (a lighter barrel, so it reads apart from its base).
+		m = StructureMaterials.make(StructureMaterials.Kind.PLASTIC, Color(0.20, 0.46, 0.82))
+	elif key == "bell_trim":
+		m = StructureMaterials.make(StructureMaterials.Kind.PLASTIC, Color(0.16, 0.16, 0.17))
+	elif key == "pvc":
+		m = StructureMaterials.make(StructureMaterials.Kind.PLASTIC, Color(0.90, 0.90, 0.87))
+	elif key == "water":
+		m = StructureMaterials.make(StructureMaterials.Kind.GLAZING, Color(0.30, 0.50, 0.62, 0.55))
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	elif key == "frame":
+		m = StructureMaterials.make(StructureMaterials.Kind.PAINTED_METAL, Color(0.10, 0.10, 0.11))
+	elif key == "engine":
+		m = StructureMaterials.make(StructureMaterials.Kind.HARDWARE_METAL, Color(0.34, 0.35, 0.37))
 	else:
 		m = StructureMaterials.make(StructureMaterials.Kind.STAINLESS, Color(0.8, 0.8, 0.8))
 	_mat_cache[key] = m

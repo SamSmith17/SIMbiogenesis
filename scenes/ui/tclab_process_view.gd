@@ -21,7 +21,16 @@ extends Node3D
 ##            front, glowing char, the elements' glow
 ##   vapour   a few pooled particle emitters: vapour rising off the charge,
 ##            the plume at the gas outlet, drips where it condenses,
-##            bubbles in a boiling pool
+##            bubbles in a boiling pool. The vapour in the vessel is drawn
+##            by tc_smoke.gdshader, which cuts every puff off at the
+##            vessel's inside wall and lid: the gas is contained.
+## Process units move with the run (always drawn, whatever the look): a
+## gasometer's float stands where its gas has it (the built part's float is
+## hidden while this view is up and a live one drawn at fill × stroke), and
+## a running generator shakes a little and puffs exhaust.
+## The charge settles as it dries and chars (TcBed.volume_frac): its mesh is
+## one unit high and the shader draws it at the height it has now; the
+## headspace gas and the vapour start from that surface.
 ## Cosmetic motion runs on the lab's clock: nothing moves while the lab is
 ## paused, and it time-lapses (sqrt of the speed) instead of strobing.
 
@@ -30,6 +39,7 @@ const XrayShader := preload("res://core/tclab/process/shaders/tc_xray.gdshader")
 const GasShader := preload("res://core/tclab/process/shaders/tc_gas.gdshader")
 const LiquidShader := preload("res://core/tclab/process/shaders/tc_liquid.gdshader")
 const BedShader := preload("res://core/tclab/process/shaders/tc_bed.gdshader")
+const SmokeShader := preload("res://core/tclab/process/shaders/tc_smoke.gdshader")
 
 const MM := 0.001
 const TUBE_SIDES := 12
@@ -62,6 +72,12 @@ var _liq: Array = []           # [{cv, mat, y_lo, y_hi}]
 var _bed: Dictionary = {}      # {mi, mat, img, tex}
 var _head: Dictionary = {}     # vessel headspace gas {mat, phase}
 var _pool: Dictionary = {}     # vessel liquid {mat, disc, disc_mat}
+var _smoke_mat: ShaderMaterial = null   # vapour puffs inside the vessel
+var _live: Node3D                # moving unit parts (drawn in every look)
+var _floats: Array = []          # [{unit (index in sim.units), part, node, stroke_m}]
+var _gens: Array = []            # [{part, node (the built part), xf, emitter}]
+var _hidden: StandardMaterial3D = null
+var _bed_top := 0.0             # the charge's height now (m, vessel frame)
 var _emit := {}                # name → GPUParticles3D
 var _drip_cvs: Array = []
 var _sect_mats := {}
@@ -83,6 +99,9 @@ func setup(b: TcBuilder, cam: Camera3D) -> void:
 	_contents = Node3D.new()
 	_contents.name = "Contents"
 	add_child(_contents)
+	_live = Node3D.new()
+	_live.name = "Live"
+	add_child(_live)
 
 
 ## A new run (or a new design): rebuild the contents from the sim's network.
@@ -92,11 +111,21 @@ func rebuild(s: TcProcSim, d: Dictionary) -> void:
 	for c in _contents.get_children():
 		_contents.remove_child(c)
 		c.queue_free()
+	for c2 in _live.get_children():
+		_live.remove_child(c2)
+		c2.queue_free()
+	for gn in _gens:
+		if is_instance_valid(gn["node"]):
+			(gn["node"] as Node3D).transform = gn["xf"]
+	_floats = []
+	_gens = []
 	_gas = []
 	_liq = []
 	_bed = {}
 	_head = {}
 	_pool = {}
+	_smoke_mat = null
+	_bed_top = 0.0
 	_emit = {}
 	_drip_cvs = []
 	_last_t = -1.0
@@ -153,6 +182,7 @@ func rebuild(s: TcProcSim, d: Dictionary) -> void:
 	if sim.vessel_cv >= 0:
 		_build_vessel(cvs[sim.vessel_cv])
 	_build_emitters()
+	_build_units()
 	apply_mode()
 	update_view(0.0, false, 1.0)
 
@@ -177,6 +207,7 @@ func _build_vessel(cv: Dictionary) -> void:
 	var bed_h := 0.0
 	if sim.bed != null and not sim.bed.is_empty():
 		bed_h = sim.bed.height_m
+		_bed_top = bed_h
 		var bm := ShaderMaterial.new()
 		bm.shader = BedShader
 		var nd := sim.bed.domains.size()
@@ -196,17 +227,23 @@ func _build_vessel(cv: Dictionary) -> void:
 			else:
 				doms.append(Vector4(0, 0, 0, 1))
 		bm.set_shader_parameter("dom", doms)
-		var bmesh := tube_mesh([PackedVector3Array([Vector3(0, 0.002, 0), Vector3(0, bed_h, 0)])], R, true)
-		var bi := _mi("Charge", bmesh, bm, holder)
-		_bed = {"mi": bi, "mat": bm, "img": img, "tex": tex}
-		_paint_bed()
+		var piece := 0.004 if sim.bed.plastic != "" else 0.011
+		bm.set_shader_parameter("piece_m", piece)
+		bm.set_shader_parameter("heap_m", minf(piece, bed_h * 0.08))
+		var bi := _mi("Charge", charge_mesh(R), bm, holder)
+		bi.custom_aabb = AABB(Vector3(-R, 0, -R), Vector3(R * 2.0, bed_h + 0.05, R * 2.0))
+		_bed = {"mi": bi, "mat": bm, "img": img, "tex": tex, "piece": piece}
 	# The headspace above the charge (or the whole vessel for a liquid charge).
 	var hm := ShaderMaterial.new()
 	hm.shader = GasShader
 	hm.set_shader_parameter("cell_m", clampf(R * 0.5, 0.03, 0.12))
-	var hmesh := tube_mesh([PackedVector3Array([Vector3(0, bed_h + 0.003, 0), Vector3(0, H, 0)])], R * 0.97, false)
-	_mi("Headspace", hmesh, hm, holder)
-	_head = {"mat": hm, "phase": 0.0, "R": R, "H": H, "bed_h": bed_h}
+	# One mesh over the vessel's whole height, squeezed onto what is above
+	# the charge as the charge settles.
+	var hmesh := tube_mesh([PackedVector3Array([Vector3(0, 0.0, 0), Vector3(0, H, 0)])], R * 0.97, false)
+	var hi := _mi("Headspace", hmesh, hm, holder)
+	_head = {"mat": hm, "phase": 0.0, "R": R, "H": H, "bed_h": bed_h, "mi": hi, "dome": _dome_m(cv), "cap": _dome_is_cap(cv)}
+	_fit_headspace()
+	_paint_bed()
 	# A liquid charge (a kettle, a still): the pool and its surface.
 	var pm := ShaderMaterial.new()
 	pm.shader = LiquidShader
@@ -241,11 +278,142 @@ func set_show_contents(on: bool) -> void:
 	_contents.visible = on and mode != "solid"
 
 
+## Whether the vessel's lid is a spherical cap (else a dished head).
+func _dome_is_cap(cv: Dictionary) -> bool:
+	var parts: Dictionary = (design.get("res", {}) as Dictionary).get("parts", {})
+	for pid in cv.get("parts", []):
+		var b: Dictionary = (parts.get(str(pid), {}) as Dictionary).get("built", {})
+		if str(b.get("type", "")) == "vessel":
+			var p: Dictionary = b.get("params", {})
+			return not p.is_empty() and TcVessel.has_lid(p) and str(p.get("lid_shape", "")) == "cap"
+	return false
+
+
+## The moving parts of the process units on the line.
+func _build_units() -> void:
+	var parts: Dictionary = (design.get("res", {}) as Dictionary).get("parts", {})
+	for ui in sim.units.size():
+		var u: Dictionary = sim.units[ui]
+		var pid := str(u.get("part", ""))
+		var pd: Dictionary = parts.get(pid, {})
+		if pd.is_empty():
+			continue
+		var b: Dictionary = pd["built"]
+		var xf := TcBuilder.to_m(pd["xf"])
+		var ud: Dictionary = b.get("unit", {})
+		match str(u["kind"]):
+			"holder":
+				var p: Dictionary = b.get("params", {})
+				var g := TcGeom.new()
+				TcUnits.gas_holder(g, str(b.get("size", "2")), float(p.get("volume_l", 100.0)), float(p.get("hold_kpa", 0.5)),
+					str(p.get("style", "bell")), "float", 0.0)
+				var at := Node3D.new()
+				at.name = "FloatAt_%s" % pid
+				at.transform = xf
+				_live.add_child(at)
+				var mi := MeshInstance3D.new()
+				mi.name = "Float"
+				mi.mesh = TcBuilder.geo_to_mesh(g, null)
+				at.add_child(mi)
+				_floats.append({"unit": ui, "part": pid, "node": mi, "stroke_m": float(ud.get("stroke_mm", 300.0)) * MM})
+			"engine":
+				var node := builder.get_node_or_null("P_%s" % pid) as Node3D if builder != null else null
+				var dir: Vector3 = ud.get("exhaust_dir", Vector3.UP)
+				var nm := "Exhaust_%s" % pid
+				var e := _emitter(nm, Vector3(0.004, 0.004, 0.004), (xf.basis * dir).normalized(), 0.25, 0.5, Vector3(0, 0.3, 0), 1.0,
+					Vector2(0.02, 0.085), 20, _live)
+				e.position = xf * ((ud.get("exhaust_mm", Vector3.ZERO) as Vector3) * MM)
+				_gens.append({"part": pid, "node": node, "xf": node.transform if node != null else Transform3D.IDENTITY, "emitter": nm})
+
+
+## Floats to where the gas has them; a running generator shakes.
+func _update_units(delta: float, running: bool) -> void:
+	for f in _floats:
+		var ui := int(f["unit"])
+		if ui >= sim.units.size():
+			continue
+		var want := sim.holder_fill(sim.units[ui]) * float(f["stroke_m"])
+		var n: Node3D = f["node"]
+		var y := n.position.y
+		# Eased while it runs; straight there on a scrub or a pause.
+		n.position = Vector3(0, lerpf(y, want, 1.0 - exp(-delta * 8.0)) if running and delta > 0.0 else want, 0)
+	for gn in _gens:
+		var node: Node3D = gn["node"]
+		if node == null or not is_instance_valid(node):
+			continue
+		var xf: Transform3D = gn["xf"]
+		var kw := float(sim.engine_kw.get(str(gn["part"]), 0.0))
+		if running and kw > 0.01:
+			var t := Time.get_ticks_msec() * 0.001
+			xf.origin += Vector3(sin(t * 87.0) * 0.0007, absf(sin(t * 61.0)) * 0.0006, cos(t * 73.0) * 0.0005)
+		node.transform = xf
+
+
+## Put the built parts back as they were (the panel is leaving Process mode).
+func release() -> void:
+	for gn in _gens:
+		if is_instance_valid(gn["node"]):
+			(gn["node"] as Node3D).transform = gn["xf"]
+	if builder == null:
+		return
+	for n in builder.get_children():
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		for si in mi.mesh.get_surface_count():
+			mi.set_surface_override_material(si, null)
+
+
+func _hidden_mat() -> StandardMaterial3D:
+	if _hidden == null:
+		_hidden = StandardMaterial3D.new()
+		_hidden.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_hidden.albedo_color = Color(0, 0, 0, 0)
+		_hidden.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_hidden.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	return _hidden
+
+
+## The inside height of the vessel's lid or top head above its shell (m).
+func _dome_m(cv: Dictionary) -> float:
+	var parts: Dictionary = (design.get("res", {}) as Dictionary).get("parts", {})
+	for pid in cv.get("parts", []):
+		var b: Dictionary = (parts.get(str(pid), {}) as Dictionary).get("built", {})
+		if str(b.get("type", "")) != "vessel":
+			continue
+		var p: Dictionary = b.get("params", {})
+		if p.is_empty():
+			return 0.0
+		if TcVessel.has_lid(p):
+			return TcVessel.lid_depth(p) * MM
+		return TcVessel.head_depth(p, "top") * MM
+	return 0.0
+
+
+## The headspace gas sits on the charge as it is now.
+func _fit_headspace() -> void:
+	if _head.is_empty():
+		return
+	var mi: MeshInstance3D = _head["mi"]
+	var H := float(_head["H"])
+	var y0 := minf(_bed_top + 0.003, H - 0.01) if _bed_top > 0.0 else 0.0
+	mi.position = Vector3(0, y0, 0)
+	mi.scale = Vector3(1.0, maxf(H - y0, 0.01) / maxf(H, 0.01), 1.0)
+
+
 ## Put the right materials on every built part for the mode.
 func apply_mode() -> void:
 	_plane = Vector4(0, 0, 0, -1)
 	if _contents != null:
 		_contents.visible = show_contents and mode != "solid"
+	# The live floats wear the look too.
+	var floats_of := {}
+	for f in _floats:
+		floats_of["P_%s" % str(f["part"])] = true
+		var fm: MeshInstance3D = f["node"]
+		for si2 in fm.mesh.get_surface_count():
+			var k2 := (fm.mesh as ArrayMesh).surface_get_name(si2)
+			fm.set_surface_override_material(si2, _section_mat(k2) if mode == "section" else (_xray_mat(k2) if mode == "xray" else null))
 	if builder == null:
 		return
 	for n in builder.get_children():
@@ -261,6 +429,9 @@ func apply_mode() -> void:
 				m = _section_mat(key)
 			elif mode == "xray":
 				m = _xray_mat(key)
+			# A gasometer's built float gives way to the live one.
+			if key.begins_with("bell") and floats_of.has(str(mi.name)):
+				m = _hidden_mat()
 			mi.set_surface_override_material(si, m)
 		if mode != "solid":
 			mi.material_overlay = null
@@ -357,6 +528,7 @@ func update_view(delta: float, running: bool, rate: float) -> void:
 		mult = clampf(sqrt(maxf(rate, 0.0)) / 3.0, 0.3, 3.0)
 	_swirl += delta * mult * 0.4
 	_update_plane()
+	_update_units(delta, running)
 	if mode == "solid" or not show_contents:
 		_set_emitting(false)
 		return
@@ -536,6 +708,19 @@ func _paint_bed() -> void:
 				img.set_pixel(j, di * TcBed.NZ + k, cell_color(d, i))
 	(_bed["tex"] as ImageTexture).update(img)
 	var mat: ShaderMaterial = _bed["mat"]
+	# The pile settles as it dries and chars; its pieces shrink with it.
+	var frac := sim.bed.volume_frac()
+	_bed_top = sim.bed.height_m * frac
+	mat.set_shader_parameter("bed_h", _bed_top)
+	mat.set_shader_parameter("piece_m", float(_bed["piece"]) * pow(frac, 1.0 / 3.0))
+	mat.set_shader_parameter("flicker", _swirl)
+	_fit_headspace()
+	var ve: GPUParticles3D = _emit.get("Vapour", null)
+	if ve != null:
+		ve.position = Vector3(0, _bed_top + 0.01, 0)
+	if _smoke_mat != null:
+		_smoke_mat.set_shader_parameter("to_vessel", (global_transform * _vessel_xf).affine_inverse())
+		_smoke_mat.set_shader_parameter("floor_y", maxf(_bed_top - 0.01, 0.0))
 	var gl: Array = []
 	var eg := _element_glows()
 	for di in 4:
@@ -547,7 +732,12 @@ func _paint_bed() -> void:
 	mat.set_shader_parameter("to_vessel", (global_transform * _vessel_xf).affine_inverse())
 
 
-## One cell: rgb what it is, a its glow.
+## One cell: rgb what it is, a its glow (0 below GLOW_FROM_C, 1 at
+## GLOW_FULL_C: temperature alone, so a charge that cools goes back to black).
+const GLOW_FROM_C := 420.0
+const GLOW_FULL_C := 800.0
+
+
 static func cell_color(d: Dictionary, i: int) -> Color:
 	var t_c := float(d["T"][i]) - 273.15
 	var wood := Color(0.78, 0.60, 0.38)
@@ -561,12 +751,12 @@ static func cell_color(d: Dictionary, i: int) -> Color:
 		1:
 			c = wood.lerp(Color(0.62, 0.44, 0.26), clampf((t_c - 120.0) / 160.0, 0.0, 1.0))
 		2:
-			c = Color(0.55, 0.36, 0.20).lerp(Color(0.10, 0.08, 0.07), TcBed.converted_at(d, i))
+			c = Color(0.55, 0.36, 0.20).lerp(Color(0.07, 0.06, 0.055), TcBed.converted_at(d, i))
 		_:
-			c = Color(0.08, 0.075, 0.07)
+			c = Color(0.05, 0.047, 0.045)
 	var glow := 0.0
 	if stage >= 2:
-		glow = clampf((t_c - 420.0) / 380.0, 0.0, 1.0)
+		glow = clampf((t_c - GLOW_FROM_C) / (GLOW_FULL_C - GLOW_FROM_C), 0.0, 1.0)
 	return Color(c.r, c.g, c.b, glow)
 
 
@@ -608,6 +798,8 @@ func _update_plane() -> void:
 		(_pool["disc_mat"] as ShaderMaterial).set_shader_parameter("cut_plane", p)
 	if not _bed.is_empty():
 		(_bed["mat"] as ShaderMaterial).set_shader_parameter("cut_plane", p)
+	if _smoke_mat != null:
+		_smoke_mat.set_shader_parameter("cut_plane", p)
 
 
 func cut_plane() -> Vector4:
@@ -632,9 +824,21 @@ func _build_emitters() -> void:
 	if sim.vessel_cv >= 0 and not _head.is_empty():
 		var vh: Node3D = _contents.get_node("Vessel")
 		var R := float(_head["R"])
+		var H := float(_head["H"])
+		# Puffs drawn only inside the vessel: cut off at its wall and lid.
+		_smoke_mat = ShaderMaterial.new()
+		_smoke_mat.shader = SmokeShader
+		_smoke_mat.set_shader_parameter("inner_r", R * 0.99)
+		_smoke_mat.set_shader_parameter("top_y", H)
+		_smoke_mat.set_shader_parameter("dome_h", maxf(float(_head["dome"]) - 0.004, 0.0))
+		_smoke_mat.set_shader_parameter("dome_cap", 1.0 if bool(_head["cap"]) else 0.0)
+		_smoke_mat.set_shader_parameter("soft", clampf(R * 0.18, 0.01, 0.04))
+		_smoke_mat.set_shader_parameter("to_vessel", (global_transform * _vessel_xf).affine_inverse())
+		var puff := minf(0.12, R * 0.75)
 		var e := _emitter("Vapour", Vector3(R * 0.6, 0.004, R * 0.6), Vector3.UP, 0.03, 0.08,
-			Vector3(0, 0.03, 0), clampf((float(_head["H"]) - float(_head["bed_h"])) / 0.06, 1.5, 6.0), Vector2(0.03, 0.12), 40, vh)
-		e.position = Vector3(0, float(_head["bed_h"]) + 0.01, 0)
+			Vector3(0, 0.03, 0), clampf((H - float(_head["bed_h"]) * 0.5) / 0.06, 1.5, 6.0), Vector2(puff * 0.25, puff), 40, vh,
+			_smoke_mat)
+		e.position = Vector3(0, _bed_top + 0.01, 0)
 		var b := _emitter("Bubbles", Vector3(R * 0.7, 0.004, R * 0.7), Vector3.UP, 0.06, 0.14,
 			Vector3.ZERO, 1.6, Vector2(0.005, 0.012), 40, vh)
 		b.position = Vector3(0, 0.01, 0)
@@ -642,8 +846,11 @@ func _build_emitters() -> void:
 	var out := _outlet_boundary()
 	if not out.is_empty():
 		var d: Vector3 = out["dir"]
-		var pl := _emitter("Plume", Vector3(0.004, 0.004, 0.004), d, 0.08, 0.2, Vector3(0, 0.04, 0), 2.2,
-			Vector2(0.012, 0.07), 36, _contents)
+		# A short jet straight out of the pipe end: the gas leaves through the
+		# outlet (to a hose, a holder, a burner), it does not rise over the
+		# reactor like smoke from an open pot.
+		var pl := _emitter("Plume", Vector3(0.004, 0.004, 0.004), d, 0.05, 0.11, Vector3.ZERO, 0.9,
+			Vector2(0.010, 0.032), 24, _contents)
 		pl.position = (out["pos_mm"] as Vector3) * MM + d * 0.01
 	for k in MAX_DRIPS:
 		_emitter("Drips%d" % k, Vector3(0.01, 0.05, 0.01), Vector3.DOWN, 0.0, 0.02, Vector3(0, -0.5, 0), 1.2,
@@ -662,7 +869,7 @@ func _outlet_boundary() -> Dictionary:
 
 
 func _emitter(nm: String, extents: Vector3, dir: Vector3, v0: float, v1: float, grav: Vector3, life: float,
-		size: Vector2, amount: int, parent: Node3D) -> GPUParticles3D:
+		size: Vector2, amount: int, parent: Node3D, mat: Material = null) -> GPUParticles3D:
 	var p := GPUParticles3D.new()
 	p.name = nm
 	p.amount = amount
@@ -704,7 +911,7 @@ func _emitter(nm: String, extents: Vector3, dir: Vector3, v0: float, v1: float, 
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.albedo_texture = FireVfx.soft_disc_texture()
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
-	q.material = m
+	q.material = mat if mat != null else m
 	p.draw_pass_1 = q
 	parent.add_child(p)
 	_emit[nm] = p
@@ -725,6 +932,8 @@ func _emit_set(nm: String, ratio: float, col: Color, running: bool, mult: float)
 	if p.emitting != want:
 		p.emitting = want
 	p.speed_scale = clampf(mult, 0.3, 2.0) if running else 0.0
+	# Puffs frozen by a pause after their source stopped would hang there.
+	p.visible = want or running
 	(p.process_material as ParticleProcessMaterial).color = col
 
 
@@ -748,6 +957,9 @@ func _update_emitters(running: bool, mult: float) -> void:
 	var pl := gas_look(px)
 	var pc: Color = pl[0]
 	_emit_set("Plume", pr / 0.004, Color(pc.r, pc.g, pc.b, clampf(float(pl[1]) * 0.6, 0.12, 0.45)), running, mult)
+	for gn in _gens:
+		var kw := float(sim.engine_kw.get(str(gn["part"]), 0.0))
+		_emit_set(str(gn["emitter"]), clampf(kw / 0.6, 0.35, 1.0) if kw > 0.01 else 0.0, Color(0.42, 0.42, 0.44, 0.45), running, mult)
 	# Drips in the volumes condensing the most.
 	var order: Array = []
 	for k in sim.n_cv:
@@ -864,6 +1076,73 @@ static func tube_mesh(polys: Array, r: float, caps: bool) -> ArrayMesh:
 	return am
 
 
+## The charge: a cylinder ONE unit high (tc_bed.gdshader scales it to the
+## charge's height) with a ringed top the shader heaps up. UV2.x = 1 on the
+## top's vertices, UV2.y = how far they may rise (0 at the wall).
+static func charge_mesh(r: float) -> ArrayMesh:
+	var sides := TUBE_SIDES * 2
+	var rings := 7
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var uv2 := PackedVector2Array()
+	var idx := PackedInt32Array()
+	# Wall.
+	for k in 2:
+		for a in sides + 1:
+			var ang := TAU * float(a) / float(sides)
+			var d := Vector3(cos(ang), 0.0, sin(ang))
+			verts.append(d * r + Vector3(0, float(k), 0))
+			norms.append(d)
+			uv2.append(Vector2(0, 0))
+	for a in sides:
+		var i0 := a
+		var i1 := a + sides + 1
+		idx.append_array([i0, i1, i0 + 1, i0 + 1, i1, i1 + 1])
+	# Bottom and top: a centre and rings.
+	for end in 2:
+		var y := float(end)
+		var n := Vector3.DOWN if end == 0 else Vector3.UP
+		var ci := verts.size()
+		verts.append(Vector3(0, y, 0))
+		norms.append(n)
+		uv2.append(Vector2(float(end), 1.0))
+		for k in rings:
+			var rr := r * float(k + 1) / float(rings)
+			var rise := 1.0 - pow(float(k + 1) / float(rings), 3.0)
+			for a in sides:
+				# Every other ring is turned half a step, so the facets vary.
+				var ang := TAU * (float(a) + (0.5 if k % 2 == 1 else 0.0)) / float(sides)
+				verts.append(Vector3(cos(ang) * rr, y, sin(ang) * rr))
+				norms.append(n)
+				uv2.append(Vector2(float(end), rise))
+		for a in sides:
+			var j0 := ci + 1 + a
+			var j1 := ci + 1 + (a + 1) % sides
+			# Godot's front face is clockwise seen from outside.
+			if end == 0:
+				idx.append_array([ci, j0, j1])
+			else:
+				idx.append_array([ci, j1, j0])
+		for k in rings - 1:
+			var b0 := ci + 1 + k * sides
+			var b1 := b0 + sides
+			for a in sides:
+				var a1 := (a + 1) % sides
+				if end == 0:
+					idx.append_array([b0 + a, b1 + a, b0 + a1, b0 + a1, b1 + a, b1 + a1])
+				else:
+					idx.append_array([b0 + a, b0 + a1, b1 + a, b0 + a1, b1 + a1, b1 + a])
+	var am := ArrayMesh.new()
+	var arr := []
+	arr.resize(Mesh.ARRAY_MAX)
+	arr[Mesh.ARRAY_VERTEX] = verts
+	arr[Mesh.ARRAY_NORMAL] = norms
+	arr[Mesh.ARRAY_TEX_UV2] = uv2
+	arr[Mesh.ARRAY_INDEX] = idx
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	return am
+
+
 static func disc_mesh(r: float) -> ArrayMesh:
 	var verts := PackedVector3Array([Vector3.ZERO])
 	var norms := PackedVector3Array([Vector3.UP])
@@ -896,4 +1175,8 @@ func debug_state() -> Dictionary:
 		if lv != null and float(lv) > -1.0e5:
 			liquids += 1
 	return {"mode": mode, "plane": _plane, "gas_tubes": _gas.size(), "liquids_shown": liquids,
-		"has_bed": not _bed.is_empty(), "emitting": on, "contents_visible": _contents.visible}
+		"has_bed": not _bed.is_empty(), "emitting": on, "contents_visible": _contents.visible,
+		"floats": _floats.map(func(f: Dictionary) -> Dictionary: return {"part": f["part"], "lift_m": (f["node"] as Node3D).position.y,
+			"stroke_m": f["stroke_m"], "fill": sim.holder_fill(sim.units[int(f["unit"])]) if sim != null and int(f["unit"]) < sim.units.size() else 0.0}),
+		"generators": _gens.size(),
+		"bed_top_m": _bed_top, "bed_loaded_m": float(_head.get("bed_h", 0.0)), "smoke_contained": _smoke_mat != null}

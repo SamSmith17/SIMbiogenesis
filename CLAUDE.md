@@ -5350,7 +5350,9 @@ chemistry engine.
     preset "Run the genset from the gas holder" (on at 60 %, off at 15 %).
   - Built-in `biochar_genset` ("Biochar reactor → genset", catalog
     `tclab_biochar_genset`): the reactor's gas line down to `GAS_LINE_Y`,
-    300 L holder, silica dryer, 2.5 kW genset, the two rules (units are
+    300 L holder, silica dryer, 2.5 kW genset (since 2026-11-08 the 30 gal
+    barrel gasometer and the 350–750 W generator, see the improvement pass),
+    the two rules (units are
     stood upright with `_attach`'s `["@up", Vector3.UP]` want — scoring
     ports alone laid them on their sides). Measured
     (`tools/diag/tc_chain_probe.gd`): the bell fills to ~40–60 % and the
@@ -5399,6 +5401,125 @@ chemistry engine.
   molecule lens, the Control tab); modal audit entry `tc_process`; bench
   `tools/bench/tc_proc_bench.gd` (per built-in: CVs, links, ms/step, the
   pre-run time, section costs; 1 s steps; snapshot / seek).
+
+- **Improvement pass (2026-11-08).**
+  - **The vapour is contained.** The vessel's vapour puffs draw through
+    `tc_smoke.gdshader` (billboard in the vertex stage; every fragment
+    outside the vessel's inside cylinder + lid dome, in the vessel's frame,
+    is discarded, with a soft fade toward the wall). The outlet "Plume" is a
+    short jet out of the pipe end with no buoyancy: it used to rise over the
+    reactor and read as smoke through the lid. Emitters whose source stopped
+    are hidden while paused.
+  - **The charge cools and settles.** `TcBed.volume_frac()` (display and
+    readings only; the heat grid keeps its loaded geometry): wood loses
+    `DRY_SHRINK` 6 % drying and `CHAR_SHRINK` 45 % charring (estimates inside
+    published 40–60 %), plastic slumps and cracks away. The charge mesh is
+    one unit high (`charge_mesh`, a ringed top the shader heaps) and
+    `tc_bed.gdshader` draws it at `bed_h` now; headspace and vapour start
+    there. Glow is temperature alone (`GLOW_FROM_C` 420 → `GLOW_FULL_C` 800,
+    dull red → orange → yellow). The reactor presets ship
+    `TcProcControl.done_rule` ("Elements off when the charge is done":
+    sensor `charge_done` ≥ 97 % for 20 min), so the batch ends with the
+    elements off and black char (84 °C at 10 h). New sensors `charge_done`,
+    `charge_mass`; tiles Charge mass / Charge volume.
+  - **The molecule lens is ONE worked example**, not a box of ~60 flying
+    molecules: `TcMolecules.stories()` (kind → storyboards with stage
+    positions; `raw` / `centroid` so the link that stays does not move) and
+    a rebuilt `tclab_molecule_lens.gd` (before → bonds break → after, name
+    tags, light backdrop, C 0.46 Å balls on 0.085 Å sticks, double bonds as
+    two sticks). Wood examples: hemicellulose (xylan2 → xylose link +
+    furfural + 2 H2O), cellulose (→ glucose link + levoglucosan), lignin
+    (→ guaiacol + ethylene + CO), charring; picked from each component's
+    rate in the bed's cells (`wood_rates`). Look check:
+    `tools/diag/tclab_lens_look_diag.gd`. `TcMolecules.STORY` is gone.
+  - **The reactor's lid** was Ø516 (wider than the vessel) and a dished
+    ellipse; the GLB's (meshes Geom3D_7 / _8, drawn lifted 116 mm) is a Ø342
+    × 59 mm spherical cap on a Ø380 flange. Vessel keys `lid_dome_od_mm`,
+    `lid_shape` dished | cap, `lid_clamp`, `bands` (hoops); crown 1½". The
+    model's inside face is Ø366; the preset stays Ø340 (Ø366 broke the
+    plastic batch's calibration).
+  - **From the user's photos:** vessel `legs` ring_stand / casters / saddle
+    (a skid on the shell's −Z side: turn the part a quarter turn),
+    `handle_ring`; vessel presets ring_stand_reactor, tall_tank,
+    horizontal_tank, cylinder, collection_pot; part type `bowl_reducer`;
+    built-in designs `ring_stand_reactor`, `tall_tank`,
+    `horizontal_receiver`, `parts_kit`. Sizes are read off the pictures
+    (estimates). Not catalog ids (designer only).
+  - **Barrel gasometer + small generator (same day, from the user's
+    `Gasometer-low poly.glb` and `small generator.glb`; drawn procedurally to
+    their measured sizes, the GLBs are not in the repo).**
+    - `gas_holder` param `style` (`TcUnits.HOLDER_STYLES`): `barrel_30` (the
+      default: 30 gal base Ø526 × 866, 15 gal float Ø382 × 730), `barrel_55`
+      (55 gal base, 30 gal float), `bell` (the old steel bell; a saved holder
+      with no `style` is still the bell at its own volume). Capacity =
+      `BARREL_USABLE` 0.8 of the float (45.4 L / 90.9 L); the hold pressure is
+      the float's weight (`barrel_hold_kpa`, a few tenths of a kPa).
+      `TcUnits.gas_holder(..., style, what, lift)` builds "all" | "base" |
+      "float"; float surfaces are the material keys `bell` / `bell_trim`.
+    - `genset` param `model`: `small` (the default: open frame 680 × 560 ×
+      620 mm, 48 V DC, `min_kw` 0.35 → `rated_kw` 0.75, efficiency 0.18) or
+      `skid` (a saved genset with no `model` is still the 2.5 kW skid set).
+      `TcProcSim.engine_setpoint_kw(u)` is the governor: `min_kw` with the
+      gasometer under `GOVERNOR_LOW` 20 %, `rated_kw` from `GOVERNOR_HIGH`
+      70 %, linear between; a set with no floor runs at its rating.
+    - The `biochar_genset` chain uses both: on at 80 % full, off at 15 %, plus
+      the done rule (it had been missing there). The generator runs ~1.5–2 min
+      each time the 30 gal float fills; ~0.3 kWh over the batch.
+    - Process mode draws them live (`tclab_process_view.gd` `_build_units` /
+      `_update_units`, node `Live`): the built float is hidden and a live one
+      stands at fill × `holder_stroke_mm`; a running generator shakes and
+      puffs exhaust; `release()` puts the built parts back on leaving. Tiles
+      "Gasometer % full" and "Generator W at 48 V". World-placed props do not
+      animate the float.
+    - ⚠ The seal blow-off runs after the pressure solve, so a 45 L float
+      overshoots its seal by ~3 kPa inside one step at peak gas (the selftest
+      allows 3 kPa over).
+  - **Third pass (same day): flat double bottom, results tiles, Control tab
+    + the controller board.**
+    - **The reactor has no legs.** Vessel key `jacket_bottom_mm`
+      (`TcVessel.double_bottom`): on a jacket that starts at the bottom seam,
+      the jacket wall carries on down to a second flat bottom the vessel
+      stands on. "bottom" face nozzles stay on the INNER bottom, so the two
+      elements' heads sit between the bottoms. The reactor uses 150 mm, which
+      puts its underside on the floor the gasometer and generator stand on
+      (the gas line ~90 mm above it). Drawing only: the jacket's process
+      volume is unchanged.
+    - The designer's studio floor is seated under the design's lowest point
+      (`tclab_modal._seat_ground`), so nothing draws below the ground.
+    - **Results tab** (was "Readings"): eight tiles of what the batch has made
+      and used, each a number + unit + a line under it, from
+      `TcProcSim.batch_stats()` (a function of the state, so it scrubs):
+      carbon in the char (`CHAR_C_FRAC` 0.80, Lehmann & Joseph 2015), CO₂e
+      (× `CHAR_PERM` 0.80, IPCC 2019 Refinement, × 44/12; electricity is NOT
+      netted off), biochar, gas made (CO, CO₂, H₂, CH₄, C₃H₆ wherever it
+      went, normal litres + MJ), heater kWh in, generator kWh out, liquids,
+      charge converted. Under them "Right now" rows (`NOW_ROWS`, KVRow; rows
+      that do not apply hide). Tile labels are `tile_<id>` / `unit_<id>` /
+      `sub_<id>`.
+    - **Control tab** order: Rules, Switches, Sensors, Controller board.
+      Sensors an instrument can read are listed with a board tick
+      (`sensor_list`, 3 columns); the model's own readings fold away
+      (`model_list`); the probe adder says which part it will land on.
+    - **`TcProcBoard`** (core/tclab/process/tc_proc_board.gd, pure): maps
+      each sensor / switch to an ESP part (temperatures → `max6675`, cooling
+      water → `ds18b20`, gasometer fill → `vl53l0x` with a calibrate_linear
+      to %, pressure → an `ads1115` channel with a 0.5–4.5 V transducer,
+      switches → `relay_1ch`; the every-element group and model readings get
+      none) and builds an EspSpec NAMED AFTER THE DESIGN whose entities carry
+      the Process Lab's own ids (`entity_ids` pins it). The player's ticks are
+      `process.board = {on: {key: bool}}` (kept by TcProcSpec; a board change
+      does not restart the run, `_same_run`). "Open the board in the ESP
+      designer" = `Main.open_esplab({spec})` over the TC designer
+      (EspLabLayer is LAYER_MODAL + 2; `tclab_modal._covered()` stops the TC
+      designer taking keys underneath).
+    - ESP instances gained `ents: {k: {name, unit, dc}}` (EspSpec.resolve
+      keeps it, `EspDesign.entities_of` applies it): the exact entity name /
+      unit an instance's entity carries.
+    - ⚠ `d.get("k", {}) is Dictionary` then `d["k"]` on a missing key threw
+      twice more here: test `has("k")` first.
+    - Not done: the ESP twin of that board reads the world's weather, not the
+      process; the board is rebuilt from the ticks each time it is opened
+      (hand wiring is kept only if saved in the ESP designer's own library).
 
 ## ESP board designer (core/esplab/, 2026-11-07)
 

@@ -108,6 +108,16 @@ func run(main: Node, harness: Node) -> Dictionary:
 	print("tc_process: batch of %.1f h computed in %.1f s over %d frames" % [done_h, secs, frames])
 	_ok(not bool(panel.get("prerunning")) and done_h >= float(proc["duration_h"]) - 0.01, "the whole batch is computed (%.1f h)" % done_h)
 	_ok((panel.get("history") as Array).size() >= int(float(proc["duration_h"]) * 50.0), "with a sample a minute for the chart")
+	# The view stays on the end of the batch: the final results stand until Restart.
+	await _settle(tree, 12)
+	var t_end := float(panel.call("time_h"))
+	var tc_end := ui.find_child("tile_carbon", true, false) as Label
+	_ok(absf(t_end - float(proc["duration_h"])) < 0.01, "when the batch is done the view is at its end (%.2f h)" % t_end)
+	_ok(tc_end != null and tc_end.text.to_float() > 1.0, "and the tiles show the final results (%s kg C)" % (tc_end.text if tc_end != null else "?"))
+	await _shot(main, "00b_final_results")
+	_ok(await _click_named(ui, vp, tree, "proc_restart"), "Restart is there")
+	await _settle(tree, 12)
+	_ok(float(panel.call("time_h")) < 0.01 and tc_end != null and tc_end.text.to_float() < 0.01, "only Restart takes them back to zero")
 	var ids := {}
 	for e in panel.get("run_events"):
 		ids[str(e["id"])] = true
@@ -134,7 +144,30 @@ func run(main: Node, harness: Node) -> Dictionary:
 		var rd: Dictionary = panel.call("readings")
 		_ok(float(rd.get("char_kg", 0.0)) > 0.5, "by 3 h there is char (%.2f kg)" % float(rd.get("char_kg", 0.0)))
 		var tile := ui.find_child("tile_char", true, false) as Label
-		_ok(tile != null and tile.text != "â€”", "the Char tile reads it (%s)" % (tile.text if tile != null else "none"))
+		_ok(tile != null and tile.text.is_valid_float(), "the Biochar tile reads it (%s)" % (tile.text if tile != null else "none"))
+		# The results tiles: a number, its unit, and a line under it.
+		var units_ok := true
+		for tid in ["carbon", "co2e", "char", "gas", "energy", "gen", "cond", "done"]:
+			var un := ui.find_child("unit_%s" % tid, true, false) as Label
+			units_ok = units_ok and un != null and un.text != ""
+		_ok(units_ok, "every result tile carries its unit")
+		var bs: Dictionary = (panel.get("sim") as TcProcSim).batch_stats()
+		var tc := ui.find_child("tile_carbon", true, false) as Label
+		var te := ui.find_child("tile_co2e", true, false) as Label
+		var tg := ui.find_child("tile_gas", true, false) as Label
+		var th2 := ui.find_child("tile_energy", true, false) as Label
+		_ok(tc != null and absf(tc.text.to_float() - float(bs["carbon_kg"])) < 0.011, "carbon locked in the char (%s kg C)" % (tc.text if tc != null else "?"))
+		_ok(te != null and absf(te.text.to_float() - float(bs["co2e_kg"])) < 0.011 and te.text.to_float() > 1.0, "CO2 kept out of the air (%s kg CO2e)" % (te.text if te != null else "?"))
+		_ok(tg != null and tg.text.to_float() > 100.0, "gas made so far (%s L)" % (tg.text if tg != null else "?"))
+		_ok(th2 != null and absf(th2.text.to_float() - float(bs["heat_kwh"])) < 0.011, "heater electricity in (%s kWh)" % (th2.text if th2 != null else "?"))
+		# They follow the run: earlier in the batch they read less.
+		var c3 := tc.text.to_float() if tc != null else 0.0
+		panel.call("seek_h", 1.0)
+		await _settle(tree, 12)
+		_ok(tc != null and tc.text.to_float() < c3, "and they follow the run (carbon %.2f at 1 h, %.2f at 3 h)" % [tc.text.to_float() if tc != null else 0.0, c3])
+		panel.call("seek_h", 3.0)
+		await _settle(tree, 12)
+		await _shot(main, "01b_results")
 
 	# Click a condenser in the studio.
 	var p11: Vector2 = ui.call("part_pos", "p11")
@@ -200,22 +233,28 @@ func run(main: Node, harness: Node) -> Dictionary:
 		panel.call("select_cv", sim.vessel_cv)
 		panel.call("play", true)
 		await _settle(tree, 240)
+		# Stop on a step that shows its name tags (not the fade between examples).
+		for _k in 600:
+			var st0: Dictionary = lens.call("debug_state")
+			if int(st0["tags"]) >= 1 and str(st0["phase"]).begins_with("3") and int(st0["shown_stories"]) >= 2:
+				break
+			await tree.process_frame
 		panel.call("play", false)
 		var ls: Dictionary = lens.call("debug_state")
 		print("tc_process: lens %s" % [ls])
-		var by: Dictionary = ls["by"]
-		var solid := 0
-		var gas := 0
-		for k in by.keys():
-			if str(k).ends_with("@solid"):
-				solid += int(by[k])
-			elif str(k).ends_with("@gas"):
-				gas += int(by[k])
-		_ok(solid >= 6, "the vessel shows its charge as molecules (%d units)" % solid)
-		_ok(by.has("char@solid"), "some of it already char at 2.2 h")
-		_ok(gas >= 8, "and its gas (%d molecules, fewer when they are big)" % gas)
+		_ok(not bool(ls["idle"]) and str(ls["story"]) in ["hemicellulose", "cellulose", "lignin", "charring", "drying"],
+			"the vessel shows one worked example of what is reacting (%s)" % str(ls["story"]))
 		_ok(int(ls["shown_stories"]) >= 1, "a reaction played (%d)" % int(ls["shown_stories"]))
-		_ok(int(ls["atoms"]) > 100 and int(ls["bonds"]) > 50, "drawn ball and stick (%d atoms, %d bonds)" % [int(ls["atoms"]), int(ls["bonds"])])
+		_ok(int(ls["atoms"]) >= 9 and int(ls["atoms"]) <= 60, "a single example, not a crowd (%d atoms, %d bonds)" % [int(ls["atoms"]), int(ls["bonds"])])
+		_ok(float(ls["ball_r"]) >= 4.5 * float(ls["stick_r"]), "bold balls on thin sticks (ball %.2f Å, stick %.3f Å)" % [float(ls["ball_r"]), float(ls["stick_r"])])
+		_ok(int(ls["tags"]) >= 1, "its molecules are named (%d tags, step %s)" % [int(ls["tags"]), str(ls["phase"])])
+		var wr: Dictionary = lens.call("wood_rates")
+		_ok(float(wr["hemicellulose"]) + float(wr["cellulose"]) + float(wr["lignin"]) > 0.0, "picked from what the bed's cells are doing (%s)" % [wr])
+		# The contents: the vapour is contained, the charge has settled.
+		var vs: Dictionary = view.call("debug_state")
+		_ok(bool(vs["smoke_contained"]), "the vapour in the vessel is drawn only inside it")
+		_ok(float(vs["bed_top_m"]) < float(vs["bed_loaded_m"]) * 0.97 and float(vs["bed_top_m"]) > float(vs["bed_loaded_m"]) * 0.4,
+			"the charge has settled as it dried and charred (%.0f of %.0f mm)" % [float(vs["bed_top_m"]) * 1000.0, float(vs["bed_loaded_m"]) * 1000.0])
 		var sr := (modal_studio_rect(ui))
 		_ok(sr.encloses(lens.get_global_rect().grow(-1.0)), "the lens sits inside the studio")
 		await _shot(main, "09_lens_vessel")
@@ -230,13 +269,31 @@ func run(main: Node, harness: Node) -> Dictionary:
 		await _shot(main, "10_lens_condenser")
 		_ok(await _click_named(ui, vp, tree, "view_molecules"), "Molecules off")
 		_ok(panel.get("lens") == null, "and the lens is gone (it costs nothing while off)")
+		# Hot at the end of pyrolysis, black once the elements are off and it has cooled.
+		panel.call("seek_h", 3.4)
+		panel.call("select_cv", sim.vessel_cv)
+		await _settle(tree, 40)
+		var hot_c := float(sim.bed.totals()["t_max_k"]) - 273.15
+		await _shot(main, "13_char_hot")
+		panel.call("seek_h", 9.5)
+		await _settle(tree, 40)
+		var cold_c := float(sim.bed.totals()["t_max_k"]) - 273.15
+		_ok(hot_c > 450.0 and cold_c < 420.0, "the charge glows at 3.4 h (%.0f °C) and has cooled to black char by 9.5 h (%.0f °C)" % [hot_c, cold_c])
+		var off := true
+		for hp in sim.heater_parts:
+			off = off and not bool(sim.heater_on.get(hp, true))
+		_ok(off, "because the preset's rule switched the elements off when the charge was done")
+		_ok(sim.bed.volume_frac() < 0.62 and sim.bed.mass_kg() < 4.0, "and it is smaller and lighter than what was loaded (%.0f %% of the volume, %.1f kg)" % [sim.bed.volume_frac() * 100.0, sim.bed.mass_kg()])
+		await _shot(main, "14_char_cooled")
 
 	# Control (Phase 5b): sensors, switches, automations, all by real clicks.
 	_ok(await _click_named(ui, vp, tree, "right_control"), "the Control tab is there")
 	var cbox := ui.find_child("control_box", true, false) as Control
 	_ok(cbox != null and cbox.is_visible_in_tree(), "it shows the control column")
 	var slist := ui.find_child("sensor_list", true, false) as GridContainer
-	_ok(slist != null and slist.get_child_count() >= 24, "the design's sensors are listed (%d)" % (slist.get_child_count() / 2 if slist != null else 0))
+	_ok(slist != null and slist.get_child_count() >= 15, "the sensors an instrument can read are listed (%d)" % (slist.get_child_count() / 3 if slist != null else 0))
+	var mlist := ui.find_child("model_list", true, false) as GridContainer
+	_ok(mlist != null and mlist.get_child_count() >= 8, "the model's own readings are folded away under them (%d)" % (mlist.get_child_count() / 2 if mlist != null else 0))
 	var cards := ui.find_child("automation_cards", true, false) as Control
 	var preset: MenuButton = null
 	if cards != null:
@@ -257,9 +314,9 @@ func run(main: Node, harness: Node) -> Dictionary:
 		await _settle(tree, 6)
 	var sp2: Dictionary = ui.call("spec")
 	var autos: Array = (sp2.get("process", {}) as Dictionary).get("automations", [])
-	_ok(autos.size() == 2, "the preset's two rules are on the design (%d)" % autos.size())
+	_ok(autos.size() == 3, "the preset's two rules join the design's own charge-is-done rule (%d)" % autos.size())
 	var sim2: TcProcSim = panel.get("sim")
-	_ok(sim2 != null and sim2.automations != null and sim2.automations.rules.size() == 2, "and run in the model")
+	_ok(sim2 != null and sim2.automations != null and sim2.automations.rules.size() == 3, "and run in the model")
 	_ok(await _click_named(ui, vp, tree, "proc_prerun"), "pre-run with the rules")
 	var fr := 0
 	while bool(panel.get("prerunning")) and fr < 6000:
@@ -305,6 +362,39 @@ func run(main: Node, harness: Node) -> Dictionary:
 	print("tc_process: control ui audit — %s" % UiAudit.summary_line(audit2))
 	_ok(int(audit2.get("errors", 0)) == 0, "the Control tab audits clean")
 	await _shot(main, "08_control_after")
+	# The controller board: a tick takes a sensor off it without restarting
+	# the run; the ESP designer opens on it with the process's own entity ids.
+	var slug_b := TcProcControl.design_slug(ui.call("design"))
+	var sim_b: TcProcSim = panel.get("sim")
+	var t_before := sim_b.t_s
+	var bnote := ui.find_child("board_note", true, false) as Label
+	_ok(bnote != null and bnote.text.contains("thermocouple") and bnote.text.contains("relay"), "the board is summed up (%s)" % (bnote.text.substr(0, 70) if bnote != null else "none"))
+	var n_on := TcProcBoard.count_on(TcProcBoard.rows(sim_b, panel.get("proc")))
+	_ok(await _click_named(ui, vp, tree, "board_sensor_%s_vessel_temp" % slug_b), "a sensor's board tick is there")
+	await _settle(tree, 4)
+	var n_on2 := TcProcBoard.count_on(TcProcBoard.rows(panel.get("sim"), panel.get("proc")))
+	_ok(n_on2 == n_on - 1, "unticking takes it off the board (%d → %d parts)" % [n_on, n_on2])
+	_ok(panel.get("sim") == sim_b and absf(sim_b.t_s - t_before) < 1.0, "without starting the run again")
+	_ok(await _click_named(ui, vp, tree, "proc_open_esp"), "the Open in the ESP designer button is there")
+	await _settle(tree, 20)
+	var esp: Control = main.get("esplab_ui")
+	_ok(esp != null and esp.visible, "the ESP board designer opens over the process")
+	if esp != null and esp.visible:
+		var es: Dictionary = esp.call("spec") if esp.has_method("spec") else esp.get("_spec")
+		_ok(EspEntityNames.ha_slug(str(es.get("name", ""))) == slug_b and (es.get("parts", []) as Array).size() == n_on2,
+			"on a board named after the design, a part per ticked sensor and switch (%d)" % (es.get("parts", []) as Array).size())
+		var want := "sensor.%s_charge_max_temp" % slug_b
+		var found := false
+		for en in EspDesign.entities_of(es, str(es["name"])):
+			found = found or str(en["entity_id"]) == want
+		_ok(found, "whose thermocouple is %s, the id the rules read" % want)
+		var audit3 := UiAudit.run(vp)
+		print("tc_process: esp board ui audit — %s" % UiAudit.summary_line(audit3))
+		_ok(int(audit3.get("errors", 0)) == 0, "the board designer audits clean over it")
+		await _shot(main, "08b_controller_board")
+		esp.call("close")
+		await _settle(tree, 6)
+		_ok(not esp.visible and ui.visible, "closing it returns to the process")
 	await _click_named(ui, vp, tree, "right_readings")
 	sim = panel.get("sim")
 
@@ -418,7 +508,32 @@ func run(main: Node, harness: Node) -> Dictionary:
 		await _settle(tree, 4)
 		var csim: Object = panel.get("sim")
 		var kwh := float(csim.get("engine_kwh")) if csim != null else 0.0
-		_ok(kwh > 0.25, "in the lab the genset makes electricity from the batch (%.2f kWh)" % kwh)
+		_ok(kwh > 0.15, "in the lab the generator makes electricity from the batch (%.2f kWh)" % kwh)
+		# The gasometer's float stands where the gas has it.
+		var cview: Node3D = panel.get("view")
+		var lifts: Array = []
+		for hh in [0.05, 0.5, 1.0, 2.5]:
+			panel.call("seek_h", hh)
+			await _settle(tree, 4)
+			var fl: Array = (cview.call("debug_state") as Dictionary)["floats"]
+			if not fl.is_empty():
+				lifts.append([float(fl[0]["fill"]), float(fl[0]["lift_m"]), float(fl[0]["stroke_m"])])
+		print("tc_process: gasometer float %s" % [lifts])
+		var follows := lifts.size() == 4
+		var lo_l := INF
+		var hi_l := -INF
+		for e3 in lifts:
+			follows = follows and absf(float(e3[1]) - float(e3[0]) * float(e3[2])) < 0.002
+			lo_l = minf(lo_l, float(e3[1]))
+			hi_l = maxf(hi_l, float(e3[1]))
+		_ok(follows, "the gasometer's float is drawn at its fill × its travel")
+		_ok(hi_l - lo_l > 0.08, "and rises and falls with the gas over the batch (%.0f mm between the lowest and highest sampled)" % ((hi_l - lo_l) * 1000.0))
+		_ok(int((cview.call("debug_state") as Dictionary)["generators"]) == 1, "the generator has its exhaust")
+		panel.call("seek_h", 0.5)
+		await _settle(tree, 20)
+		await _shot(main, "15_chain_gasometer")
+		panel.call("seek_h", 8.0)
+		await _settle(tree, 4)
 		await _click_named(ui, vp, tree, "right_control")
 		await _settle(tree, 6)
 		var ctl := ui.find_child("control_box", true, false)
