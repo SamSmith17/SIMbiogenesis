@@ -407,6 +407,32 @@ const PROCESSORS: Array = [
 		},
 	},
 	{
+		# The tri-clamp reactor run as a plastic retort (TcPresets.plastic_retort):
+		# shredded polyolefin melts, cracks, and the condensers drop oil and wax;
+		# the light gas leaves the last column. The rates below are a fixed guess
+		# (io_absolute) until a TC Process Lab run is put on the node ("Use this
+		# run on the graph"): the lab's default batch is 8 kg of PP on two 600 W
+		# elements. Thermal cracking of PP gives mostly liquids and wax with
+		# 10-30 % gas (Scheirs & Kaminsky, Feedstock Recycling and Pyrolysis of
+		# Waste Plastics, 2006). The oil and wax leave as the `tar` kind
+		# (alias pyrolysis_oil).
+		"type": "processor", "label": "Plastic-to-Fuel Retort", "icon": "⛽",
+		"width": 150.0, "height": 140.0,
+		"specs": {
+			"name": "Plastic-to-Fuel Retort", "watts": 1200.0, "cost": 2400.0,
+			"energy_source": "ac",
+			"efficiency": 1.0, "energy_wh_per_unit": 1200.0,
+			"io_absolute": true,
+			"daily_note": "Shredded plastic 1 kg/h + 1.2 kW -> ~0.6 kg/h pyrolysis oil and wax + ~0.2 m³/h of light gas. A TC Process Lab run replaces these rates with its batch.",
+			"inputs": [{"kind": "plastic_waste", "rate": 1.0, "unit": "kg/h"}],
+			"outputs": [
+				{"kind": "tar", "rate": 0.6, "unit": "kg/h"},
+				{"kind": "woodgas", "rate": 0.2, "unit": "m³/h"},
+			],
+			"model_id": "tclab_plastic_retort",
+		},
+	},
+	{
 		"type": "processor", "label": "Well Pump",     "icon": "🏗",
 		"width": 130.0, "height": 120.0,
 		"specs": {

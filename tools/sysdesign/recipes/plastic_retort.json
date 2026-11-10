@@ -1,0 +1,110 @@
+{
+  "batch_time_hrs": 7.95138888888889,
+  "builtin": false,
+  "chore_hours": 0.6,
+  "compatible_roles": [],
+  "failure_mode": "pause_and_resume",
+  "gas_composition": {
+    "C3H6": 0.970722061181395,
+    "N2": 0.0231442106361073,
+    "O2": 0.00613372818249775
+  },
+  "gas_lhv_mj_nm3": 83.4559387836418,
+  "id": "tc_plastic_retort_680353",
+  "inputs": [
+    {
+      "delay_hrs": 0.0,
+      "duration_hrs": 1.0,
+      "kind": "plastic_waste",
+      "mode": "frontloaded",
+      "qty": 8.0,
+      "rate": 8.0,
+      "unit": "kg"
+    }
+  ],
+  "label": "Plastic retort: a lab run (8 kg polypropylene pellets, 2 × 600 W)",
+  "note": "From a TC Process Lab run: 8.0 h, 7.74 kWh, 0.00 kg char, 1.70 Nm³ gas at 83.5 MJ/Nm³, 0.00 L wood vinegar, 5.63 kg tar.",
+  "outputs": [
+    {
+      "delay_hrs": 2.76805555555556,
+      "duration_hrs": 4.78333333333333,
+      "kind": "tar",
+      "mode": "delayed",
+      "qty": 5.63244572247741,
+      "rate": 5.63244572247741,
+      "unit": "kg"
+    },
+    {
+      "composition": {
+        "C3H6": 0.970722061181395,
+        "N2": 0.0231442106361073,
+        "O2": 0.00613372818249775
+      },
+      "delay_hrs": 0.101388888888889,
+      "duration_hrs": 7.6,
+      "kind": "woodgas",
+      "lhv_mj_nm3": 83.4559387836418,
+      "mode": "delayed",
+      "qty": 1.70102198140026,
+      "rate": 1.70102198140026,
+      "unit": "m³"
+    },
+    {
+      "delay_hrs": 0.0,
+      "duration_hrs": 1.0,
+      "kind": "hot_water",
+      "mode": "continuous",
+      "qty": 954.166666666667,
+      "rate": 954.166666666667,
+      "unit": "L"
+    }
+  ],
+  "require_confirm_start": false,
+  "steps": [
+    {
+      "at_frac": 0.0,
+      "chore_hours": 0.3,
+      "id": "load",
+      "label": "Load the retort with shredded plastic",
+      "require_confirm": false
+    },
+    {
+      "at_frac": 0.0492576419213974,
+      "chore_hours": 0.0,
+      "id": "pyrolysis",
+      "label": "Pyrolysis begins",
+      "require_confirm": false
+    },
+    {
+      "at_frac": 0.956855895196506,
+      "chore_hours": 0.0,
+      "id": "done",
+      "label": "The charge is char",
+      "require_confirm": false
+    },
+    {
+      "at_frac": 1.0,
+      "chore_hours": 0.3,
+      "id": "unload",
+      "label": "Drain the oil and wax",
+      "require_confirm": false
+    }
+  ],
+  "tc_summary": {
+    "batch_h": 7.95138888888889,
+    "char_kg": 0.0,
+    "feed_kg": 8.0,
+    "gas_composition": {
+      "C3H6": 0.970722061181395,
+      "N2": 0.0231442106361073,
+      "O2": 0.00613372818249775
+    },
+    "gas_lhv_mj_nm3": 83.4559387836418,
+    "gas_nm3": 1.70102198140026,
+    "kwh": 7.74166666666667,
+    "tar_kg": 5.63244572247741,
+    "vinegar_l": 0.0,
+    "watts": 973.624454148472
+  },
+  "watts": 973.624454148472
+}

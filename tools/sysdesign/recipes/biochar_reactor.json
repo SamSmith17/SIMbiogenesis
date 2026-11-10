@@ -1,0 +1,151 @@
+{
+  "batch_time_hrs": 4.00138888888889,
+  "builtin": false,
+  "chore_hours": 0.6,
+  "compatible_roles": [],
+  "failure_mode": "pause_and_resume",
+  "gas_composition": {
+    "CH4": 0.08733203401091,
+    "CO": 0.296331021943324,
+    "CO2": 0.519611562421699,
+    "H2": 0.0529697911177494,
+    "N2": 0.0345887942952437,
+    "O2": 0.00916679621107342
+  },
+  "gas_lhv_mj_nm3": 7.43893395151181,
+  "id": "tc_biochar_reactor_condenser_97205",
+  "inputs": [
+    {
+      "delay_hrs": 0.0,
+      "duration_hrs": 1.0,
+      "kind": "biomass",
+      "mode": "frontloaded",
+      "qty": 10.0,
+      "rate": 10.0,
+      "unit": "kg"
+    }
+  ],
+  "label": "Biochar reactor + condenser: a lab run (10 kg softwood chips, 2 × 600 W)",
+  "note": "From a TC Process Lab run: 4.0 h, 4.50 kWh, 2.81 kg char, 0.96 Nm³ gas at 7.4 MJ/Nm³, 3.00 L wood vinegar, 2.60 kg tar.",
+  "outputs": [
+    {
+      "delay_hrs": 0.0,
+      "duration_hrs": 1.0,
+      "kind": "biochar",
+      "mode": "end_batch",
+      "qty": 2.81418199401166,
+      "rate": 2.81418199401166,
+      "unit": "kg"
+    },
+    {
+      "delay_hrs": 0.0,
+      "duration_hrs": 1.0,
+      "kind": "hot_water",
+      "mode": "continuous",
+      "qty": 480.166666666667,
+      "rate": 480.166666666667,
+      "unit": "L"
+    },
+    {
+      "composition": {
+        "CH4": 0.08733203401091,
+        "CO": 0.296331021943324,
+        "CO2": 0.519611562421699,
+        "H2": 0.0529697911177494,
+        "N2": 0.0345887942952437,
+        "O2": 0.00916679621107342
+      },
+      "delay_hrs": 0.0180555555555556,
+      "duration_hrs": 3.73333333333333,
+      "kind": "woodgas",
+      "lhv_mj_nm3": 7.43893395151181,
+      "mode": "delayed",
+      "qty": 0.960065090257424,
+      "rate": 0.960065090257424,
+      "unit": "m³"
+    },
+    {
+      "delay_hrs": 1.05138888888889,
+      "duration_hrs": 2.43333333333333,
+      "kind": "wood_vinegar",
+      "mode": "delayed",
+      "qty": 2.99786791450982,
+      "rate": 2.99786791450982,
+      "unit": "L"
+    },
+    {
+      "delay_hrs": 1.05138888888889,
+      "duration_hrs": 2.43333333333333,
+      "kind": "tar",
+      "mode": "delayed",
+      "qty": 2.60258400511056,
+      "rate": 2.60258400511056,
+      "unit": "kg"
+    }
+  ],
+  "require_confirm_start": false,
+  "steps": [
+    {
+      "at_frac": 0.0,
+      "chore_hours": 0.3,
+      "id": "load",
+      "label": "Load the reactor with biomass",
+      "require_confirm": false
+    },
+    {
+      "at_frac": 0.00416522040958001,
+      "chore_hours": 0.0,
+      "id": "drying",
+      "label": "Drying starts",
+      "require_confirm": false
+    },
+    {
+      "at_frac": 0.02290871225269,
+      "chore_hours": 0.0,
+      "id": "pyrolysis",
+      "label": "Pyrolysis begins",
+      "require_confirm": false
+    },
+    {
+      "at_frac": 0.662270045123221,
+      "chore_hours": 0.0,
+      "id": "dry",
+      "label": "The charge is dry",
+      "require_confirm": false
+    },
+    {
+      "at_frac": 0.851787573759111,
+      "chore_hours": 0.0,
+      "id": "done",
+      "label": "The charge is char",
+      "require_confirm": false
+    },
+    {
+      "at_frac": 1.0,
+      "chore_hours": 0.3,
+      "id": "unload",
+      "label": "Empty the char and the traps",
+      "require_confirm": false
+    }
+  ],
+  "tc_summary": {
+    "batch_h": 4.00138888888889,
+    "char_kg": 2.81418199401166,
+    "feed_kg": 10.0,
+    "gas_composition": {
+      "CH4": 0.08733203401091,
+      "CO": 0.296331021943324,
+      "CO2": 0.519611562421699,
+      "H2": 0.0529697911177494,
+      "N2": 0.0345887942952437,
+      "O2": 0.00916679621107342
+    },
+    "gas_lhv_mj_nm3": 7.43893395151181,
+    "gas_nm3": 0.960065090257424,
+    "kwh": 4.5,
+    "tar_kg": 2.60258400511056,
+    "vinegar_l": 2.99786791450982,
+    "watts": 1124.6095105866
+  },
+  "watts": 1124.6095105866
+}

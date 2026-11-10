@@ -1091,7 +1091,8 @@ func _test_scenarios() -> void:
 	_ledgers_close(sim, "kettle")
 	# Plastic retort.
 	spec = TcPresets.builtin("plastic_retort")
-	_ok(TcDesign.bound_preset(spec).is_empty(), "the plastic retort has no graph node")
+	_ok(str(TcDesign.bound_preset(spec).get("label", "")) == "Plastic-to-Fuel Retort",
+		"the plastic retort's graph node is the Plastic-to-Fuel Retort preset")
 	d = TcDesign.solve(spec)
 	sim = TcProcSim.create(d, spec["process"])
 	var finite := true

@@ -230,12 +230,12 @@ static func _with_done_rule(p: Dictionary, name: String) -> Dictionary:
 
 
 ## The reactor as a plastic retort: same vessel and condenser, loaded with
-## PP pellets. No graph node (nothing on the graph makes oil from plastic
-## yet); its drains carry the tar / bio-oil kind.
+## PP pellets. Its graph node is the "Plastic-to-Fuel Retort" preset; its
+## drains carry the tar / pyrolysis-oil kind.
 static func plastic_retort() -> Dictionary:
 	var s := biochar_reactor()
 	s["name"] = "Plastic retort"
-	s["binds"] = ""
+	s["binds"] = "Plastic-to-Fuel Retort"
 	var labels: Dictionary = s["labels"]
 	for k in labels.keys():
 		var t := str((labels[k] as Dictionary).get("text", ""))

@@ -248,6 +248,7 @@ func _find_main_node() -> Node:
 
 ## Cached node references to avoid expensive lookups (must re-resolve after scene changes).
 var _solar_ui_cache : Node = null
+var _graph_view_cache : Node = null
 
 func _find_node_in_tree(node_name: String) -> Node:
 	if node_name == "SolarUI":
@@ -257,6 +258,14 @@ func _find_node_in_tree(node_name: String) -> Node:
 		# a full recursive search once and cache the result.
 		_solar_ui_cache = _find_node_recursive(node_name)
 		return _solar_ui_cache
+	# SystemGraphView is three levels deep too (root -> Main -> UILayer): the
+	# shallow search never found it, so no tank.<id>.level / node.<id> key
+	# reached a rule and a tank-level automation could not fire in play.
+	if node_name == "SystemGraphView":
+		if is_instance_valid(_graph_view_cache):
+			return _graph_view_cache
+		_graph_view_cache = _find_node_recursive(node_name)
+		return _graph_view_cache
 	return _find_node_shallow(node_name)
 
 func _find_node_recursive(node_name: String) -> Node:

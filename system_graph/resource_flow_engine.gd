@@ -3047,7 +3047,7 @@ func _process_processor_batch(item: Dictionary, specs: Dictionary, net_rates: Di
 					var tank_specs: Dictionary = tank_item.get("specs", {}) if not tank_item.is_empty() else {}
 					var out_valve_open: bool = bool(tank_specs.get("output_valve_open", true))
 					var deficit_ok: bool = tl == null and bool(tank_specs.get("allow_negative", false))
-					if (tl == null and not deficit_ok) or (tl != null and tl.level_at(abs_h) < qty) or not out_valve_open:
+					if (tl == null and not deficit_ok) or (tl != null and tl.level_at(abs_h) * tl.capacity_qty < qty) or not out_valve_open:
 						can_start = false
 						start_block_reason = GraphNodeState.REASON_EMPTY_INPUT
 						start_block_kinds = [ResourceKinds.normalize_kind(kind)]
@@ -3170,7 +3170,7 @@ func _process_processor_batch(item: Dictionary, specs: Dictionary, net_rates: Di
 					var tank_specs4: Dictionary = tank_item4.get("specs", {}) if not tank_item4.is_empty() else {}
 					var out_valve_open4: bool = bool(tank_specs4.get("output_valve_open", true))
 					var deficit_ok4: bool = tl4 == null and bool(tank_specs4.get("allow_negative", false))
-					if (tl4 == null and not deficit_ok4) or (tl4 != null and tl4.level_at(abs_h) < (qty_per_hr * dt_hours)) or not out_valve_open4:
+					if (tl4 == null and not deficit_ok4) or (tl4 != null and tl4.level_at(abs_h) * tl4.capacity_qty < (qty_per_hr * dt_hours)) or not out_valve_open4:
 						missing_inputs = true
 						missing_kind = kind4
 						break

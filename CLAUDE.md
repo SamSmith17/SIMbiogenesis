@@ -6191,6 +6191,46 @@ the same state. Plan: `~/.claude/plans/the-github-version-of-starry-lighthouse.m
   - `simpack.json` (the manifest, in part 1) plus `simpack.hashes.json` at
     the end of every part.
 - **Hard rules, enforced by BOTH writer and reader** (`entry_allowed`):
+## Whole-system design harness + the closed-loop world (tools/sysdesign/, 2026-11-09)
+
+Design a site as data, build it from library presets, run it a year on the
+game's own simulation, read a verdict. Full notes: `tools/sysdesign/README.md`.
+- **Loop:** `designs/<name>.json` -> `$env:SYSDESIGN="<name>"; $env:SYSDESIGN_DAYS="366";
+  tools\harness.ps1 -World <id> -RunScript res://tools/sysdesign/run_design.gd -Label <dir> -Timeout 3400`
+  -> `screenshots/<dir>/report.md` (+ report.json, daily.csv). A year with ten
+  people at 6-min steps is ~27 min. `SYSDESIGN_PEOPLE=0` skips the people.
+- `SysdesignBuilder` (nodes by library LABEL, `count`, `set`, recipes,
+  automations, wires by kind, `"a>b"` cross-kind), `sysdesign_year.gd` (the
+  stepper: SolarUI's pure evaluator, `EnergyTimeline.step_soc` + hysteresis,
+  `NpcPopulationBridge.tick_at`, `AutomationSim` switching through the
+  GraphSimLoad proxy, `ResourceFlowEngine.render_step`, the view's machine
+  ticks), `sysdesign_report.gd` (the eight SUSTAINED checks).
+- The run resets `PopTestPrefs` in memory and sets the chore ledger to finite
+  labour with a ZERO abstract pool, so recipe crew steps wait for a person.
+- **`bombay_ten`** (10 people, Bombay Beach): 15.2 kWp, 62.4 kWh, a 12,000 m2
+  rain apron into a 400 m3 cistern, 9 greenhouse beds, kitchen recipe with
+  crew steps, reed beds on blackwater, compost + HomeBiogas, biomass plots ->
+  Biochar Reactor as a solar dump load -> woodgas genset, shredder ->
+  Plastic-to-Fuel Retort + injection molder. 366 days from 2024-01-01:
+  SUSTAINED, 0 h AC off, lowest battery 28 %, 10 of 10 stayed.
+- **World** `w6af22bac295d` "Bombay Beach - Closed Loop Ten": built by
+  `tools/fixes/closed_loop_world.gd` (graph, 3D twins as packed kits, 18
+  stowed in a cargo container, three living vehicles, gate, spaces, standing
+  chores, ARRIVE then DEPLOY). Sandbox gate:
+  `tools/checks/closed_loop_world_check.gd`. New world from a map:
+  `tools/sysdesign/create_world.gd` (headless).
+- **Game fixes that came out of it:**
+  - `AutomationEngine` looked for SystemGraphView two levels deep; it is
+    three. No `tank.<id>.level` / node-state key ever reached a live rule,
+    so tank-level automations never fired in play. Cached recursive lookup.
+  - `ResourceFlowEngine` batch start gates compared a 0-1 level with an
+    absolute quantity (two sites); now level x capacity.
+  - New library preset **Plastic-to-Fuel Retort** (catalog
+    `tclab_plastic_retort`, the TC lab's `plastic_retort` binds it).
+- Engine rules a design must respect are listed in the README (proportional
+  processors, batches pushing into full stores, unwired-port fallback, the
+  0.1 % "has supply" rule, rain needs the Rain source wired).
+
   - Secrets never travel: `SECRET_FILES` / `SECRET_DIRS`.
   - Code never travels: `CODE_EXTENSIONS`.
   - A `.tres` / `.tscn` never travels as user data. The map's
