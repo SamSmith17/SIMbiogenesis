@@ -20,6 +20,8 @@ const LIVE_BUDGET_USEC := 1500
 ## Fresh-heat after a structural edit / at the end of a drag.
 const REHEAT_EDIT := 0.5
 const REHEAT_DRAG := 0.3
+## How hard a held arrangement pulls a node back to its slot each step.
+const ANCHOR_STRENGTH := 0.18
 
 var model: GraphModel = null
 var canvas: Control = null
@@ -27,6 +29,13 @@ var canvas: Control = null
 var port_side: Callable = Callable()
 var params: Dictionary = GraphForceLayout.default_params()
 var live := false
+## The arrangement last applied (GraphSchemaLayout.RING …, "" = Tidy / none).
+## While it is set, Live layout HOLDS it: nodes are anchored to where they
+## are, a drag pulls the dragged node's neighbours along and they spring
+## back, and the dropped node keeps its new place.
+var schema := ""
+## The regions (+ ring guide) the arrangement drew: {regions, ring}.
+var schema_result: Dictionary = {}
 
 var _sim: GraphForceLayout = null
 var _sim_scope := ""
@@ -124,12 +133,56 @@ func pinned_ids(items: Array) -> Dictionary:
 	return out
 
 
+## Lay the scope out as `schema_id` (GraphSchemaLayout) and glide every node
+## there. Pinned nodes stay put. Returns false when there is nothing to do.
+func apply_schema(scope_id: String, schema_id: String, animate: bool = true) -> bool:
+	var items := scope_items(scope_id)
+	if items.size() < 2:
+		return false
+	var conns: Array = _conns_between(scope_id, items)
+	var res := GraphSchemaLayout.arrange(schema_id, items, conns, port_side,
+		{"spacing": float(params.get("spacing", GraphSchemaLayout.DEFAULT_SPACING))})
+	var target: Dictionary = res.get("positions", {})
+	if target.is_empty():
+		return false
+	var pins := pinned_ids(items)
+	for iid in pins:
+		target.erase(iid)
+	_tidy_job = {}
+	_anim_from = {}
+	_anim_to = target
+	for it in items:
+		var d: Dictionary = it
+		_anim_from[str(d["id"])] = Vector2(float(d.get("x", 0.0)), float(d.get("y", 0.0)))
+	_anim_commit = true
+	schema = schema_id
+	schema_result = {"regions": res.get("regions", []), "ring": res.get("ring", {})}
+	# Live picks up from the arrangement at rest (a warm sim would tug it).
+	_sim = null
+	if animate:
+		_anim_t = 0.0
+	else:
+		_write_positions(_anim_to)
+		_anim_t = -1.0
+		_moved_since_commit = true
+	_dirty = true
+	return true
+
+
+## Forget the arrangement (Tidy, or the player chose "none").
+func clear_schema() -> void:
+	schema = ""
+	schema_result = {}
+	_dirty = true
+
+
 ## Compute the settled layout for `scope_id` and glide every node to it.
 ## Returns false when there is nothing to arrange.
 func tidy(scope_id: String, animate: bool = true) -> bool:
 	var items := scope_items(scope_id)
 	if items.size() < 2:
 		return false
+	clear_schema()
 	var conns: Array = _conns_between(scope_id, items)
 	var groups := pv_groups(scope_id, items)
 	var sim_items: Array = items
@@ -236,7 +289,13 @@ func process(delta: float, scope_id: String, freeform: bool) -> bool:
 		if not dragging.has(iid):
 			_drag_pins.erase(iid)
 			_sim.set_pinned(str(iid), _is_spec_pinned(str(iid)))
-			_sim.reheat(REHEAT_DRAG)
+			# Holding an arrangement: where it was dropped is its new slot.
+			if _sim.is_anchored():
+				_sim.set_anchor_center(str(iid), _sim.center_of(str(iid)))
+				# Let go: settle back quickly (a cool sim, the anchors win).
+				_sim.alpha = minf(_sim.alpha, REHEAT_DRAG * 0.4)
+			else:
+				_sim.reheat(REHEAT_DRAG)
 	for iid in dragging:
 		var it := model.get_item(str(iid))
 		if it.is_empty():
@@ -300,6 +359,16 @@ func _rebuild(scope_id: String) -> void:
 	_sim.setup(items, _conns_between(scope_id, items), port_side, pins)
 	# A rebuild after an edit warms the layout; a first build starts hot.
 	_sim.alpha = maxf(REHEAT_EDIT, keep_alpha) if keep_alpha < 1.0 else 1.0
+	# Holding an arrangement: every node is anchored where it stands now (the
+	# arrangement, plus whatever the player has moved since). It starts cool:
+	# nothing moves until something is dragged or edited.
+	if not schema.is_empty():
+		var here := {}
+		for it in items:
+			var d: Dictionary = it
+			here[str(d["id"])] = Vector2(float(d.get("x", 0.0)), float(d.get("y", 0.0)))
+		_sim.set_anchors(here, ANCHOR_STRENGTH)
+		_sim.alpha = GraphForceLayout.ALPHA_MIN * 0.5 if keep_alpha >= 1.0 else minf(_sim.alpha, REHEAT_DRAG)
 	for iid in _drag_pins:
 		_sim.set_pinned(str(iid), true)
 

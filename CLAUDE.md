@@ -11461,6 +11461,93 @@ playing the bootcamp through `--capture=bootcamp` (the regression gate).
   frame); the settle commits one history entry + autosave. Round tanks /
   catchments get a layout box widened by their caption (`scope_items`).
   "Arrange" is now "Only remove overlaps".
+- **Arrange as (2026-11-09, `GraphSchemaLayout`, pure)**: Layout ▾ →
+  **Ring** (machines round a circle, one arc per system in flow order; the
+  stores inside, each at the circular mean of its machines; habitats in the
+  middle), **Clusters by system** (one area per system, each force-laid on
+  its own wires, packed in rows), **Swimlanes by system** (a lane per
+  system, columns = flow layer, a column wraps at `LANE_STACK` 3 cards),
+  **Grid by system**. A node's system is `domain_of` (a store by its kind,
+  a habitat = people, else the most resource wires; AC supply wires do not
+  count). The view's ids are `LAYOUT_SCHEMA_BASE` + index; one undo step.
+  The canvas draws the arrangement's system AREAS under the cards
+  (`layout_regions`, measured from the members every draw so they follow
+  drags; a ring draws coloured arcs instead of boxes); "Show system areas"
+  toggles; saved as `layout_schema` / `layout_regions_on` /
+  `layout_schema_result`. Tidy clears the arrangement. **Live layout holds
+  an arrangement**: `GraphForceLayout.set_anchors` (anchored mode = links +
+  anchors + collision only, no charge / gravity / layering): a dragged node
+  pulls its wired neighbours along and they spring back; where it is dropped
+  is its new slot. Gates: `system_graph/graph_schema_layout_selftest.gd`
+  (26) and `tools\harness.ps1 -World w6af22bac295d -RunScript
+  res://tools/checks/graph_schema_layout_check.gd -Label graph_schemas`
+  (23: every arrangement through the menu on the 63-card Closed Loop graph,
+  no overlaps, areas drawn, the live drag). ⚠ `_item_drag_ids` is
+  `Array[String]`: setting it from an untyped Array fails silently.
+  `GraphCard.fill_circle_level` skips a sub-pixel sliver (it errored
+  "triangulation failed" when a tank card was drawn tiny).
+- **The ring in 3D (2026-11-10, Layout ▾ → Ring in 3D).** "3D: nested
+  spheres (a cell)", "3D: torus", "Flat ring" (ids `LAYOUT_3D_SPHERE` 25 /
+  `_TORUS` 26 / `_FLAT` 27; `SystemGraphView.set_graph_3d(mode)`, saved as
+  `graph_3d` {mode, yaw, pitch}). A VIEW, not a layout: the ring is arranged
+  first if it is not up, x/y stay the flat ring, nothing is written.
+  - `GraphSchema3D` (pure): the ring's own groups (machines / stores /
+    people via `GraphSchemaLayout.domain_of` / `is_store`). Sphere: machines
+    on a Fibonacci lattice over the outer sphere in ring order (each system a
+    band), stores on an inner sphere toward their wired machines
+    (`relax_on_sphere`), people at the centre; wires bow toward the centre
+    (`connector_points`). Torus (x-z plane, tube `TUBE_SHARE` 0.25 so the
+    hole stays open): machines round the outer circumference at the flat
+    ring's angles in up to 3 rows, stores on the inner equator, people in
+    the hole; wires run inside the tube (`connector_points_torus`). From
+    straight above (pitch PI/2) the torus IS the flat ring. y is DOWN.
+  - `GraphView3D` (canvas `_v3`): camera (yaw, pitch, orbit inertia), the
+    layout (recomputed on struct_rev), a projection cache behind a DIRTY
+    FLAG — ⚠ a formatted key per lookup cost ~150 ms a frame, the card
+    position functions are called thousands of times per draw. It draws the
+    shells (membrane + nucleus discs and wireframes; a rim-lit glass tube),
+    system names and the connectors (flow beads while flowing).
+  - Canvas hooks, all behind `_v3_on()` (freeform only): `_item_screen_tl` /
+    `_item_screen_size` return the projected rect (eased from the flat one
+    over 0.7 s both ways), so ports, picks, wire drags and selection follow;
+    `_visible_items` sorted far side first (drawn back to front, picked front
+    first); each card's overlays then its fog drawn WITH it (drawn after all
+    cards, back cards' outlines landed on the near side); the card on top
+    beats a port of a card behind it; a press on a card selects, drags
+    nothing and owns its release (`_press_consumed`; a release elsewhere
+    read as a background click and deselected); no bezier wire picks;
+    `fit_items_to_view` frames as drawn (`_v3_fit`). V2 `_v3_orbit_input`:
+    Ctrl/Cmd + drag anywhere orbits (positions, not `relative`); a Ctrl-press
+    that does not move is replayed to the canvas as a Ctrl-click. Tidy or
+    another arrangement leaves 3D (only when it acts on the 3D view's own
+    scope). Also off in 3D: waypoint, orthogonal-segment and resize-handle
+    hits (none are drawn; a hidden waypoint ate clicks). Live layout pauses
+    while its scope is in 3D (it moved the hidden flat ring under it).
+  - **The view belongs to its scope** (`GraphView3D.scope_id`, saved): a
+    group double-clicked from 3D opens FLAT inside (the enter transition
+    starts from the card's projected rect), Esc / pop lands back on the 3D
+    view. Every camera function that framed a card from x/y now asks
+    `_card_graph_rect` (the drawn rect in graph units): pop transitions,
+    `restore_scope_cam`, `focus_on_item`, `prepare_and_try_zoom_drill`.
+  - **Drag a card over its shell** (a plain drag; people in the middle stay):
+    sphere = the eye ray hits the card's sphere on the side it started
+    (`shell_value_at`; past the silhouette, the rim), torus = the
+    (theta, phi) projecting nearest the pointer (a grid, two finer passes).
+    Shown live (`set_drag_value`, the layout is not recomputed under a
+    drag), stored on release as `specs.layout_3d[mode]` (direction /
+    [theta, phi], `GraphSchema3D.SPEC_KEY`) — ONE undo step via
+    `items_moved`. The layout honours it (a placed store is `fixed` in
+    `relax_on_sphere`); the layout key includes `user_rev`, so undo / redo
+    re-lay it. Layout ▾ → Reset 3D placements clears them for the mode.
+  - Tour stop `20d_graph_ring_3d` (mtvernon): sphere + real Ctrl+drag, torus.
+  - Gates: `system_graph/graph_schema_3d_selftest.gd` (offline, 41) and
+    `tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/graph_3d_view_check.gd -Label graph_3d -Timeout 900`
+    (36, REAL Ctrl+drag / Ctrl-click / shell drag + undo / redo / reset /
+    double-click into a group and Esc back; 78-card graph; orbit frame time
+    vs the flat graph's — both ~180 ms a frame on that world in the sandbox,
+    the world's own cost). ⚠ In the check: vehicle and camp cards carry a
+    Watch button that takes a click, and a long camera move flies for up to
+    ~1 s — wait before clicking what it framed.
 - **One card anatomy** (`GraphCard` draw + LOD, `GraphCardSpecs` per type,
   `GraphTheme` tokens) for panel / battery / controller / load: header (icon,
   name, chip), hero number, sub line, bar (+ ghost band for a clipped

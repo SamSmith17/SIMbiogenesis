@@ -42,6 +42,15 @@ var keep_rows := true        ## pull each layer onto one horizontal line
 
 var alpha := 1.0
 
+## Anchored mode (Live layout holding an arrangement — a ring, clusters…):
+## each anchored node is pulled back to its slot, and only the wires, the
+## anchors and collision act (no repulsion, gravity or layering, which would
+## pull the arrangement apart). Drag a node and its neighbours follow on
+## their wires, then spring back; drop it and that is its new slot.
+var anchor_strength := 0.0
+var _anchor: PackedVector2Array = PackedVector2Array()   ## centres
+var _has_anchor: PackedByteArray = PackedByteArray()
+
 var _ids: PackedStringArray = PackedStringArray()
 var _index := {}
 var _pos: PackedVector2Array = PackedVector2Array()   ## centres
@@ -298,6 +307,32 @@ func set_center(iid: String, center: Vector2) -> void:
 	_vel[i] = Vector2.ZERO
 
 
+## Anchor nodes to slots: {id: TOP-LEFT Vector2}. strength 0 turns it off.
+func set_anchors(slots: Dictionary, strength: float = 0.25) -> void:
+	anchor_strength = strength
+	_anchor = PackedVector2Array()
+	_anchor.resize(_ids.size())
+	_has_anchor = PackedByteArray()
+	_has_anchor.resize(_ids.size())
+	for i in _ids.size():
+		if slots.has(_ids[i]):
+			_anchor[i] = (slots[_ids[i]] as Vector2) + _size[i] * 0.5
+			_has_anchor[i] = 1
+
+
+## Move one node's slot (where it was dropped) — its CENTRE.
+func set_anchor_center(iid: String, center: Vector2) -> void:
+	if not _index.has(iid) or _anchor.size() != _ids.size():
+		return
+	var i: int = _index[iid]
+	_anchor[i] = center
+	_has_anchor[i] = 1
+
+
+func is_anchored() -> bool:
+	return anchor_strength > 0.0 and _anchor.size() == _ids.size()
+
+
 func reheat(to_alpha: float = 0.5) -> void:
 	alpha = maxf(alpha, to_alpha)
 
@@ -318,7 +353,13 @@ func step() -> float:
 	# With no wires there is nothing to organise: only remove overlaps, so an
 	# authored arrangement (a row of panels over a controller, before any wire
 	# exists) keeps its shape instead of being blown into a ring by repulsion.
-	if not _edges.is_empty():
+	var anchored := is_anchored()
+	if anchored:
+		_apply_links(force)
+		for i in n:
+			if _has_anchor[i] == 1:
+				force[i] += (_anchor[i] - _pos[i]) * anchor_strength
+	elif not _edges.is_empty():
 		_apply_links(force)
 		_apply_flow(force)
 		_apply_charge(force)
@@ -337,7 +378,8 @@ func step() -> float:
 	# Layering is a CONSTRAINT, not a soft force: with springs pulling every
 	# panel toward its controller, a force-only flow term let the panels fan
 	# out level with the controller instead of sitting above it.
-	_project_flow()
+	if not anchored:
+		_project_flow()
 	# Collision last and at full strength: overlap is never acceptable, at any
 	# temperature.
 	moved = maxf(moved, _apply_collision(2))

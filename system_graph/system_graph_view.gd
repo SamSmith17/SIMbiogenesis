@@ -265,6 +265,14 @@ const LAYOUT_PIN := 12
 const LAYOUT_UNPIN := 13
 const LAYOUT_SETTINGS := 14
 const LAYOUT_BY_SITE := 15
+## Arrangements (GraphSchemaLayout): 16 + the schema's index.
+const LAYOUT_SCHEMA_BASE := 16
+const LAYOUT_REGIONS := 24
+## The ring in 3D (GraphSchema3D): nested spheres, a torus, back to flat.
+const LAYOUT_3D_SPHERE := 25
+const LAYOUT_3D_TORUS := 26
+const LAYOUT_3D_FLAT := 27
+const LAYOUT_3D_RESET := 28
 var _ctrl_picker_dialog: AcceptDialog = null
 var _ctrl_picker_list: ItemList = null
 var _ctrl_picker_array_id: String = ""
@@ -2494,6 +2502,40 @@ func _build_topbar() -> Control:
 	lp.add_item("Tidy layout", LAYOUT_TIDY)
 	lp.set_item_tooltip(lp.get_item_index(LAYOUT_TIDY),
 		"Space every node out with no overlaps: sources on top, loads at the bottom (one undo step)")
+	lp.add_separator("Arrange as")
+	var schema_tips := {
+		GraphSchemaLayout.RING: "Machines round a circle, one arc per system in flow order; the stores they share inside it, each where its wires come from; the people in the middle.",
+		GraphSchemaLayout.CLUSTERS: "One area per system — power, water, food and nutrients, fuel and heat, materials, people — each laid out on its own wires.",
+		GraphSchemaLayout.SWIMLANES: "One lane per system, columns in flow order: what feeds what reads left to right, and a wire between lanes is where two systems meet.",
+		GraphSchemaLayout.GRID: "A compact grid, one system after another.",
+	}
+	for si in GraphSchemaLayout.SCHEMAS.size():
+		var sid: String = GraphSchemaLayout.SCHEMAS[si]
+		lp.add_item(str(GraphSchemaLayout.LABELS[sid]), LAYOUT_SCHEMA_BASE + si)
+		lp.set_item_tooltip(lp.get_item_index(LAYOUT_SCHEMA_BASE + si), str(schema_tips[sid])
+			+ " With Live layout on, the arrangement holds: drag a node and its neighbours follow, then settle back.")
+	lp.add_separator("Ring in 3D")
+	lp.add_radio_check_item(str(GraphSchema3D.LABELS[GraphSchema3D.SPHERE]), LAYOUT_3D_SPHERE)
+	lp.set_item_tooltip(lp.get_item_index(LAYOUT_3D_SPHERE),
+		"The ring as a cell: the machines spread evenly over an outer sphere, one band per system; "
+		+ "the stores on an inner sphere, each toward the machines it is wired to; the people at the "
+		+ "centre; the wires run through the inside. Ctrl+drag to orbit.")
+	lp.add_radio_check_item(str(GraphSchema3D.LABELS[GraphSchema3D.TORUS]), LAYOUT_3D_TORUS)
+	lp.set_item_tooltip(lp.get_item_index(LAYOUT_3D_TORUS),
+		"The ring as a torus: the machines round its outer circumference at their ring angles, "
+		+ "the stores round its inner equator facing the hole, the people in the hole. Ctrl+drag to orbit.")
+	lp.add_radio_check_item("Flat ring", LAYOUT_3D_FLAT)
+	lp.set_item_tooltip(lp.get_item_index(LAYOUT_3D_FLAT), "Back to the flat 2D graph.")
+	lp.set_item_checked(lp.get_item_index(LAYOUT_3D_FLAT), true)
+	lp.add_item("Reset 3D placements", LAYOUT_3D_RESET)
+	lp.set_item_tooltip(lp.get_item_index(LAYOUT_3D_RESET),
+		"Put every card you dragged over its shell back where the 3D view places it (one undo step).")
+	lp.add_separator()
+	lp.add_check_item("Show system areas", LAYOUT_REGIONS)
+	lp.set_item_checked(lp.get_item_index(LAYOUT_REGIONS), true)
+	lp.set_item_tooltip(lp.get_item_index(LAYOUT_REGIONS),
+		"Draw each system's area and name under the cards after an arrangement.")
+	lp.add_separator()
 	lp.add_check_item("Live layout", LAYOUT_LIVE)
 	lp.set_item_tooltip(lp.get_item_index(LAYOUT_LIVE),
 		"Keep the layout running: drag a node and the rest re-space around it")
@@ -11762,6 +11804,9 @@ func _on_combine_menu_id(id: int) -> void:
 
 
 func _on_layout_menu_id(id: int) -> void:
+	if id >= LAYOUT_SCHEMA_BASE and id < LAYOUT_SCHEMA_BASE + GraphSchemaLayout.SCHEMAS.size():
+		apply_layout_schema(str(GraphSchemaLayout.SCHEMAS[id - LAYOUT_SCHEMA_BASE]))
+		return
 	match id:
 		LAYOUT_ARRANGE:     _on_arrange_graph_pressed()
 		LAYOUT_PLACEHOLDER: _on_spawn_3d_placeholder_pressed()
@@ -11771,6 +11816,15 @@ func _on_layout_menu_id(id: int) -> void:
 		LAYOUT_UNPIN:       _pin_selection(false)
 		LAYOUT_SETTINGS:    _open_layout_settings()
 		LAYOUT_BY_SITE:     arrange_systems_by_site()
+		LAYOUT_REGIONS:
+			set_layout_regions_visible(not _layout_regions_on)
+		LAYOUT_3D_SPHERE:   set_graph_3d(GraphSchema3D.SPHERE)
+		LAYOUT_3D_TORUS:    set_graph_3d(GraphSchema3D.TORUS)
+		LAYOUT_3D_FLAT:     set_graph_3d("")
+		LAYOUT_3D_RESET:
+			var n3 := int(_graph_canvas.call("reset_view_3d_placements")) if _graph_canvas != null else 0
+			_show_toast("Reset %s" % UiText.count(n3, "card") if n3 > 0
+				else "No cards were placed by hand in this 3D view", 1.8)
 		LAYOUT_PV_SNAP:
 			var on := not PvGridSnap.enabled()
 			PvGridSnap.set_pref("enabled", on)
@@ -11827,7 +11881,109 @@ func tidy_layout(animate: bool = true, quiet: bool = false) -> bool:
 	var ok := _ensure_layout_driver().tidy(_active_scope_id, animate)
 	if not ok and not quiet:
 		_show_toast("Nothing to tidy — add a second node", 1.6)
+	if ok:
+		_layout_schema = ""
+		_sync_layout_regions()
+		if _graph_3d_scope() == _active_scope_id:
+			set_graph_3d("")
 	return ok
+
+
+var _layout_schema := ""
+var _layout_regions_on := true
+
+
+## Layout ▾ → Arrange as: lay the active scope out as a GraphSchemaLayout
+## arrangement (ring, clusters, swimlanes, grid) and glide there. One undo
+## step. With Live layout on, the arrangement then holds.
+func apply_layout_schema(schema_id: String, animate: bool = true, keep_3d: bool = false) -> bool:
+	if model == null:
+		return false
+	var drv := _ensure_layout_driver()
+	if not drv.apply_schema(_active_scope_id, schema_id, animate):
+		_show_toast("Nothing to arrange — add a second node", 1.6)
+		return false
+	_layout_schema = schema_id
+	_sync_layout_regions()
+	if not keep_3d and _graph_3d_scope() == _active_scope_id:
+		set_graph_3d("")
+	_show_toast("Arranged: %s%s" % [str(GraphSchemaLayout.LABELS.get(schema_id, schema_id)),
+		" · Live layout holds it" if _layout_live else ""], 2.0)
+	return true
+
+
+func set_layout_regions_visible(on: bool) -> void:
+	_layout_regions_on = on
+	if _layout_menu != null:
+		var lp := _layout_menu.get_popup()
+		var idx := lp.get_item_index(LAYOUT_REGIONS)
+		if idx >= 0:
+			lp.set_item_checked(idx, on)
+	_sync_layout_regions()
+	_schedule_graph_autosave()
+
+
+## Layout ▾ → Ring in 3D: the ring arrangement seen as nested spheres
+## (GraphSchema3D.SPHERE) or a torus (TORUS); "" = back to the flat graph.
+## A view, not a layout: x/y stay the flat ring underneath (it is arranged
+## first if it is not up), and the 3D places are worked out from the graph.
+func set_graph_3d(mode: String, animate: bool = true) -> void:
+	if _graph_canvas == null or model == null:
+		return
+	var cur := str(_graph_canvas.call("view_3d_mode"))
+	if mode == cur:
+		_sync_3d_menu_checks()
+		return
+	if not mode.is_empty():
+		if _graph_view_mode != GraphSiteLayout.VIEW_FREEFORM:
+			_on_mode_chip_pressed(GraphSiteLayout.VIEW_FREEFORM)
+		if _layout_schema != GraphSchemaLayout.RING:
+			if not apply_layout_schema(GraphSchemaLayout.RING, false, true):
+				return
+		_graph_canvas.set("view_3d_spacing",
+			float(_ensure_layout_driver().params.get("spacing", GraphSchemaLayout.DEFAULT_SPACING)))
+	_graph_canvas.call("set_view_3d", mode, animate)
+	_sync_3d_menu_checks()
+	if not mode.is_empty():
+		_show_toast("%s · Ctrl+drag to orbit" % str(GraphSchema3D.LABELS.get(mode, mode)), 2.4)
+	elif not cur.is_empty():
+		var ids: Array = []
+		for it in model.get_items_in_scope(_active_scope_id):
+			ids.append(str((it as Dictionary).get("id", "")))
+		_graph_canvas.call("fit_items_to_view", ids)
+	_schedule_graph_autosave()
+
+
+## The scope the 3D view belongs to ("" when it is off).
+func _graph_3d_scope() -> String:
+	if _graph_canvas == null:
+		return ""
+	var st: Dictionary = _graph_canvas.call("view_3d_state")
+	return str(st.get("scope", "")) if not str(st.get("mode", "")).is_empty() else ""
+
+
+func _sync_3d_menu_checks() -> void:
+	if _layout_menu == null or _graph_canvas == null:
+		return
+	var m := str(_graph_canvas.call("view_3d_mode"))
+	var lp := _layout_menu.get_popup()
+	for pair in [[LAYOUT_3D_SPHERE, GraphSchema3D.SPHERE], [LAYOUT_3D_TORUS, GraphSchema3D.TORUS],
+			[LAYOUT_3D_FLAT, ""]]:
+		var idx := lp.get_item_index(int(pair[0]))
+		if idx >= 0:
+			lp.set_item_checked(idx, m == str(pair[1]))
+
+
+## The canvas draws the arrangement's system areas from the driver's result.
+func _sync_layout_regions() -> void:
+	if _graph_canvas == null:
+		return
+	_graph_canvas.set("layout_regions_visible", _layout_regions_on)
+	var res: Dictionary = _layout_driver.schema_result if _layout_driver != null else {}
+	if _layout_schema.is_empty() or res.is_empty():
+		_graph_canvas.call("set_layout_regions", [], {})
+	else:
+		_graph_canvas.call("set_layout_regions", res.get("regions", []), res.get("ring", {}))
 
 
 func set_live_layout(on: bool) -> void:
@@ -11856,10 +12012,30 @@ func _tick_layout(delta: float) -> void:
 	if _layout_driver == null or model == null:
 		return
 	var freeform := _graph_view_mode == GraphSiteLayout.VIEW_FREEFORM
+	# The 3D view draws its own places; Live layout would move the hidden
+	# flat ring under it (and the cards would come back elsewhere).
+	if _graph_canvas != null and bool(_graph_canvas.call("_v3_on")):
+		return
 	if _layout_driver.process(delta, _active_scope_id, freeform):
 		_push_history()
 		_update_undo_redo_btns()
 		_schedule_graph_autosave()
+
+
+## A saved arrangement result: the ring guide's centre comes back from JSON
+## as a string ("(x, y)") or an array; make it a Vector2 again.
+func _schema_result_from_save(d: Dictionary) -> Dictionary:
+	var out := d.duplicate(true)
+	var ring: Variant = out.get("ring", {})
+	if ring is Dictionary and (ring as Dictionary).has("centre"):
+		var c: Variant = (ring as Dictionary)["centre"]
+		if c is String:
+			var parts := (c as String).trim_prefix("(").trim_suffix(")").split(",")
+			if parts.size() == 2:
+				(ring as Dictionary)["centre"] = Vector2(float(parts[0]), float(parts[1]))
+		elif c is Array and (c as Array).size() >= 2:
+			(ring as Dictionary)["centre"] = Vector2(float((c as Array)[0]), float((c as Array)[1]))
+	return out
 
 
 const _LAYOUT_PREF_KEYS := ["spacing", "link_length", "flow_strength", "gravity", "keep_rows"]
@@ -17116,6 +17292,10 @@ func collect_save_state() -> Dictionary:
 		"view_mode":           _graph_view_mode,
 		"freeform_soi_bubble": _freeform_soi_bubble,
 		"layout_live": _layout_live,
+		"layout_schema": _layout_schema,
+		"layout_regions_on": _layout_regions_on,
+		"layout_schema_result": _layout_driver.schema_result if _layout_driver != null else {},
+		"graph_3d": (_graph_canvas.call("view_3d_state") as Dictionary) if _graph_canvas != null else {},
 		"view_filter": GraphDomainFilter.to_array(_domain_shown),
 		"view_filter_unwired": _domain_unwired,
 		"elevation_3d_section": _elevation_3d_section,
@@ -17320,6 +17500,17 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 	_freeform_soi_bubble = bool(data.get("freeform_soi_bubble", false))
 	if data.has("layout_live") and bool(data.get("layout_live", false)) != _layout_live:
 		set_live_layout(bool(data.get("layout_live", false)))
+	_layout_schema = str(data.get("layout_schema", ""))
+	_layout_regions_on = bool(data.get("layout_regions_on", true))
+	var drv0 := _ensure_layout_driver()
+	drv0.schema = _layout_schema
+	var lsr: Variant = data.get("layout_schema_result", {})
+	drv0.schema_result = _schema_result_from_save(lsr) if lsr is Dictionary else {}
+	_sync_layout_regions()
+	if _graph_canvas != null:
+		var g3: Variant = data.get("graph_3d", {})
+		_graph_canvas.call("apply_view_3d_state", g3 if g3 is Dictionary else {})
+		_sync_3d_menu_checks()
 	set_domain_filter(GraphDomainFilter.from_array(data.get("view_filter", [])),
 		bool(data.get("view_filter_unwired", true)))
 	_elevation_3d_section = bool(data.get("elevation_3d_section", true))

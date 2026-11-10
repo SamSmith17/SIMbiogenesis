@@ -374,10 +374,12 @@ static func hub_name_lines(fnt: Font, name: String, size: int, width: float) -> 
 ## Fill the lower `level` of a circle (a tank's level), clipped to the chord.
 static func fill_circle_level(ci: CanvasItem, c: Vector2, r: float, level: float, col: Color) -> void:
 	level = clampf(level, 0.0, 1.0)
-	if level >= 0.999:
+	# A sliver under a pixel deep is a polygon too thin to triangulate (the
+	# engine errors): nothing to draw, or the whole disc.
+	if level >= 0.999 or 2.0 * r * (1.0 - level) < 0.75:
 		GraphFastDraw.disc(ci, c, r, col)
 		return
-	if level <= 0.001 or r < 2.0:
+	if level <= 0.001 or r < 2.0 or 2.0 * r * level < 0.75:
 		return
 	var water_y := c.y + r - 2.0 * r * level
 	var dy := water_y - c.y

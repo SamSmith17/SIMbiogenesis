@@ -36,6 +36,8 @@ func _gui_input(event: InputEvent) -> void:
 	if view_mode == GraphSiteLayout.VIEW_GLOBE or _pins_mode_active():
 		super._gui_input(event)
 		return
+	if _v3_orbit_input(event):
+		return
 	if event is InputEventScreenTouch:
 		var st := event as InputEventScreenTouch
 		_interaction.update_pointer(st.position)
@@ -73,6 +75,70 @@ func _gui_input(event: InputEvent) -> void:
 		if _hover_port_identity() != before:
 			queue_redraw()
 	super._gui_input(event)
+
+
+## 3D view: Ctrl (or Cmd) + drag orbits the camera, anywhere on the canvas.
+## A Ctrl-press that does not move is a Ctrl-click: handed to the canvas
+## as one on release (it toggles the node in the selection).
+var _orbit_press: InputEventMouseButton = null
+var _orbit_dragging := false
+var _orbit_replay := false
+var _orbit_last := Vector2.ZERO
+var _orbit_msec := 0
+const ORBIT_START_PX := 4.0
+
+
+func _v3_orbit_input(event: InputEvent) -> bool:
+	if _orbit_replay or not _v3_on():
+		if _orbit_press != null and not _v3_on():
+			_orbit_press = null
+			_orbit_dragging = false
+			_v3.end_orbit()
+		return false
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index != MOUSE_BUTTON_LEFT:
+			return false
+		if mb.pressed and (mb.ctrl_pressed or mb.meta_pressed) and not mb.double_click:
+			_orbit_press = mb.duplicate() as InputEventMouseButton
+			_orbit_dragging = false
+			_orbit_last = mb.position
+			_orbit_msec = Time.get_ticks_msec()
+			accept_event()
+			return true
+		if not mb.pressed and _orbit_press != null:
+			var press := _orbit_press
+			_orbit_press = null
+			if _orbit_dragging:
+				_orbit_dragging = false
+				_v3.end_orbit(Time.get_ticks_msec() - _orbit_msec > 80)
+			else:
+				_orbit_replay = true
+				_gui_input(press)
+				_gui_input(mb)
+				_orbit_replay = false
+			accept_event()
+			return true
+	elif event is InputEventMouseMotion and _orbit_press != null:
+		var mm := event as InputEventMouseMotion
+		# From positions, not `relative`: pushed / warped motions carry a
+		# wrong relative.
+		if not _orbit_dragging and mm.position.distance_to(_orbit_press.position) >= ORBIT_START_PX:
+			_orbit_dragging = true
+			_v3.orbiting = true
+		if _orbit_dragging:
+			var now := Time.get_ticks_msec()
+			var dt := clampf(float(now - _orbit_msec) / 1000.0, 0.004, 0.1)
+			_orbit_msec = now
+			view_3d_orbit(mm.position - _orbit_last, dt)
+		_orbit_last = mm.position
+		accept_event()
+		return true
+	return false
+
+
+func is_orbiting_3d() -> bool:
+	return _orbit_dragging
 
 
 func _notification(what: int) -> void:

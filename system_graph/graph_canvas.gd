@@ -749,6 +749,8 @@ var _flow_live: bool = false
 
 func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 	_refresh_ac_shed_state()
+	if _v3.active() and _v3.advance(delta):
+		queue_redraw()
 	# Flow dots: only in test mode; speed tracks simulation time_scale; paused when scale <= 0.
 	var flow_mult := 1.0
 	if sim_time_scale >= 0.0:
@@ -1666,6 +1668,12 @@ func _cancel_pointer_interaction() -> void:
 
 
 func _on_pointer_move(screen_pos: Vector2) -> void:
+	if not _v3_drag_id.is_empty():
+		if _v3_on():
+			_v3_drag_move(screen_pos)
+			return
+		_v3_drag_id = ""
+		_v3.end_drag()
 	if _wire_dragging and view_mode == GraphSiteLayout.VIEW_SITE and _wire_drag_is_turbine_water():
 		var hit := _site_stream_hit(screen_pos, STREAM_DROP_PX)
 		if str(hit.get("fid", "")) != str(_wire_stream_hit.get("fid", "")) \
@@ -1885,11 +1893,10 @@ func prepare_and_try_zoom_drill(item_id: String) -> bool:
 	var it := model.get_item(item_id)
 	if it.is_empty() or not GraphSolarArrays.zoom_enterable(model, it):
 		return false
-	var gw := maxf(float(it.get("width", 120.0)), 8.0)
-	var gh := maxf(float(it.get("height", 90.0)), 8.0)
-	var gc := Vector2(
-		float(it.get("x", 0.0)) + gw * 0.5,
-		float(it.get("y", 0.0)) + gh * 0.5)
+	var gr := _card_graph_rect(it)
+	var gw := maxf(gr.size.x, 8.0)
+	var gh := maxf(gr.size.y, 8.0)
+	var gc := gr.get_center()
 	# Fill ~90% of the shorter viewport axis so cover clears ZOOM_DRILL_COVER.
 	var cover := 0.90
 	var z := maxf(size.x * cover / gw, size.y * cover / gh)
@@ -2106,8 +2113,7 @@ func focus_on_item(item_id: String, target_zoom: float = 0.7) -> void:
 	var it := model.get_item(item_id)
 	if it.is_empty():
 		return
-	var c := Vector2(float(it.get("x", 0.0)) + float(it.get("width", 120.0)) * 0.5,
-		float(it.get("y", 0.0)) + float(it.get("height", 90.0)) * 0.5)
+	var c := _card_graph_rect(it).get_center()
 	var tz := clampf(target_zoom, ZOOM_MIN, ZOOM_MAX)
 	_animate_view(tz, -c * tz)
 
@@ -2156,8 +2162,7 @@ func restore_scope_cam(focus_id: String = "") -> bool:
 	if not focus_id.is_empty() and model != null and view_mode == GraphSiteLayout.VIEW_FREEFORM:
 		var it := model.get_item(focus_id)
 		if not it.is_empty():
-			var r := Rect2(Vector2(float(it.get("x", 0.0)), float(it.get("y", 0.0))),
-				Vector2(float(it.get("width", 120.0)), float(it.get("height", 90.0))))
+			var r := _card_graph_rect(it)
 			var sr := Rect2(size * 0.5 + p + r.position * z, r.size * z)
 			if not Rect2(Vector2.ZERO, size).encloses(sr):
 				p = -(r.position + r.size * 0.5) * z
@@ -2171,6 +2176,8 @@ func fit_items_to_view(ids: Array, pad_frac: float = 0.18) -> bool:
 		return false
 	if view_mode != GraphSiteLayout.VIEW_FREEFORM:
 		return frame_site_items(ids)
+	if _v3_on() and not view_3d_mode().is_empty():
+		return _v3_fit(ids, pad_frac)
 	var min_p := Vector2(1e20, 1e20)
 	var max_p := Vector2(-1e20, -1e20)
 	var n := 0
@@ -2281,8 +2288,7 @@ func finish_pop_transition(owner_compound_id: String) -> void:
 		target = {"ok": true, "zoom": float(cam["zoom"]), "pan": cam["pan"]}
 		var ow := model.get_item(owner_compound_id) if model != null else {}
 		if not ow.is_empty():
-			var orr := Rect2(Vector2(float(ow.get("x", 0.0)), float(ow.get("y", 0.0))),
-				Vector2(float(ow.get("width", 120.0)), float(ow.get("height", 90.0))))
+			var orr := _card_graph_rect(ow)
 			var cz := float(cam["zoom"])
 			var sr := Rect2(size * 0.5 + (cam["pan"] as Vector2) + orr.position * cz, orr.size * cz)
 			if not Rect2(Vector2.ZERO, size).encloses(sr):
@@ -2295,8 +2301,7 @@ func finish_pop_transition(owner_compound_id: String) -> void:
 		# that rect currently overlaps the child bbox we just left.
 		var tz: float = float(target.get("zoom", _zoom)) if bool(target.get("ok", false)) else _zoom
 		var tp: Vector2 = target.get("pan", _pan) as Vector2 if bool(target.get("ok", false)) else _pan
-		var og := Rect2(Vector2(float(owner.get("x", 0.0)), float(owner.get("y", 0.0))),
-				Vector2(float(owner.get("width", 120.0)), float(owner.get("height", 90.0))))
+		var og := _card_graph_rect(owner)
 		if _pop_from_rect.size.x > 1.0:
 			var start := _view_for_bbox_in_rect(og, _pop_from_rect)
 			if bool(start.get("ok", false)):
@@ -2416,7 +2421,7 @@ var _draw_main_cached: Node = null
 func _visible_items() -> Array:
 	if _draw_cache_active:
 		return _cached_visible_items
-	return _compute_visible_items()
+	return _v3_sorted(_compute_visible_items())
 
 
 ## Show-only view (GraphDomainFilter): the domains shown, empty = everything.
@@ -2838,6 +2843,10 @@ func _on_lmb_press(screen_pos: Vector2) -> void:
 		return
 
 	var port := _port_at_screen(screen_pos, "", "", _port_grab_radius())
+	# 3D view: cards overlap front to back; the card on top owns the press,
+	# never a port of a card behind it.
+	if _v3_on() and not port.is_empty() and not hit.is_empty() 			and str(port.get("item_id", "")) != str(hit.get("id", "")):
+		port = {}
 	if not port.is_empty():
 		# Elevation: Alt = wire / hub rotate; plain click must not own the CT.
 		if view_mode == GraphSiteLayout.VIEW_ELEVATION \
@@ -2970,6 +2979,31 @@ func _begin_item_press(screen_pos: Vector2, hit: Dictionary) -> void:
 			items_multi_selected.emit(selected_item_ids.duplicate())
 			queue_redraw()
 		return
+	# 3D view: a press selects; nothing is dragged (the cards' places are
+	# the layout's, and x/y underneath stay the flat ring).
+	if _v3_on():
+		# The release belongs to this press (a release elsewhere must not
+		# read as a click on the empty canvas and deselect).
+		_press_consumed = true
+		if _item_press_toggle:
+			if selected_item_ids.has(hit_id):
+				selected_item_ids.erase(hit_id)
+			else:
+				selected_item_ids.append(hit_id)
+			selected_item_id = hit_id if selected_item_ids.size() == 1 else ""
+			if selected_item_ids.size() == 1:
+				_select_item(selected_item_ids[0])
+			else:
+				items_multi_selected.emit(selected_item_ids.duplicate())
+				queue_redraw()
+		else:
+			_select_item(hit_id)
+			if _v3.can_drag(hit_id):
+				_v3_drag_id = hit_id
+				_v3_drag_px = screen_pos
+				_v3_drag_front = _v3.is_front(hit_id)
+				_v3_drag_value = null
+		return
 	_item_dragging       = true
 	_item_drag_duplicated = false
 	_item_drag_id        = hit_id
@@ -3056,6 +3090,8 @@ func _consume_press() -> void:
 
 
 func _on_lmb_release(screen_pos: Vector2) -> void:
+	if not _v3_drag_id.is_empty():
+		_v3_drag_release()
 	if _press_consumed:
 		_press_consumed = false
 		return
@@ -3434,6 +3470,9 @@ func _resize_handle_hit_rect(item: Dictionary) -> Rect2:
 
 
 func _resize_handle_item_at(screen_pos: Vector2) -> String:
+	# 3D view: no resize handles are drawn, so none are hit.
+	if _v3_on():
+		return ""
 	if model == null:
 		return ""
 	# Prefer the primary selected item, then any selected.
@@ -3853,6 +3892,388 @@ static func dc_circuit_volts(hint: Dictionary, src_id: String, tgt_id: String,
 func _wire_spread(from: Vector2, to: Vector2) -> float:
 	var dist := from.distance_to(to)
 	return clampf(dist * 0.48, 48.0 * _zoom, 200.0 * _zoom)
+
+
+## Labelled system areas an arrangement laid out (GraphSchemaLayout regions:
+## [{ids, title, domain}]), drawn under the cards in freeform. The box is
+## measured from its members every draw, so it follows them when they move.
+var layout_regions: Array = []
+var layout_regions_visible := true
+## The ring's guide circles while a ring arrangement is up ({} otherwise):
+## {centre, r_outer, r_inner} in graph px.
+var layout_ring: Dictionary = {}
+
+
+func set_layout_regions(regions: Array, ring: Dictionary = {}) -> void:
+	layout_regions = regions.duplicate(true)
+	layout_ring = ring.duplicate()
+	queue_redraw()
+
+
+# ---------------------------------------------------------------------------
+# 3D view of the ring (GraphView3D / GraphSchema3D): nested spheres or a
+# torus. Freeform only. Every card's screen rect comes from _item_screen_tl /
+# _item_screen_size, which ask the 3D view while it is up, so ports, picking,
+# wire drags and selection all follow it. Ctrl+drag orbits (the V2 canvas).
+# ---------------------------------------------------------------------------
+
+var _v3: GraphView3D = GraphView3D.new()
+## Layout spacing the 3D view uses (the view keeps it in step with Tidy's).
+var view_3d_spacing := GraphSchemaLayout.DEFAULT_SPACING
+
+
+func set_view_3d(mode: String, animate: bool = true) -> void:
+	var entering := not _v3.active() and not mode.is_empty()
+	if not _v3.set_mode(mode, animate, active_scope_id):
+		return
+	if entering or not mode.is_empty():
+		_v3_ensure()
+		var z := clampf(_v3.fit_zoom(size), ZOOM_MIN, ZOOM_MAX)
+		stop_fly()
+		if animate:
+			_animate_view(z, -_v3.centre() * z, 0.55)
+		else:
+			_zoom = z
+			_pan = -_v3.centre() * z
+	queue_redraw()
+
+
+func view_3d_mode() -> String:
+	return str(_v3.state().get("mode", ""))
+
+
+func view_3d_state() -> Dictionary:
+	return _v3.state()
+
+
+func apply_view_3d_state(d: Dictionary) -> void:
+	_v3.apply_state(d)
+	if _v3.active():
+		_v3_ensure()
+	queue_redraw()
+
+
+## Ctrl+drag: turn the camera by a screen-pixel drag.
+func view_3d_orbit(rel: Vector2, delta: float = 0.0) -> void:
+	_v3.orbit_px(rel, delta)
+	queue_redraw()
+
+
+## The 3D view is drawing (or blending in / out) this frame. It belongs to
+## the scope it was opened in: a group opened from it is flat inside.
+func _v3_on() -> bool:
+	return _v3.active() and view_mode == GraphSiteLayout.VIEW_FREEFORM 		and active_scope_id == _v3.scope_id
+
+
+func _v3_ensure() -> void:
+	if model != null:
+		_v3.ensure(model, Callable(self, "_v3_port_side"), view_3d_spacing)
+
+
+## A card's rect in graph units as it is DRAWN (3D or flat): what the scope
+## transitions and the remembered-camera checks map through.
+func _card_graph_rect(item: Dictionary) -> Rect2:
+	var tl := Vector2(float(item.get("x", 0.0)), float(item.get("y", 0.0)))
+	var sz := Vector2(float(item.get("width", 120.0)), float(item.get("height", 90.0)))
+	if _v3_on() and _v3.has(str(item.get("id", ""))):
+		_v3_ensure()
+		return _v3.graph_rect(str(item.get("id", "")), tl, sz)
+	return Rect2(tl, sz)
+
+
+# Dragging a card over its shell (a plain drag in the 3D view). Shown live,
+# written to the item's specs (GraphSchema3D.SPEC_KEY) on release as ONE
+# undo step; x/y are never touched.
+var _v3_drag_id := ""
+var _v3_drag_px := Vector2.ZERO
+var _v3_drag_front := true
+var _v3_drag_value: Variant = null
+## Cards the player placed on their shell, per mode (the harness reads it).
+signal view_3d_card_placed(item_id: String)
+
+
+func _v3_drag_move(screen_pos: Vector2) -> void:
+	if screen_pos.distance_to(_v3_drag_px) < _effective_drag_threshold() and _v3_drag_value == null:
+		return
+	var v: Variant = _v3.shell_value_at(_v3_drag_id, _screen_to_graph(screen_pos), _v3_drag_front)
+	if v == null:
+		return
+	_v3_drag_value = v
+	_v3.set_drag_value(_v3_drag_id, v)
+	queue_redraw()
+
+
+func _v3_drag_release() -> void:
+	var iid := _v3_drag_id
+	var v: Variant = _v3_drag_value
+	_v3_drag_id = ""
+	_v3_drag_value = null
+	_v3.end_drag()
+	if v == null or model == null:
+		queue_redraw()
+		return
+	var it := model.get_item(iid)
+	if it.is_empty():
+		return
+	var sp: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	var l3: Dictionary = (sp[GraphSchema3D.SPEC_KEY] as Dictionary).duplicate() 		if sp.has(GraphSchema3D.SPEC_KEY) and sp[GraphSchema3D.SPEC_KEY] is Dictionary else {}
+	l3[view_3d_mode()] = GraphSchema3D.override_to_array(v)
+	sp[GraphSchema3D.SPEC_KEY] = l3
+	model.update_item(iid, {"specs": sp})
+	layout_changed.emit()
+	items_moved.emit([iid])
+	view_3d_card_placed.emit(iid)
+	queue_redraw()
+
+
+## Layout ▾ → Reset 3D placements: every card in this scope back to where
+## the 3D view puts it. One undo step. Returns how many moved.
+func reset_view_3d_placements() -> int:
+	if model == null or not _v3.active():
+		return 0
+	var m := view_3d_mode()
+	var n := 0
+	for it in model.get_items_in_scope(_v3.scope_id):
+		var d: Dictionary = it
+		var sp: Variant = d.get("specs", {})
+		# has() first: get(k, {}) is a Dictionary for a MISSING key too.
+		if not (sp is Dictionary) or not (sp as Dictionary).has(GraphSchema3D.SPEC_KEY) 				or not ((sp as Dictionary)[GraphSchema3D.SPEC_KEY] is Dictionary):
+			continue
+		var l3: Dictionary = ((sp as Dictionary)[GraphSchema3D.SPEC_KEY] as Dictionary).duplicate()
+		if not l3.has(m):
+			continue
+		l3.erase(m)
+		var sp2: Dictionary = (sp as Dictionary).duplicate(true)
+		if l3.is_empty():
+			sp2.erase(GraphSchema3D.SPEC_KEY)
+		else:
+			sp2[GraphSchema3D.SPEC_KEY] = l3
+		model.update_item(str(d["id"]), {"specs": sp2})
+		n += 1
+	if n > 0:
+		layout_changed.emit()
+		items_moved.emit([])
+	queue_redraw()
+	return n
+
+
+## Same rule as the view's layout port side: where a port sits on its card
+## (0 top … 1 bottom) says which way a wire flows.
+func _v3_port_side(item: Dictionary, handle_id: String) -> float:
+	for h in _resolved_handles(item):
+		var hd: Dictionary = h
+		if str(hd.get("id", "")) != handle_id:
+			continue
+		if hd.has("ry"):
+			return float(hd["ry"])
+		if hd.has("angle_rad"):
+			return 0.5 + 0.5 * sin(float(hd["angle_rad"]))
+		if hd.has("y"):
+			return float(hd["y"]) / maxf(1.0, float(item.get("height", 90.0)))
+	return NAN
+
+
+func _v3_rect(item: Dictionary, center: Vector2) -> Rect2:
+	var flat_tl := center + _pan + Vector2(float(item.get("x", 0.0)), float(item.get("y", 0.0))) * _zoom
+	var flat_sz := Vector2(float(item.get("width", 120.0)), float(item.get("height", 90.0))) * _zoom
+	return _v3.rect_for(str(item.get("id", "")), flat_tl, flat_sz, center + _pan, _zoom)
+
+
+## Far cards first, so the near side is drawn (and picked) on top.
+func _v3_sorted(arr: Array) -> Array:
+	if not _v3_on() or arr.size() < 2:
+		return arr
+	_v3_ensure()
+	var keyed: Array = []
+	for i in arr.size():
+		var it: Dictionary = arr[i]
+		keyed.append([_v3.depth_of(str(it.get("id", ""))), i, it])
+	keyed.sort_custom(func(a: Array, b: Array) -> bool:
+		return float(a[0]) < float(b[0]) if float(a[0]) != float(b[0]) else int(a[1]) < int(b[1]))
+	var out: Array = []
+	for k in keyed:
+		out.append(k[2])
+	return out
+
+
+## Frame nodes as the 3D view draws them. Card rects scale with the zoom
+## about the screen point of graph (0, 0), so one step solves it.
+func _v3_fit(ids: Array, pad_frac: float) -> bool:
+	_v3_ensure()
+	var c := size * 0.5
+	var box := Rect2()
+	var n := 0
+	for id_v in ids:
+		var it := model.get_item(str(id_v))
+		if it.is_empty() or not _v3.has(str(id_v)):
+			continue
+		var r := Rect2(_item_screen_tl(it, c), _item_screen_size(it))
+		box = r if n == 0 else box.merge(r)
+		n += 1
+	if n == 0:
+		return false
+	var g := (box.get_center() - c - _pan) / maxf(_zoom, 0.001)
+	var avail := size * (1.0 - pad_frac * 2.0)
+	var z := clampf(_zoom * minf(avail.x / maxf(box.size.x, 1.0), avail.y / maxf(box.size.y, 1.0)),
+		ZOOM_MIN, 1.6 if n == 1 else ZOOM_MAX)
+	_animate_view(z, -g * z)
+	return true
+
+
+func _v3_draw_backdrop() -> void:
+	_v3.draw_backdrop(self, size * 0.5 + _pan, _zoom, UITheme.font("semibold"))
+
+
+func _v3_draw_connectors() -> void:
+	var solar_w: float = _solar_array_output_w() + _renewable_output_w()
+	var load_w: float = _sum_all_load_w()
+	var info := func(conn: Dictionary) -> Dictionary:
+		var pol := str(conn.get("polarity", "positive"))
+		var est := _estimate_connection_flow(conn, solar_w, load_w)
+		var active := bool(est.get("active", true))
+		var col := _wire_color_for_connection(conn, pol)
+		if pol == "resource":
+			col = ResourceKinds.wire_color(ResourceKinds.normalize_kind(
+				str(est.get("resource_kind", conn.get("resource_type", "")))))
+		if bool(conn.get("severed", false)) or bool(conn.get("reverse_polarity", false)):
+			col = Color(0.85, 0.22, 0.2, 0.9)
+			active = false
+		if bool(est.get("shed", false)):
+			active = false
+		var w := (WIRE_BASE_W + _wire_glow_scale_from_watts(float(est.get("watts", 100.0))) * 2.0) * _zoom
+		if str(conn.get("id", "")) == selected_connection_id:
+			col = C_SELECTED_BORDER
+			w *= 1.6
+		if not _path_conns.is_empty() and not _path_conns.has(str(conn.get("id", ""))):
+			col = Color(col.r, col.g, col.b, col.a * 0.18)
+		return {"color": col, "width": clampf(w, 1.0, 9.0),
+			"flowing": _flow_live and active, "reverse": bool(est.get("reverse", false))}
+	if _v3.draw_connectors(self, _visible_connections(), size * 0.5 + _pan, _zoom, info, _flow_phase):
+		_flowing_drawn = true
+
+
+## Fade a card on the far side of the shell toward the canvas colour.
+func _v3_fog(item: Dictionary, center: Vector2) -> void:
+	var f := _v3.fog_for(str(item.get("id", "")))
+	if f <= 0.02:
+		return
+	var r := Rect2(_item_screen_tl(item, center), _item_screen_size(item))
+	GraphFastDraw.rrect(self, r.grow(1.0), clampf(8.0 * _zoom, 3.0, 14.0),
+		Color(C_CANVAS_BG.r, C_CANVAS_BG.g, C_CANVAS_BG.b, f))
+
+
+## Top of the canvas while the 3D view is up: what it is and how to move it.
+func _v3_draw_hint() -> void:
+	if _v3.eased_blend() < 0.5:
+		return
+	var fnt := UITheme.font("medium")
+	var fs := UITheme.FONT_XS + 1
+	var label := str(GraphSchema3D.LABELS.get(view_3d_mode(), "3D"))
+	var txt := "%s  ·  Ctrl+drag to orbit  ·  drag a card over its shell  ·  wheel to zoom  ·  Layout ▾ → Flat ring" % label
+	var tw := fnt.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var ph := float(fs) + 12.0
+	var plate := Rect2(Vector2(14.0, size.y - ph - 14.0), Vector2(tw + 20.0, ph))
+	GraphFastDraw.rrect(self, plate, 6.0, Color(0.05, 0.08, 0.16, 0.78))
+	draw_string(fnt, plate.position + Vector2(10.0, float(fs) + 3.0), txt,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.80, 0.88, 0.98, 0.92))
+
+
+func _draw_layout_regions() -> void:
+	if not layout_regions_visible or view_mode != GraphSiteLayout.VIEW_FREEFORM or model == null:
+		return
+	if layout_regions.is_empty() and layout_ring.is_empty():
+		return
+	var center := size * 0.5
+	var font := get_theme_default_font()
+	if not layout_ring.is_empty():
+		var c := _graph_to_screen(layout_ring.get("centre", Vector2.ZERO) as Vector2, center)
+		for key in ["r_outer", "r_inner"]:
+			var r := float(layout_ring.get(key, 0.0)) * _zoom
+			if r > 4.0:
+				draw_arc(c, r, 0.0, TAU, 128, Color(1, 1, 1, 0.06), maxf(2.0, 10.0 * _zoom), true)
+	if not layout_ring.is_empty():
+		_draw_ring_regions(center, font)
+		return
+	for reg in layout_regions:
+		var rd: Dictionary = reg
+		var box := Rect2()
+		var first := true
+		for iid in (rd.get("ids", []) as Array):
+			var it := model.get_item(str(iid))
+			if it.is_empty() or str(it.get("scope_id", "root")) != active_scope_id:
+				continue
+			var r2 := Rect2(Vector2(float(it.get("x", 0.0)), float(it.get("y", 0.0))),
+				Vector2(float(it.get("width", 120.0)), float(it.get("height", 90.0))))
+			box = r2 if first else box.merge(r2)
+			first = false
+		if first:
+			continue
+		var col: Color = GraphSchemaLayout.COLORS.get(str(rd.get("domain", "other")), Color(0.6, 0.6, 0.7))
+		var pad := 28.0
+		var tl := _graph_to_screen(box.position - Vector2(pad, pad + 26.0), center)
+		var br := _graph_to_screen(box.end + Vector2(pad, pad), center)
+		var sr := Rect2(tl, br - tl)
+		if not sr.intersects(Rect2(Vector2.ZERO, size)):
+			continue
+		GraphFastDraw.rrect_box(self, sr, 14.0,
+			Color(col.r, col.g, col.b, 0.07), Color(col.r, col.g, col.b, 0.35), 1)
+		var fs := clampi(int(15.0 * _zoom), 9, 22)
+		if font != null and sr.size.x > 40.0:
+			draw_string(font, sr.position + Vector2(10.0, 6.0 + float(fs)), str(rd.get("title", "")),
+				HORIZONTAL_ALIGNMENT_LEFT, sr.size.x - 20.0, fs, Color(col.r, col.g, col.b, 0.85))
+
+
+## A ring's system areas: a coloured band along the outer ring under each
+## system's arc of machines, its name outside it.
+func _draw_ring_regions(center: Vector2, font: Font) -> void:
+	var c_g: Vector2 = layout_ring.get("centre", Vector2.ZERO)
+	var r_g := float(layout_ring.get("r_outer", 0.0))
+	var c := _graph_to_screen(c_g, center)
+	var r := r_g * _zoom
+	if r < 8.0:
+		return
+	for reg in layout_regions:
+		var rd: Dictionary = reg
+		var angs: Array = []
+		var band := 0.0
+		for iid in (rd.get("ids", []) as Array):
+			var it := model.get_item(str(iid))
+			if it.is_empty() or str(it.get("scope_id", "root")) != active_scope_id:
+				continue
+			var sz := Vector2(float(it.get("width", 120.0)), float(it.get("height", 90.0)))
+			var p := Vector2(float(it.get("x", 0.0)), float(it.get("y", 0.0))) + sz * 0.5
+			if absf(p.distance_to(c_g) - r_g) > sz.length():
+				continue   # moved off the ring (or the people in the middle)
+			angs.append(fposmod((p - c_g).angle(), TAU))
+			band = maxf(band, sz.length())
+		if angs.is_empty():
+			continue
+		angs.sort()
+		# The span is the circle minus the biggest gap between members.
+		var start := float(angs[0])
+		var span := 0.0
+		if angs.size() > 1:
+			var best_gap := TAU - (float(angs[angs.size() - 1]) - float(angs[0]))
+			var best_i := 0
+			for i in range(1, angs.size()):
+				var g := float(angs[i]) - float(angs[i - 1])
+				if g > best_gap:
+					best_gap = g
+					best_i = i
+			start = float(angs[best_i])
+			span = TAU - best_gap
+		var pad_a := (band * 0.6) / maxf(r_g, 1.0)
+		var col: Color = GraphSchemaLayout.COLORS.get(str(rd.get("domain", "other")), Color(0.6, 0.6, 0.7))
+		draw_arc(c, r, start - pad_a, start + span + pad_a, maxi(8, int((span + pad_a * 2.0) * 32.0)),
+			Color(col.r, col.g, col.b, 0.10), maxf(4.0, band * 1.15 * _zoom), true)
+		var fs := clampi(int(15.0 * _zoom), 9, 22)
+		if font != null:
+			var mid := start + span * 0.5
+			var lp := c + Vector2(cos(mid), sin(mid)) * (r + band * 0.75 * _zoom + float(fs))
+			var title := str(rd.get("title", ""))
+			var tw := font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+			draw_string(font, lp - Vector2(tw * 0.5, -float(fs) * 0.35), title,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(col.r, col.g, col.b, 0.9))
 
 
 func _screen_to_graph(screen_pos: Vector2) -> Vector2:
@@ -5890,6 +6311,9 @@ func _draw_connection_waypoint_handles(conn: Dictionary, center: Vector2) -> voi
 
 
 func _waypoint_hit(screen_pos: Vector2) -> Dictionary:
+	# 3D view: the flat wires (and their bends) are not drawn.
+	if _v3_on():
+		return {}
 	if selected_connection_id.is_empty() or model == null:
 		return {}
 	var conn := model.get_connection(selected_connection_id)
@@ -6040,6 +6464,9 @@ func _segment_is_horizontal(a: Vector2, b: Vector2) -> bool:
 
 
 func _ortho_segment_hit(screen_pos: Vector2) -> Dictionary:
+	# 3D view: the flat wires (and their bends) are not drawn.
+	if _v3_on():
+		return {}
 	if selected_connection_id.is_empty() or model == null:
 		return {}
 	var conn := model.get_connection(selected_connection_id)
@@ -6497,6 +6924,10 @@ func _tangent_from_rx_ry(rx: float, ry: float) -> Vector2:
 ## whose curve passes within PICK_DIST pixels of screen_pos, or {}.
 func _connection_at_screen(screen_pos: Vector2) -> Dictionary:
 	if model == null:
+		return {}
+	# 3D view: the wires drawn are curves through the inside, not the
+	# beziers this picks.
+	if _v3_on():
 		return {}
 	# Pin mode: the 3D conduits in the picture are the wires (spatial pick).
 	if _pins_mode_active():
@@ -7478,7 +7909,9 @@ func _draw() -> void:
 	# Populate the per-draw visible-items/connections cache for this whole pass
 	# (base + any V2 super._draw extension). Refreshed every draw so moves/adds
 	# show up; the model is immutable within a single draw.
-	_cached_visible_items = _compute_visible_items()
+	if _v3_on():
+		_v3_ensure()
+	_cached_visible_items = _v3_sorted(_compute_visible_items())
 	_cached_visible_connections = _compute_visible_connections()
 	_twin_hidden_cache.clear()
 	_conn_anchor_cache.clear()
@@ -7501,8 +7934,14 @@ func _draw() -> void:
 	else:
 		draw_rect(Rect2(Vector2.ZERO, size), fill)
 	PerfSpan.begin("gv_d_bg")
-	_draw_dot_grid()
+	var v3 := _v3_on()
+	if v3:
+		_v3_draw_backdrop()
+	else:
+		_draw_dot_grid()
 	_draw_soi_background()
+	if not v3:
+		_draw_layout_regions()
 	PerfSpan.end("gv_d_bg")
 	# Site Plan lost its unplaced tray (nodes are auto-seated on entry and on
 	# add — see _compute_visible_items); Elevation keeps it.
@@ -7518,7 +7957,10 @@ func _draw() -> void:
 	elif model != null and _visible_items().size() > 0:
 		if pm != null:
 			pm.begin("gv_wires")
-		_draw_connections()
+		if v3:
+			_v3_draw_connectors()
+		else:
+			_draw_connections()
 		if pm != null:
 			pm.end("gv_wires")
 			pm.begin("gv_cards")
@@ -7538,15 +7980,23 @@ func _draw() -> void:
 				var pk := str(item_p.get("type", "")) + "/" + str((item_p.get("specs", {}) as Dictionary).get("compound_kind", ""))
 				draw_profile[pk] = int(draw_profile.get(pk, 0)) + (Time.get_ticks_usec() - t0)
 				draw_profile[pk + "#n"] = int(draw_profile.get(pk + "#n", 0)) + 1
+		elif v3:
+			# Each card's overlays go on with it, then its fog: a card on
+			# the far side must not draw its outline over the near side.
+			for item: Dictionary in on_screen:
+				_render_item(item)
+				_draw_item_overlays(item)
+				_v3_fog(item, cul_c)
 		else:
 			for item: Dictionary in on_screen:
 				_render_item(item)
 		if pm != null:
 			pm.end("gv_cards")
-		for item: Dictionary in on_screen:
-			_draw_item_overlays(item)
-		for item2: Dictionary in on_screen:
-			_draw_resize_handle(item2)
+		if not v3:
+			for item: Dictionary in on_screen:
+				_draw_item_overlays(item)
+			for item2: Dictionary in on_screen:
+				_draw_resize_handle(item2)
 	elif model != null and not _is_physical_view() and not soi_live_preview:
 		_draw_empty_state_prompt()
 	# Derive alert presence from what we actually drew, so tick() can pick a
@@ -7589,6 +8039,8 @@ func _draw() -> void:
 		_draw_world_pins()
 		PerfSpan.end("gv_d_pins")
 	_draw_destroy_fx()
+	if v3:
+		_v3_draw_hint()
 	_draw_temp_wire()                # always on top of everything
 	if _marquee_selecting:
 		var rect := Rect2(_marquee_start, _marquee_end - _marquee_start).abs()
@@ -11127,6 +11579,8 @@ func _is_physical_view() -> bool:
 
 
 func _item_screen_tl(item: Dictionary, center: Vector2) -> Vector2:
+	if _v3_on() and _v3.has(str(item.get("id", ""))):
+		return _v3_rect(item, center).position
 	if _is_physical_view() and GraphSiteLayout.has_site_coords(item):
 		var proj: Variant = _phys_project_item_center(item)
 		if proj is Vector2:
@@ -11147,6 +11601,8 @@ func _item_screen_tl(item: Dictionary, center: Vector2) -> Vector2:
 
 
 func _item_screen_size(item: Dictionary) -> Vector2:
+	if _v3_on() and _v3.has(str(item.get("id", ""))):
+		return _v3_rect(item, size * 0.5).size
 	if view_mode == GraphSiteLayout.VIEW_SITE and GraphSiteLayout.has_site_coords(item):
 		# Magnifiers are circular — square pad from the longer footprint axis.
 		var raw := GraphSiteLayout.site_item_screen_size(item, _zoom)
