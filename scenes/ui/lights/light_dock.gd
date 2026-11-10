@@ -800,6 +800,7 @@ func _rebuild_inspector() -> void:
 		_add_field_row(f, res)
 
 	if recs.size() == 1:
+		_add_host_row(first)
 		_add_graph_row(first)
 	_sync_inspector_values()
 
@@ -919,6 +920,34 @@ func _style_row_label(l: Label, text: String) -> void:
 	l.text = text
 	l.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	l.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+
+
+## What the light hangs on: it moves with that prop (LightHosts).
+func _add_host_row(rec: Dictionary) -> void:
+	var row := HBoxContainer.new()
+	_insp_box.add_child(row)
+	var id := str(rec["id"])
+	var host := LightHosts.host_label(_main, rec)
+	if not host.is_empty():
+		_label(row, "Moves with %s" % host, UITheme.C_OK, UITheme.FONT_XS) 			.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_small_btn(row, "Detach", "Keep this light where it is when the %s moves" % host,
+			func() -> void:
+				PlacedLightService.checkpoint(_main)
+				PlacedLightService.set_attached(_main, [id], false)
+				PlacedLightService.save(_main)
+				PlacedLightService.notify())
+	else:
+		var off := not bool(rec.get("host_auto", true))
+		_label(row, "Detached — stays put" if off else "On the ground — not on a prop",
+			UITheme.C_TEXT_M, UITheme.FONT_XS).size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_small_btn(row, "Attach", "Move with the placed structure this light is in",
+			func() -> void:
+				PlacedLightService.checkpoint(_main)
+				PlacedLightService.set_attached(_main, [id], true)
+				PlacedLightService.save(_main)
+				PlacedLightService.notify()
+				if str(_layer().find_light(id).get("host_id", "")).is_empty():
+					_hint_text("Not inside a placed structure"))
 
 
 func _add_graph_row(rec: Dictionary) -> void:

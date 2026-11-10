@@ -18,7 +18,7 @@ extends SceneTree
 ##
 ##   Godot --headless --path . --script core/placed_lights/placed_lights_selftest.gd
 
-const EXPECTED_CHECKS := 129
+const EXPECTED_CHECKS := 140
 
 var _checks := 0
 var _fails := 0
@@ -50,6 +50,7 @@ func _process(_delta: float) -> bool:
 	_test_modifiers_and_bulbs()
 	_test_festival_fixtures()
 	_test_drag_rules()
+	_test_hosts()
 	if _checks != EXPECTED_CHECKS:
 		_fails += 1
 		print("FAIL  check count %d != EXPECTED_CHECKS %d (a test function aborted?)" % [
@@ -643,6 +644,94 @@ func _test_drag_rules() -> void:
 		and layer.find_light(c2).is_empty() and PlacedLightRuntime.find_node(main, c2) == null)
 	PlacedLightClock.set_time(5.0)
 	_check("the shared effect clock is one clock", _near(PlacedLightClock.now(main, false), 5.0))
+	if had:
+		var fw := FileAccess.open(path, FileAccess.WRITE)
+		fw.store_buffer(backup)
+		fw.close()
+	elif FileAccess.file_exists(path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	main.queue_free()
+
+
+## Lights on a placed prop move with it (LightHosts).
+func _test_hosts() -> void:
+	var a := LightHosts.xf_to_array(Transform3D(Basis.from_euler(Vector3(0.2, 1.1, -0.3)), Vector3(4, 5, 6)))
+	_check("a host frame round-trips through its 12 floats",
+		LightHosts.array_to_xf(a).is_equal_approx(Transform3D(Basis.from_euler(Vector3(0.2, 1.1, -0.3)), Vector3(4, 5, 6))))
+	var turn := Transform3D(Basis(Vector3.UP, PI / 2.0), Vector3(10, 0, 0))
+	var c := LightHosts.carried({"kind": "omni", "x": 1.0, "y": 2.0, "z": 0.0, "yaw": 0.0}, turn)
+	_check("a carried light turns and moves with the prop",
+		Vector3(c["x"], c["y"], c["z"]).is_equal_approx(Vector3(10, 2, -1)) and _near(float(c["yaw"]), 90.0),
+		str(c))
+	var cs := LightHosts.carried({"kind": "string", "x": 0.0, "y": 1.0, "z": 0.0,
+		"waypoints": [{"x": 0.0, "y": 1.0, "z": 0.0}, {"x": 2.0, "y": 1.0, "z": 0.0}]}, turn)
+	_check("every pin of a carried string moves, the record sits on its first pin",
+		_near(float(cs["waypoints"][1]["x"]), 10.0) and _near(float(cs["waypoints"][1]["z"]), -2.0) 		and _near(float(cs["x"]), 10.0) and _near(float(cs["z"]), 0.0))
+
+	# A fake site: one placed prop (a 4 x 3 x 4 m box) under Terrain/PlacedProps.
+	var main := Node3D.new()
+	main.name = "SelftestLightsMain5"
+	root.add_child(main)
+	var terrain := Node3D.new()
+	terrain.name = "Terrain"
+	main.add_child(terrain)
+	var props := Node3D.new()
+	props.name = "PlacedProps"
+	terrain.add_child(props)
+	var prop := PlacedProp.new()
+	prop.prop_id = "host_test_prop"
+	var model := Node3D.new()
+	model.name = "ModelRoot"
+	prop.add_child(model)
+	var box := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(4, 3, 4)
+	box.mesh = bm
+	box.position = Vector3(0, 1.5, 0)
+	model.add_child(box)
+	props.add_child(prop)
+	var rec0 := {"id": "host_test_prop", "model_id": "", "x": 20.0, "z": 5.0, "yaw": 30.0, "y_offset": 0.0, "ground_y": 0.0}
+	PlacedPropRuntime._apply_transform(prop, model, rec0, Callable())
+	_check("the record's model frame is where the node puts the model",
+		PlacedPropRuntime.model_world_xf(rec0, Callable()).is_equal_approx(LightHosts.node_frame(prop)))
+	var inside := Vector3(20.5, 2.0, 5.5)
+	_check("a light inside a prop's bounds finds it as its host",
+		LightHosts.find_host(main, [inside]) == "host_test_prop")
+	_check("a light well outside finds no host", LightHosts.find_host(main, [Vector3(30, 1, 5)]).is_empty())
+
+	var path := PlacedLightLayer.path_for_key(PlacedLightService.map_key(main))
+	var had := FileAccess.file_exists(path)
+	var backup := FileAccess.get_file_as_bytes(path) if had else PackedByteArray()
+	var layer := PlacedLightService.get_layer(main)
+	layer.lights.clear()
+	PlacedLightService.rebuild_all(main)
+	var hosted := PlacedLightService.add_point_light(main, "omni", inside, Vector3.ZERO)
+	var legacy := PlacedLightService.add_point_light(main, "omni", inside + Vector3(0, 0.5, 0), Vector3.ZERO)
+	var outside := PlacedLightService.add_point_light(main, "omni", Vector3(30, 1, 5), Vector3.ZERO)
+	var old_xf := PlacedPropRuntime.model_world_xf(rec0, Callable())
+	layer.find_light(hosted)["host_id"] = "host_test_prop"
+	layer.find_light(hosted)["host_xf"] = LightHosts.xf_to_array(old_xf)
+	var rec1 := rec0.duplicate()
+	rec1["x"] = 26.0
+	rec1["yaw"] = 120.0
+	var new_xf := PlacedPropRuntime.model_world_xf(rec1, Callable())
+	var moved := LightHosts.follow(main, layer, "host_test_prop", rec0, rec1, false)
+	_check("a preview moves no light record", moved.size() == 2 		and layer.position_of(layer.find_light(hosted)).is_equal_approx(inside))
+	moved = LightHosts.follow(main, layer, "host_test_prop", rec0, rec1, true)
+	var want := new_xf * (old_xf.affine_inverse() * inside)
+	_check("a hosted light follows its prop's move and turn",
+		layer.position_of(layer.find_light(hosted)).distance_to(want) < 0.01
+		and _near(float(layer.find_light(hosted)["yaw"]), 90.0),
+		"%s vs %s" % [layer.position_of(layer.find_light(hosted)), want])
+	_check("a light saved before hosts is adopted by the prop it was in and moves too",
+		str(layer.find_light(legacy).get("host_id", "")) == "host_test_prop"
+		and layer.position_of(layer.find_light(legacy)).distance_to(new_xf * (old_xf.affine_inverse() * (inside + Vector3(0, 0.5, 0)))) < 0.01)
+	_check("a light outside the prop stays put",
+		layer.position_of(layer.find_light(outside)).is_equal_approx(Vector3(30, 1, 5)) and moved.size() == 2)
+	var rec2 := rec1.duplicate()
+	rec2["packed"] = true
+	_check("packing a prop does not drag its lights to the crate",
+		LightHosts.follow(main, layer, "host_test_prop", rec1, rec2, true).is_empty())
 	if had:
 		var fw := FileAccess.open(path, FileAccess.WRITE)
 		fw.store_buffer(backup)

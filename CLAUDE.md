@@ -11092,6 +11092,18 @@ rotate — rotation swings every pin about the handle) for fine adjustment.
   the base of every `pow()` in an additive shader: the interpolated
   `v_along` overshoots 1.0 at the beam's far end, `pow(negative)` is NaN, and
   the glow pass turns one NaN pixel into a bright square with a black centre.
+- **Lights move with their prop** (`LightHosts`, core/placed_lights/light_hosts.gd).
+  A light's host is the placed prop whose model bounds (+0.35 m) hold it,
+  set in `PlacedLightService.commit` for every light placed or moved since
+  the checkpoint (`host_id`, `host_xf` = `PlacedPropRuntime.model_world_xf`
+  at attach; `host_auto` false = detached by hand, the dock's "Moves with"
+  row). Every prop move path carries them by the frame change:
+  `PlacedPropService._update_prop_record_depth` and `move_prop_at`, the
+  loader's `update_prop_record` and `save_prop_from_node`, and the gumball's
+  `preview_prop` (nodes only). Lights saved before this are adopted the first
+  time their prop moves (bounds test against the record's OLD pose). Packing
+  leaves them; deleting the prop releases them. Gate:
+  `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/light_host_follow_check.gd -Label light_hosts`.
 - **One effect clock** (`PlacedLightClock`): strings, lamps and movers all read
   it, so duplicates chase and sweep in step. Effects now include `flicker`
   (flame / lantern) and `strobe` (fx_speed = flashes/s); the GPU half lives in

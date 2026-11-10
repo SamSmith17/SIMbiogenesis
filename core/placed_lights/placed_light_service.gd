@@ -269,8 +269,60 @@ static func checkpoint(main: Node) -> void:
 
 
 static func commit(main: Node) -> void:
+	_resolve_hosts_since_checkpoint(main)
 	save(main)
 	notify()
+
+
+## Every light placed or moved since the last checkpoint gets its host again
+## (LightHosts): the prop it now stands in, or none.
+static func _resolve_hosts_since_checkpoint(main: Node) -> void:
+	var layer := get_layer(main)
+	if layer == null:
+		return
+	var before: Dictionary = {}
+	if not _undo.is_empty():
+		for r in ((_undo.back() as Dictionary).get("lights", []) as Array):
+			if r is Dictionary:
+				before[str(r.get("id", ""))] = r
+	for rec in layer.lights:
+		var r := rec as Dictionary
+		var old: Dictionary = before.get(str(r.get("id", "")), {})
+		if not old.is_empty() and r.has("host_id") 				and LightHosts.points_of(old) == LightHosts.points_of(r):
+			continue
+		LightHosts.resolve(main, r)
+
+
+## A placed prop moved (or, `commit_records` false, is being previewed at a
+## new pose): the lights hosted on it go with it.
+static func follow_prop(main: Node, prop_id: String, old_rec: Dictionary, new_rec: Dictionary,
+		commit_records: bool = true) -> void:
+	var layer := get_layer(main)
+	if layer == null:
+		return
+	var moved := LightHosts.follow(main, layer, prop_id, old_rec, new_rec, commit_records)
+	if commit_records and not moved.is_empty():
+		_apply_selection_visuals(main)
+		save(main)
+		notify()
+
+
+## A prop was deleted: its lights stay where they stand.
+static func release_prop(main: Node, prop_id: String) -> void:
+	var layer := get_layer(main)
+	if layer == null:
+		return
+	LightHosts.release(layer, prop_id)
+	save(main)
+
+
+## The dock's "Moves with" switch.
+static func set_attached(main: Node, ids: Array, on: bool) -> void:
+	var layer := get_layer(main)
+	for id in ids:
+		var rec := layer.find_light(str(id))
+		if not rec.is_empty():
+			LightHosts.set_attached(main, rec, on)
 
 
 static func can_undo() -> bool:
@@ -301,7 +353,8 @@ static func _swap(main: Node, from: Array, to: Array) -> bool:
 			keep.append(id)
 	selection.assign(keep)
 	rebuild_all(main)
-	commit(main)
+	save(main)
+	notify()
 	return true
 
 

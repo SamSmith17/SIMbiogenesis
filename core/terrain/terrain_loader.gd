@@ -14367,6 +14367,7 @@ func delete_prop_by_id(prop_id: String) -> bool:
 	# Anything mounted on this prop (a solar array on its roof) comes down.
 	if _main != null:
 		PlacedPropService.release_hosted(_main, prop_id)
+		PlacedLightService.release_prop(_main, prop_id)
 	# Crates in its bay are set down at its door, a hitch is undone, a
 	# forklift's load is let go of.
 	_release_vehicle_ties(rec)
@@ -15271,8 +15272,13 @@ func is_prop_packed(prop_id: String) -> bool:
 func update_prop_record(prop_id: String, patch: Dictionary) -> void:
 	if _placed_prop_layer == null:
 		return
+	var light_from: Dictionary = {}
+	if LightHosts.patch_moves(patch):
+		light_from = _placed_prop_layer.find_by_id(prop_id).duplicate(true)
 	if not _placed_prop_layer.update_prop(prop_id, patch):
 		return
+	if not light_from.is_empty() and _main != null:
+		PlacedLightService.follow_prop(_main, prop_id, light_from, _placed_prop_layer.find_by_id(prop_id))
 	_save_props_and_share()
 	_attach_buildings()
 	_rebuild_placed_props()
@@ -15472,9 +15478,12 @@ func preview_prop(prop_id: String, patch: Dictionary) -> void:
 		return
 	for child in root.get_children():
 		if child is PlacedProp and str((child as PlacedProp).prop_id) == prop_id:
-			var rec := _placed_prop_layer.find_by_id(prop_id).duplicate(true)
+			var saved := _placed_prop_layer.find_by_id(prop_id)
+			var rec := saved.duplicate(true)
 			rec.merge(patch, true)
 			PlacedPropRuntime.apply_record_to_prop(child as PlacedProp, rec, Callable(self, "_ground_height_at"))
+			# The lights on it follow the preview (their records move on commit).
+			PlacedLightService.follow_prop(_main, prop_id, saved, rec, false)
 			return
 
 
@@ -15482,7 +15491,10 @@ func save_prop_from_node(prop: PlacedProp) -> void:
 	if _placed_prop_layer == null or prop == null:
 		return
 	var patch := prop.get_record_patch_from_node(Callable(self, "_ground_height_at"))
+	var light_from := _placed_prop_layer.find_by_id(prop.prop_id).duplicate(true)
 	_placed_prop_layer.update_prop(prop.prop_id, patch)
+	if _main != null:
+		PlacedLightService.follow_prop(_main, prop.prop_id, light_from, _placed_prop_layer.find_by_id(prop.prop_id))
 	_save_props_and_share()
 
 

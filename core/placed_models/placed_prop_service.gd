@@ -141,8 +141,14 @@ static func _update_prop_record_depth(main: Node, prop_id: String, patch: Dictio
 	var layer := _layer_for_main(main)
 	if layer == null:
 		return false
+	# J lights hanging on this prop move with it (LightHosts).
+	var light_from: Dictionary = {}
+	if LightHosts.patch_moves(patch):
+		light_from = layer.find_by_id(prop_id).duplicate(true)
 	if not layer.update_prop(prop_id, patch.duplicate(true)):
 		return false
+	if not light_from.is_empty():
+		PlacedLightService.follow_prop(main, prop_id, light_from, layer.find_by_id(prop_id))
 	if rebuild_prop:
 		var parent := _props_parent(main)
 		var root := parent.get_node_or_null("PlacedProps")
@@ -226,8 +232,10 @@ static func move_prop_at(main: Node, prop_id: String, x: float, z: float,
 	var patch := {"x": x, "z": z, "ground_y": gy, "stowed_in": null, "stow_local": null}
 	if not is_nan(y_offset):
 		patch["y_offset"] = y_offset
+	var light_from := layer.find_by_id(prop_id).duplicate(true)
 	if not layer.update_prop(prop_id, patch):
 		return false
+	PlacedLightService.follow_prop(main, prop_id, light_from, layer.find_by_id(prop_id))
 	_save_layer(main, layer)
 	_reposition_scene_prop(main, layer, prop_id)
 	if glide_from != Vector3.INF:

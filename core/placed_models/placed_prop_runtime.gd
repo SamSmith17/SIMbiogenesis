@@ -813,6 +813,32 @@ static func _apply_transform(_prop: PlacedProp, model: Node3D, rec: Dictionary,
 		_prop.position.y = float(rec["y"])
 
 
+## Where a record puts its ModelRoot in the world (rotation and scale
+## included): the same maths as _apply_transform / _apply_packed_transform,
+## without a node. The frame J lights attached to a prop move with
+## (LightHosts).
+static func model_world_xf(rec: Dictionary, ground_y_at: Callable) -> Transform3D:
+	var x := float(rec.get("x", 0.0))
+	var z := float(rec.get("z", 0.0))
+	var gy: float = float(ground_y_at.call(x, z)) if ground_y_at.is_valid() \
+		else float(rec.get("ground_y", 0.0))
+	if bool(rec.get("packed", false)):
+		var b0 := Basis.from_euler(Vector3(0.0, deg_to_rad(float(rec.get("yaw", 0.0))), 0.0)) \
+			.scaled(Vector3.ONE * float(rec.get("scale", 1.0)))
+		return Transform3D(b0, Vector3(x, gy + float(rec.get("y_offset", 0.0)), z))
+	var mid := str(rec.get("model_id", ""))
+	var ws := ModelCatalog.resolved_scale(mid, float(rec.get("scale", 1.0)))
+	var b := Basis.from_euler(Vector3(deg_to_rad(float(rec.get("pitch", 0.0))),
+		deg_to_rad(float(rec.get("yaw", 0.0))), deg_to_rad(float(rec.get("roll", 0.0))))) \
+		.scaled(Vector3.ONE * ws)
+	var y := gy - ModelCatalog.foot_local_y(mid) * ws
+	if rec.has("y_offset"):
+		y += float(rec["y_offset"])
+	elif rec.has("y") and not rec.has("ground_y"):
+		y = float(rec["y"])
+	return Transform3D(b, Vector3(x, y, z))
+
+
 static func _clear_children(root: Node3D) -> void:
 	for child in root.get_children():
 		child.queue_free()
