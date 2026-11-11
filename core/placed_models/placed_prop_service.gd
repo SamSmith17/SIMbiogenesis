@@ -166,6 +166,48 @@ static func sync_earthship(main: Node, prop_id: String) -> void:
 	# The roof feeds the cisterns behind the berm (an Earthship's water).
 	var st: Dictionary = d["stats"]
 	_sync_roof_water(main, prop_id, str(d["spec"]["name"]), float(st["roof_m2"]), float(st["cistern_l"]))
+	# The roof's solar panels as a graph array (idempotent per prop).
+	seed_earthship_pv(main, prop_id)
+
+
+static func earthship_pv_tag(prop_id: String) -> String:
+	return "earthship_%s" % prop_id
+
+
+## The Earthship's roof panels on the graph: one array tagged by the prop,
+## facing the way the glazing faces at the panels' tilt. No panels (or
+## packed) removes it.
+static func seed_earthship_pv(main: Node, prop_id: String) -> bool:
+	var sgv := _system_graph_view(main)
+	if sgv == null:
+		return false
+	var tag := earthship_pv_tag(prop_id)
+	var rec := get_prop_record(main, prop_id)
+	var spec: Dictionary = rec.get(EarthshipSpec.KEY, {}) if rec.get(EarthshipSpec.KEY, null) is Dictionary else {}
+	var d := EarthshipDesign.solve(spec)
+	var count := int(d["stats"]["pv_panels"])
+	if count <= 0 or bool(rec.get("packed", false)):
+		if sgv.has_method("remove_imported_solar_array"):
+			sgv.call("remove_imported_solar_array", tag)
+		return false
+	var tilt := deg_to_rad(float(d["spec"]["pv_tilt"]))
+	var n_world := Vector3(0.0, cos(tilt), sin(tilt))
+	var prop := _find_prop_node(main, prop_id)
+	if prop is Node3D:
+		n_world = (prop as Node3D).global_transform.basis * n_world
+	var orient: Dictionary = LinkageStructureBuilder.orientation_from_normal(n_world)
+	if sgv.has_method("add_imported_solar_panels"):
+		sgv.call("add_imported_solar_panels", count, float(d["spec"]["pv_watts"]),
+			"%s solar" % str(d["spec"]["name"]), tag, {"tilt_deg": float(orient.get("tilt_deg", 0.0)),
+			"azimuth_deg": float(orient.get("azimuth_deg", 180.0)), "panel_w_m": EarthshipDesign.PV_W,
+			"panel_h_m": EarthshipDesign.PV_L, "show_picker": false, "auto_wire": true})
+	return true
+
+
+static func remove_earthship_graph(main: Node, prop_id: String) -> void:
+	var sgv := _system_graph_view(main) if main != null else null
+	if sgv != null and sgv.has_method("remove_imported_solar_array"):
+		sgv.call("remove_imported_solar_array", earthship_pv_tag(prop_id))
 
 
 ## Any structure with earthworks: its roof (the opening's footprint) as a rain

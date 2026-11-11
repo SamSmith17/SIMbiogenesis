@@ -15778,6 +15778,47 @@ editor), first version = Earthships + houses with basements.
   `phoenix`. The user's GLBs are catalog `earthship_phoenix` /
   `earthship_detail` (`Imported Models/Earthship/`, gitignored, scale figure
   stripped). `PlacedPropService.sync_earthship` on placement and Apply.
+  - **Look pass (2026-11-11)**, from Earthship Biotecture photos and the
+    detail GLB (vigas ~0.30 m logs 0.585 m apart running FRONT TO BACK,
+    bottle ends 9 cm, PV 1.99 x 1.02 m at 29°):
+    - Spec keys `glazing_style` sloped | vertical, `vents`, `room_front`
+      wood | glass | bottle | open (an old `inner_glazing` = glass),
+      `entry_style` alcove | vestibule (protruding entry, open double doors,
+      fan light, curved wing walls with half-round tops and round noses),
+      `viga_d` / `viga_spacing`, `ceiling` boards | plaster, `floor`
+      flagstone | earth | tile, `bottle_ends`, `bottle_pattern` scatter |
+      clusters | bands | arch, `bottle_colors` mixed | blue_green | amber |
+      rainbow, `bottle_density`, `end_door` (arched, closed), `plants`
+      mixed | tropical | garden | none, `pv_panels` / `pv_watts` / `pv_tilt`,
+      `skylights`, `green_roof`. Cisterns are drawn in the berm with lids at
+      its crest.
+    - Vigas are round logs from the back wall over a front beam (`HEADER_D`)
+      into the greenhouse; the old ones ran along the row.
+    - Part shapes beyond box / prism / quad: `cyl`, `obox`, `sweep` (a
+      curved wall whose top follows a path) and `panel` (a wall in its own
+      plane; `EarthshipDesign.bottle_holes` picks grid cells wholly inside
+      the outline, the builder lays faces row by row, each bottle cell a
+      ring round a REAL hole with the glass in it). Parts flagged `roof` are
+      left out by the builder's `{"cutaway": true}` (the designer's "Roof
+      off").
+    - ⚠ The builder's `_tri` now winds every triangle to its normal (Godot
+      front face clockwise from the normal's side). The old `emit_quad`
+      wound the glass backwards, which with an opaque GLAZING material is
+      why the glass rendered black; glass is now its own alpha material.
+    - Nodes: Mesh, Glazing (alpha, no shadow), Bottles
+      (`earthship_bottle.gdshader`: backlight + a little emission, no
+      shadow), Plants (`EarthshipPlants`: banana, Norfolk pine, fern, aloe,
+      geranium on GardenCrops' kit + its vegetables, full grown through
+      garden_crop.gdshader, scaled to the headroom under the glass),
+      CollisionMesh.
+    - Bottle ends or an end door leave that end unbermed (a check says so).
+    - `sync_earthship` also seeds the roof PV on the graph (tag
+      `earthship_<prop id>`, removed on delete).
+    - Presets now differ: `simple_survival`, `global_model` (upright windows,
+      vestibule), `muro_di_gomme`, `phoenix`, `bottle_cottage`, `taos_ridge`.
+    - Look check: `tools/diag/earthship_look_diag.gd` (WINDOWED, APPDATA at a
+      scratch folder, `--out=`, `--only=`): outside, greenhouse, room,
+      roof off per preset.
 - **Basements** (`BasementBuilder`, building spec key `basement` {depth_m,
   wall_t, entry areaway | walkout | none, edge, door_at}): foundation walls with
   a door, a slab; Building Builder → Basement section.
@@ -15822,7 +15863,7 @@ editor), first version = Earthships + houses with basements.
   `--script` selftest that loads it (`tour_selftest` printed compile errors
   before its PASS); it is duck-typed now.
 - Gates: `core/earthworks/earthworks_selftest.gd` (77),
-  `core/earthshiplab/earthship_selftest.gd` (38), and on Bombay Beach
+  `core/earthshiplab/earthship_selftest.gd` (58), and on Bombay Beach
   `tools/checks/earthworks_check.gd` (19), `earthship_check.gd` (17, incl. a nav path through the door),
   `basement_check.gd` (9) — real Forward walks down the ramps and in.
 

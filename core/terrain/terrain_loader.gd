@@ -14596,6 +14596,8 @@ func delete_prop_by_id(prop_id: String) -> bool:
 		PlacedPropService.remove_toroid_graph(_main, prop_id)
 	elif str(rec.get("model_id", "")) == PvLabBuilder.MODEL_ID and _main != null:
 		PlacedPropService.remove_pvlab_graph(_main, prop_id)
+	elif str(rec.get("model_id", "")) == EarthshipBuilder.MODEL_ID and _main != null:
+		PlacedPropService.remove_earthship_graph(_main, prop_id)
 	# Anything mounted on this prop (a solar array on its roof) comes down.
 	if _main != null:
 		PlacedPropService.release_hosted(_main, prop_id)

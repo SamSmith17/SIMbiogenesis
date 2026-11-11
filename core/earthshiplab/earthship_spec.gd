@@ -12,6 +12,19 @@ extends RefCounted
 const MAX_MODULES := 8
 const KEY := "earthship_spec"
 const ENTRY := ["left", "centre", "right"]
+## The greenhouse front: "sloped" = one sheet of glazing from the kneewall
+## to the roof (the classic Earthship); "vertical" = upright windows under a
+## sloped greenhouse roof (the newer Global Model, Taos 2010s).
+const GLAZING_STYLES := ["sloped", "vertical"]
+## Between each room and the greenhouse.
+const ROOM_FRONTS := ["open", "wood", "glass", "bottle"]
+const ENTRY_STYLES := ["alcove", "vestibule"]
+const BOTTLE_PATTERNS := ["scatter", "bands", "arch", "clusters"]
+const BOTTLE_PALETTES := ["mixed", "blue_green", "amber", "rainbow"]
+const END_DOORS := ["none", "left", "right", "both"]
+const PLANTS := ["tropical", "garden", "mixed", "none"]
+const FLOORS := ["flagstone", "earth", "tile"]
+const CEILINGS := ["boards", "plaster"]
 
 ## Sources for the defaults:
 ##  - Reynolds, "Earthship Vol. 1" (1990): U-module ~16' (4.9 m) wide inside,
@@ -43,6 +56,27 @@ static func default_spec() -> Dictionary:
 		"cistern_l": 13000.0,
 		"plaster": [0.78, 0.66, 0.5],
 		"trim": [0.43, 0.29, 0.18],
+		# The look (2026-11-11 pass, from Earthship Biotecture photos and the
+		# player's detail model).
+		"glazing_style": "sloped",
+		"vents": true,
+		"room_front": "wood",
+		"entry_style": "alcove",
+		"viga_d": 0.25,
+		"viga_spacing": 0.6,
+		"ceiling": "boards",
+		"floor": "flagstone",
+		"bottle_ends": true,
+		"bottle_pattern": "scatter",
+		"bottle_colors": "mixed",
+		"bottle_density": 0.35,
+		"end_door": "none",
+		"plants": "mixed",
+		"pv_panels": 6,
+		"pv_tilt": 45.0,
+		"pv_watts": 400.0,
+		"skylights": true,
+		"green_roof": false,
 	}
 
 
@@ -74,7 +108,27 @@ static func resolve(spec_in: Variant) -> Dictionary:
 	s["cistern_l"] = clampf(_f(s, "cistern_l", 13000.0), 500.0, 60000.0)
 	if not ENTRY.has(str(s.get("entry", "left"))):
 		s["entry"] = "left"
-	s["inner_glazing"] = bool(s.get("inner_glazing", false))
+	# An older design's "inner_glazing" is the glass room front.
+	if spec_in is Dictionary and not (spec_in as Dictionary).has("room_front") and bool((spec_in as Dictionary).get("inner_glazing", false)):
+		s["room_front"] = "glass"
+	_pick(s, "glazing_style", GLAZING_STYLES)
+	_pick(s, "room_front", ROOM_FRONTS)
+	_pick(s, "entry_style", ENTRY_STYLES)
+	_pick(s, "bottle_pattern", BOTTLE_PATTERNS)
+	_pick(s, "bottle_colors", BOTTLE_PALETTES)
+	_pick(s, "end_door", END_DOORS)
+	_pick(s, "plants", PLANTS)
+	_pick(s, "floor", FLOORS)
+	_pick(s, "ceiling", CEILINGS)
+	s["inner_glazing"] = str(s["room_front"]) == "glass"
+	s["viga_d"] = clampf(_f(s, "viga_d", 0.25), 0.12, 0.45)
+	s["viga_spacing"] = clampf(_f(s, "viga_spacing", 0.6), 0.35, 1.5)
+	s["bottle_density"] = clampf(_f(s, "bottle_density", 0.35), 0.0, 1.0)
+	s["pv_panels"] = clampi(int(_f(s, "pv_panels", 6)), 0, 48)
+	s["pv_tilt"] = clampf(_f(s, "pv_tilt", 45.0), 0.0, 75.0)
+	s["pv_watts"] = clampf(_f(s, "pv_watts", 400.0), 50.0, 700.0)
+	for b in ["vents", "bottle_ends", "skylights", "green_roof"]:
+		s[b] = bool(s.get(b, false))
 	s["berm_ends"] = bool(s.get("berm_ends", true))
 	s["ramp"] = bool(s.get("ramp", true))
 	s["name"] = str(s.get("name", "Earthship"))
@@ -91,11 +145,18 @@ static func to_json_safe(spec: Dictionary) -> Dictionary:
 	var out := {}
 	for k in s.keys():
 		var v: Variant = s[k]
-		if v is float and v == floorf(v) and absf(v) < 1e9 and k in ["modules", "cisterns"]:
+		if v is float and v == floorf(v) and absf(v) < 1e9 and k in ["modules", "cisterns", "pv_panels"]:
 			out[k] = int(v)
 		else:
 			out[k] = v
 	return out
+
+
+static func _pick(s: Dictionary, key: String, allowed: Array) -> void:
+	if not allowed.has(str(s.get(key, ""))):
+		s[key] = allowed[0]
+	else:
+		s[key] = str(s[key])
 
 
 static func color_of(spec: Dictionary, key: String, dv: Color) -> Color:

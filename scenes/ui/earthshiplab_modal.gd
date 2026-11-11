@@ -29,6 +29,7 @@ var _apply_btn: Button = null
 var _place_btn: Button = null
 var _earth_check: CheckButton = null
 var _show_earth := true
+var _roof_off := false
 var _spec: Dictionary = {}
 var _prop_id := ""
 var _syncing := false
@@ -150,6 +151,15 @@ func _build_centre() -> void:
 		_show_earth = on
 		_rebuild_preview())
 	_studio.strip.add_child(_earth_check)
+	var roof := CheckButton.new()
+	roof.text = "Roof off"
+	roof.name = "roof_off"
+	roof.focus_mode = Control.FOCUS_NONE
+	roof.tooltip_text = "Lift the roofs off to see the rooms, the vigas and the beds from above"
+	roof.toggled.connect(func(on: bool) -> void:
+		_roof_off = on
+		_rebuild_preview())
+	_studio.strip.add_child(roof)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_studio.strip.add_child(spacer)
@@ -173,7 +183,16 @@ func _build_right() -> void:
 	_spin(box, "wall_t", "Tyre wall", 0.3, 1.5, 0.05, "m", "Rammed tyres plus plaster (a tyre is ~0.75 m)")
 	_spin(box, "floor_depth", "Sunk below grade", 0.0, 3.0, 0.05, "m",
 		"How far the floors sit under the ground outside")
+	_spin(box, "viga_d", "Vigas", 0.12, 0.45, 0.01, "m",
+		"Round log beams from the back wall to the front beam (diameter)")
+	_spin(box, "viga_spacing", "Viga spacing", 0.35, 1.5, 0.05, "m", "Centre to centre, along the row")
+	_option(box, "room_front", "Room fronts", [["wood", "Wood and glass"], ["glass", "Glass (double glazed)"],
+		["bottle", "Bottle wall"], ["open", "Open"]], "Between each room and the greenhouse")
+	_option(box, "ceiling", "Ceiling", [["boards", "Wood boards"], ["plaster", "Plaster"]], "Over the vigas")
+	_option(box, "floor", "Floor", [["flagstone", "Flagstone"], ["earth", "Burnished earth"], ["tile", "Terracotta tile"]], "")
 	box.add_child(SectionHeader.make("Greenhouse", ""))
+	_option(box, "glazing_style", "Front", [["sloped", "Sloped glazing"], ["vertical", "Upright windows"]],
+		"Sloped: one sheet of glass to the roof (classic). Upright: windows under a sloped greenhouse roof (newer Global Model)")
 	_spin(box, "corridor_d", "Depth", 1.2, 8.0, 0.05, "m", "From the rooms to the glazing")
 	_spin(box, "glazing_deg", "Glazing angle", 35.0, 90.0, 0.5, "°",
 		"Above horizontal. Square to the winter-solstice noon sun = latitude + 23.4°")
@@ -185,17 +204,43 @@ func _build_right() -> void:
 	best.pressed.connect(_on_best_glazing)
 	box.add_child(best)
 	_spin(box, "sill_h", "Kneewall", 0.2, 1.5, 0.05, "m", "Wall under the glazing")
+	_check(box, "vents", "Vents", "Awning windows low in the glazing", "The low vents that let cool air in")
 	_spin(box, "planter_w", "Planter", 0.0, 3.0, 0.05, "m", "The botanical cell along the glazing (0 = none)")
-	_check(box, "inner_glazing", "Inner glazing", "A second wall of glass", "Phoenix style: glass between the greenhouse and the rooms")
+	_option(box, "plants", "Planted with", [["mixed", "Food and tropicals"], ["tropical", "Tropical"],
+		["garden", "Vegetables"], ["none", "Nothing yet"]], "What grows in the greywater beds")
+	box.add_child(SectionHeader.make("Bottle walls", ""))
+	_check(box, "bottle_ends", "Ends", "Bottle walls at the greenhouse ends",
+		"Coloured bottles set in earthen walls: sunlight comes through them")
+	_option(box, "bottle_pattern", "Pattern", [["scatter", "Scattered"], ["clusters", "Flowers"],
+		["bands", "Bands"], ["arch", "Rainbow arch"]], "How the bottles are laid in each wall")
+	_option(box, "bottle_colors", "Glass", [["mixed", "Mixed"], ["blue_green", "Blues and greens"],
+		["amber", "Ambers"], ["rainbow", "Rainbow"]], "")
+	_spin(box, "bottle_density", "How many", 0.0, 1.0, 0.05, "", "Share of the wall's bottle spots used")
+	_option(box, "end_door", "End door", [["none", "None"], ["left", "Left end"], ["right", "Right end"],
+		["both", "Both ends"]], "An arched door out through a greenhouse end wall")
+	box.add_child(SectionHeader.make("Entry", ""))
+	_option(box, "entry_style", "Style", [["alcove", "Doorway in the glazing"], ["vestibule", "Vestibule and wing walls"]],
+		"A vestibule stands out from the glazing with curved earthen walls either side of the steps")
 	box.add_child(SectionHeader.make("Earth", ""))
 	_spin(box, "berm_run", "Berm slope 1:", 0.6, 5.0, 0.1, "", "Metres out for each metre of height")
 	_check(box, "berm_ends", "Ends", "Berm both ends", "Earth piled against the end walls too")
 	_spin(box, "front_cut", "Front cut", 0.5, 10.0, 0.1, "m", "Dug out in front of the glazing, down to the floor")
 	_check(box, "ramp", "Entry ramp", "A ramp down to the door", "From the ground down into the front cut")
-	var entry := FormRow.option("Door", [["left", "Left room"], ["centre", "Centre"], ["right", "Right room"]],
-		func(v: Variant) -> void: _set_field("entry", str(v)), "Where the door through the glazing is", "entry")
-	box.add_child(entry)
-	_rows["entry"] = entry
+	_option(box, "entry", "Door", [["left", "Left room"], ["centre", "Centre"], ["right", "Right room"]],
+		"Where the door through the glazing is")
+	box.add_child(SectionHeader.make("Roof", ""))
+	_spin(box, "pv_panels", "Solar panels", 0, 48, 1, "", "Modules along the roof's front edge (on the graph when placed)")
+	_spin(box, "pv_watts", "Each", 50.0, 700.0, 10.0, "W", "")
+	_spin(box, "pv_tilt", "Panel tilt", 0.0, 75.0, 1.0, "°", "Above horizontal, facing the glazing's way")
+	var best_pv := Button.new()
+	best_pv.text = "Best tilt for this site"
+	best_pv.name = "pv_best"
+	best_pv.tooltip_text = "Tilt the panels to about the world's latitude"
+	UITheme.style_button(best_pv)
+	best_pv.pressed.connect(_on_best_pv)
+	box.add_child(best_pv)
+	_check(box, "skylights", "Skylights", "A skylight over each room", "")
+	_check(box, "green_roof", "Green roof", "Grass on the roof", "")
 	box.add_child(SectionHeader.make("Water", ""))
 	_spin(box, "cisterns", "Cisterns", 0, 8, 1, "", "Buried behind the berm, fed from the roof")
 	_spin(box, "cistern_l", "Each holds", 500.0, 60000.0, 100.0, "L", "")
@@ -204,12 +249,18 @@ func _build_right() -> void:
 	_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_status)
-	_col = DesignerColumn.setup(box, "earthship", {"open": ["Rooms", "Greenhouse"], "tile_cols": 2})
+	_col = DesignerColumn.setup(box, "earthship", {"open": ["Rooms", "Greenhouse", "Bottle walls"], "tile_cols": 2})
 
 
 func _spin(box: VBoxContainer, key: String, label: String, lo: float, hi: float, step: float,
 		unit: String, tip: String) -> void:
 	var row := FormRow.spin(label, lo, hi, step, unit, func(v: float) -> void: _set_field(key, v), tip, key)
+	box.add_child(row)
+	_rows[key] = row
+
+
+func _option(box: VBoxContainer, key: String, label: String, items: Array, tip: String) -> void:
+	var row := FormRow.option(label, items, func(v: Variant) -> void: _set_field(key, str(v)), tip, key)
 	box.add_child(row)
 	_rows[key] = row
 
@@ -309,7 +360,7 @@ func _load_spec(spec: Dictionary) -> void:
 func _preview_node(spec: Dictionary) -> Node3D:
 	var root := Node3D.new()
 	root.name = "EarthshipPreview"
-	root.add_child(EarthshipBuilder.build_node(spec, "Earthship"))
+	root.add_child(EarthshipBuilder.build_node(spec, "Earthship", {"cutaway": _roof_off}))
 	if _show_earth:
 		root.add_child(earth_mesh(EarthshipDesign.earthworks(spec)))
 	return root
@@ -384,7 +435,10 @@ func _refresh_summary() -> void:
 			{"caption": "Tyres", "value": UiText.thousands(int(st["tyres"])),
 				"tip": "%s courses; ~%s of rammed earth" % [str(int(st["courses"])),
 					UiText.num(float(st["earth_t"]) * 1000.0, "kg", 3)]},
-			{"caption": "Glazing", "value": UiText.num(float(st["glazing_m2"]), "m²", 3), "tip": "The sloped front"}])
+			{"caption": "Glazing", "value": UiText.num(float(st["glazing_m2"]), "m²", 3), "tip": "The greenhouse front"},
+			{"caption": "Bottles", "value": UiText.thousands(int(st["bottles"])), "tip": "Bottle ends set in the walls"},
+			{"caption": "Solar", "value": UiText.num(float(st["pv_kw"]) * 1000.0, "W", 3),
+				"tip": UiText.count(int(st["pv_panels"]), "panel")}])
 	for c in _summary_box.get_children():
 		_summary_box.remove_child(c)
 		c.queue_free()
@@ -396,6 +450,10 @@ func _refresh_summary() -> void:
 	_summary_box.add_child(FormRow.value("Roof catchment", UiText.num(float(st["roof_m2"]), "m²", 3),
 		"Rain on the roof runs to the cisterns"))
 	_summary_box.add_child(FormRow.value("Cisterns", UiText.num(float(st["cistern_l"]), "L", 3), ""))
+	_summary_box.add_child(FormRow.value("Vigas", "%s, %s of log" % [str(int(st["vigas"])),
+		UiText.num(float(st["viga_m"]), "m", 3)], "Round beams spanning front to back"))
+	_summary_box.add_child(FormRow.value("Beds", "%s planted" % UiText.num(float(st["planter_m2"]), "m²", 3),
+		"Greywater botanical cells along the glazing"))
 	for c2 in _checks_box.get_children():
 		_checks_box.remove_child(c2)
 		c2.queue_free()
@@ -430,6 +488,16 @@ func _on_best_glazing() -> void:
 	_sync_rows()
 	_rebuild_preview()
 	_status.text = "Glazing at %s for latitude %s." % [UiText.num(float(_spec["glazing_deg"]), "°", 3),
+		UiText.num(absf(lat), "°", 3)]
+
+
+func _on_best_pv() -> void:
+	var main := _main()
+	var lat := float(main.get("latitude")) if main != null and "latitude" in main else 35.0
+	_spec["pv_tilt"] = EarthshipDesign.pv_tilt_for_lat(lat)
+	_sync_rows()
+	_rebuild_preview()
+	_status.text = "Panels at %s for latitude %s." % [UiText.num(float(_spec["pv_tilt"]), "°", 3),
 		UiText.num(absf(lat), "°", 3)]
 
 
