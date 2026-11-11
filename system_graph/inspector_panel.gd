@@ -352,6 +352,9 @@ func _rebuild_for_item(item: Dictionary) -> void:
 	_title_lbl.text = "%s  %s" % [_type_icon(itype), iname]
 	_title_lbl.add_theme_color_override("font_color", C_TEXT)
 	_append_education_card(item)
+	# A gap node's brief is the point of it: first, above its ports.
+	if itype == "processor" and DesignGap.is_gap(specs):
+		_build_gap_section(item, specs)
 
 	match itype:
 		"panel":
@@ -810,6 +813,8 @@ func _build_composition_section(item: Dictionary) -> void:
 		_separate_button(kind)
 		_close_loop_button(kind)
 	elif itype == "processor" or itype == "plant":
+		if DesignGap.is_gap(specs):
+			return
 		if itype == "processor" and (specs.get("inputs", []) as Array).is_empty() and (specs.get("outputs", []) as Array).is_empty():
 			return
 		var mb := MassBalance.of_item(item)
@@ -858,6 +863,17 @@ func _build_composition_section(item: Dictionary) -> void:
 		var scope := str(item.get("child_scope_id", ""))
 		if scope.is_empty() or _model == null:
 			return
+		if not GraphSolarArrays.is_solar_array(item):
+			var rb := Button.new()
+			rb.text = "Replace with a gap node"
+			rb.name = "replace_with_gap"
+			rb.tooltip_text = "Put a gap node in its place, its wires moved onto it, carrying what the group takes in and gives out: a design brief for what the group does. Ctrl+Z puts the group back."
+			var cid := str(item.get("id", ""))
+			rb.pressed.connect(func() -> void:
+				var gv := ServiceLocator.graph()
+				if gv != null and gv.has_method("loop_closer"):
+					gv.call("loop_closer").call("replace_with_gap", cid))
+			_form_vbox.add_child(rb)
 		var led := ElementLedger.compute(_model, scope)
 		var st: Dictionary = led["stock"]
 		if (led["stores"] as Array).is_empty() and (led["nodes"] as Dictionary).is_empty():
@@ -1499,6 +1515,41 @@ func _build_pv_window_section(item: Dictionary) -> void:
 
 
 ## "What can separate this?" (resource composition Phase 5).
+## A gap node (Phase 8): its design brief, measured, its energy target and
+## what to do with it.
+func _build_gap_section(item: Dictionary, specs: Dictionary) -> void:
+	var gv := ServiceLocator.graph()
+	if gv == null or not gv.has_method("loop_closer"):
+		return
+	var lc: Node = gv.call("loop_closer")
+	var iid := str(item.get("id", ""))
+	var brief: Dictionary = lc.call("brief_for", iid)
+	_section("Design brief")
+	for l in brief.get("lines", []):
+		var lab := Label.new()
+		lab.text = "• " + str((l as Dictionary)["text"])
+		lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lab.add_theme_color_override("font_color", C_TEXT_S if str((l as Dictionary)["key"]) != "short" else UITheme.C_WARN)
+		lab.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		_form_vbox.add_child(_wrap_margin(lab, 12, 2))
+	_hint_label("A placeholder for a machine nobody has built yet: it takes what comes in, delivers what it is asked as far as the elements allow, and measures it.")
+	_num_field("Energy target (kWh/kg, −1 none)", float(specs.get("gap_kwh_per_kg", -1.0)), "specs/gap_kwh_per_kg", -1.0, 100.0, 0.01)
+	for spec in [["Export brief", "gap_export", "Save it as Markdown and JSON in design_challenges.", "export_brief"],
+			["Design this gap", "gap_design", "Put the gap node in a group of its own, to build the machine inside.", "design_gap"],
+			["All challenges", "gap_all", "Every gap node on the graph.", "open_challenges"]]:
+		var b := Button.new()
+		b.text = str(spec[0])
+		b.name = str(spec[1])
+		b.tooltip_text = str(spec[2])
+		var fn := str(spec[3])
+		b.pressed.connect(func() -> void:
+			if fn == "open_challenges":
+				lc.call(fn)
+			else:
+				lc.call(fn, iid))
+		_form_vbox.add_child(b)
+
+
 ## "Close this loop": the loop closer's ghosts for that kind (Phase 7).
 func _close_loop_button(kind: String, text: String = "Close this loop", from_item: String = "") -> void:
 	var b := Button.new()

@@ -353,6 +353,20 @@ const APPLIANCES: Array = [
 # Resource I/O on left (in) / right (out).
 # ---------------------------------------------------------------------------
 const PROCESSORS: Array = [
+	# The gap node (resource composition plan Phase 8): a placeholder for a
+	# machine nobody has built yet. It takes what its inputs offer, delivers
+	# what its outputs ask as far as the elements coming in allow, and meters
+	# it into a design brief. Add its inputs and outputs in the inspector.
+	{
+		"type": "processor", "label": "Design gap (placeholder)", "icon": "❓",
+		"width": 150.0, "height": 120.0,
+		"specs": {
+			"name": "Gap: a machine to design", "role": "design_gap",
+			"watts": 0.0, "cost": 0.0, "energy_source": "", "efficiency": 1.0,
+			"gap_kwh_per_kg": -1.0, "requested_state": "on",
+			"inputs": [], "outputs": [],
+		},
+	},
 	{
 		"type": "processor", "label": "Water Pump",    "icon": "💧",
 		"width": 130.0, "height": 120.0,

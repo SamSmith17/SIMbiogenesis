@@ -2775,6 +2775,9 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 	if str(specs.get("role", "")) == "habitat":
 		_process_habitat(item, specs, net_rates, abs_h)
 		return
+	if DesignGap.is_gap(specs):
+		_process_design_gap(item, specs, net_rates, _dt, abs_h)
+		return
 	# Siphon hydro has its own tick after culverts (_process_siphon_hydro).
 	if str(specs.get("role", "")) == "siphon_hydro":
 		return
@@ -3025,6 +3028,133 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 		if i == 0 and outputs.size() == 1:
 			for conn: Dictionary in _connections_from_handle(str(item.get("id", "")), "output"):
 				_cache_conn_flow(str(conn.get("id", "")), portion, str(outp.get("kind", "")))
+
+
+# --- The gap node (resource composition plan Phase 8) ------------------------
+
+## What an upstream tank keeps back from a gap node (share of its capacity).
+const GAP_RESERVE := 0.05
+## Live meters by gap node id; each is saved onto its node once a sim hour.
+var _gap_meters: Dictionary = {}
+var _gap_saved_h: Dictionary = {}
+
+
+func gap_meter(item_id: String) -> GapMeter:
+	var m: GapMeter = _gap_meters.get(item_id)
+	if m == null and _model != null:
+		var sp: Dictionary = (_model.get_item(item_id).get("specs", {}) as Dictionary)
+		m = GapMeter.from_dict(sp.get("gap_meter", {}) if sp.get("gap_meter", {}) is Dictionary else {})
+		_gap_meters[item_id] = m
+	return m
+
+
+## A gap node: it takes what is offered on its wired inputs, DesignGap
+## decides what it can deliver without making any element out of nothing,
+## and the meter remembers it for the brief. Only its own wired tanks (its
+## res_in_i / res_out_i), never the "any tank" fallback other machines use.
+func _process_design_gap(item: Dictionary, specs: Dictionary, net_rates: Dictionary,
+		dt_hours: float, abs_h: float) -> void:
+	var gid := str(item.get("id", ""))
+	var inputs: Array = specs.get("inputs", [])
+	var outputs: Array = specs.get("outputs", [])
+	var target := float(specs.get("gap_kwh_per_kg", -1.0))
+	var on := _processor_switched_on(specs)
+	var powered := target < 0.0 or _processor_has_power(item)
+	var live := on and powered and dt_hours > 0.0
+	var avail: Array = []
+	var in_tanks: Array = []
+	var in_kinds: Array = []
+	for i in inputs.size():
+		var inp: Dictionary = inputs[i]
+		var k := ResourceKinds.normalize_kind(str(inp.get("kind", "")))
+		in_kinds.append(ChainWiring.kind(k))
+		var tid := _gap_tank(gid, "res_in_%d" % i, true)
+		in_tanks.append(tid)
+		var rate := float(inp.get("rate", 0.0))
+		var q := 0.0
+		if live and not tid.is_empty():
+			var tsp: Dictionary = (_model.get_item(tid).get("specs", {}) as Dictionary)
+			if _tank_is_unlimited(tsp):
+				q = rate
+			else:
+				var tl: ResourceTimeline = _timelines.get(tid) as ResourceTimeline
+				var lvl := tl.level_at(abs_h) if tl != null else float(tsp.get("level", 0.0))
+				var cap := _effective_capacity_qty(tsp)
+				q = maxf(lvl * cap - GAP_RESERVE * cap, 0.0) / dt_hours
+		avail.append({"kind": k, "qty_h": q, "cap_h": rate})
+	var outs: Array = []
+	var out_tanks: Array = []
+	var out_kinds: Array = []
+	for j in outputs.size():
+		var outp: Dictionary = outputs[j]
+		var k2 := ResourceKinds.normalize_kind(str(outp.get("kind", "")))
+		out_kinds.append(ChainWiring.kind(k2))
+		var tid2 := _gap_tank(gid, "res_out_%d" % j, false)
+		out_tanks.append(tid2)
+		var room := 0.0
+		if live and not tid2.is_empty():
+			var tsp2: Dictionary = (_model.get_item(tid2).get("specs", {}) as Dictionary)
+			if _tank_is_unlimited(tsp2):
+				room = INF
+			else:
+				var tl2: ResourceTimeline = _timelines.get(tid2) as ResourceTimeline
+				var lvl2 := tl2.level_at(abs_h) if tl2 != null else float(tsp2.get("level", 0.0))
+				room = maxf(0.998 - lvl2, 0.0) * _effective_capacity_qty(tsp2) / dt_hours
+				room = maxf(room - maxf(float(net_rates.get(tid2, 0.0)), 0.0), 0.0)
+		outs.append({"kind": k2, "want_h": float(outp.get("rate", 0.0)), "room_h": room,
+			"residue": bool(outp.get("residue", false))})
+	var r := DesignGap.step(avail, outs, target)
+	for i2 in in_tanks.size():
+		var q2 := float((r["take"] as Array)[i2])
+		if q2 > 0.0 and not str(in_tanks[i2]).is_empty():
+			net_rates[in_tanks[i2]] = float(net_rates.get(in_tanks[i2], 0.0)) - q2
+		for conn: Dictionary in _connections_to_handle(gid, "res_in_%d" % i2):
+			_cache_conn_flow(str(conn.get("id", "")), q2, str(in_kinds[i2]))
+	for j2 in out_tanks.size():
+		var g := float((r["give"] as Array)[j2])
+		if g > 0.0 and not str(out_tanks[j2]).is_empty():
+			net_rates[out_tanks[j2]] = float(net_rates.get(out_tanks[j2], 0.0)) + g
+		for conn2: Dictionary in _connections_from_handle(gid, "res_out_%d" % j2):
+			_cache_conn_flow(str(conn2.get("id", "")), g, str(out_kinds[j2]))
+	var m := gap_meter(gid)
+	m.record(abs_h, GapMeter.rates_from_step(r, in_kinds, out_kinds))
+	var res := 0.0
+	for v in (r["residue"] as Dictionary).values():
+		res += float(v)
+	var sh := 0.0
+	for v2 in (r["short"] as Dictionary).values():
+		sh += float(v2)
+	specs["gap_in_kg_h"] = snappedf(float(r["kg_in"]), 1e-5)
+	specs["gap_out_kg_h"] = snappedf(float(r["kg_out"]), 1e-5)
+	specs["gap_residue_kg_h"] = snappedf(res, 1e-5)
+	specs["gap_short_kg_h"] = snappedf(sh, 1e-5)
+	specs["gap_power_w"] = snappedf(float(r["power_w"]), 0.01)
+	specs["watts"] = maxf(float(r["power_w"]), 0.0) if target >= 0.0 else 0.0
+	var keys := ["gap_in_kg_h", "gap_out_kg_h", "gap_residue_kg_h", "gap_short_kg_h", "gap_power_w", "watts"]
+	if absf(abs_h - float(_gap_saved_h.get(gid, -INF))) >= 1.0:
+		_gap_saved_h[gid] = abs_h
+		specs["gap_meter"] = m.to_dict()
+		keys.append("gap_meter")
+	_write_if_changed(gid, item, specs, keys)
+	if not on:
+		_write_node_state(gid, specs, GraphNodeState.IDLE)
+	elif not powered:
+		_write_node_state(gid, specs, GraphNodeState.BLOCKED, GraphNodeState.REASON_NO_POWER, [])
+	elif bool(r["running"]):
+		_write_node_state(gid, specs, GraphNodeState.RUNNING)
+	else:
+		_write_node_state(gid, specs, GraphNodeState.IDLE)
+
+
+## The tank on one of a gap node's own ports ("" = none wired there).
+func _gap_tank(gid: String, handle: String, want_input: bool) -> String:
+	var conns: Array = _connections_to_handle(gid, handle) if want_input else _connections_from_handle(gid, handle)
+	for conn: Dictionary in conns:
+		var other := str(conn.get("source_item_id" if want_input else "target_item_id", ""))
+		var it := _model.get_item(other)
+		if not it.is_empty() and str(it.get("type", "")) == "resource":
+			return other
+	return ""
 
 
 ## How far a growing machine has come since it was planted: 1.0 when it has

@@ -109,9 +109,9 @@ func _test_closure() -> void:
 	var wired_out := false
 	for c in model.get_connections_in_scope(scope):
 		var cd: Dictionary = c
-		if str(cd.get("target", "")) == iid and str(cd.get("resource_type", "")) == "greywater":
+		if str(cd.get("target_item_id", "")) == iid and str(cd.get("resource_type", "")) == "greywater":
 			wired_in = true
-		if str(cd.get("source", "")) == iid and str(cd.get("resource_type", "")) == "water":
+		if str(cd.get("source_item_id", "")) == iid and str(cd.get("resource_type", "")) == "water":
 			wired_out = true
 	_check("closure: wired from the grey tank and into the water tank", wired_in and wired_out)
 	var sc2 := CampLoopClosure.score(model, cid)
@@ -129,9 +129,9 @@ func _test_closure() -> void:
 	var bed_food := false
 	for c2 in model.get_connections_in_scope(scope):
 		var cd2: Dictionary = c2
-		if str(cd2.get("target", "")) == bed and str(cd2.get("resource_type", "")) == "water":
+		if str(cd2.get("target_item_id", "")) == bed and str(cd2.get("resource_type", "")) == "water":
 			bed_water = true
-		if str(cd2.get("source", "")) == bed and str(cd2.get("resource_type", "")) == "food":
+		if str(cd2.get("source_item_id", "")) == bed and str(cd2.get("resource_type", "")) == "food":
 			bed_food = true
 	_check("closure: the bed is wired from water and into the food store", bed_water and bed_food)
 	var bed_ports := GraphPortService.resolved_handles(model.get_item(bed),
@@ -175,7 +175,7 @@ func _test_planned_chain() -> void:
 	var direct := false
 	for c in model.get_connections_in_scope(scope):
 		var cd: Dictionary = c
-		if ids.has(str(cd.get("source", ""))) and ids.has(str(cd.get("target", ""))):
+		if ids.has(str(cd.get("source_item_id", ""))) and ids.has(str(cd.get("target_item_id", ""))):
 			direct = true
 	_check("planner: the chain is wired step to step", ids.size() >= 2 and direct, str(ids))
 

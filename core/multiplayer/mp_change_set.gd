@@ -28,7 +28,7 @@ extends RefCounted
 ## lives only in these is not an edit anybody made, so it never makes a
 ## change worth sending or reviewing. Prefix match.
 const VOLATILE_SPEC_PREFIXES: Array = [
-	"live_", "dc_", "pv_offered", "pv_curtail", "current_", "pop_state",
+	"live_", "dc_", "pv_offered", "pv_curtail", "current_", "pop_state", "gap_",
 	"pop_present", "pop_morale", "pop_collapse", "camp_soc", "camp_pv",
 	"camp_load", "camp_ac", "camp_hours", "camp_open", "camp_morale",
 	"camp_present", "budget_", "starved", "ideal_import", "ideal_export",

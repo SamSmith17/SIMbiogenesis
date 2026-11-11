@@ -9,8 +9,8 @@ extends RefCounted
 ##
 ## A suggestion: {key, sig, scope, open: {kind, side, kg_h, …}, plan, index,
 ## count, items, conns (a ChainWiring.plan), bbox: Rect2 (graph px), text,
-## machines, gaps}. Steps no machine does (a class, a recipe) are placeholder
-## cards (`gap` true): drawn, never added; Phase 8 makes them gap nodes.
+## machines, gaps, tanks}. Steps no machine does (a class, a recipe) are gap
+## nodes (`gap` true, DesignGap): drawn as gaps, placed as gap nodes.
 ##
 ## Dismissals are remembered per world (WorldPaths kind "suggestions"):
 ## {dismissed: {"<scope>|<kind>|<side>|<plan sig>": unix time}}.
@@ -93,36 +93,60 @@ static func build(model, scope: String, open: Dictionary, plan: Dictionary,
 		var r := Rect2(float(it2["x"]), float(it2["y"]), float(it2["width"]), float(it2["height"]))
 		bbox = r if not have else bbox.merge(r)
 		have = true
-	var stores := 0
+	var tanks := 0
 	for it3 in chain["items"]:
-		if bool((it3 as Dictionary).get("store", false)):
-			stores += 1
+		if bool((it3 as Dictionary).get("store", false)) or bool((it3 as Dictionary).get("buffer", false)):
+			tanks += 1
 	var out := {"key": loop_key(scope, kind, side), "sig": plan_sig(plan), "scope": scope, "open": open,
 		"plan": plan, "index": index, "count": count, "items": chain["items"], "conns": chain["conns"],
-		"bbox": bbox, "anchor": anchor, "machines": machines, "gaps": gaps, "stores": stores}
-	out["text"] = chip_text(open, plan, machines, gaps, stores)
+		"bbox": bbox, "anchor": anchor, "machines": machines, "gaps": gaps, "tanks": tanks,
+		"unpowered": (chain.get("unpowered", []) as Array).size()}
+	out["text"] = chip_text(open, plan, machines, gaps, tanks)
+	if int(out["unpowered"]) > 0:
+		out["text"] += " · no controller here to power it"
 	return out
 
 
-## A placeholder card for a step no machine in the library does.
+## A gap node for a step no machine in the library does (Phase 8): it
+## takes what the step takes and delivers what it gives, as far as the
+## elements allow, and its meter becomes the design brief. The process type
+## rides along (`gap_class`) for the brief's energy numbers.
 static func _gap_entry(st: Dictionary) -> Dictionary:
-	var ins: Array = [{"kind": str(st.get("takes", "")), "rate": 1.0}]
+	var ins: Array = []
+	if not str(st.get("takes", "")).is_empty():
+		ins.append({"kind": str(st.get("takes", "")), "rate": 0.0})
 	var outs: Array = []
 	for g in st.get("gives", []):
-		outs.append({"kind": str(g), "rate": 1.0})
+		outs.append({"kind": str(g), "rate": 0.0})
 	var label := str(st.get("label", "")).trim_prefix("recipe: ")
-	var what := "a recipe to run on a machine" if str(st.get("type", "")) == "recipe" else "no machine yet"
-	return {"type": "processor", "label": label, "gap": true, "width": GAP_SIZE.x, "height": GAP_SIZE.y,
-		"specs": {"name": "%s (%s)" % [label, what], "inputs": ins, "outputs": outs}}
+	var specs := DesignGap.make_specs("Gap: %s" % label, ins, outs, {"gap_class": str(st.get("class", ""))})
+	return {"type": "processor", "label": "Gap: %s" % label, "gap": true, "width": GAP_SIZE.x,
+		"height": GAP_SIZE.y, "specs": specs}
+
+
+## A one-step plan that is a gap node for a loop nothing closes: a sink's
+## gap takes the kind (what it gives is the player's to set), a source's
+## gap delivers it.
+static func gap_plan(open: Dictionary) -> Dictionary:
+	var kind := str(open.get("kind", ""))
+	var sink := str(open.get("side", "sink")) == "sink"
+	var label := ("close the %s loop" % kind_word(kind)) if sink else ("make %s here" % kind_word(kind))
+	return {"side": str(open.get("side", "sink")), "kind": kind, "kg_h": float(open.get("kg_h", 0.0)),
+		"closes": 1.0, "complete": false, "adds": {}, "needs": [], "still_open": [],
+		"steps": [{"id": "gap:" + kind, "type": "gap", "label": label, "class": "",
+			"takes": kind if sink else "", "gives": [] if sink else [kind]}]}
 
 
 ## "Close the urine loop · 2 machines · +45 W · $900 · closes 100 %".
-static func chip_text(open: Dictionary, plan: Dictionary, machines: int, gaps: int, stores: int = 0) -> String:
+static func chip_text(open: Dictionary, plan: Dictionary, machines: int, gaps: int, tanks: int = 0) -> String:
 	var kind := str(open.get("kind", ""))
 	var nm := kind_word(kind)
 	var parts := PackedStringArray()
 	parts.append(("Close the %s loop" % nm) if str(open.get("side", "")) == "sink" else ("Make %s here" % nm))
-	parts.append(UiText.count(machines, "machine") + ((" and " + UiText.count(stores, "store")) if stores > 0 else ""))
+	if machines > 0 or gaps == 0:
+		parts.append(UiText.count(machines, "machine") + ((" and " + UiText.count(tanks, "tank")) if tanks > 0 else ""))
+	elif tanks > 0:
+		parts.append(UiText.count(tanks, "tank"))
 	var adds: Dictionary = plan.get("adds", {})
 	var w := float(adds.get("power_w", 0.0))
 	if w >= 0.5:
@@ -132,7 +156,7 @@ static func chip_text(open: Dictionary, plan: Dictionary, machines: int, gaps: i
 		parts.append("$" + UiText.thousands(int(round(cost))))
 	parts.append("closes %s of it" % UiText.pct(float(plan.get("closes", 0.0))))
 	if gaps > 0:
-		parts.append("%s no machine does yet" % UiText.count(gaps, "step"))
+		parts.append("%s for what no machine does yet" % UiText.count(gaps, "gap node"))
 	var needs: Array = plan.get("needs", [])
 	if not needs.is_empty():
 		var nk := PackedStringArray()

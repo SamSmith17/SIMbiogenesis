@@ -70,6 +70,27 @@ static func for_item(item: Dictionary, ctx: Dictionary) -> Dictionary:
 	return spec
 
 
+## A gap node: what it takes in now, what it gives, what is left over.
+static func _gap(spec: Dictionary, specs: Dictionary) -> void:
+	spec["chip"] = "GAP"
+	spec["icon"] = "search"
+	spec["accent"] = GraphTheme.WARN
+	# The live rate (the brief, not the card, gives the day's mean).
+	var kin := float(specs.get("gap_in_kg_h", 0.0))
+	spec["hero"] = UiText.num(kin, "kg") + "/h"
+	var kout := float(specs.get("gap_out_kg_h", 0.0))
+	var res := float(specs.get("gap_residue_kg_h", 0.0))
+	spec["sub"] = "%s/h out · %s/h left over" % [UiText.num(kout, "kg"), UiText.num(res, "kg")]
+	if float(specs.get("gap_short_kg_h", 0.0)) > 0.0 and float(specs.get("gap_short_kg_h", 0.0)) >= 0.005 * kin:
+		spec["footer"] = "Short of an input"
+		spec["footer_color"] = GraphTheme.WARN
+	elif kin > 0.0:
+		spec["footer"] = "Measuring: a machine to design"
+	else:
+		spec["footer"] = "Nothing coming in yet"
+		spec["footer_color"] = GraphTheme.TEXT_MUTED
+
+
 static func _wired(ctx: Dictionary, iid: String, handle: String) -> bool:
 	return (ctx.get("wired", {}) as Dictionary).has(iid + "|" + handle)
 
@@ -293,6 +314,9 @@ static func _machine(spec: Dictionary, item: Dictionary, specs: Dictionary, ctx:
 			spec["footer_color"] = GraphTheme.ERROR
 		else:
 			spec["footer"] = "Every need met" if n > 0 else "Nobody here"
+		return
+	if role == DesignGap.ROLE:
+		_gap(spec, specs)
 		return
 	if role == "csp_concentrator":
 		spec["chip"] = "CSP"

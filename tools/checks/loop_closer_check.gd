@@ -128,7 +128,7 @@ func run(main: Node, harness: Node) -> Dictionary:
 		if str((c as Dictionary)["source"]) == tid:
 			joins = true
 	_ok(joins, "the ghost takes the toilet block's own urine output")
-	var machines := int(sugg.get("machines", 0)) + int(sugg.get("stores", 0))
+	var machines := int(sugg.get("machines", 0)) + int(sugg.get("tanks", 0))
 	_ok(machines > 0, "the plan has a machine to place (%d)" % machines)
 	# 3. Tab accepts: exactly one history entry.
 	var hist: Object = sgv.get("_history")
@@ -242,7 +242,129 @@ func run(main: Node, harness: Node) -> Dictionary:
 		await _wait(tree, 0.8)
 	model.remove_item(inner)
 	model.remove_item(gid)
+	await _gap_week(main, sgv, model, gc, closer)
+	await _replace_group(sgv, model, closer, tid)
 	model.remove_item(tid)
 	GraphSuggestions.save_dismissed(dpath, {})
 	print("loopcloser %s (%d failures)" % ["PASS" if _fails.is_empty() else "FAIL", _fails.size()])
 	return {"ok": _fails.is_empty(), "fails": _fails}
+
+
+func _tank_of(model: GraphModel, kind: String) -> String:
+	for it in model.get_items_in_scope("root"):
+		var d: Dictionary = it
+		if str(d.get("type", "")) == "resource" and ChainWiring.kind(str((d.get("specs", {}) as Dictionary).get("resource_kind", ""))) == kind:
+			return str(d["id"])
+	return ""
+
+
+## Phase 8: a gap node on the world's urine, run for a sim week, its brief.
+func _gap_week(main: Node, sgv: Node, model: GraphModel, gc: Node, closer: Node) -> void:
+	var tree := main.get_tree()
+	var vp := main.get_viewport()
+	var root_trail: Array[String] = ["root"]
+	sgv.call("_set_scope_trail", root_trail)
+	await _wait(tree, 0.8)
+	var ids0: Dictionary = {}
+	for it in model.items:
+		ids0[str((it as Dictionary)["id"])] = true
+	closer.call("show_gap_for", "root", {"kind": "urine", "side": "sink", "kg_h": 1.0})
+	await _wait(tree, 1.0)
+	var sugg: Dictionary = closer.call("suggestion")
+	_ok(int(sugg.get("gaps", 0)) == 1, "Add a gap node here shows a gap node as a ghost: %s" % str(sugg.get("text", "")))
+	_shot(vp, "06_gap_ghost")
+	HarnessInput.key(vp, KEY_TAB)
+	await _wait(tree, 0.8)
+	var gap := ""
+	for it2 in model.items:
+		var d: Dictionary = it2
+		if not ids0.has(str(d["id"])) and DesignGap.is_gap(d.get("specs", {})):
+			gap = str(d["id"])
+	_ok(not gap.is_empty(), "Tab places the gap node")
+	if gap.is_empty():
+		return
+	# What closing it should give: reclaimed water and nutrients, into the
+	# world's own tanks.
+	var sp: Dictionary = (model.get_item(gap)["specs"] as Dictionary).duplicate(true)
+	sp["outputs"] = [{"kind": "irrigation_water", "rate": 0.0, "unit": "L/h"}, {"kind": "nutrients", "rate": 0.0, "unit": "kg/h"}]
+	model.update_item(gap, {"specs": sp})
+	var irr := _tank_of(model, "irrigation_water")
+	var nut := _tank_of(model, "nutrients")
+	_ok(not irr.is_empty() and not nut.is_empty(), "the world has reclaimed-water and nutrient tanks")
+	model.add_connection({"polarity": "resource", "resource_type": "irrigation_water", "source_item_id": gap,
+		"source_handle_id": "res_out_0", "target_item_id": irr, "target_handle_id": "input"})
+	model.add_connection({"polarity": "resource", "resource_type": "nutrients", "source_item_id": gap,
+		"source_handle_id": "res_out_1", "target_item_id": nut, "target_handle_id": "input"})
+	var h0 := float(main.call("get_absolute_hours"))
+	main.set("time_scale", 8.0)
+	var ok := await _until(tree, func() -> bool: return float(main.call("get_absolute_hours")) - h0 >= 168.0, 120.0)
+	main.set("time_scale", 0.0)
+	await _wait(tree, 0.5)
+	_ok(ok, "a sim week runs (%.0f h)" % (float(main.call("get_absolute_hours")) - h0))
+	var meter: GapMeter = closer.call("gap_meter", gap)
+	_ok(meter != null and meter.hours() > 100.0, "the gap node measured the week (%.0f h)" % (meter.hours() if meter != null else 0.0))
+	var brief: Dictionary = closer.call("brief_for", gap)
+	var text := "\n".join((brief.get("lines", []) as Array).map(func(x): return str(x["text"])))
+	print("loopcloser: the brief —\n" + text)
+	_ok(text.contains("Process") and text.contains("of urine") and text.contains("Deliver"), "the brief says what it processes and delivers")
+	var path: String = closer.call("export_brief", gap)
+	_ok(FileAccess.file_exists(path) and FileAccess.file_exists(path.get_basename() + ".json"), "the brief exports (%s)" % path)
+	var gb := HarnessInput.find_button_revealing(sgv, "Export brief")
+	sgv.call("focus_graph_item", gap)
+	await _wait(tree, 1.0)
+	gb = HarnessInput.find_button_revealing(sgv, "Export brief")
+	_ok(gb != null, "the inspector shows the brief with Export")
+	_shot(vp, "07_gap_inspector")
+	closer.call("open_challenges")
+	await _wait(tree, 1.0)
+	var dm := _modal(tree, "design_challenges_modal.gd")
+	_ok(dm != null and HarnessInput.find_button(dm, "Look") != null, "Design challenges lists it")
+	_shot(vp, "08_challenges")
+	_audit(vp, "Design challenges")
+	if dm != null:
+		(dm.get("_frame") as ModalFrame).close()
+		await _wait(tree, 0.5)
+	var comp: String = closer.call("design_gap", gap)
+	var in_group := not comp.is_empty() and str(model.get_item(gap).get("scope_id", "")) == str(model.get_item(comp).get("child_scope_id", "-"))
+	_ok(in_group, "Design this gap puts it in a group of its own")
+	if not comp.is_empty():
+		model.remove_item(comp)
+	for it3 in model.items.duplicate():
+		var d3: Dictionary = it3
+		if not ids0.has(str(d3["id"])) and str(d3.get("type", "")) == "resource":
+			model.remove_item(str(d3["id"]))
+	if not model.get_item(gap).is_empty():
+		model.remove_item(gap)
+
+
+## Phase 8: a group's boundary becomes a gap node; Ctrl+Z puts it back.
+func _replace_group(sgv: Node, model: GraphModel, closer: Node, toilet: String) -> void:
+	var tree := sgv.get_tree()
+	var t2: String = model.generate_item_id()
+	model.add_item({"id": t2, "type": "resource", "scope_id": "root", "x": 0.0, "y": -400.0, "width": 120.0, "height": 120.0,
+		"specs": {"name": "Test Urine Out", "resource_kind": "urine", "capacity_qty": 100.0, "capacity_unit": "L", "level": 0.0}})
+	model.add_connection({"polarity": "resource", "resource_type": "urine", "source_item_id": toilet,
+		"source_handle_id": "res_out_0", "target_item_id": t2, "target_handle_id": "input"})
+	var sel: Array[String] = [toilet]
+	sgv.set("_selected_item_ids", sel)
+	var comp := str(sgv.call("_group_selected_items", false, "", "Test Toilets", {}, 1))
+	await _wait(tree, 0.5)
+	_ok(not comp.is_empty(), "a test group with a wire out of it")
+	if comp.is_empty():
+		model.remove_item(t2)
+		return
+	var n0 := model.items.size()
+	var gid: String = closer.call("replace_with_gap", comp)
+	await _wait(tree, 0.5)
+	var wired := false
+	for c in model.connections:
+		var cd: Dictionary = c
+		if str(cd.get("source_item_id", "")) == gid and str(cd.get("target_item_id", "")) == t2:
+			wired = true
+	_ok(not gid.is_empty() and model.get_item(comp).is_empty() and wired,
+		"Replace with a gap node: the group is gone, its wire out moved onto the gap node")
+	HarnessInput.key(sgv.get_viewport(), KEY_Z, true)
+	await _wait(tree, 0.8)
+	_ok(not model.get_item(comp).is_empty() and model.get_item(gid).is_empty(), "Ctrl+Z puts the group back")
+	model.remove_item(comp)
+	model.remove_item(t2)

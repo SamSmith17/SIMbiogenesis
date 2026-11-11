@@ -44,7 +44,21 @@ func _fill() -> void:
 		_list.add_child(SectionHeader.make(nm, "", what))
 		var plans: Array = row["plans"]
 		if plans.is_empty():
-			_list.add_child(_note("Nothing in the library closes it yet. A gap to design for."))
+			var h := HBoxContainer.new()
+			h.add_theme_constant_override("separation", 10)
+			var n := _note("Nothing in the library closes it yet. A gap to design for.")
+			n.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			h.add_child(n)
+			var gb := Button.new()
+			gb.text = "Add a gap node here"
+			gb.name = "gap_%s" % kind
+			gb.tooltip_text = "A placeholder machine that measures what closing this loop would take: a design brief."
+			UITheme.style_button(gb)
+			gb.pressed.connect(func() -> void:
+				_frame.close()
+				_closer.call("show_gap_for", _scope, od))
+			h.add_child(gb)
+			_list.add_child(h)
 			continue
 		for i in plans.size():
 			_list.add_child(_row(od, plans, i))

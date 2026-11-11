@@ -1866,7 +1866,16 @@ Godot.exe.exe --headless --path . --script system_graph/graph_suggestions_selfte
 # ONE undo step, Ctrl+Z takes it back; Dismiss is saved per world and the
 # next ask shows another plan; Test a week runs A vs B and hands the world
 # back; Close loops…; a group's open-loop badge; UiAudit (run at 720 too):
-tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/loop_closer_check.gd -Label loop_closer -Timeout 1200
+# Gap nodes and their design brief (offline — Phase 8): DesignGap.step
+# conserves every element (trace rule, shortfall, residue, energy target),
+# GapMeter's peak / months / round trip / scrub, GapBrief's lines on a hand
+# case + export, the engine running a gap node, a placed Urine Nutrient
+# Recovery chain RUNNING off a controller, the GAP card. EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script core/composition/design_gap_selftest.gd
+# The check above also places a gap node ("Add a gap node here"), runs a
+# sim week, reads + exports its brief, opens Design challenges, puts it in
+# a group (Design this gap) and replaces a group with one (Ctrl+Z back):
+tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/loop_closer_check.gd -Label loop_closer -Timeout 1500
 # Process recipes + chore ledger + workflow runner (offline — normalize/catalog,
 # legacy batch migration, scrub-safe progress, hybrid chore confirm, part credits,
 # workflow step advance; run --import first so class_names register):

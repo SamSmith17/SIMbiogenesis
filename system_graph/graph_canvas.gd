@@ -2499,6 +2499,8 @@ func _sugg_port(id: String, handle: String, is_input: bool, ghosts: Dictionary, 
 	if ghosts.has(id):
 		var g: Dictionary = ghosts[id]
 		var r: Rect2 = g["rect"]
+		if handle == "power_in":
+			return {"pos": Vector2(r.position.x, r.position.y + r.size.y * 0.5), "tangent": Vector2(-1.0, 0.0)}
 		var list: Array = ChainWiring.ports(str(g["item"]["type"]), g["item"]["specs"], is_input)
 		var i := 0
 		for k in list.size():

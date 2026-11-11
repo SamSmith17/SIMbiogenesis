@@ -172,9 +172,9 @@ func accept() -> Array:
 	if not active():
 		return []
 	var m := _model()
-	var machines := int(_sugg.get("machines", 0)) + int(_sugg.get("stores", 0))
-	if m == null or machines == 0:
-		_toast("Nothing to place yet: no machine in the library does these steps.", ToastUI.Level.WARN)
+	var machines := int(_sugg.get("machines", 0))
+	var gaps := int(_sugg.get("gaps", 0))
+	if m == null or (machines == 0 and gaps == 0):
 		return []
 	view.set("_history_suppress", true)
 	var ids := ChainWiring.apply(m, _scope, {"items": _sugg["items"], "conns": _sugg["conns"]})
@@ -184,7 +184,16 @@ func accept() -> Array:
 		view.call("_update_undo_redo_btns")
 	if view.has_method("_schedule_graph_autosave"):
 		view.call("_schedule_graph_autosave")
-	var text := "Added %s to close the %s loop." % [UiText.count(ids.size(), "machine"), _nm(str(_open.get("kind", "")))]
+	var bits := PackedStringArray()
+	if machines > 0:
+		bits.append(UiText.count(machines, "machine"))
+	if gaps > 0:
+		bits.append(UiText.count(gaps, "gap node"))
+	if ids.size() > machines + gaps:
+		bits.append(UiText.count(ids.size() - machines - gaps, "tank"))
+	var text := "Added %s to close the %s loop." % [GapBrief._and(bits), _nm(str(_open.get("kind", "")))]
+	if gaps > 0:
+		text += " Run the clock: each gap node measures what its machine must do."
 	clear()
 	_toast(text, ToastUI.Level.OK)
 	_badge_key = ""
@@ -382,6 +391,167 @@ func open_list(scope: String = "") -> void:
 	var md: Node = scr.new()
 	get_tree().root.add_child(md)
 	md.call("open_for", self, scope)
+
+
+# --- Gap nodes and their briefs (resource composition plan Phase 8) ----------
+
+## Every gap node on the graph: [{id, scope, title}].
+func gaps() -> Array:
+	var m := _model()
+	var out: Array = []
+	if m == null:
+		return out
+	for it in GraphNesting.walk_items(m, "root"):
+		var d: Dictionary = it
+		if str(d.get("type", "")) == "processor" and DesignGap.is_gap(d.get("specs", {})):
+			out.append({"id": str(d["id"]), "scope": str(d.get("scope_id", "root")),
+				"title": str((d["specs"] as Dictionary).get("name", "Gap"))})
+	return out
+
+
+## The gap node's meter: the flow engine's live one, else the one saved on it.
+func gap_meter(item_id: String) -> GapMeter:
+	var fe: Variant = view.get("_resource_flow") if view != null else null
+	if fe != null and (fe as Object).has_method("gap_meter"):
+		var live: GapMeter = (fe as Object).call("gap_meter", item_id)
+		if live != null:
+			return live
+	var sp: Dictionary = (_model().get_item(item_id).get("specs", {}) as Dictionary)
+	return GapMeter.from_dict(sp.get("gap_meter", {}) if sp.get("gap_meter", {}) is Dictionary else {})
+
+
+## Mean kWh/day of solar the site curtailed (made but could not use) over
+## the last `days`, from SolarUI's energy timeline (raw − delivered). NAN =
+## not known.
+func curtailed_kwh_day(days: float = 7.0) -> float:
+	var solar: Node = view.call("_find_solar_ui") if view != null and view.has_method("_find_solar_ui") else null
+	if solar == null:
+		return NAN
+	var tl: Variant = solar.get("energy_timeline")
+	var main := ServiceLocator.main()
+	if tl == null or main == null:
+		return NAN
+	var now := float(main.call("get_absolute_hours"))
+	var raw := float((tl as Object).call("integrate_channel", now - days * 24.0, now, "raw"))
+	var got := float((tl as Object).call("integrate_channel", now - days * 24.0, now, "solar"))
+	if raw <= 0.0:
+		return NAN
+	return maxf(raw - got, 0.0) / days
+
+
+func brief_for(item_id: String) -> Dictionary:
+	var sp: Dictionary = (_model().get_item(item_id).get("specs", {}) as Dictionary)
+	return GapBrief.make(sp, gap_meter(item_id), {"curtailed_kwh_day": curtailed_kwh_day()})
+
+
+## Write the brief to user://design_challenges/. → the .md path.
+func export_brief(item_id: String) -> String:
+	var path := GapBrief.export(brief_for(item_id))
+	if path.is_empty():
+		_toast("Could not write the brief.", ToastUI.Level.WARN)
+	else:
+		_toast("Brief saved: %s" % ProjectSettings.globalize_path(path))
+	return path
+
+
+## "Add a gap node here": a loop nothing in the library closes gets a gap
+## node, shown as a ghost like any plan (Tab accepts it).
+func show_gap_for(scope: String, od: Dictionary) -> void:
+	show_plans(scope, od, [GraphSuggestions.gap_plan(od)], 0, "")
+
+
+## "Design this gap": the gap node goes into a group of its own, its wires
+## becoming the group's ports, to be filled with real machines.
+func design_gap(item_id: String) -> String:
+	var m := _model()
+	if m == null or not DesignGap.is_gap(m.get_item(item_id).get("specs", {})):
+		return ""
+	var title := str((m.get_item(item_id)["specs"] as Dictionary).get("name", "Gap")).trim_prefix("Gap: ")
+	var sel: Array[String] = [item_id]
+	view.set("_selected_item_ids", sel)
+	var cid := str(view.call("_group_selected_items", false, "", "Design: %s" % title,
+		{"design_gap_of": item_id}, 1))
+	if not cid.is_empty():
+		_toast("Open the group and build the machine inside; the gap node's brief stays there until you remove it.")
+	return cid
+
+
+## "Replace with a gap node": a group's measured boundary flows become a gap
+## node in its place, its outside wires moved onto the gap's ports. One undo
+## step (Ctrl+Z puts the group back).
+func replace_with_gap(comp_id: String) -> String:
+	var m := _model()
+	if m == null:
+		return ""
+	var comp := m.get_item(comp_id)
+	if comp.is_empty() or str(comp.get("type", "")) != "compound":
+		return ""
+	var scope := str(comp.get("scope_id", "root"))
+	var fe: Variant = view.get("_resource_flow")
+	var ins: Array = []
+	var outs: Array = []
+	var moves: Array = []
+	for c in m.get_connections_in_scope(scope):
+		var cd: Dictionary = c
+		if str(cd.get("polarity", "")) != "resource":
+			continue
+		var into := str(cd.get("target_item_id", "")) == comp_id
+		var outof := str(cd.get("source_item_id", "")) == comp_id
+		if not into and not outof:
+			continue
+		var k := ChainWiring.kind(str(cd.get("resource_type", "")))
+		var rate := 0.0
+		if fe != null and (fe as Object).has_method("get_connection_flow"):
+			rate = float(((fe as Object).call("get_connection_flow", str(cd.get("id", ""))) as Dictionary).get("rate", 0.0))
+		if into:
+			moves.append([cd.duplicate(), true, ins.size()])
+			ins.append({"kind": k, "rate": snappedf(rate, 0.001)})
+		else:
+			moves.append([cd.duplicate(), false, outs.size()])
+			outs.append({"kind": k, "rate": snappedf(rate, 0.001)})
+	if ins.is_empty() and outs.is_empty():
+		_toast("That group has no resource wires to measure.", ToastUI.Level.WARN)
+		return ""
+	var title := str((comp.get("specs", {}) as Dictionary).get("name", "group"))
+	var gid: String = m.generate_item_id()
+	view.set("_history_suppress", true)
+	m.add_item({"id": gid, "type": "processor", "scope_id": scope, "x": float(comp.get("x", 0.0)),
+		"y": float(comp.get("y", 0.0)), "width": 160.0, "height": 120.0,
+		"specs": DesignGap.make_specs("Gap: what %s does" % title, ins, outs)})
+	for mv in moves:
+		var cd2: Dictionary = mv[0]
+		m.remove_connection(str(cd2["id"]))
+		var row := {"scope_id": scope, "polarity": "resource", "resource_type": str(cd2.get("resource_type", ""))}
+		if bool(mv[1]):
+			row["source_item_id"] = str(cd2["source_item_id"])
+			row["source_handle_id"] = str(cd2["source_handle_id"])
+			row["target_item_id"] = gid
+			row["target_handle_id"] = "res_in_%d" % int(mv[2])
+		else:
+			row["source_item_id"] = gid
+			row["source_handle_id"] = "res_out_%d" % int(mv[2])
+			row["target_item_id"] = str(cd2["target_item_id"])
+			row["target_handle_id"] = str(cd2["target_handle_id"])
+		m.add_connection(row)
+	m.remove_item(comp_id)
+	view.set("_history_suppress", false)
+	view.call("_push_history")
+	if view.has_method("_update_undo_redo_btns"):
+		view.call("_update_undo_redo_btns")
+	if view.has_method("_schedule_graph_autosave"):
+		view.call("_schedule_graph_autosave")
+	_toast("Replaced %s with a gap node: run the clock and it measures what the group did. Ctrl+Z puts it back." % title)
+	return gid
+
+
+## Design challenges: every gap node with its brief.
+func open_challenges() -> void:
+	var scr: Script = load("res://scenes/ui/design_challenges_modal.gd")
+	if scr == null:
+		return
+	var md: Node = scr.new()
+	get_tree().root.add_child(md)
+	md.call("open_for", self)
 
 
 func _nm(kind: String) -> String:

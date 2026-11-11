@@ -180,6 +180,7 @@ static func markdown(y: Object, design: Dictionary, res: Dictionary) -> String:
 			float(a["running_h"]), 100.0 * float(a["running_h"]) / maxf(days * 24.0, 1e-6),
 			float(a["blocked_h"]), float(a["starved_h"]), float(a["kwh"]), ", ".join(why)])
 	L.append("")
+	_gaps(L, y, days)
 	var p: Dictionary = y.people
 	L.append("## People")
 	L.append("")
@@ -220,3 +221,29 @@ static func csv(y: Object) -> String:
 			cells.append("%.1f" % float((r["tanks"] as Dictionary).get(iid3, 0.0)))
 		rows.append(",".join(cells))
 	return "\n".join(rows) + "\n"
+
+
+## Gap nodes (resource composition plan Phase 8): each one's design brief,
+## measured over the run. Nothing when the design has none.
+static func _gaps(L: Array, y: Object, days: float) -> void:
+	var m: GraphModel = y.get("model")
+	var fe: Object = y.get("flow")
+	if m == null or fe == null or not fe.has_method("gap_meter"):
+		return
+	var curt := float((y.energy as Dictionary).get("curtailed_kwh", 0.0)) / maxf(days, 1e-6)
+	var any := false
+	for it in GraphNesting.walk_items(m, "root"):
+		var d: Dictionary = it
+		if str(d.get("type", "")) != "processor" or not DesignGap.is_gap(d.get("specs", {})):
+			continue
+		if not any:
+			L.append("## Gaps (machines to design)")
+			L.append("")
+			any = true
+		var meter: GapMeter = fe.call("gap_meter", str(d["id"]))
+		var b := GapBrief.make(d["specs"], meter if meter != null else GapMeter.new(), {"curtailed_kwh_day": curt})
+		L.append("### %s" % str(b.get("title", "Gap")))
+		L.append("")
+		for l in b.get("lines", []):
+			L.append("- %s" % str((l as Dictionary)["text"]))
+		L.append("")

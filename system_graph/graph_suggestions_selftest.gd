@@ -1,11 +1,11 @@
 extends SceneTree
 
 ## The loop closer's ghosts and the chain wiring they share with the camps
-## (resource composition plan Phase 7). Offline:
+## (resource composition plan Phases 7–8). Offline:
 ##   Godot --headless --path . --script system_graph/graph_suggestions_selftest.gd
 ## Carries EXPECTED_CHECKS.
 
-const EXPECTED_CHECKS := 21
+const EXPECTED_CHECKS := 24
 
 var _checks := 0
 var _fails := 0
@@ -50,11 +50,26 @@ func _camp() -> GraphModel:
 ## The habitat's 0.24 L/h of urine through Urine Nutrient Recovery (listed
 ## at 1 L/h): the step is sized ×0.24.
 func _urine_plan() -> Dictionary:
-	var scale := 0.24
 	return {"side": "sink", "kind": "urine", "kg_h": 0.25, "closes": 1.0, "complete": true,
 		"adds": {"power_w": 45.0, "cost": 900.0}, "needs": [], "still_open": [],
 		"steps": [{"id": "preset:Urine Nutrient Recovery", "type": "preset", "label": "Urine Nutrient Recovery",
-			"scale": scale, "takes": "urine", "gives": ["nutrients", "irrigation_water", "brine"]}]}
+			"scale": 0.24, "takes": "urine", "gives": ["nutrients", "irrigation_water", "brine"]}]}
+
+
+func _by_label(items: Array, label: String) -> Dictionary:
+	for it in items:
+		if str((it as Dictionary)["label"]) == label:
+			return it
+	return {}
+
+
+func _types(m: GraphModel, items: Array) -> Dictionary:
+	var t := {}
+	for it in m.items:
+		t[str((it as Dictionary)["id"])] = str((it as Dictionary)["type"])
+	for it2 in items:
+		t[str((it2 as Dictionary)["id"])] = str((it2 as Dictionary)["type"])
+	return t
 
 
 func _test_anchor_and_ghost() -> void:
@@ -65,44 +80,54 @@ func _test_anchor_and_ghost() -> void:
 	var od := {"kind": "urine", "side": "sink", "kg_h": 0.25}
 	var g := GraphSuggestions.build(m, "root", od, _urine_plan())
 	var items: Array = g["items"]
-	_check("ghost: the machine, and a salt pan for its brine (the camp has none)", items.size() == 2
-		and str(items[0]["label"]) == "Urine Nutrient Recovery" and bool(items[1].get("store", false))
-		and int(g["machines"]) == 1 and int(g["stores"]) == 1, str(items.map(func(x): return x["label"])))
+	var unr := _by_label(items, "Urine Nutrient Recovery")
+	_check("ghost: the machine", not unr.is_empty() and int(g["machines"]) == 1)
+	var labels: Array = items.map(func(x): return str(x["label"]))
+	_check("ghost: a urine buffer from the habitat, a nutrients store and a salt pan for the brine",
+		labels.has("Urine (diverted) buffer") and labels.has("Nutrients store") and labels.has("Salt Pan (brine)")
+		and int(g["tanks"]) == 3, str(labels))
+	var types := _types(m, items)
+	var m2m := 0
 	var from_hab := false
-	var to_tank := false
+	var to_irr := false
 	for c in g["conns"]:
 		var cd: Dictionary = c
-		if str(cd["source"]) == "hab" and str(cd["source_handle"]) == "res_out_1" and str(cd["resource_type"]) == "urine":
+		if str(types.get(str(cd["source"]), "")) != "resource" and str(types.get(str(cd["target"]), "")) != "resource":
+			m2m += 1
+		if str(cd["source"]) == "hab" and str(cd["source_handle"]) == "res_out_1":
 			from_hab = true
 		if str(cd["target"]) == "irr" and str(cd["resource_type"]) == "irrigation_water":
-			to_tank = true
-	_check("ghost: wired from the habitat's urine port", from_hab, str(g["conns"]))
-	_check("ghost: its reclaimed water goes into the camp's irrigation tank", to_tank)
-	var sp: Dictionary = items[0]["specs"]
+			to_irr = true
+	_check("no wire runs machine to machine (the engine moves things only through tanks)", m2m == 0, "%d" % m2m)
+	_check("ghost: it takes the habitat's urine port", from_hab, str(g["conns"]))
+	_check("ghost: its reclaimed water goes into the camp's irrigation tank", to_irr)
+	var sp: Dictionary = unr["specs"]
 	_check("ghost: the machine is sized to the 0.24 L/h stream, not its listed 1 L/h",
 		absf(float((sp["inputs"] as Array)[0]["rate"]) - 0.24) < 0.02 and float(sp["watts"]) < 50.0,
 		str((sp["inputs"] as Array)[0]))
-	var r := Rect2(float(items[0]["x"]), float(items[0]["y"]), float(items[0]["width"]), float(items[0]["height"]))
 	var clear := true
-	for it in m.items:
-		var d: Dictionary = it
-		if Rect2(float(d["x"]), float(d["y"]), float(d["width"]), float(d["height"])).intersects(r):
-			clear = false
-	_check("ghost: it does not sit on a real card", clear, str(r))
-	_check("ghost: below the anchor (a sink plan takes from an output)", r.position.y >= 120.0)
+	for it in items:
+		var r := Rect2(float(it["x"]), float(it["y"]), float(it["width"]), float(it["height"]))
+		for it2 in m.items:
+			var d: Dictionary = it2
+			if Rect2(float(d["x"]), float(d["y"]), float(d["width"]), float(d["height"])).intersects(r):
+				clear = false
+	_check("ghost: no card sits on a real card", clear)
+	_check("ghost: below the anchor (a sink plan takes from an output)", float(unr["y"]) >= 120.0)
 	_check("ghost: the model is untouched", m.items.size() == 3 and m.connections.is_empty())
 	_check("chip: says what it does", str(g["text"]).begins_with("Close the urine loop")
-		and str(g["text"]).contains("1 machine and 1 store") and str(g["text"]).contains("+45 W") and str(g["text"]).contains("$900"),
-		str(g["text"]))
+		and str(g["text"]).contains("1 machine and 3 tanks") and str(g["text"]).contains("+45 W"), str(g["text"]))
 	_check("two builds agree", JSON.stringify(GraphSuggestions.build(m, "root", od, _urine_plan())["conns"]) == JSON.stringify(g["conns"]))
 	var before_rev := m.struct_rev
 	var ids := ChainWiring.apply(m, "root", {"items": g["items"], "conns": g["conns"]})
 	var wired := 0
 	for c2 in m.connections:
-		if ids.has(str((c2 as Dictionary)["source"])) or ids.has(str((c2 as Dictionary)["target"])):
+		var cd2: Dictionary = c2
+		if ids.has(str(cd2["source_item_id"])) or ids.has(str(cd2["target_item_id"])):
 			wired += 1
-	_check("apply: the machine, the store and their wires are added", ids.size() == 2 and wired == (g["conns"] as Array).size()
-		and m.struct_rev > before_rev, "%d wires of %d" % [wired, (g["conns"] as Array).size()])
+	_check("apply: every card and wire is added, with the model's keys", ids.size() == items.size()
+		and wired == (g["conns"] as Array).size() and m.struct_rev > before_rev,
+		"%d of %d wires" % [wired, (g["conns"] as Array).size()])
 	_check("apply: the open urine loop is gone", not _open_has(m, "urine"))
 
 
@@ -121,7 +146,7 @@ func _test_tank_and_gap() -> void:
 	_check("anchor: a urine tank, wired by kind", str(a["id"]) == "ut" and bool(a["tank"]))
 	var plan := _urine_plan()
 	(plan["steps"] as Array).append({"id": "class:distillation:brine", "type": "class", "label": "Distillation",
-		"takes": "brine", "gives": ["water"]})
+		"class": "distillation", "takes": "brine", "gives": ["water"]})
 	var g := GraphSuggestions.build(m, "root", {"kind": "urine", "side": "sink", "kg_h": 0.25}, plan)
 	var from_tank := false
 	for c in g["conns"]:
@@ -134,19 +159,26 @@ func _test_tank_and_gap() -> void:
 		if str((c3 as Dictionary)["source"]) == "hab":
 			from_hab = true
 	_check("asked from the habitat, the ghost joins its urine port, not the tank", from_hab)
-	var gaps := 0
+	var gap: Dictionary = {}
 	for it in g["items"]:
 		if bool((it as Dictionary).get("gap", false)):
-			gaps += 1
-	_check("ghost: a step no machine does is a placeholder card", gaps == 1 and int(g["gaps"]) == 1
-		and str(g["text"]).contains("no machine does yet"), str(g["text"]))
+			gap = it
+	_check("ghost: a step no machine does is a gap node", not gap.is_empty() and int(g["gaps"]) == 1
+		and DesignGap.is_gap(gap["specs"]) and str(gap["specs"].get("gap_class", "")) == "distillation"
+		and str(g["text"]).contains("1 gap node"), str(g["text"]))
+	var brine_buffer := false
+	for c4 in g["conns"]:
+		var cd4: Dictionary = c4
+		if not gap.is_empty() and str(cd4["target"]) == str(gap["id"]) and str(cd4["resource_type"]) == "brine":
+			brine_buffer = true
+	_check("ghost: the gap node takes the brine through a buffer", brine_buffer)
 	var n0 := m.items.size()
 	var ids := ChainWiring.apply(m, "root", {"items": g["items"], "conns": g["conns"]})
-	var to_gap := false
-	for c2 in m.connections:
-		if str((c2 as Dictionary)["target"]).begins_with(ChainWiring.NEW) or str((c2 as Dictionary)["source"]).begins_with(ChainWiring.NEW):
-			to_gap = true
-	_check("apply: the placeholder and its wires are left out", ids.size() == 1 and m.items.size() == n0 + 1 and not to_gap)
+	var gap_placed := false
+	for iid in ids:
+		if DesignGap.is_gap((m.get_item(str(iid)).get("specs", {}) as Dictionary)):
+			gap_placed = true
+	_check("apply: the gap node is placed with the rest", gap_placed and m.items.size() == n0 + ids.size())
 
 
 func _test_dismissals() -> void:

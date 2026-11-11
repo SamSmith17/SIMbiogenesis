@@ -37,6 +37,7 @@ const INSTANCE_ONLY_SPEC_KEYS: Array[String] = [
 	"sunlight_factor", "source", "site_x_m", "site_z_m",
 	"pop_state", "site_projects", "starved_kinds", "is_starved",
 	"pop_present", "pop_morale", "pop_collapse_risk", "camp_meter",
+	"gap_meter", "gap_in_kg_h", "gap_out_kg_h", "gap_residue_kg_h", "gap_short_kg_h", "gap_power_w",
 ]
 
 const _MAX_DEPTH := 32

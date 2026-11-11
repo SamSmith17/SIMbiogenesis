@@ -114,6 +114,7 @@ const SHOW_LENS_OFF := 440
 const SHOW_LENS_BASE := 441   # + index into ElementLens.LENSES
 const SHOW_WHERE := 452
 const SHOW_CLOSE_LOOPS := 453
+const SHOW_CHALLENGES := 454
 var _element_lens := ""
 ## What moved, element by element, over sim time (the Sankey's windows and
 ## the water-recovery track), recorded once a second graph open or not.
@@ -2951,6 +2952,9 @@ func _build_topbar() -> Control:
 	showp.add_item("Close loops…", SHOW_CLOSE_LOOPS)
 	showp.set_item_tooltip(showp.get_item_index(SHOW_CLOSE_LOOPS),
 		"What is left over here or brought in, and the machines that would close it: pick one to see it on the graph.")
+	showp.add_item("Design challenges…", SHOW_CHALLENGES)
+	showp.set_item_tooltip(showp.get_item_index(SHOW_CHALLENGES),
+		"Every gap node on the graph: what the machine it stands for would have to do, measured.")
 	showp.id_pressed.connect(_on_show_menu_id)
 	display_row.add_child(_show_menu)
 	_sync_show_menu()
@@ -10570,6 +10574,7 @@ const _INSTANCE_ONLY_SPEC_KEYS := [
 	"live_capture_lph", "live_capture_rate",
 	"pop_state", "pop_present", "pop_morale", "pop_collapse_risk",
 	"site_projects", "camp_meter",
+	"gap_meter", "gap_in_kg_h", "gap_out_kg_h", "gap_residue_kg_h", "gap_short_kg_h", "gap_power_w",
 ]
 
 ## Called by the inspector after "Save/Add to Library" writes `preset`. Pushes
@@ -13129,14 +13134,14 @@ func _compound_handle_pos(direction: String, idx: int, side_count: int, compound
 	return Vector2(t, 1.0)
 
 
-func _group_selected_items(allow_virtual: bool = false, compound_kind: String = "", group_title: String = "Group", extra_specs: Dictionary = {}) -> String:
+func _group_selected_items(allow_virtual: bool = false, compound_kind: String = "", group_title: String = "Group", extra_specs: Dictionary = {}, min_count: int = 2) -> String:
 	if model == null:
 		return ""
 	var candidates := _get_group_candidates(allow_virtual)
 	var selected_ids_set: Dictionary = {}
 	for sid: String in candidates:
 		selected_ids_set[sid] = true
-	if candidates.size() < 2:
+	if candidates.size() < min_count:
 		_show_toast("Select 2+ nodes to group")
 		return ""
 	var min_x := 1e20
@@ -22509,6 +22514,9 @@ func get_domain_filter() -> Dictionary:
 func _on_show_menu_id(id: int) -> void:
 	if id == SHOW_CLOSE_LOOPS:
 		open_close_loops()
+		return
+	if id == SHOW_CHALLENGES:
+		loop_closer().call("open_challenges")
 		return
 	if id == SHOW_WHERE:
 		open_element_sankey(_element_lens if not _element_lens.is_empty() else "N")
