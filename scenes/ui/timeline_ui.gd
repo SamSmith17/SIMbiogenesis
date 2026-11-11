@@ -987,7 +987,8 @@ func _flush_track_prefs_save() -> void:
 var _tracks_subs: Dictionary = {}   # "power" | "weather" | "ha" | "remove" -> PopupMenu
 
 const TRACK_SOURCE_NAMES := {"live": "live", "sim": "simulated", "observed": "observed CSV",
-	"ha": "Home Assistant link", "ha_entity": "Home Assistant", "weather": "weather"}
+	"ha": "Home Assistant link", "ha_entity": "Home Assistant", "weather": "weather",
+	"composition": "water & nutrients"}
 
 
 func _setup_tracks_menu() -> void:
@@ -997,7 +998,7 @@ func _setup_tracks_menu() -> void:
 	_tracks_menu.name = "TracksMenu"
 	add_child(_tracks_menu)
 	_tracks_menu.id_pressed.connect(_on_tracks_menu_id_pressed.bind(_tracks_menu))
-	for key in ["power", "weather", "ha", "remove"]:
+	for key in ["power", "weather", "composition", "ha", "remove"]:
 		var sub := PopupMenu.new()
 		sub.name = "Tracks_%s" % key
 		_tracks_menu.add_child(sub)
@@ -1045,6 +1046,12 @@ func _rebuild_tracks_menu() -> void:
 	for ch in TimelineWeatherChannels.CHANNELS:
 		_track_menu_add(wx, str(ch["label"]), {"add_weather": str(ch["id"])})
 	_tracks_menu.add_submenu_node_item("Add weather track", wx)
+	# Water and nutrients: what the site's stores hold (from the tank
+	# timelines) and how much used water comes back clean.
+	var comp: PopupMenu = _tracks_subs["composition"]
+	for cc in TimelineCompositionChannels.CHANNELS:
+		_track_menu_add(comp, str(cc["label"]), {"add_comp": str(cc["id"])})
+	_tracks_menu.add_submenu_node_item("Add water & nutrients track", comp)
 	# Home Assistant: each Live link (in the value's own unit), then any sensor.
 	var ha: PopupMenu = _tracks_subs["ha"]
 	var svc := get_node_or_null("/root/HomeAssistant")
@@ -1100,6 +1107,8 @@ func _on_tracks_menu_id_pressed(id : int, menu : PopupMenu) -> void:
 		_track_layout.add_ha_track(str(dh["add_ha"]), str(dh.get("label", "")))
 	elif meta is Dictionary and meta.has("add_weather"):
 		_track_layout.add_weather_track(str(meta["add_weather"]))
+	elif meta is Dictionary and meta.has("add_comp"):
+		_track_layout.add_composition_track(str(meta["add_comp"]))
 	elif meta is Dictionary and meta.has("add"):
 		var d : Dictionary = meta as Dictionary
 		_track_layout.add_waveform_track(str(d.get("add", "")), str(d.get("source", "live")))
@@ -2298,6 +2307,8 @@ func _draw_waveform_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : f
 			_draw_ha_entity_lane(td, lane_rect, win_start, span, fnt)
 		TimelineWeatherChannels.SOURCE:
 			_draw_weather_lane(td, lane_rect, win_start, span, fnt)
+		TimelineCompositionChannels.SOURCE:
+			_draw_composition_lane(td, lane_rect, win_start, span, fnt)
 		_:
 			_draw_power_lane(td, lane_rect, win_start, span, fnt, solar)
 
@@ -2447,6 +2458,26 @@ func _draw_weather_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : fl
 		axis = Vector2(float(fixed[0]), float(fixed[1]))
 	var msg := "no weather data loaded for this site" if not bool(ws.call("has_data")) else "no data for this variable"
 	_draw_bins_lane(td, lane_rect, shown, win_start, span, axis, unit, msg, fnt)
+
+
+## A water / nutrients lane: the systems graph view answers for the bins
+## (stocks from the tank timelines, recovery from its element history).
+func _draw_composition_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : float, span : float, fnt : Font) -> void:
+	var ch := TimelineCompositionChannels.find(td.channel)
+	var gv : Node = ServiceLocator.graph()
+	if ch.is_empty() or gv == null or not gv.has_method("composition_track_bins"):
+		return
+	var g := _lane_grid(lane_rect, win_start, span, 0.0)
+	var bins : Dictionary = _lane_bins_cached(td, g, 5.0, func() -> Dictionary:
+		return gv.call("composition_track_bins", td.channel, float(g["w"]), int(g["i0"]), int(g["n"])))
+	var r := TimelineBinning.value_range(bins)
+	var axis := _axis_for(r, bool(ch.get("floor_zero", false)))
+	var fixed : Variant = ch.get("fixed", null)
+	if fixed is Array and not is_nan(r.x):
+		axis = Vector2(float(fixed[0]), float(fixed[1]))
+	var msg := "no used water recorded yet (the record runs while the clock does)" \
+		if str(ch["kind"]) == "recovery" else "no stores holding it"
+	_draw_bins_lane(td, lane_rect, bins, win_start, span, axis, str(ch["si"]), msg, fnt)
 
 
 ## The weather card's unit switch (ui_prefs.cfg [units] imperial).

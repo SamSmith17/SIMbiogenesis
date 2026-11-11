@@ -107,6 +107,19 @@ var _view_menu: MenuButton = null
 var _show_menu: MenuButton = null
 var _domain_shown: Dictionary = {}
 var _domain_unwired := true
+## Show ▾ → Colour by element (resource composition Phase 4): the lens id
+## (ElementLens: C H O N P K, "water", "energy"; "" = off). A colour lens,
+## not a filter: nothing is hidden.
+const SHOW_LENS_OFF := 440
+const SHOW_LENS_BASE := 441   # + index into ElementLens.LENSES
+const SHOW_WHERE := 452
+var _element_lens := ""
+## What moved, element by element, over sim time (the Sankey's windows and
+## the water-recovery track), recorded once a second graph open or not.
+var _element_history := ElementHistory.new()
+var _element_leds: Dictionary = {}   # scope id -> {led, ms}
+var _element_acc := 0.0
+const _ELEMENT_INTERVAL := 1.0
 const SHOW_ALL := 400
 const SHOW_POWER := 401
 const SHOW_WATER := 402
@@ -2922,6 +2935,16 @@ func _build_topbar() -> Control:
 	showp.set_item_tooltip(showp.get_item_index(SHOW_UNWIRED),
 		"Off: a node shows only if it has a wire of the shown kind.\n"
 		+ "On: having a port of that kind is enough (a battery you just dropped stays visible).")
+	showp.add_separator("Colour by element")
+	showp.add_radio_check_item("No element colours", SHOW_LENS_OFF)
+	for li in ElementLens.LENSES.size():
+		showp.add_radio_check_item(str(ElementLens.LENSES[li]["label"]), SHOW_LENS_BASE + li)
+	showp.set_item_tooltip(showp.get_item_index(SHOW_LENS_OFF),
+		"Colour and size every wire by how much of one element it carries, with what each machine gives to or takes from the air.")
+	showp.add_separator()
+	showp.add_item("Where it goes…", SHOW_WHERE)
+	showp.set_item_tooltip(showp.get_item_index(SHOW_WHERE),
+		"Follow one element through the site: where it comes from, what changes it, where it ends up.")
 	showp.id_pressed.connect(_on_show_menu_id)
 	display_row.add_child(_show_menu)
 	_sync_show_menu()
@@ -15261,6 +15284,7 @@ func _process_frame(delta: float) -> void:
 	PerfSpan.begin("gv_ambient")
 	_tick_resource_flow_ambient(delta)
 	PerfSpan.end("gv_ambient")
+	_tick_elements(delta)
 	# Between ticks: keep the NPC nav bake moving in a small time-boxed slice
 	# per frame (it used to land as one lump per 2 Hz tick, for minutes).
 	if _npc_population != null and not _mp_is_replica() and not _ambient_flow_suspended \
@@ -17443,6 +17467,7 @@ func collect_save_state() -> Dictionary:
 		"graph_3d": (_graph_canvas.call("view_3d_state") as Dictionary) if _graph_canvas != null else {},
 		"view_filter": GraphDomainFilter.to_array(_domain_shown),
 		"view_filter_unwired": _domain_unwired,
+		"element_lens": _element_lens,
 		"elevation_3d_section": _elevation_3d_section,
 		"elevation_heading_rad": float(_graph_canvas.get("elevation_heading_rad")) if _graph_canvas != null else 0.0,
 		"elevation_section_offset_m": float(_graph_canvas.get("elevation_section_offset_m")) if _graph_canvas != null else 0.0,
@@ -17658,6 +17683,8 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 		_sync_3d_menu_checks()
 	set_domain_filter(GraphDomainFilter.from_array(data.get("view_filter", [])),
 		bool(data.get("view_filter_unwired", true)))
+	var lens_id := str(data.get("element_lens", ""))
+	set_element_lens(lens_id if ElementLens.is_lens(lens_id) else "", false)
 	_elevation_3d_section = bool(data.get("elevation_3d_section", true))
 	_sync_elev_slice_row()
 	_sync_site_tool_row()
@@ -22464,6 +22491,15 @@ func get_domain_filter() -> Dictionary:
 
 
 func _on_show_menu_id(id: int) -> void:
+	if id == SHOW_WHERE:
+		open_element_sankey(_element_lens if not _element_lens.is_empty() else "N")
+		return
+	if id == SHOW_LENS_OFF:
+		set_element_lens("")
+		return
+	if id >= SHOW_LENS_BASE and id < SHOW_LENS_BASE + ElementLens.LENSES.size():
+		set_element_lens(str(ElementLens.LENSES[id - SHOW_LENS_BASE]["id"]))
+		return
 	match id:
 		SHOW_ALL:
 			set_domain_filter({})
@@ -22497,6 +22533,132 @@ func _on_show_menu_id(id: int) -> void:
 	_queue_autosave_if_any()
 
 
+# ---------------------------------------------------------------------------
+# Element lens, history and "where it goes" (resource composition Phase 4)
+# ---------------------------------------------------------------------------
+
+## The element ledger of a scope, at most a second old (the dashboard card,
+## the inspector and the lens share it).
+func element_ledger(scope_id: String = "root") -> Dictionary:
+	var c: Dictionary = _element_leds.get(scope_id, {})
+	var now := Time.get_ticks_msec()
+	if not c.is_empty() and now - int(c["ms"]) < int(_ELEMENT_INTERVAL * 1500.0):
+		return c["led"]
+	if model == null:
+		return {}
+	PerfSpan.begin("gv_elements")
+	var led := ElementLedger.compute(model, scope_id)
+	PerfSpan.end("gv_elements")
+	_element_leds[scope_id] = {"led": led, "ms": now}
+	return led
+
+
+func element_history() -> ElementHistory:
+	return _element_history
+
+
+func element_lens() -> String:
+	return _element_lens
+
+
+func set_element_lens(id: String, save: bool = true) -> void:
+	_element_lens = id if ElementLens.is_lens(id) else ""
+	_push_element_lens()
+	_sync_show_menu()
+	if save:
+		_queue_autosave_if_any()
+
+
+## Once a second, graph open or not: the site's ledger into the history (on
+## the sim clock), and the lens data for the scope on screen.
+func _tick_elements(delta: float) -> void:
+	_element_acc += delta
+	if _element_acc < _ELEMENT_INTERVAL:
+		return
+	_element_acc = 0.0
+	if model == null or _mp_is_replica() or _ambient_flow_suspended:
+		return
+	_element_leds.clear()
+	var led := element_ledger("root")
+	_element_history.record(_closure_abs_hours(), led)
+	if not _element_lens.is_empty() and visible:
+		_push_element_lens()
+
+
+## The lens, the air each node trades and the biggest wire flux in the scope
+## on screen, handed to the canvas.
+func _push_element_lens() -> void:
+	if _graph_canvas == null or not _graph_canvas.has_method("set_element_lens"):
+		return
+	if _element_lens.is_empty() or model == null:
+		_graph_canvas.call("set_element_lens", "", {}, 0.0)
+		if _conduit_manager != null and is_instance_valid(_conduit_manager) \
+				and _conduit_manager.has_method("set_preview_element_lens"):
+			_conduit_manager.call("set_preview_element_lens", "", {}, 0.0)
+		return
+	var led := element_ledger(_active_scope_id)
+	var air: Dictionary = {}
+	for id in (led.get("nodes", {}) as Dictionary).keys():
+		var gases: Dictionary = (led["nodes"][id] as Dictionary).get("air", {})
+		var v := 0.0
+		for g in gases.keys():
+			var kg := float(gases[g])
+			if _element_lens == "water":
+				v += kg if str(g) == "H2O" else 0.0
+			elif _element_lens != "energy":
+				v += kg * float(CompositionCatalog.component_elements(str(g)).get(_element_lens, 0.0))
+		if absf(v) > 1e-9:
+			air[str(id)] = v
+	var mx := 0.0
+	for e in led.get("edges", []):
+		mx = maxf(mx, ElementLens.amount((e as Dictionary)["emb"], _element_lens))
+	for v2 in air.values():
+		mx = maxf(mx, absf(float(v2)))
+	_graph_canvas.call("set_element_lens", _element_lens, air, mx)
+	if _conduit_manager != null and is_instance_valid(_conduit_manager) \
+			and _conduit_manager.has_method("set_preview_element_lens"):
+		var flux: Dictionary = {}
+		for e2 in led.get("edges", []):
+			var ed: Dictionary = e2
+			flux[str(ed["id"])] = ElementLens.amount(ed["emb"], _element_lens)
+		_conduit_manager.call("set_preview_element_lens", _element_lens, flux, mx)
+
+
+## Timeline → Add water & nutrients track: zoom-stable bins for a
+## TimelineCompositionChannels channel over the whole site.
+func composition_track_bins(channel: String, w: float, i0: int, n: int) -> Dictionary:
+	var ch := TimelineCompositionChannels.find(channel)
+	if ch.is_empty() or model == null:
+		return TimelineBinning.empty(w, i0, n)
+	if str(ch["kind"]) == "recovery":
+		return TimelineCompositionChannels.recovery_bins(_element_history.recovery_series(), w, i0, n,
+			_element_history.last_hour() + ElementHistory.BIN_H)
+	var terms := TimelineCompositionChannels.stock_terms(GraphNesting.walk_items(model, "root"), str(ch["lens"]))
+	var flow := _resource_flow
+	var level_of := func(id: String, t: float) -> float:
+		if flow == null:
+			return NAN
+		var tl: ResourceTimeline = flow.call("get_timeline", id)
+		if tl == null or tl.is_empty():
+			return NAN
+		if t < tl.time_of_step(tl.first_step()) or t > tl.time_of_step(tl.last_step()):
+			return NAN
+		return tl.level_at(t)
+	return TimelineCompositionChannels.stock_bins(terms, level_of, w, i0, n)
+
+
+## Show ▾ → Where it goes…: the cycle Sankey over the site (or the system
+## the player is in).
+func open_element_sankey(lens: String = "N") -> void:
+	var scr: Script = load("res://scenes/ui/element_sankey_modal.gd")
+	if scr == null:
+		return
+	var m: Node = scr.new()
+	var host: Node = get_tree().root
+	host.add_child(m)
+	m.call("open_for", self, lens, _active_scope_id)
+
+
 func _queue_autosave_if_any() -> void:
 	_schedule_graph_autosave()
 
@@ -22517,6 +22679,11 @@ func _sync_show_menu() -> void:
 		var d: String = GraphDomainFilter.DOMAINS[i]
 		pop.set_item_checked(pop.get_item_index(SHOW_DOMAIN_BASE + i), all or _domain_shown.get(d, false))
 	pop.set_item_checked(pop.get_item_index(SHOW_UNWIRED), _domain_unwired)
+	if pop.get_item_index(SHOW_LENS_OFF) >= 0:
+		pop.set_item_checked(pop.get_item_index(SHOW_LENS_OFF), _element_lens.is_empty())
+		for li in ElementLens.LENSES.size():
+			pop.set_item_checked(pop.get_item_index(SHOW_LENS_BASE + li),
+				str(ElementLens.LENSES[li]["id"]) == _element_lens)
 	var label := "Show ▾" if all else "Show: %s ▾" % GraphDomainFilter.describe(_domain_shown)
 	_show_menu.set_meta("full_text", label)
 	if _topbar_level < 2:

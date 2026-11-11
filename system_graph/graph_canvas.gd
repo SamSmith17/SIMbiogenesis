@@ -2427,10 +2427,82 @@ func _visible_items() -> Array:
 ## Show-only view (GraphDomainFilter): the domains shown, empty = everything.
 ## Set by the view's "Show ▾" menu and saved with the graph.
 var domain_filter: Dictionary = {}
+## Colour by element (ElementLens id, "" = off): wires are coloured and
+## sized by the element they carry; `element_air` is what each node gives to
+## (+) or takes from (−) the air, per hour; `element_flux_max` the biggest
+## flux in the scope (for widths). Pushed by the view once a second.
+var element_lens := ""
+var element_air: Dictionary = {}
+var element_flux_max := 0.0
+
+
+## Air stubs that carry words (the biggest by amount).
+const ELEMENT_AIR_LABELS := 6
+
+
+func set_element_lens(id: String, air: Dictionary, flux_max: float) -> void:
+	element_lens = id
+	element_air = air
+	element_flux_max = flux_max
+	queue_redraw()
+
+
+func element_lens_on() -> bool:
+	return not element_lens.is_empty()
 ## With a filter: also show nodes that merely HAVE a port in a shown domain.
 var domain_include_unwired := true
 var _domain_cache: Dictionary = {}
 var _domain_cache_frame := -1
+
+
+## The element lens's air side: a dotted stub on top of each card that
+## trades the element with the air (up = given off, down = taken in), and a
+## legend in the top-left corner. Freeform only.
+func _draw_element_air() -> void:
+	if not element_lens_on() or model == null or view_mode != GraphSiteLayout.VIEW_FREEFORM:
+		return
+	var lc := ElementLens.color(element_lens)
+	var fnt := UITheme.font("medium", true)
+	var fs := maxi(8, int(round(WIRE_LABEL_FONT_PX * _zoom)))
+	# Words on the biggest few (and the selected node); the rest keep the
+	# stub alone, or a ring of plant beds is a wall of labels.
+	var ranked: Array = element_air.keys()
+	ranked.sort_custom(func(a, b) -> bool: return absf(float(element_air[a])) > absf(float(element_air[b])))
+	var worded: Dictionary = {}
+	for k in ranked.slice(0, ELEMENT_AIR_LABELS):
+		worded[str(k)] = true
+	for it in _visible_items():
+		var item: Dictionary = it
+		var id := str(item.get("id", ""))
+		if not element_air.has(id):
+			continue
+		var v := float(element_air[id])
+		var tl := _item_screen_tl(item, size * 0.5)
+		var sz := _item_screen_size(item)
+		var base := Vector2(tl.x + sz.x * 0.78, tl.y - 2.0)
+		var w := maxf(ElementLens.width_for(absf(v), element_flux_max), 1.5) * _zoom
+		var top := base - Vector2(0.0, 34.0 * _zoom)
+		draw_dashed_line(base, top, Color(lc, 0.85), w, 5.0 * _zoom, true)
+		var head := top if v > 0.0 else base
+		var dir := -1.0 if v > 0.0 else 1.0
+		var hs := 5.0 * _zoom + w * 0.5
+		draw_colored_polygon(PackedVector2Array([head + Vector2(0.0, dir * hs),
+			head + Vector2(-hs, -dir * hs * 0.2), head + Vector2(hs, -dir * hs * 0.2)]), Color(lc, 0.9))
+		if not worded.has(id) and id != selected_item_id:
+			continue
+		var txt := "%s %s" % ["to the air" if v > 0.0 else "from the air", ElementLens.fmt_rate(absf(v), element_lens)]
+		var ts := fnt.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+		var at := top + Vector2(hs + 3.0, ts.y * 0.35)
+		GraphFastDraw.rrect(self, Rect2(at - Vector2(3.0, ts.y * 0.85), ts + Vector2(6.0, 4.0)), 4.0,
+			Color(0.04, 0.06, 0.10, 0.85))
+		draw_string(fnt, at, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(lc, 0.95))
+	var leg := "Colour: %s · wires sized by what they carry · dotted = the air" % ElementLens.label(element_lens)
+	var lf := UITheme.font("semibold")
+	var lts := lf.get_string_size(leg, HORIZONTAL_ALIGNMENT_LEFT, -1, 13)
+	var lr := Rect2(Vector2(12.0, size.y - 84.0), lts + Vector2(22.0, 10.0))
+	GraphFastDraw.rrect(self, lr, 7.0, Color(0.04, 0.06, 0.10, 0.88))
+	draw_rect(Rect2(lr.position + Vector2(6.0, 6.0), Vector2(4.0, lr.size.y - 12.0)), lc)
+	draw_string(lf, lr.position + Vector2(16.0, 5.0 + lts.y * 0.8), leg, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.92, 0.94, 0.97))
 
 
 func set_domain_filter(shown: Dictionary, include_unwired: bool = domain_include_unwired) -> void:
@@ -4141,6 +4213,17 @@ func _v3_draw_connectors() -> void:
 		if bool(est.get("shed", false)):
 			active = false
 		var w := (WIRE_BASE_W + _wire_glow_scale_from_watts(float(est.get("watts", 100.0))) * 2.0) * _zoom
+		if element_lens_on():
+			var rk := ResourceKinds.normalize_kind(str(est.get("resource_kind", conn.get("resource_type", ""))))
+			var flux := ElementLens.amount_of(rk, float(est.get("rate", 0.0)), element_lens) \
+				if pol == "resource" else 0.0
+			if flux > 0.0:
+				col = ElementLens.color(element_lens)
+				w = ElementLens.width_for(flux, element_flux_max) * _zoom
+			else:
+				col = Color(col.r, col.g, col.b, 0.10)
+				w = 1.0
+				active = false
 		if str(conn.get("id", "")) == selected_connection_id:
 			col = C_SELECTED_BORDER
 			w *= 1.6
@@ -5557,6 +5640,16 @@ func _render_connection(
 	else:
 		var gscale_w  := _wire_glow_scale_from_watts(flow_watts)
 		width = (6.5 if is_sel else WIRE_BASE_W + gscale_w * 2.4) * _zoom
+	if element_lens_on() and not bool(conn.get("severed", false)):
+		var flux := ElementLens.amount_of(res_kind, res_rate, element_lens) if is_resource_wire else 0.0
+		var lc := ElementLens.color(element_lens)
+		if flux > 0.0:
+			col = C_SELECTED_BORDER if is_sel else lc
+			width = ElementLens.width_for(flux, element_flux_max) * _zoom
+		else:
+			col = Color(col.r, col.g, col.b, 0.10)
+			width = 1.2 * _zoom
+			flow_active = false
 
 	# Wires animate while power actually flows — clock running, or paused with
 	# the "flow when paused" pref, or during a baked-run playback.
@@ -5627,7 +5720,7 @@ func _render_connection(
 		# Stamp a transient draw-only corner clamp used by metro/ortho helpers.
 		conn = conn.duplicate()
 		conn["_draw_corner_px"] = _conn_corner_radius_px(conn, link_len)
-	var sankey_scale = bool(conn.get("sankey_scale", true))
+	var sankey_scale = bool(conn.get("sankey_scale", true)) and not element_lens_on()
 	# Parallel-wire comb: a bundled end starts its curve at its fan tooth.
 	var bundle: Dictionary = _bundle_plan.get(str(conn.get("id", "")), {}) as Dictionary
 	if not bundle.is_empty() and style != "metro" and style != "orthogonal":
@@ -5724,7 +5817,7 @@ func _render_connection(
 			_draw_resource_wire_path(
 				[src_pos] + wps + [tgt_pos], [src_t, tgt_tang_out],
 				col, width, flowing, reverse, curve_t, res_rate, res_kind, sankey_scale)
-		if flowing and _zoom >= WIRE_LABEL_MIN_ZOOM:
+		if (flowing or (element_lens_on() and flow_active)) and _zoom >= WIRE_LABEL_MIN_ZOOM:
 			_draw_flow_label(src_pos, tgt_pos, wps, res_rate, true, res_kind, col)
 		_draw_connection_waypoint_handles(conn, center)
 		return
@@ -5795,6 +5888,9 @@ func _wire_value_text(value: float, is_resource: bool, kind: String, volts: floa
 ## carries nothing right now still says how long it is.
 func _wire_pill_text(value: float, is_resource: bool, kind: String, volts: float,
 		length_m: float) -> String:
+	if element_lens_on():
+		var flux := ElementLens.amount_of(ResourceKinds.normalize_kind(kind), value, element_lens) if is_resource else 0.0
+		return ElementLens.fmt_rate(flux, element_lens) if flux > 0.0 else ""
 	var txt := _wire_value_text(value, is_resource, kind, volts)
 	if length_m > 0.0:
 		txt += (" · " if not txt.is_empty() else "") + ConduitLength.format(length_m)

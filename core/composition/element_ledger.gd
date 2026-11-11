@@ -27,6 +27,8 @@ extends RefCounted
 ##   dumped     unwired optional outputs (cooling water, backwash): the
 ##              machine runs and the stream is drained off site
 ##   leaks      outputs with nowhere to go, full stores still filling
+##   edges      every material wire touching the scope: {id, src, tgt, kind,
+##              rate, emb} (the element lens and ElementHistory read them)
 ##   water      {used_kg_h, recovered_kg_h, ratio}: ISS-style water recovery
 ##
 ## Water recovery (the ECLSS measure, recovered for reuse ÷ water used): a
@@ -52,7 +54,7 @@ static func compute(model: GraphModel, scope_id: String = "root") -> Dictionary:
 	var out := {"stock": _empty_stock(), "stores": [], "unknown": [], "nodes": {},
 		"boundary": {"rain": _side(), "imports": _side(), "in": _side(), "out": _side(), "exports": _side()},
 		"unaccounted": [], "leaks": [], "water": {"used_kg_h": 0.0, "recovered_kg_h": 0.0, "ratio": NAN},
-		"air": {"out": _side(), "in": _side(), "gases": {}}, "dumped": _side(),
+		"air": {"out": _side(), "in": _side(), "gases": {}}, "dumped": _side(), "edges": [],
 		"scope_id": scope_id}
 	if model == null:
 		return out
@@ -91,6 +93,8 @@ static func compute(model: GraphModel, scope_id: String = "root") -> Dictionary:
 		if not bool(emb["known"]):
 			continue
 		wires.append({"src": src, "tgt": tgt, "kind": kind, "emb": emb, "rate": rate})
+		(out["edges"] as Array).append({"id": str(f.get("id", "")), "src": src, "tgt": tgt,
+			"kind": kind, "rate": rate, "emb": emb})
 		if inside.has(tgt):
 			inflow_to[tgt] = float(inflow_to.get(tgt, 0.0)) + float(emb["kg"])
 	for w in wires:
@@ -172,12 +176,13 @@ static func _stocks(items: Array, out: Dictionary) -> void:
 # --- flows --------------------------------------------------------------------
 
 static func _side() -> Dictionary:
-	return {"kg_h": 0.0, "water_kg_h": 0.0, "elements": {}}
+	return {"kg_h": 0.0, "water_kg_h": 0.0, "energy_mj_h": 0.0, "elements": {}}
 
 
 static func _add(side: Dictionary, emb: Dictionary) -> void:
 	side["kg_h"] = float(side["kg_h"]) + float(emb["kg"])
 	side["water_kg_h"] = float(side["water_kg_h"]) + float(emb["water_kg"])
+	side["energy_mj_h"] = float(side.get("energy_mj_h", 0.0)) + float(emb.get("energy_mj", 0.0))
 	_add_elements(side["elements"], emb["elements"])
 
 
@@ -287,10 +292,13 @@ static func _judge(n: Dictionary, out: Dictionary) -> Dictionary:
 				var ok := str(od.get("kind", ""))
 				if (unwired as Array).has(ok) and bool(od.get("optional", false)) and CompositionCatalog.is_material(ok):
 					dumped.append({"kind": ok, "rate": float(od.get("rate", 0.0)) * scale})
+	var node_dumped := _side()
 	for dd in dumped:
 		var emb := CompositionCatalog.embodied(str(dd["kind"]), float(dd["rate"]))
 		if bool(emb["known"]):
 			_add(out["dumped"], emb)
+			_add(node_dumped, emb)
+	n["dumped"] = node_dumped
 	if ins.is_empty() and outs.is_empty():
 		return {}
 	var air: Variant = MassBalance.air_for(item)

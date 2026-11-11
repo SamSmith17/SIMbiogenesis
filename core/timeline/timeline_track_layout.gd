@@ -171,6 +171,14 @@ func add_weather_track(channel_id : String) -> TimelineTrackDef:
 	return add_custom_track(TimelineWeatherChannels.SOURCE, channel_id, str(ch["label"]), ch["color"] as Color)
 
 
+## A water / nutrients track (TimelineCompositionChannels id).
+func add_composition_track(channel_id : String) -> TimelineTrackDef:
+	var ch := TimelineCompositionChannels.find(channel_id)
+	if ch.is_empty():
+		return null
+	return add_custom_track(TimelineCompositionChannels.SOURCE, channel_id, str(ch["label"]), ch["color"] as Color)
+
+
 func remove_track(track_id : String) -> bool:
 	for i in tracks.size():
 		var t: Variant = tracks[i]

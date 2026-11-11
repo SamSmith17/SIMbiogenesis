@@ -179,6 +179,7 @@ func _draw_v2_all() -> void:
 	_draw_tile_labels()
 	_draw_site_inset()
 	_draw_inside_cue()
+	_draw_element_air()
 	if view_mode == GraphSiteLayout.VIEW_GLOBE or _pins_mode_active():
 		return
 	# Reuse the per-draw visible cache (still populated by super._draw) for the

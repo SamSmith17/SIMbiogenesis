@@ -179,6 +179,7 @@ func set_preview_visibility(on: bool) -> void:
 	_preview_visible = on
 	_refresh_world_visibility()
 	_apply_preview_domain_filter()
+	_apply_preview_element_lens()
 
 
 ## The graph's show-only view (GraphDomainFilter) also hides the 3D runs of
@@ -192,6 +193,61 @@ var _domain_filter_acc := 0.0
 func set_preview_domain_filter(shown: Dictionary) -> void:
 	_preview_domain_shown = shown.duplicate()
 	_apply_preview_domain_filter()
+
+
+## Colour by element in the graph's 3D lenses (resource composition Phase 4):
+## each run that carries the lens's element wears an overlay in its colour,
+## brighter for a bigger flux; a run carrying none fades out. Lens views only
+## (`_preview_visible`); "" clears it. `flux` = {connection id: amount/h}.
+var _lens_id := ""
+var _lens_flux: Dictionary = {}
+var _lens_max := 0.0
+var _lens_touched: Dictionary = {}
+var _lens_mats: Dictionary = {}   # "color|bucket" -> material
+
+
+func set_preview_element_lens(lens: String, flux: Dictionary, flux_max: float) -> void:
+	_lens_id = lens
+	_lens_flux = flux
+	_lens_max = flux_max
+	_apply_preview_element_lens()
+
+
+func _apply_preview_element_lens() -> void:
+	var on := _preview_visible and not _lens_id.is_empty()
+	for cid in _lens_touched.keys():
+		if on and _instances.has(cid):
+			continue
+		var old := _instances.get(cid, null) as MeshInstance3D
+		if old != null and is_instance_valid(old):
+			old.material_overlay = null
+			old.transparency = 0.0
+		_lens_touched.erase(cid)
+	if not on:
+		return
+	var col := ElementLens.color(_lens_id)
+	for cid2 in _instances.keys():
+		var inst := _instances[cid2] as MeshInstance3D
+		if inst == null or not is_instance_valid(inst):
+			continue
+		var v := float(_lens_flux.get(str(cid2), 0.0))
+		_lens_touched[cid2] = true
+		if v <= 0.0:
+			inst.material_overlay = null
+			inst.transparency = 0.85
+			continue
+		inst.transparency = 0.0
+		var f := ElementLens.width_for(v, _lens_max) / ElementLens.WIDTH_MAX
+		var bucket := clampi(int(round(f * 4.0)), 1, 4)
+		var key := "%s|%d" % [col.to_html(), bucket]
+		if not _lens_mats.has(key):
+			var m := StandardMaterial3D.new()
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			m.no_depth_test = true
+			m.albedo_color = Color(col, 0.25 + 0.15 * float(bucket))
+			_lens_mats[key] = m
+		inst.material_overlay = _lens_mats[key]
 
 
 func _apply_preview_domain_filter() -> void:

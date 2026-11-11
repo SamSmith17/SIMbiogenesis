@@ -1815,6 +1815,19 @@ Godot.exe.exe --headless --path . --script core/composition/element_ledger_selft
 # graph with its cost in ms, the dashboard WATER & NUTRIENTS card, the
 # inspector's Made of / Mass balance sections; prints the numbers:
 tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/element_ledger_check.gd -Label element_ledger -Timeout 900
+# The element lens, history and Sankey (offline — Phase 4): ElementLens
+# amounts / words / widths, ElementHistory integrating ledger rates over sim
+# hours (scrub back drops what came after, a > 6 h jump counts nothing,
+# NOW = one hour of rates), ElementSankey's three columns with the air, the
+# composition timeline channels (stocks from tank levels, recovery in %).
+# EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script core/composition/element_cycles_selftest.gd
+# The same on a real graph (sandbox): Show ▾ → Colour by element (N, water,
+# C) colours the wires with air stubs, the clock runs and the history
+# records, Where it goes… has all three columns over 24 h and right now,
+# the stock + recovery tracks answer, Site Plan colours the 3D runs, Off
+# clears everything; shots:
+tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/element_lens_check.gd -Label element_lens -Timeout 900
 # Process recipes + chore ledger + workflow runner (offline — normalize/catalog,
 # legacy batch migration, scrub-safe progress, hybrid chore confirm, part credits,
 # workflow step advance; run --import first so class_names register):

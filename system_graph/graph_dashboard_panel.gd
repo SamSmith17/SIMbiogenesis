@@ -228,6 +228,16 @@ func _build_ui() -> void:
 	_made_of_vbox = VBoxContainer.new()
 	_made_of_vbox.add_theme_constant_override("separation", 2)
 	made_body.add_child(_made_of_vbox)
+	var where_btn := Button.new()
+	where_btn.text = "Where it goes…"
+	where_btn.tooltip_text = "Follow one element through the site: where it comes from, what changes it, where it ends up."
+	where_btn.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(where_btn)
+	where_btn.pressed.connect(func() -> void:
+		if _graph_view != null and _graph_view.has_method("open_element_sankey"):
+			var lens := str(_graph_view.call("element_lens")) if _graph_view.has_method("element_lens") else ""
+			_graph_view.call("open_element_sankey", lens if not lens.is_empty() else "N"))
+	made_body.add_child(where_btn)
 
 	add_child(_card_section("🔁 NEEDS & CLOSURE"))
 	var closure_wrap := _card_body()
@@ -709,7 +719,10 @@ func _refresh_made_of() -> void:
 			var sys_item: Dictionary = model.get_item(sid)
 			if not sys_item.is_empty() and not str(sys_item.get("child_scope_id", "")).is_empty():
 				scope = str(sys_item["child_scope_id"])
-		rows = ElementLedger.rows(ElementLedger.compute(model, scope))
+		# The view keeps the ledger at most a second old; computing it here
+		# too doubled the cost.
+		var led: Dictionary = _graph_view.call("element_ledger", scope) if _graph_view.has_method("element_ledger") else ElementLedger.compute(model, scope)
+		rows = ElementLedger.rows(led)
 	_render_rows(_made_of_vbox, rows, _made_of_state,
 		"Add tanks and machines to see the water and nutrients they hold")
 
