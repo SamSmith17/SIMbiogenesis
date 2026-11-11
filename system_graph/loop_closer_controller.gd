@@ -57,11 +57,11 @@ func suggestion() -> Dictionary:
 # --- asking -------------------------------------------------------------------
 
 ## The open loops of a scope with their plans: [{open, plans}].
-func loops(scope: String) -> Array:
+func loops(scope: String, only_kinds: Array = []) -> Array:
 	var m := _model()
 	if m == null:
 		return []
-	return LoopPlanner.plan_scope(m, scope, MAX_LOOPS)
+	return LoopPlanner.plan_scope(m, scope, MAX_LOOPS, {}, only_kinds)
 
 
 ## "Close this loop" on a tank, a wire or a machine: the first plan not
@@ -72,7 +72,7 @@ func close_loop_for_kind(kind: String, scope: String = "", from_item: String = "
 		scope = str(view.get("_active_scope_id"))
 	_from = from_item
 	var k := ChainWiring.kind(kind)
-	for row in loops(scope):
+	for row in loops(scope, [k]):
 		var od: Dictionary = row["open"]
 		if str(od["kind"]) != k:
 			continue
@@ -107,7 +107,7 @@ func loops_touching(item_id: String) -> Array:
 		for p in ChainWiring.ports(str(it.get("type", "")), it.get("specs", {}), ins):
 			kinds[str(p[0])] = true
 	var out: Array = []
-	for row in loops(str(it.get("scope_id", "root"))):
+	for row in loops(str(it.get("scope_id", "root")), kinds.keys()):
 		if kinds.has(str(row["open"]["kind"])):
 			out.append(row)
 	return out

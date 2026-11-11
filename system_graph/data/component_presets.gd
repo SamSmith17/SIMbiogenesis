@@ -450,6 +450,31 @@ const PROCESSORS: Array = [
 		},
 	},
 	{
+		"type": "processor", "label": "Biochar Kiln (scrap lumber)", "icon": "🪵",
+		"width": 150.0, "height": 140.0,
+		"specs": {
+			# Salvaged timber and plywood (resource composition plan Phase 9):
+			# a retort kiln, sealed, heated by its own elements. Char ~30 % of
+			# the dry wood at ~500 °C (Lehmann & Joseph 2015); the woodgas,
+			# wood vinegar and tar rates are solved so C, H and O close against
+			# the lumber's make-up (tools/diag/preset_tune.gd).
+			"name": "Biochar Kiln (scrap lumber)", "watts": 900.0, "cost": 1400.0,
+			"energy_source": "ac",
+			"efficiency": 0.88, "energy_wh_per_unit": 150.0,
+			# Each port at its own rate (a gas in m³/h must not set the pace).
+			"io_absolute": true,
+			"unit_ops": ["pyrolysis"],
+			"daily_note": "Lumber 6 kg/h + 0.9 kW → 1.6 kg/h biochar + 0.49 m³/h gas + 1.09 L/h wood vinegar + 2.93 kg/h tar.",
+			"inputs": [{"kind": "lumber", "rate": 6.0, "unit": "kg/h"}],
+			"outputs": [
+				{"kind": "biochar", "rate": 1.6, "unit": "kg/h"},
+				{"kind": "woodgas", "rate": 0.49, "unit": "m³/h"},
+				{"kind": "wood_vinegar", "rate": 1.09, "unit": "L/h"},
+				{"kind": "tar", "rate": 2.93, "unit": "kg/h"},
+			],
+		},
+	},
+	{
 		# The tri-clamp reactor run as a plastic retort (TcPresets.plastic_retort):
 		# shredded polyolefin melts, cracks, and the condensers drop oil and wax;
 		# the light gas leaves the last column. The rates below are a fixed guess

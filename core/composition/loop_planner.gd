@@ -41,6 +41,9 @@ const MAX_PLANS := 3
 const BENIGN := ["soil", "compost", "biochar", "irrigation_water", "nutrients", "air"]
 ## Kinds whose ordinary end is a store, not a machine: a plan may end on one
 ## and the store is added with it (ChainWiring) when the scope has none.
+## A salvage store nothing draws from is an open loop sized to use its
+## stock up in a week (Phase 9: what is stored in things).
+const SALVAGE_USE_H := 168.0
 const TERMINAL := {"brine": "Salt Pan (brine)"}
 ## Clean water kinds that answer a need for water.
 const WATER_KINDS := ["water", "distilled_water", "rainwater", "irrigation_water"]
@@ -229,6 +232,7 @@ static func find_open(model: GraphModel, scope_id: String = "root") -> Dictionar
 	var used: Dictionary = {}
 	var stocked: Dictionary = {}
 	var flex: Dictionary = {}
+	var salvaged: Dictionary = {}
 	if model == null:
 		return {"made": made, "used": used, "stocked": stocked, "open": []}
 	for it in GraphNesting.walk_items(model, scope_id):
@@ -242,6 +246,11 @@ static func find_open(model: GraphModel, scope_id: String = "root") -> Dictionar
 			if CompositionCatalog.is_material(rk) and (ResourceKinds.tank_stock_qty(sp) > 0.0
 					or bool(sp.get("unlimited_capacity", false))):
 				stocked[rk] = true
+			# A salvage store (a structure taken down, Phase 9) is stock to
+			# use up, not a flow: counted below if nothing draws from it.
+			if bool(sp.get("salvage_store", false)):
+				salvaged[rk] = float(salvaged.get(rk, 0.0)) \
+					+ ResourceKinds.tank_stock_qty(sp) * CompositionCatalog.kg_per_unit(rk)
 			continue
 		if ty == "catchment":
 			_add(made, "water", float(sp.get("live_capture_lph", 0.0)))
@@ -286,6 +295,11 @@ static func find_open(model: GraphModel, scope_id: String = "root") -> Dictionar
 					lack -= float(made.get(wk, 0.0))
 		if lack > maxf(MIN_OPEN_KG_H, 0.01 * float(used[k4])):
 			open.append(_open_row(str(k4), "source", lack))
+	for k5 in salvaged.keys():
+		if float(used.get(k5, 0.0)) <= 0.0 and float(salvaged[k5]) / SALVAGE_USE_H > MIN_OPEN_KG_H:
+			var row := _open_row(str(k5), "sink", float(salvaged[k5]) / SALVAGE_USE_H)
+			row["stock_kg"] = float(salvaged[k5])
+			open.append(row)
 	open.sort_custom(func(a, b) -> bool:
 		if absf(float(a["rank"]) - float(b["rank"])) > 1e-9:
 			return float(a["rank"]) > float(b["rank"])
@@ -494,7 +508,10 @@ static func _result(s: Dictionary, side: String, kind: String, f0: float) -> Dic
 
 ## Every open loop in a scope with up to MAX_PLANS plans each, the most
 ## valuable first. → [{open: {kind, side, kg_h, …}, plans: [plan]}]
-static func plan_scope(model: GraphModel, scope_id: String = "root", max_loops: int = 6, lib: Dictionary = {}) -> Array:
+## `only_kinds` (non-empty): plan just those kinds' loops, whatever their
+## rank (a store's own "Close this loop").
+static func plan_scope(model: GraphModel, scope_id: String = "root", max_loops: int = 6, lib: Dictionary = {},
+		only_kinds: Array = []) -> Array:
 	var fo := find_open(model, scope_id)
 	var use_lib := lib if not lib.is_empty() else library()
 	var sinks: Dictionary = {}
@@ -503,7 +520,10 @@ static func plan_scope(model: GraphModel, scope_id: String = "root", max_loops: 
 			sinks[str(o["kind"])] = true
 	var ctx := {"used": fo["used"], "made": fo["made"], "stocked": fo["stocked"], "sinks": sinks}
 	var out: Array = []
-	for o2 in (fo["open"] as Array).slice(0, max_loops):
+	var rows: Array = fo["open"]
+	if not only_kinds.is_empty():
+		rows = rows.filter(func(r) -> bool: return only_kinds.has(str((r as Dictionary)["kind"])))
+	for o2 in rows.slice(0, max_loops):
 		var od: Dictionary = o2
 		var c2 := ctx.duplicate()
 		if str(od["side"]) == "source":

@@ -1876,6 +1876,23 @@ Godot.exe.exe --headless --path . --script core/composition/design_gap_selftest.
 # sim week, reads + exports its brief, opens Design challenges, puts it in
 # a group (Design this gap) and replaces a group with one (Ctrl+Z back):
 tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/loop_closer_check.gd -Label loop_closer -Timeout 1500
+# What is stored in things (offline — Phase 9): BuiltStock: a 2×4's carbon,
+# water and energy; every material composes and salvages into a real kind;
+# a Linkage frame's wood + steel from its own shipping spec, a rack's,
+# domes' (conduit steel, plywood ribs, polycarbonate covers) and flat-pack
+# parts by their own stock; the model table; trees skipped, unknown models
+# counted; the site sum; salvage kinds (modules kept whole); salvage into a
+# new store then the same one; a salvage store as an open loop (use it up
+# in a week); the planner offering the scrap-lumber kiln first.
+# EXPECTED_CHECKS; --import first. tools/diag/parts_labels_probe.gd lists
+# every designer's packing parts (what the material rules read):
+Godot.exe.exe --headless --path . --script core/composition/built_stock_selftest.gd
+# The same with REAL input (sandbox): the site's built stock on the
+# dashboard; a timber site gate's editor says what it is made of; two REAL
+# clicks on Salvage take it down into a lumber store; a REAL click on the
+# store's "Close this loop" shows the kiln; a REAL Tab places it; a sim day
+# turns the lumber into biochar:
+tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/built_stock_check.gd -Label built_stock -Timeout 1200
 # Process recipes + chore ledger + workflow runner (offline — normalize/catalog,
 # legacy batch migration, scrub-safe progress, hybrid chore confirm, part credits,
 # workflow step advance; run --import first so class_names register):

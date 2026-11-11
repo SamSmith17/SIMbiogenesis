@@ -10353,6 +10353,76 @@ func draw_fuel_near(world_pos: Vector3, kind: String, litres: float, reach_m: fl
 	return {"litres": take, "tank_id": tid, "name": name}
 
 
+## The site's built stock (resource composition plan Phase 9): what the
+## placed structures are made of. Cached for a few seconds (BuiltStock caches
+## each design too).
+var _built_cache: Dictionary = {}
+var _built_at_ms := -100000
+
+func built_stock() -> Dictionary:
+	if Time.get_ticks_msec() - _built_at_ms < 5000 and not _built_cache.is_empty():
+		return _built_cache
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	var recs: Array = loader.call("placed_prop_records") if loader != null and loader.has_method("placed_prop_records") else []
+	_built_cache = BuiltStock.site(recs)
+	_built_at_ms = Time.get_ticks_msec()
+	return _built_cache
+
+
+## Take a placed structure down and put its material into the graph's stores
+## (lumber, scrap metal, plastic, rubble; solar modules are kept whole). One
+## undo step on the graph; the prop is deleted. → {ok, text, tanks, kept}.
+func salvage_prop(prop_id: String) -> Dictionary:
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	if loader == null or not loader.has_method("get_prop_record"):
+		return {"ok": false, "text": "No site to salvage from."}
+	var rec: Dictionary = (loader.call("get_prop_record", prop_id) as Dictionary).duplicate(true)
+	if rec.is_empty():
+		return {"ok": false, "text": "That structure is gone."}
+	var o := BuiltStock.of_record(rec)
+	if bool(o.get("skip", false)) or not bool(o.get("known", false)):
+		return {"ok": false, "text": "What it is made of is not known, so it cannot be salvaged."}
+	var sv := BuiltStock.salvage_kinds(o["materials"])
+	var max_x := 0.0
+	var min_y := INF
+	for it in model.get_items_in_scope("root"):
+		var d: Dictionary = it
+		max_x = maxf(max_x, float(d.get("x", 0.0)) + float(d.get("width", 120.0)))
+		min_y = minf(min_y, float(d.get("y", 0.0)))
+	var at := Vector2(max_x + 120.0, 0.0 if min_y == INF else min_y)
+	var h := 0.0
+	var main := _get_scene_main_node()
+	if main != null and main.has_method("get_absolute_hours"):
+		h = float(main.call("get_absolute_hours"))
+	var level_of := func(tid: String) -> float:
+		var tl: ResourceTimeline = _resource_flow.get_timeline(tid) if _resource_flow != null else null
+		return tl.level_at(h) if tl != null else float((model.get_item(tid).get("specs", {}) as Dictionary).get("level", 0.0))
+	_history_suppress = true
+	var tanks := BuiltStock.salvage_into(model, "root", sv["kinds"], at, level_of)
+	_history_suppress = false
+	for t in tanks:
+		var td: Dictionary = t
+		var tl2: ResourceTimeline = _resource_flow.get_timeline(str(td["id"])) if _resource_flow != null else null
+		if tl2 != null:
+			tl2.set_current_level(h, float(td["level"]))
+	_push_history()
+	_update_undo_redo_btns()
+	_schedule_graph_autosave()
+	if loader.has_method("delete_prop_by_id"):
+		loader.call("delete_prop_by_id", prop_id)
+	_built_at_ms = -100000
+	var got := PackedStringArray()
+	for t2 in tanks:
+		got.append("%s %s" % [UiText.num(float(t2["kg"]), "kg"), GraphSuggestions.kind_word(str(t2["kind"])).to_lower()])
+	var text := "Salvaged into the graph: " + (", ".join(got) if not got.is_empty() else "nothing")
+	var kept: Dictionary = sv["kept"]
+	if not kept.is_empty():
+		text += ". Kept whole to reuse: " + BuiltStock.describe(kept)
+	text += ". Close loops… shows what can use it."
+	_show_toast(text)
+	return {"ok": true, "text": text, "tanks": tanks, "kept": kept}
+
+
 func remove_vehicle_system(prop_id: String) -> void:
 	var cid := vehicle_system_item_id(prop_id)
 	if cid.is_empty():

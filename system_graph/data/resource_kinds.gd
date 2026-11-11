@@ -120,6 +120,30 @@ const BUILTIN: Dictionary = {
 		"abbrev": "🪣",
 		"flow_ref_rate": 50.0,
 	},
+	"lumber": {
+		# Salvaged timber and plywood from a structure taken down (resource
+		# composition plan Phase 9): fuel for a kiln, or built again.
+		"display": "Lumber (salvaged)",
+		"color": Color(0.729, 0.561, 0.361, 1.0),
+		"unit": "kg",
+		"abbrev": "LB",
+		"flow_ref_rate": 10.0,
+		"aliases": ["timber", "scrap_lumber"],
+	},
+	"scrap_metal": {
+		"display": "Scrap metal",
+		"color": Color(0.580, 0.600, 0.620, 1.0),
+		"unit": "kg",
+		"abbrev": "FE",
+		"flow_ref_rate": 10.0,
+	},
+	"rubble": {
+		"display": "Rubble (glass, concrete)",
+		"color": Color(0.560, 0.540, 0.500, 1.0),
+		"unit": "kg",
+		"abbrev": "RB",
+		"flow_ref_rate": 10.0,
+	},
 	"biochar": {
 		"display": "Biochar",
 		"color": Color(0.180, 0.180, 0.180, 1.0),

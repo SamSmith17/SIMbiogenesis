@@ -15,6 +15,9 @@ const EXCEPTIONS := {
 	# urine-diverting toilet's brownwater carries about a third of the N:
 	# one static make-up per kind cannot show both digestates.
 	"Brownwater Digester (3 m³)": "digestate weaker than the shared kind's make-up",
+	# Shares the biochar kind with the crop-residue reactor, whose char holds
+	# that feed's ash; char from clean timber has almost none (C, H, O close).
+	"Biochar Kiln (scrap lumber)": "wood char has less ash than the shared kind's make-up",
 }
 const EXPECTED_CHECKS := 7
 

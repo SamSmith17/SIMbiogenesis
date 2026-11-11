@@ -13,6 +13,8 @@ extends RefCounted
 ##   label, what     words for the player
 ##   accepts         what it takes in: "kind:<id>", "family:<f>" or
 ##                   "water_grade<=n" (CompositionCatalog grades)
+##   refuses         kinds it will not take even when `accepts` matches
+##                   (woody lumber: lignin does not compost or digest)
 ##   gives           [{target, to, recovery}]: target "water" | an element
 ##                   (C N P K), `to` the kind (or "air") the target leaves
 ##                   in, recovery the typical share of it that does
@@ -76,12 +78,14 @@ const CLASSES := {
 	"anaerobic_digestion": {"reject": "liquid_fertilizer", "label": "Anaerobic digestion",
 		"what": "Microbes without air turn organic matter into biogas; the nutrients stay in the digestate.",
 		"accepts": ["family:organic", "kind:blackwater", "kind:brownwater", "kind:manure", "kind:food_waste"],
+		"refuses": ["kind:lumber"],
 		"gives": [{"target": "C", "to": "biogas", "recovery": 0.50}, {"target": "N", "to": "liquid_fertilizer", "recovery": 0.95},
 			{"target": "P", "to": "liquid_fertilizer", "recovery": 0.80}, {"target": "K", "to": "liquid_fertilizer", "recovery": 0.90}],
 		"kwh_per_kg": 0.01, "kwh_min": NAN, "per": "feed",
 		"src": "~50 % of degradable C to biogas; N, P, K kept (Möller & Müller 2012), mixing est"},
 	"composting": {"reject": "compost", "label": "Composting", "what": "Aerobic decay; carbon leaves as CO₂, the nutrients stay in the compost.",
 		"accepts": ["family:organic", "kind:manure", "kind:food_waste", "kind:green_waste"],
+		"refuses": ["kind:lumber"],
 		"gives": [{"target": "C", "to": "air", "recovery": 0.50}, {"target": "N", "to": "compost", "recovery": 0.75},
 			{"target": "P", "to": "compost", "recovery": 0.95}, {"target": "K", "to": "compost", "recovery": 0.90}],
 		"kwh_per_kg": 0.0, "kwh_min": NAN, "per": "feed",
@@ -134,6 +138,8 @@ static func accepts(id: String, kind: String) -> bool:
 	var k := CompositionCatalog.canonical(kind)
 	var fam := CompositionCatalog.family_of(k)
 	var grade := CompositionCatalog.grade_of(k)
+	if (row.get("refuses", []) as Array).has("kind:" + k):
+		return false
 	for a in row.get("accepts", []):
 		var s := str(a)
 		if s == "kind:" + k:

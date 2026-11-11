@@ -723,6 +723,9 @@ func _refresh_made_of() -> void:
 		# too doubled the cost.
 		var led: Dictionary = _graph_view.call("element_ledger", scope) if _graph_view.has_method("element_ledger") else ElementLedger.compute(model, scope)
 		rows = ElementLedger.rows(led)
+		# What the site's structures hold (Phase 9), at the site level only.
+		if scope == "root" and _graph_view.has_method("built_stock"):
+			rows.append_array(BuiltStock.rows(_graph_view.call("built_stock")))
 	_render_rows(_made_of_vbox, rows, _made_of_state,
 		"Add tanks and machines to see the water and nutrients they hold")
 

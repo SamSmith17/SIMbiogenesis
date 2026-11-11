@@ -160,6 +160,20 @@ const COMPONENTS := {
 	"clay": {"elements": {"Si": 0.22, "Al": 0.17, "O": 0.53, "Fe": 0.03, "K": 0.02, "Ca": 0.01,
 		"Mg": 0.01, "H": 0.01}, "name": "clay", "est": true},
 	"steel": {"elements": {"Fe": 0.98, "C": 0.02}, "name": "steel", "est": true},
+	# --- building materials (Phase 9: what is stored in things) -------------
+	"aluminium": {"elements": {"Al": 1.0}, "name": "aluminium"},
+	"pc": {"formula": "C16H14O3", "name": "polycarbonate"},
+	"pmma": {"formula": "C5H8O2", "name": "acrylic (PMMA)"},
+	# Phenol-formaldehyde plywood glue, cured (C8H8O2 repeat unit). est
+	"pf_resin": {"formula": "C8H8O2", "name": "plywood glue", "est": true},
+	"silicon": {"formula": "Si", "name": "silicon"},
+	"copper": {"elements": {"X": 1.0}, "name": "copper (untracked)"},
+	# Soda-lime glass: 72 % SiO2, 14 % Na2O, 9 % CaO, 4 % MgO, 1 % Al2O3.
+	"glass": {"elements": {"Si": 0.337, "O": 0.461, "Na": 0.104, "Ca": 0.064, "Mg": 0.024,
+		"Al": 0.005, "X": 0.005}, "name": "soda-lime glass", "src": "soda-lime oxide shares"},
+	# Concrete, cured: aggregate (SiO2) 70 %, cement hydrates ~25 %, water 5 %. est
+	"concrete": {"elements": {"O": 0.50, "Si": 0.29, "Ca": 0.13, "Al": 0.02, "Fe": 0.015,
+		"H": 0.006, "C": 0.004, "Mg": 0.01, "X": 0.025}, "name": "concrete", "est": true},
 }
 
 ## waste: water or matter someone has used (greywater, urine, food scraps …):
@@ -256,10 +270,42 @@ const KINDS := {
 		"lignin": 0.02, "protein": 0.03, "carbohydrate": 0.025, "bio_ash": 0.02}, "rest": "H2O",
 		"family": "organic", "lhv_mj_kg": 1.45, "src": "est (compost feedstock ranges)", "est": true},
 	# Kiln-dried softwood lumber at 12 % moisture: a 2×4 is ~0.45 kg/ft.
-	# Composition-only until Phase 9 adds it as a kind.
+	# A kind since Phase 9: salvaged structures go into a lumber store.
 	"lumber": {"kg_per_unit": 1.0, "mix": {"cellulose": 0.37, "hemicellulose": 0.22, "lignin": 0.24,
 		"extractives": 0.03, "protein": 0.005, "bio_ash": 0.005}, "rest": "H2O", "family": "organic",
-		"lhv_mj_kg": 16.1, "internal": true, "src": "Phyllis2 softwood at 12 % MC, est", "est": true},
+		"lhv_mj_kg": 16.1, "src": "Phyllis2 softwood at 12 % MC, est", "est": true},
+	# --- what structures are made of (Phase 9; BuiltStock) ------------------
+	# Plywood: veneers + 8 % cured PF glue (typical exterior ply). est
+	"mat_plywood": {"kg_per_unit": 1.0, "kinds": {"lumber": 0.92}, "mix": {"pf_resin": 0.08},
+		"family": "organic", "lhv_mj_kg": 17.0, "internal": true, "src": "est (glue 6–10 %)", "est": true},
+	"mat_steel": {"kg_per_unit": 1.0, "mix": {"steel": 1.0}, "family": "metal", "internal": true, "src": "the material itself"},
+	"mat_aluminium": {"kg_per_unit": 1.0, "mix": {"aluminium": 1.0}, "family": "metal", "internal": true, "src": "the material itself"},
+	"mat_hdpe": {"kg_per_unit": 1.0, "mix": {"pe": 1.0}, "family": "plastic", "lhv_mj_kg": 43.0,
+		"internal": true, "src": "Engineering ToolBox"},
+	"mat_pp": {"kg_per_unit": 1.0, "mix": {"pp": 1.0}, "family": "plastic", "lhv_mj_kg": 43.0,
+		"internal": true, "src": "Engineering ToolBox"},
+	"mat_pvc": {"kg_per_unit": 1.0, "mix": {"pvc": 1.0}, "family": "plastic", "lhv_mj_kg": 18.0,
+		"internal": true, "src": "Engineering ToolBox"},
+	"mat_pc": {"kg_per_unit": 1.0, "mix": {"pc": 1.0}, "family": "plastic", "lhv_mj_kg": 29.0,
+		"internal": true, "src": "est (~31 MJ/kg HHV)", "est": true},
+	"mat_pmma": {"kg_per_unit": 1.0, "mix": {"pmma": 1.0}, "family": "plastic", "lhv_mj_kg": 25.0,
+		"internal": true, "src": "est (~26 MJ/kg HHV)", "est": true},
+	# Tarp / tent / shade fabric: polyester (PET) with a coating. est
+	"mat_fabric": {"kg_per_unit": 1.0, "mix": {"pet": 1.0}, "family": "plastic", "lhv_mj_kg": 22.0,
+		"internal": true, "src": "est (polyester)", "est": true},
+	"mat_glass": {"kg_per_unit": 1.0, "mix": {"glass": 1.0}, "family": "mineral", "internal": true, "src": "the material itself"},
+	"mat_concrete": {"kg_per_unit": 1.0, "mix": {"concrete": 1.0}, "family": "mineral", "internal": true, "est": true},
+	# A crystalline-silicon module by mass (IRENA/IEA-PVPS 2016 End-of-Life
+	# Management: glass ~76 %, Al frame ~10 %, polymers ~10 %, Si ~3 %, Cu ~1 %).
+	"mat_pv_module": {"kg_per_unit": 1.0, "mix": {"glass": 0.76, "aluminium": 0.10, "pe": 0.10,
+		"silicon": 0.03, "copper": 0.01}, "family": "mineral", "internal": true,
+		"src": "IRENA/IEA-PVPS 2016"},
+	# Salvaged metal: mostly steel, some aluminium. est
+	"scrap_metal": {"kg_per_unit": 1.0, "mix": {"steel": 0.85, "aluminium": 0.15}, "family": "metal",
+		"src": "est (structure salvage)", "est": true},
+	# Broken glass and concrete. est
+	"rubble": {"kg_per_unit": 1.0, "mix": {"glass": 0.5, "concrete": 0.5}, "family": "mineral",
+		"src": "est (structure salvage)", "est": true},
 	"biochar": {"kg_per_unit": 1.0, "mix": {"char": 0.95}, "rest": "H2O", "family": "carbon",
 		"lhv_mj_kg": 28.4, "src": "est (wood char ~30 MJ/kg dry)", "est": true},
 	# Finished compost, ~41 % moisture; dry: C ~25 %, N ~1.7 %, P ~0.3 %,

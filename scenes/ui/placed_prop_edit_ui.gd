@@ -91,6 +91,9 @@ var _sched_loaded_for := ""   # which burn time the date boxes were last filled 
 # footer
 var _del_btn: Button
 var _del_armed := false
+var _salv_btn: Button
+var _salv_armed := false
+var _made_lbl: Label
 
 
 func _ready() -> void:
@@ -259,6 +262,13 @@ func _build_ui() -> void:
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	foot.add_child(spacer)
+	_salv_btn = Button.new()
+	_salv_btn.text = "Salvage"
+	_salv_btn.name = "salvage"
+	_salv_btn.tooltip_text = "Take it down and put its material into stores on the graph (lumber, scrap metal, plastic, rubble) for a kiln or a shredder to use. Asks once."
+	UITheme.style_button(_salv_btn)
+	_salv_btn.pressed.connect(_on_salvage)
+	foot.add_child(_salv_btn)
 	_del_btn = Button.new()
 	_del_btn.text = "Delete"
 	_del_btn.tooltip_text = "Remove this prop from the site (asks once)"
@@ -914,6 +924,12 @@ func _rebuild_dynamic_sections() -> void:
 	_packed_lbl.add_theme_color_override("font_color", C_TEXT_S)
 	_packed_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_model_btns.add_child(_packed_lbl)
+	_made_lbl = Label.new()
+	_made_lbl.name = "made_of"
+	_made_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_made_lbl.add_theme_color_override("font_color", C_TEXT_S)
+	_made_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_model_btns.add_child(_made_lbl)
 	_refresh_packed_line()
 
 	if ModelCatalog.is_starshade_model(mid):
@@ -1067,6 +1083,7 @@ func _build_material_fix_row(mid: String) -> void:
 
 
 func _refresh_packed_line() -> void:
+	_refresh_made_of()
 	var packed := PlacedPropRuntime.packed_spec_for_record(_rec)
 	_packed_lbl.visible = not packed.is_empty()
 	if packed.is_empty():
@@ -2197,6 +2214,51 @@ func _on_duplicate() -> void:
 		_hint("Copied. This is the copy.")
 
 
+## What it is made of (resource composition plan Phase 9), and whether it
+## can be salvaged.
+func _refresh_made_of() -> void:
+	if _made_lbl == null:
+		return
+	var o := BuiltStock.of_record(_rec)
+	var can := bool(o.get("known", false)) and not bool(o.get("skip", false)) and str(_rec.get("type", "")) != "osm"
+	_made_lbl.visible = not bool(o.get("skip", false))
+	if bool(o.get("known", false)):
+		var emb := BuiltStock.embodied(o["materials"])
+		var c := float((emb["elements"] as Dictionary).get("C", 0.0))
+		_made_lbl.text = "Made of %s%s%s" % [BuiltStock.describe(o["materials"]),
+			"  (est.)" if bool(o.get("est", false)) else "",
+			(" · holds %s of carbon" % ElementLedger.fmt_kg(c)) if c > 0.05 else ""]
+	else:
+		_made_lbl.text = "What it is made of is not known."
+	if _salv_btn != null:
+		_salv_btn.visible = can
+
+
+func _on_salvage() -> void:
+	if _prop_id.is_empty():
+		return
+	if not _salv_armed:
+		_salv_armed = true
+		_salv_btn.text = "Confirm salvage?"
+		_salv_btn.add_theme_color_override("font_color", UITheme.C_WARN)
+		var o := BuiltStock.of_record(_rec)
+		_hint("Click again to take it down: %s go into stores on the graph." % BuiltStock.describe(o.get("materials", {})))
+		return
+	_salv_armed = false
+	var pid := _prop_id
+	var gv := ServiceLocator.graph()
+	if gv == null or not gv.has_method("salvage_prop"):
+		_hint("No graph on this map to salvage into.")
+		return
+	var res: Dictionary = gv.call("salvage_prop", pid)
+	if not bool(res.get("ok", false)):
+		_hint(str(res.get("text", "Could not salvage it.")))
+		_salv_btn.text = "Salvage"
+		_salv_btn.remove_theme_color_override("font_color")
+		return
+	close()
+
+
 func _on_delete() -> void:
 	if _loader == null or _prop_id.is_empty():
 		return
@@ -2215,6 +2277,10 @@ func _on_delete() -> void:
 
 func _disarm_delete() -> void:
 	_del_armed = false
+	_salv_armed = false
+	if _salv_btn != null:
+		_salv_btn.text = "Salvage"
+		_salv_btn.remove_theme_color_override("font_color")
 	if _del_btn != null:
 		_del_btn.text = "Remove OSM" if str(_rec.get("type", "")) == "osm" else "Delete"
 		_del_btn.remove_theme_color_override("font_color")

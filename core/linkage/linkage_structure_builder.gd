@@ -488,6 +488,7 @@ static func packed_spec_for(p: LinkageParams) -> Dictionary:
 		wood_in3 += float(sb["w"]) * float(sb["t"]) \
 			* (sb["p1"] as Vector3).distance_to(sb["p2"] as Vector3)
 	var mass := wood_in3 * in3_to_m3 * PackedSpec.WOOD_KG_M3
+	var wood_kg := mass
 	# Brackets: simplified U-channel steel volume (2 walls + base).
 	for br in frame.get("brackets", []):
 		mass += LinkageBom.bracket_mass_kg(
@@ -510,6 +511,8 @@ static func packed_spec_for(p: LinkageParams) -> Dictionary:
 	return PackedSpec.normalize({
 		"w_m": size_m.x, "d_m": size_m.y, "h_m": size_m.z,
 		"mass_kg": mass, "form": "folded", "source": "computed", "count": copies,
+		# What the bundle is made of, per unit (BuiltStock reads it).
+		"materials": {"lumber": wood_kg, "steel": maxf(mass - wood_kg, 0.0)},
 	})
 
 

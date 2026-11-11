@@ -47,7 +47,7 @@ const KIND_DOMAIN := {
 	"steam": FUEL, "woodgas": FUEL, "biogas": FUEL, "propane": FUEL, "thermal": FUEL,
 	"plastic_waste": MATERIALS, "plastic_shred": MATERIALS, "plastic_flake": MATERIALS,
 	"plastic_sheet": MATERIALS, "finished_part": MATERIALS, "mud": MATERIALS,
-	"packaging_waste": MATERIALS,
+	"packaging_waste": MATERIALS, "lumber": MATERIALS, "scrap_metal": MATERIALS, "rubble": MATERIALS,
 	"sunlight": AMBIENT, "wind": AMBIENT,
 }
 
