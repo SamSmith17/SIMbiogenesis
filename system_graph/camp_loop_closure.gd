@@ -218,104 +218,26 @@ static func apply(model, comp_id: String, label: String) -> String:
 ## Place every machine of a planner chain inside the camp, in flow order:
 ## each from the camp's tank of what it takes, else straight from the step
 ## before it that makes that kind; each into the camp's tank of what it
-## makes. Class steps (no machine yet) are skipped. Returns the new ids.
+## makes, each built to its step's size (ChainWiring.sized). Class steps (no
+## machine yet) are skipped. Returns the new ids.
 static func apply_plan(model, comp_id: String, plan: Dictionary) -> Array:
 	var labels: Array = []
 	for st in plan.get("steps", []):
 		if str((st as Dictionary).get("type", "")) == "preset":
-			labels.append(str(st["label"]))
+			labels.append({"label": str(st["label"]), "scale": float((st as Dictionary).get("scale", 1.0))})
 	return _place_chain(model, comp_id, labels)
 
 
 static func _place_chain(model, comp_id: String, labels: Array) -> Array:
-	var out: Array = []
 	if model == null or labels.is_empty():
-		return out
+		return []
 	var comp: Dictionary = model.get_item(comp_id)
 	var scope := str(comp.get("child_scope_id", ""))
 	if scope.is_empty():
-		return out
-	var tanks: Dictionary = {}
-	var stores: Dictionary = {}
+		return []
 	var max_x := 0.0
 	for it in model.get_items_in_scope(scope):
-		var d: Dictionary = it
-		max_x = maxf(max_x, float(d.get("x", 0.0)))
-		if str(d.get("type", "")) == "resource":
-			var ds: Dictionary = d.get("specs", {})
-			var k := _k(str(ds.get("resource_kind", "")))
-			# The camp's own stores (CampTemplates marks them camp_store) win
-			# over a tank the player added later.
-			if not tanks.has(k) or bool(ds.get("camp_store", false)) and not stores.has(k):
-				tanks[k] = str(d.get("id", ""))
-				if bool(ds.get("camp_store", false)):
-					stores[k] = true
-	# Place them all first, then wire, so a step can feed the next.
-	var placed: Array = []
-	for i in labels.size():
-		var preset := ComponentPresets.find_preset_by_label(str(labels[i]))
-		if preset.is_empty():
-			continue
-		var iid: String = model.generate_item_id()
-		var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
-		model.add_item({"id": iid, "type": str(preset.get("type", "processor")), "scope_id": scope,
-			"x": max_x + 240.0 * float(placed.size() + 1), "y": 0.0, "width": float(preset.get("width", 140.0)),
-			"height": float(preset.get("height", 130.0)), "specs": specs})
-		placed.append({"id": iid, "ins": _ports(str(preset.get("type", "")), specs, true),
-			"outs": _ports(str(preset.get("type", "")), specs, false)})
-		out.append(iid)
-	for n in placed.size():
-		var p: Dictionary = placed[n]
-		var iid2 := str(p["id"])
-		for ip in p["ins"]:
-			var k2 := str(ip[0])
-			if tanks.has(k2):
-				_wire(model, scope, str(tanks[k2]), "output", iid2, str(ip[1]), k2)
-				continue
-			var from := _maker_before(placed, n, k2)
-			if not from.is_empty():
-				_wire(model, scope, str(from[0]), str(from[1]), iid2, str(ip[1]), k2)
-		for op in p["outs"]:
-			var k3 := str(op[0])
-			if tanks.has(k3):
-				_wire(model, scope, iid2, str(op[1]), str(tanks[k3]), "input", k3)
-	return out
-
-
-## [[kind, handle]] of an item's inputs (`ins`) or outputs. A plant's ports
-## are fixed: water_in, nutrients_in, and the crop on biomass_out (food for a
-## food crop, its residue biomass on residue_out).
-static func _ports(type: String, specs: Dictionary, ins: bool) -> Array:
-	var out: Array = []
-	if type == "plant":
-		var food := float(specs.get("food_fraction", 0.0)) > 0.0
-		if ins:
-			out.append(["water", "water_in"])
-			out.append(["nutrients", "nutrients_in"])
-		else:
-			out.append(["food" if food else "biomass", "biomass_out"])
-			if food:
-				out.append(["biomass", "residue_out"])
-		return out
-	var list: Array = specs.get("inputs" if ins else "outputs", [])
-	for i in list.size():
-		out.append([_k(str((list[i] as Dictionary).get("kind", ""))), ("res_in_%d" if ins else "res_out_%d") % i])
-	return out
-
-
-static func _k(kind: String) -> String:
-	return CompositionCatalog.canonical(ResourceKinds.normalize_kind(kind))
-
-
-## [item id, handle] of the nearest earlier placed step that makes `kind`.
-static func _maker_before(placed: Array, n: int, kind: String) -> Array:
-	for m in range(n - 1, -1, -1):
-		for op in (placed[m] as Dictionary)["outs"]:
-			if str(op[0]) == kind:
-				return [str((placed[m] as Dictionary)["id"]), str(op[1])]
-	return []
-
-
-static func _wire(model, scope: String, src: String, sh: String, dst: String, dh: String, kind: String) -> void:
-	model.add_connection({"scope_id": scope, "source": src, "source_handle": sh,
-		"target": dst, "target_handle": dh, "polarity": "resource", "resource_type": kind})
+		max_x = maxf(max_x, float((it as Dictionary).get("x", 0.0)))
+	var chain := ChainWiring.plan(model, scope, labels, {"origin": Vector2(max_x + 240.0, 0.0),
+		"step": Vector2(240.0, 0.0)})
+	return ChainWiring.apply(model, scope, chain)

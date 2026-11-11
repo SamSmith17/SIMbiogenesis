@@ -60,8 +60,8 @@ func _test_synthetic() -> void:
 		_p("A to B", [["greywater", 1.0]], [["wash_water", 1.0]]),
 		_p("B to C", [["wash_water", 1.0]], [["rainwater", 1.0]]),
 		_p("C to D", [["rainwater", 1.0]], [["seawater", 1.0]]),
-		_p("D to E", [["seawater", 1.0]], [["brine", 1.0]]),
-		_p("E to F", [["brine", 1.0]], [["urine", 1.0]]),
+		_p("D to E", [["seawater", 1.0]], [["plastic_waste", 1.0]]),
+		_p("E to F", [["plastic_waste", 1.0]], [["urine", 1.0]]),
 		_p("F to G", [["urine", 1.0]], [["irrigation_water", 1.0]]),
 	]
 	var lib := LoopPlanner.build_library(presets, [], false)

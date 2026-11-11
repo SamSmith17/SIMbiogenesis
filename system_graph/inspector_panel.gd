@@ -808,6 +808,7 @@ func _build_composition_section(item: Dictionary) -> void:
 		if not note.is_empty():
 			_hint_label(note)
 		_separate_button(kind)
+		_close_loop_button(kind)
 	elif itype == "processor" or itype == "plant":
 		if itype == "processor" and (specs.get("inputs", []) as Array).is_empty() and (specs.get("outputs", []) as Array).is_empty():
 			return
@@ -846,6 +847,13 @@ func _build_composition_section(item: Dictionary) -> void:
 				_hint_label("Keeps %s on site (ash, sludge or the soil)." % ", ".join(kept.keys()))
 		if v == "unbalanced":
 			_hint_label("From its listed rates, with its air side closed. The listed outputs carry more or less of an element than its inputs: a rate or a make-up is off.")
+		# The loops it takes part in that are open where it stands (Phase 7).
+		var gv := ServiceLocator.graph()
+		if gv != null and gv.has_method("loop_closer") and not bool(item.get("is_ghost", false)):
+			var touching: Array = gv.call("loop_closer").call("loops_touching", str(item.get("id", "")))
+			for row in touching.slice(0, 3):
+				var ok := str((row as Dictionary)["open"]["kind"])
+				_close_loop_button(ok, "Close the %s loop" % GraphSuggestions.kind_word(ok), str(item.get("id", "")))
 	elif itype == "compound":
 		var scope := str(item.get("child_scope_id", ""))
 		if scope.is_empty() or _model == null:
@@ -940,6 +948,7 @@ func _rebuild_for_connection(conn: Dictionary) -> void:
 					_readonly_field(str(ElementLedger.ELEMENT_NAMES.get(e, e)), ElementLedger.fmt_kg_h(ekg))
 		if CompositionCatalog.is_material(rkind) and not CompositionCatalog.row(rkind).is_empty():
 			_separate_button(rkind)
+			_close_loop_button(rkind)
 		_section("Conduit Info")
 		_num_field("Diameter (mm)",    float(conn.get("conduit_diameter",   25.0)), "conduit_diameter",       1, 1000, 1.0)
 		_length_field(conn)
@@ -1490,6 +1499,19 @@ func _build_pv_window_section(item: Dictionary) -> void:
 
 
 ## "What can separate this?" (resource composition Phase 5).
+## "Close this loop": the loop closer's ghosts for that kind (Phase 7).
+func _close_loop_button(kind: String, text: String = "Close this loop", from_item: String = "") -> void:
+	var b := Button.new()
+	b.text = text
+	b.name = "close_loop_" + kind
+	b.tooltip_text = "Show machines that would close the %s loop here, as ghosts on the graph (Tab accepts, Esc dismisses)." % GraphSuggestions.kind_word(kind)
+	b.pressed.connect(func() -> void:
+		var gv := ServiceLocator.graph()
+		if gv != null and gv.has_method("close_loop_for_kind"):
+			gv.call("close_loop_for_kind", kind, from_item))
+	_form_vbox.add_child(b)
+
+
 func _separate_button(kind: String) -> void:
 	var b := Button.new()
 	b.text = "What can separate this?"

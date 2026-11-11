@@ -65,6 +65,7 @@ const KINDS: Array = [
 	["climelapse_keys", "json"],
 	["experiments", "json"],
 	["deploy_schedule", "json"],
+	["suggestions", "json"],
 ]
 
 static var _world_id: String = ""

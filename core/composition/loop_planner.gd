@@ -39,11 +39,14 @@ const BEAM := 32
 const MAX_PLANS := 3
 ## Kinds that may safely end a chain whether or not the scope uses them.
 const BENIGN := ["soil", "compost", "biochar", "irrigation_water", "nutrients", "air"]
+## Kinds whose ordinary end is a store, not a machine: a plan may end on one
+## and the store is added with it (ChainWiring) when the scope has none.
+const TERMINAL := {"brine": "Salt Pan (brine)"}
 ## Clean water kinds that answer a need for water.
 const WATER_KINDS := ["water", "distilled_water", "rainwater", "irrigation_water"]
 const W_STEP := 1.0
 const W_ENERGY := 2.0      # per kWh per kg of the open flow (boiling greywater must lose to filtering it)
-const W_PRICE := 0.0002    # per $
+const W_PRICE := 0.0002    # per $ per kg/h of the open flow (capital per throughput)
 const W_LEFT := 3.0        # per share left open
 const W_NEED := 2.0        # per share of co-inputs the scope lacks
 const W_CLASS := 1.5       # a step with no machine yet
@@ -382,7 +385,7 @@ static func _expand(lib: Dictionary, st: Dictionary, side: String, target: Strin
 		var n := {"open": open.duplicate(), "steps": (st["steps"] as Array).duplicate(),
 			"used_edges": (st["used_edges"] as Dictionary).duplicate(), "left_closed": float(st["left_closed"]),
 			"needs": (st["needs"] as Dictionary).duplicate(), "kwh": float(st["kwh"]) + float(e["kwh"]) * scale,
-			"cost": float(st["cost"]) + float(e["cost"]), "classes": int(st["classes"]) + (1 if str(e["type"]) == "class" else 0),
+			"cost": float(st["cost"]) + float(e["cost"]) * scale, "classes": int(st["classes"]) + (1 if str(e["type"]) == "class" else 0),
 			"unbalanced": int(st["unbalanced"]) + (0 if bool(e["balanced"]) else 1)}
 		n["used_edges"][str(e["id"])] = true
 		(n["open"] as Dictionary).erase(kind)
@@ -437,7 +440,7 @@ static func _need(n: Dictionary, kind: String, kg: float, ctx: Dictionary, side:
 static func _is_goal(kind: String, target: String, ctx: Dictionary) -> bool:
 	if kind == target:
 		return false
-	if BENIGN.has(kind):
+	if BENIGN.has(kind) or TERMINAL.has(kind):
 		return true
 	var used: Dictionary = ctx.get("used", {})
 	if used.has(kind):
@@ -454,7 +457,7 @@ static func _cost(s: Dictionary, f0: float) -> float:
 	for k2 in (s["needs"] as Dictionary).keys():
 		need += float(s["needs"][k2])
 	return W_STEP * float((s["steps"] as Array).size()) + W_ENERGY * float(s["kwh"]) / f0 \
-		+ W_PRICE * float(s["cost"]) + W_LEFT * clampf(left / f0, 0.0, 2.0) \
+		+ W_PRICE * float(s["cost"]) / maxf(f0, 1.0) + W_LEFT * clampf(left / f0, 0.0, 2.0) \
 		+ W_NEED * clampf(need / f0, 0.0, 2.0) + W_CLASS * float(s["classes"]) \
 		+ W_UNBALANCED * float(s["unbalanced"]) + (W_INCOMPLETE if left > 1e-9 or need > 1e-9 else 0.0)
 

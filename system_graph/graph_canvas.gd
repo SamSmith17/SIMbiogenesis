@@ -522,6 +522,7 @@ signal camp_watch_pressed(item_id: String)
 ## a card's twin badge was clicked; a dot on the freeform site inset.
 signal item_hovered(item_id: String)
 signal twin_badge_pressed(item_id: String)
+signal open_loops_badge_pressed(item_id: String)
 signal inset_system_pressed(item_id: String)
 var _camp_watch_rects: Dictionary = {}
 ## SoI live preview camera — Shift+drag orbit, Shift+wheel zoom.
@@ -2439,6 +2440,173 @@ var element_flux_max := 0.0
 ## Air stubs that carry words (the biggest by amount).
 const ELEMENT_AIR_LABELS := 6
 
+# --- The loop closer's ghosts (resource composition plan Phase 7) --------------
+
+## The suggestion on show (GraphSuggestions.build), {} = none. Its cards are
+## NOT in the model: drawn here faded with dashed wires, never hit-tested, so
+## clicks go through to what is under them. Freeform only, in its own scope.
+var suggestion: Dictionary = {}
+## {compound id: open loops inside it} for the badge under the twin badge.
+var open_loop_badges: Dictionary = {}
+var _open_loop_badge_rects: Dictionary = {}
+const SUGG_COLOR := Color(0.36, 0.86, 0.80)
+
+
+func set_suggestion(s: Dictionary) -> void:
+	suggestion = s
+	queue_redraw()
+
+
+func suggestion_shown() -> bool:
+	return not suggestion.is_empty() and view_mode == GraphSiteLayout.VIEW_FREEFORM \
+		and str(suggestion.get("scope", "")) == active_scope_id and not _v3_on()
+
+
+## The ghost cards' screen rect (canvas-local), Rect2() when none is drawn.
+func suggestion_screen_rect() -> Rect2:
+	if not suggestion_shown():
+		return Rect2()
+	var bb: Rect2 = suggestion.get("bbox", Rect2())
+	return Rect2(_graph_to_screen(bb.position, size * 0.5), bb.size * _zoom)
+
+
+## Frame the ghost and what it joins, leaving `reserve_right` px free on the
+## right for the chip.
+func frame_suggestion(reserve_right: float = 0.0) -> void:
+	var bb: Rect2 = suggestion.get("bbox", Rect2())
+	if bb.size == Vector2.ZERO:
+		return
+	var anchor_id := str((suggestion.get("anchor", {}) as Dictionary).get("id", ""))
+	var a_item := model.get_item(anchor_id) if model != null and not anchor_id.is_empty() else {}
+	if not a_item.is_empty():
+		bb = bb.merge(Rect2(float(a_item.get("x", 0.0)), float(a_item.get("y", 0.0)),
+			float(a_item.get("width", 120.0)), float(a_item.get("height", 90.0))))
+	var free_w := maxf(size.x - reserve_right, size.x * 0.35)
+	var avail := Vector2(free_w * 0.8, size.y * 0.7)
+	var z := clampf(minf(avail.x / maxf(bb.size.x, 1.0), avail.y / maxf(bb.size.y, 1.0)), ZOOM_MIN, 1.2)
+	# The ghost's middle at the middle of the free part, not of the canvas.
+	var shift := Vector2((free_w - size.x) * 0.5, 0.0)
+	_animate_view(z, -(bb.position + bb.size * 0.5) * z + shift)
+
+
+func _sugg_rect(it: Dictionary, c: Vector2) -> Rect2:
+	return Rect2(_graph_to_screen(Vector2(float(it["x"]), float(it["y"])), c),
+		Vector2(float(it["width"]), float(it["height"])) * _zoom)
+
+
+## {pos, tangent} of a ghost card's port, or a real item's handle.
+func _sugg_port(id: String, handle: String, is_input: bool, ghosts: Dictionary, c: Vector2) -> Dictionary:
+	if ghosts.has(id):
+		var g: Dictionary = ghosts[id]
+		var r: Rect2 = g["rect"]
+		var list: Array = ChainWiring.ports(str(g["item"]["type"]), g["item"]["specs"], is_input)
+		var i := 0
+		for k in list.size():
+			if str(list[k][1]) == handle:
+				i = k
+		var x := r.position.x + r.size.x * float(i + 1) / float(list.size() + 1)
+		return {"pos": Vector2(x, r.position.y if is_input else r.end.y),
+			"tangent": Vector2(0.0, -1.0 if is_input else 1.0)}
+	var info := _get_handle_info(id, handle, c)
+	if not info.is_empty():
+		return {"pos": info["pos"], "tangent": (info.get("tangent", Vector2(0.0, 1.0)) as Vector2).normalized()}
+	var item := model.get_item(id) if model != null else {}
+	if item.is_empty():
+		return {}
+	var tl := _item_screen_tl(item, c)
+	var sz := _item_screen_size(item)
+	return {"pos": tl + Vector2(sz.x * 0.5, 0.0 if is_input else sz.y),
+		"tangent": Vector2(0.0, -1.0 if is_input else 1.0)}
+
+
+func _draw_suggestion() -> void:
+	if not suggestion_shown():
+		return
+	var c := size * 0.5
+	var ghosts: Dictionary = {}
+	for it in suggestion.get("items", []):
+		var d: Dictionary = it
+		ghosts[str(d["id"])] = {"item": d, "rect": _sugg_rect(d, c)}
+	var lw := clampf(2.4 * _zoom, 1.4, 3.2)
+	for cn in suggestion.get("conns", []):
+		var cd: Dictionary = cn
+		var a := _sugg_port(str(cd["source"]), str(cd["source_handle"]), false, ghosts, c)
+		var b := _sugg_port(str(cd["target"]), str(cd["target_handle"]), true, ghosts, c)
+		if a.is_empty() or b.is_empty():
+			continue
+		var pa: Vector2 = a["pos"]
+		var pb: Vector2 = b["pos"]
+		var bend := clampf(pa.distance_to(pb) * 0.4, 24.0 * _zoom, 160.0 * _zoom)
+		var col := ResourceKinds.wire_color(str(cd["resource_type"]))
+		col.a = 0.85
+		_draw_bezier_stroke_dashed(pa, pa + (a["tangent"] as Vector2) * bend, pb + (b["tangent"] as Vector2) * bend,
+			pb, 28, col, lw, 9.0, 6.0, -_flow_phase * 14.0)
+	var fnt := UITheme.font("medium")
+	for gid in ghosts.keys():
+		var g: Dictionary = ghosts[gid]
+		var r: Rect2 = g["rect"]
+		var d2: Dictionary = g["item"]
+		var ty := str(d2["type"])
+		var gap := bool(d2.get("gap", false))
+		var spec: Dictionary = {}
+		if not gap and GraphCardSpecs.handles(ty):
+			spec = GraphCardSpecs.for_item(d2, {})
+		if spec.is_empty():
+			spec = {"accent": GraphTheme.accent(ty), "icon": GraphTheme.icon(ty),
+				"title": str(d2.get("label", "")), "chip": ""}
+		spec["title"] = str(d2.get("label", ""))
+		spec["footer"] = "no machine yet" if gap else "suggested"
+		spec["dim"] = true
+		GraphCard.draw(self, r, _zoom, spec)
+		var radius := clampf(9.0 * _zoom, 4.0, 14.0)
+		GraphFastDraw.rrect(self, r, radius, Color(0.03, 0.05, 0.08, 0.42))
+		_draw_dashed_rect(r, Color(SUGG_COLOR if not gap else UITheme.C_WARN, 0.9), clampf(1.6 * _zoom, 1.2, 2.2))
+		for is_in in [true, false]:
+			var list: Array = ChainWiring.ports(ty, d2["specs"], is_in)
+			for k in list.size():
+				var x := r.position.x + r.size.x * float(k + 1) / float(list.size() + 1)
+				var p := Vector2(x, r.position.y if is_in else r.end.y)
+				GraphFastDraw.disc(self, p, clampf(4.0 * _zoom, 2.5, 5.0), Color(ResourceKinds.wire_color(str(list[k][0])), 0.9))
+		if gap and r.size.x > 70.0:
+			draw_string(fnt, r.position + Vector2(8.0, r.size.y - 8.0), "a gap to design",
+				HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 16.0, UITheme.FONT_XS, UITheme.C_WARN)
+
+
+func _draw_dashed_rect(r: Rect2, col: Color, w: float) -> void:
+	var pts := [r.position, Vector2(r.end.x, r.position.y), r.end, Vector2(r.position.x, r.end.y), r.position]
+	for i in 4:
+		var a: Vector2 = pts[i]
+		var b: Vector2 = pts[i + 1]
+		var L := a.distance_to(b)
+		var t := 0.0
+		while t < L:
+			var t2 := minf(t + 8.0, L)
+			draw_line(a.lerp(b, t / L), a.lerp(b, t2 / L), col, w)
+			t += 13.0
+
+
+## The open-loop badge (Phase 7's only passive cue): a count under the twin
+## badge of a group card whose inside has open loops. A click opens them.
+func _draw_open_loop_badge(item: Dictionary) -> void:
+	if view_mode != GraphSiteLayout.VIEW_FREEFORM:
+		return
+	var iid := str(item.get("id", ""))
+	var n := int(open_loop_badges.get(iid, 0))
+	if n <= 0:
+		return
+	var sz := _item_screen_size(item)
+	if sz.x < 120.0:
+		return
+	var tl := _item_screen_tl(item, size * 0.5)
+	var r := Rect2(Vector2(tl.x + sz.x + 3.0, tl.y + 28.0), Vector2(20.0, 16.0))
+	GraphFastDraw.rrect(self, r, 6.0, Color(0.04, 0.06, 0.10, 0.94))
+	draw_rect(r, Color(UITheme.C_WARN, 0.8), false, 1.0)
+	draw_string(UITheme.font("semibold"), r.position + Vector2(0.0, 12.5), str(mini(n, 9)),
+		HORIZONTAL_ALIGNMENT_CENTER, r.size.x, UITheme.FONT_XS, UITheme.C_WARN)
+	_open_loop_badge_rects[iid] = r
+
+
+
 
 func set_element_lens(id: String, air: Dictionary, flux_max: float) -> void:
 	element_lens = id
@@ -2786,6 +2954,11 @@ func _on_lmb_press(screen_pos: Vector2) -> void:
 		if (_twin_badge_rects[bid] as Rect2).grow(3.0).has_point(screen_pos):
 			_consume_press()
 			twin_badge_pressed.emit(str(bid))
+			return
+	for lid in _open_loop_badge_rects:
+		if (_open_loop_badge_rects[lid] as Rect2).grow(3.0).has_point(screen_pos):
+			_consume_press()
+			open_loops_badge_pressed.emit(str(lid))
 			return
 	if _inset_rect.has_area() and _inset_rect.has_point(screen_pos):
 		var best := ""
@@ -7991,6 +8164,7 @@ func _draw() -> void:
 	_controller_reset_rects.clear()
 	_camp_watch_rects.clear()
 	_twin_badge_rects.clear()
+	_open_loop_badge_rects.clear()
 	_inset_rect = Rect2()
 	_inset_dots.clear()
 	_poi_heads.clear()

@@ -81,6 +81,11 @@ func has_blocking_modal() -> bool:
 	return not _modal_stack.is_empty()
 
 
+## The modal on top ("" = none).
+func top_modal() -> String:
+	return _modal_stack.back() if not _modal_stack.is_empty() else ""
+
+
 func should_capture_look() -> bool:
 	return not _paused and not has_blocking_modal() and not has_tool_overlay()
 

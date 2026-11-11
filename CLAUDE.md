@@ -1854,6 +1854,19 @@ Godot.exe.exe --headless --path . --script core/composition/loop_planner_selftes
 # with festival camps a camp's first chain placed and removed:
 tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/loop_planner_check.gd -Label loop_planner -Timeout 900
 tools\harness.ps1 -World walton -RunScript res://tools/checks/loop_planner_check.gd -Label loop_planner -Timeout 900
+# The loop closer's ghosts (offline — Phase 7): GraphSuggestions' anchor (the
+# machine asked from, else the kind's tank, else a maker), the ghost wired
+# from it and into the scope's tanks, sized to the stream, clear of real
+# cards, a salt pan added for brine, placeholders for steps no machine
+# does (never placed), the chip text, ChainWiring.apply, dismissals on a
+# TEMP path. EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script system_graph/graph_suggestions_selftest.gd
+# The same with REAL input (sandbox): nothing until asked; a toilet block's
+# "Close the urine loop" shows a ghost on its own output; Tab accepts as
+# ONE undo step, Ctrl+Z takes it back; Dismiss is saved per world and the
+# next ask shows another plan; Test a week runs A vs B and hands the world
+# back; Close loops…; a group's open-loop badge; UiAudit (run at 720 too):
+tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/loop_closer_check.gd -Label loop_closer -Timeout 1200
 # Process recipes + chore ledger + workflow runner (offline — normalize/catalog,
 # legacy batch migration, scrub-safe progress, hybrid chore confirm, part credits,
 # workflow step advance; run --import first so class_names register):

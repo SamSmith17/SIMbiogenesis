@@ -180,6 +180,7 @@ func _draw_v2_all() -> void:
 	_draw_site_inset()
 	_draw_inside_cue()
 	_draw_element_air()
+	_draw_suggestion()
 	if view_mode == GraphSiteLayout.VIEW_GLOBE or _pins_mode_active():
 		return
 	# Reuse the per-draw visible cache (still populated by super._draw) for the
@@ -356,6 +357,7 @@ func _render_item(item: Dictionary) -> void:
 			_render_card_v2(item)
 			_draw_overlay_outline(item)
 			_draw_twin_badge(item)
+			_draw_open_loop_badge(item)
 			return
 	# Full-bleed icon/model preview (skip frame + title); keep ports + selection.
 	var specs_early: Dictionary = item.get("specs", {}) as Dictionary

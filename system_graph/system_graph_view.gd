@@ -113,6 +113,7 @@ var _domain_unwired := true
 const SHOW_LENS_OFF := 440
 const SHOW_LENS_BASE := 441   # + index into ElementLens.LENSES
 const SHOW_WHERE := 452
+const SHOW_CLOSE_LOOPS := 453
 var _element_lens := ""
 ## What moved, element by element, over sim time (the Sankey's windows and
 ## the water-recovery track), recorded once a second graph open or not.
@@ -1992,6 +1993,8 @@ func _connect_canvas_signals(gc: Node) -> void:
 	if gc.has_signal("twin_badge_pressed"):
 		if not gc.is_connected("twin_badge_pressed", _on_twin_badge_pressed):
 			gc.connect("twin_badge_pressed", _on_twin_badge_pressed)
+	if gc.has_signal("open_loops_badge_pressed"):
+		loop_closer().call("setup", self)
 	if gc.has_signal("inset_system_pressed"):
 		if not gc.is_connected("inset_system_pressed", _on_inset_system_pressed):
 			gc.connect("inset_system_pressed", _on_inset_system_pressed)
@@ -2945,6 +2948,9 @@ func _build_topbar() -> Control:
 	showp.add_item("Where it goes…", SHOW_WHERE)
 	showp.set_item_tooltip(showp.get_item_index(SHOW_WHERE),
 		"Follow one element through the site: where it comes from, what changes it, where it ends up.")
+	showp.add_item("Close loops…", SHOW_CLOSE_LOOPS)
+	showp.set_item_tooltip(showp.get_item_index(SHOW_CLOSE_LOOPS),
+		"What is left over here or brought in, and the machines that would close it: pick one to see it on the graph.")
 	showp.id_pressed.connect(_on_show_menu_id)
 	display_row.add_child(_show_menu)
 	_sync_show_menu()
@@ -15499,6 +15505,16 @@ func _input(event: InputEvent) -> void:
 					set_connect_tool(not _connect_tool_on)
 					get_viewport().set_input_as_handled()
 					return
+				# The loop closer's ghost: Tab accepts it, Esc dismisses it.
+				if visible and _loop_closer != null and bool(_loop_closer.call("active")) \
+						and CursorController.top_modal() in ["", "system_graph"] \
+						and (ke.keycode == KEY_TAB or ke.keycode == KEY_ESCAPE) and not ke.ctrl_pressed:
+					if ke.keycode == KEY_TAB:
+						_loop_closer.call("accept")
+					else:
+						_loop_closer.call("dismiss")
+					get_viewport().set_input_as_handled()
+					return
 				if visible and ke.keycode == KEY_DELETE:
 					_delete_selected()
 					get_viewport().set_input_as_handled()
@@ -22491,6 +22507,9 @@ func get_domain_filter() -> Dictionary:
 
 
 func _on_show_menu_id(id: int) -> void:
+	if id == SHOW_CLOSE_LOOPS:
+		open_close_loops()
+		return
 	if id == SHOW_WHERE:
 		open_element_sankey(_element_lens if not _element_lens.is_empty() else "N")
 		return
@@ -22645,6 +22664,35 @@ func composition_track_bins(channel: String, w: float, i0: int, n: int) -> Dicti
 			return NAN
 		return tl.level_at(t)
 	return TimelineCompositionChannels.stock_bins(terms, level_of, w, i0, n)
+
+
+## The loop closer (resource composition plan Phase 7): ghosts of a plan
+## that closes an open loop, shown only when asked.
+var _loop_closer: Node = null
+
+
+func loop_closer() -> Node:
+	if _loop_closer == null or not is_instance_valid(_loop_closer):
+		var scr: Script = load("res://system_graph/loop_closer_controller.gd")
+		_loop_closer = scr.new()
+		_loop_closer.name = "LoopCloser"
+		add_child(_loop_closer)
+		_loop_closer.call("setup", self)
+	return _loop_closer
+
+
+## Show ▾ → Close loops…: every open loop in the system the player is in.
+func open_close_loops(scope: String = "") -> void:
+	if not visible:
+		open_graph_view()
+	loop_closer().call("open_list", scope)
+
+
+## "Close this loop" (inspector: a tank, a wire, a machine): the first plan
+## for that kind as ghosts on the graph, joined to `from_item` (the machine
+## asked from) when given. false = nothing open for it here.
+func close_loop_for_kind(kind: String, from_item: String = "") -> bool:
+	return bool(loop_closer().call("close_loop_for_kind", kind, "", from_item))
 
 
 ## "What can separate this?" for a kind (inspector: a tank, a wire).
