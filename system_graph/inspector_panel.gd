@@ -807,6 +807,7 @@ func _build_composition_section(item: Dictionary) -> void:
 			note += " (an estimate)" if not note.is_empty() else "An estimated make-up"
 		if not note.is_empty():
 			_hint_label(note)
+		_separate_button(kind)
 	elif itype == "processor" or itype == "plant":
 		if itype == "processor" and (specs.get("inputs", []) as Array).is_empty() and (specs.get("outputs", []) as Array).is_empty():
 			return
@@ -937,6 +938,8 @@ func _rebuild_for_connection(conn: Dictionary) -> void:
 				var ekg := float((emb["elements"] as Dictionary).get(e, 0.0))
 				if ekg >= 1e-6:
 					_readonly_field(str(ElementLedger.ELEMENT_NAMES.get(e, e)), ElementLedger.fmt_kg_h(ekg))
+		if CompositionCatalog.is_material(rkind) and not CompositionCatalog.row(rkind).is_empty():
+			_separate_button(rkind)
 		_section("Conduit Info")
 		_num_field("Diameter (mm)",    float(conn.get("conduit_diameter",   25.0)), "conduit_diameter",       1, 1000, 1.0)
 		_length_field(conn)
@@ -1485,6 +1488,17 @@ func _build_pv_window_section(item: Dictionary) -> void:
 		for msg in rep.get("issues", []) as Array:
 			_hint_label("⚠ " + str(msg))
 
+
+## "What can separate this?" (resource composition Phase 5).
+func _separate_button(kind: String) -> void:
+	var b := Button.new()
+	b.text = "What can separate this?"
+	b.tooltip_text = "The machines and kinds of process that pull water, nitrogen, phosphorus, potassium or carbon out of %s." % ResourceKinds.display_name(kind).to_lower()
+	b.pressed.connect(func() -> void:
+		var gv := ServiceLocator.graph()
+		if gv != null and gv.has_method("open_separate"):
+			gv.call("open_separate", kind))
+	_form_vbox.add_child(b)
 
 func _hint_label(text: String) -> void:
 	var hint := Label.new()

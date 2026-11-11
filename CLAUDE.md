@@ -1828,6 +1828,16 @@ Godot.exe.exe --headless --path . --script core/composition/element_cycles_selft
 # the stock + recovery tracks answer, Site Plan colours the 3D runs, Off
 # clears everything; shots:
 tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/element_lens_check.gd -Label element_lens -Timeout 900
+# What can separate this? (offline — Phase 5): UnitOps' class table (every
+# preset tag resolves, every class sourced, floors for distillation and RO),
+# ProcessCapabilities' transfers derived from a preset's own lists (a still
+# on seawater), the cached library index, separate() on urine / food scraps
+# (a class answers where no machine does), deterministic. EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script core/composition/process_capabilities_selftest.gd
+# The same on a real graph (sandbox, REAL clicks): the inspector's "What can
+# separate this?" on the urine store, the window's machines and classes,
+# Place adding Urine Nutrient Recovery; seawater and food scraps:
+tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/separate_check.gd -Label separate -Timeout 900
 # Process recipes + chore ledger + workflow runner (offline — normalize/catalog,
 # legacy batch migration, scrub-safe progress, hybrid chore confirm, part credits,
 # workflow step advance; run --import first so class_names register):

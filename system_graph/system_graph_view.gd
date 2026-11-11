@@ -22647,6 +22647,33 @@ func composition_track_bins(channel: String, w: float, i0: int, n: int) -> Dicti
 	return TimelineCompositionChannels.stock_bins(terms, level_of, w, i0, n)
 
 
+## "What can separate this?" for a kind (inspector: a tank, a wire).
+func open_separate(kind: String) -> void:
+	var scr: Script = load("res://scenes/ui/separate_modal.gd")
+	if scr == null:
+		return
+	var m: Node = scr.new()
+	get_tree().root.add_child(m)
+	m.call("open_for", self, kind)
+
+
+## The library's own placement for a preset found by "What can separate
+## this?": dropped on the canvas centre like a library click.
+func place_preset_by_label(label: String) -> bool:
+	var p := ComponentPresets.find_preset_by_label(label)
+	if p.is_empty():
+		for cid in ProcessCapabilities.LIBRARY_CATEGORIES:
+			for q in ComponentPresets.presets_for_category(cid):
+				if str((q as Dictionary).get("label", "")) == label:
+					p = (q as Dictionary).duplicate(true)
+	if p.is_empty():
+		return false
+	if not visible:
+		open_graph_view()
+	_spawn_at_canvas_center(p)
+	return true
+
+
 ## Show ▾ → Where it goes…: the cycle Sankey over the site (or the system
 ## the player is in).
 func open_element_sankey(lens: String = "N") -> void:
