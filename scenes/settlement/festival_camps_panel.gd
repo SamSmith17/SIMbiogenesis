@@ -465,19 +465,21 @@ func _update_card(d: Dictionary) -> void:
 	var s0: Dictionary = sugg[0]
 	var lbl := _cell(str(s0["text"]) + ":", UITheme.C_WARN)
 	fix.add_child(lbl)
-	if (s0["presets"] as Array).is_empty():
+	var opts := CampLoopClosure.options(s0)
+	if opts.is_empty():
 		fix.add_child(_cell("nothing in the library makes this yet", UITheme.C_TEXT_S))
-	for p in (s0["presets"] as Array):
+	for o in opts:
+		var od: Dictionary = o
 		var b := Button.new()
-		b.text = "+ " + str(p)
-		b.tooltip_text = "Add a %s inside this camp, wired to its own tanks" % str(p)
+		b.text = "+ " + str(od["text"])
+		b.tooltip_text = ("Add %s inside this camp, each wired to the next and to the camp's own tanks"
+			if (od["labels"] as Array).size() > 1 else "Add a %s inside this camp, wired to its own tanks") % str(od["text"])
 		UITheme.style_button(b)
 		var cid := str(d["id"])
-		var label := str(p)
 		b.pressed.connect(func() -> void:
 			var sgv2 := ServiceLocator.graph()
 			var m2: Variant = sgv2.get("model") if sgv2 != null else null
-			if m2 != null and not CampLoopClosure.apply(m2, cid, label).is_empty():
+			if m2 != null and not CampLoopClosure.apply_option(m2, cid, od).is_empty():
 				c["fix_sig"] = ""
 				_refresh())
 		fix.add_child(b)

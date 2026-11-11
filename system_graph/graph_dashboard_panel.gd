@@ -1513,19 +1513,19 @@ func _refresh_system_card(r: Dictionary) -> void:
 		var ideas: Array = CampLoopClosure.suggest(_graph_view.get("model"), str(r.get("id", "")))
 		if not ideas.is_empty():
 			var idea: Dictionary = ideas[0]
-			var presets: Array = idea.get("presets", [])
-			if not presets.is_empty():
+			var opts: Array = CampLoopClosure.options(idea, 1)
+			if not opts.is_empty():
+				var opt: Dictionary = opts[0]
 				var add_btn := Button.new()
-				add_btn.text = "Add %s" % str(presets[0])
+				add_btn.text = "Add %s" % str(opt["text"])
 				add_btn.focus_mode = Control.FOCUS_NONE
 				add_btn.tooltip_text = str(idea.get("text", ""))
 				var cid := str(r.get("id", ""))
-				var label := str(presets[0])
 				add_btn.pressed.connect(func() -> void:
 					if _graph_view == null:
 						return
-					var made := CampLoopClosure.apply(_graph_view.get("model"), cid, label)
-					if str(made).is_empty():
+					var made: Array = CampLoopClosure.apply_option(_graph_view.get("model"), cid, opt)
+					if made.is_empty():
 						return
 					add_btn.disabled = true
 					if _graph_view.has_method("_push_history"):

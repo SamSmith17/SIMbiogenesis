@@ -1838,6 +1838,22 @@ Godot.exe.exe --headless --path . --script core/composition/process_capabilities
 # separate this?" on the urine store, the window's machines and classes,
 # Place adding Urine Nutrient Recovery; seawater and food scraps:
 tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/separate_check.gd -Label separate -Timeout 900
+# The loop planner (offline — Phase 6): LoopPlanner's AND-OR search on a
+# synthetic library (blackwater → digester → filter, the biogas burned; an
+# AND co-input the scope lacks becomes a need; the depth cap; partial
+# plans; no plan for steel; deterministic; 200 presets under 50 ms; a
+# source plan) and on the game's own (urine via Urine Nutrient Recovery,
+# a class for food scraps, a machine before a class, never a delivery),
+# find_open on a scope (rate-0 habitat inputs count as eaten).
+# EXPECTED_CHECKS. CampLoopClosure's planner-backed suggest + apply_plan
+# are in camp_flow_meter_selftest; tools/diag/camp_plan_probe.gd prints
+# what a fresh camp is offered:
+Godot.exe.exe --headless --path . --script core/composition/loop_planner_selftest.gd
+# The same on a real graph (sandbox): every open loop with its plans and
+# the time it took, no delivery in a plan, two runs agree, and on a world
+# with festival camps a camp's first chain placed and removed:
+tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/loop_planner_check.gd -Label loop_planner -Timeout 900
+tools\harness.ps1 -World walton -RunScript res://tools/checks/loop_planner_check.gd -Label loop_planner -Timeout 900
 # Process recipes + chore ledger + workflow runner (offline — normalize/catalog,
 # legacy batch migration, scrub-safe progress, hybrid chore confirm, part credits,
 # workflow step advance; run --import first so class_names register):

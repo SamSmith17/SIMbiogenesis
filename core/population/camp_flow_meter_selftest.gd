@@ -10,7 +10,7 @@ extends SceneTree
 ## greywater loop closes). Offline. Carries EXPECTED_CHECKS; --import first.
 ##   godot --headless --path . --script core/population/camp_flow_meter_selftest.gd
 
-const EXPECTED_CHECKS := 22
+const EXPECTED_CHECKS := 26
 const GraphModelScript := preload("res://system_graph/data/graph_model.gd")
 
 var _failures := 0
@@ -20,6 +20,7 @@ var _checks := 0
 func _init() -> void:
 	_test_meter()
 	_test_closure()
+	_test_planned_chain()
 	if _checks != EXPECTED_CHECKS:
 		_failures += 1
 		print("  FAIL: ran %d checks, expected %d (a test function aborted?)" % [_checks, EXPECTED_CHECKS])
@@ -141,3 +142,40 @@ func _test_closure() -> void:
 		if str((h as Dictionary).get("id", "")) == "biomass_out" and str((h as Dictionary).get("resource_kind", "")) == "food":
 			food_port = true
 	_check("closure: the bed's output port carries food", food_port)
+
+
+## suggest() asks the loop planner first; apply_plan places a whole chain,
+## a step that makes a kind the camp has no tank for wired straight into the
+## step that takes it.
+func _test_planned_chain() -> void:
+	var model = GraphModelScript.new()
+	var cid := _stamp(model, 12)
+	var rows := CampLoopClosure.suggest(model, cid)
+	var with_plans := 0
+	var chain: Dictionary = {}
+	for r in rows:
+		if not (r["plans"] as Array).is_empty():
+			with_plans += 1
+		for pl in r["plans"]:
+			var n := 0
+			for st in pl["steps"]:
+				if str(st["type"]) == "preset":
+					n += 1
+			if n >= 2 and chain.is_empty():
+				chain = pl
+	_check("planner: every open loop of a fresh camp has a plan", with_plans == rows.size() and rows.size() >= 3,
+		"%d of %d" % [with_plans, rows.size()])
+	_check("planner: a delivery is never suggested", not str(rows.map(func(x): return x["presets"])).contains("Water Truck"))
+	_check("planner: some plan is a chain of two machines", not chain.is_empty())
+	if chain.is_empty():
+		_check("planner: the chain is wired step to step", false)
+		return
+	var ids := CampLoopClosure.apply_plan(model, cid, chain)
+	var scope := str(model.get_item(cid).get("child_scope_id", ""))
+	var direct := false
+	for c in model.get_connections_in_scope(scope):
+		var cd: Dictionary = c
+		if ids.has(str(cd.get("source", ""))) and ids.has(str(cd.get("target", ""))):
+			direct = true
+	_check("planner: the chain is wired step to step", ids.size() >= 2 and direct, str(ids))
+

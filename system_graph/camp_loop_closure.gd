@@ -13,8 +13,9 @@ extends RefCounted
 ##   a WASTE (greywater, blackwater) is closed by what machines inside the
 ##     camp CONSUME of it, over what its people make.
 ## Each is 0..1; the camp's score is their mean. Pure over the model.
-## `suggest` names the existing presets that close the biggest open loop, and
-## `apply` drops one into the camp, wired to the camp's own tanks.
+## `suggest` names the presets that close the biggest open loop (the loop
+## planner's chains first), `apply` drops one into the camp, wired to the
+## camp's own tanks, and `apply_plan` places a whole chain, step to step.
 
 const INPUT_KINDS: Array = ["water", "food", "biomass"]
 const WASTE_KINDS: Array = ["greywater", "blackwater"]
@@ -102,35 +103,138 @@ static func score(model, comp_id: String) -> Dictionary:
 	return out
 
 
-## [{kind, label, presets: [label], text}] for every loop not yet closed,
-## the most open first. `sc` = a score() result already in hand (the camps
-## panel has one per row), else it is computed.
+## [{kind, label, presets: [label], plans: [plan], text}] for every loop not
+## yet closed, the most open first. `sc` = a score() result already in hand
+## (the camps panel has one per row), else it is computed. The presets come
+## from the loop planner first (LoopPlanner: the machine that takes the open
+## kind, or makes the wanted one, in each plan it found), then the CLOSERS
+## table; `plans` are the planner's whole chains (apply_plan places one).
 static func suggest(model, comp_id: String, sc: Dictionary = {}) -> Array:
 	if sc.is_empty():
 		sc = score(model, comp_id)
+	var planned := _planned(model, comp_id)
 	var rows: Array = []
 	for k in (sc["kinds"] as Dictionary).keys():
 		var f := float(sc["kinds"][k])
 		if f >= 0.999:
 			continue
-		var verb := "Reclaim" if WASTE_KINDS.has(str(k)) else "Make"
-		rows.append({"kind": str(k), "closed": f, "presets": CLOSERS.get(str(k), []),
+		var waste := WASTE_KINDS.has(str(k))
+		var verb := "Reclaim" if waste else "Make"
+		var plans: Array = planned.get("%s:%s" % [str(k), "sink" if waste else "source"], [])
+		var presets: Array = []
+		for pl in plans:
+			var lab := _touching_preset(pl as Dictionary)
+			if not lab.is_empty() and not presets.has(lab):
+				presets.append(lab)
+		for c in CLOSERS.get(str(k), []):
+			if not presets.has(c):
+				presets.append(c)
+		rows.append({"kind": str(k), "closed": f, "presets": presets, "plans": plans,
 			"text": "%s %s inside the camp (%d %% closed)" % [verb, LABELS.get(str(k), str(k)), int(round(f * 100.0))]})
 	rows.sort_custom(func(a, b) -> bool: return float(a["closed"]) < float(b["closed"]))
 	return rows
+
+
+## What a suggestion row offers, as buttons: each planner chain (its
+## machines in order, classes left out), then the CLOSERS presets not
+## already in one, at most `max_n`. → [{labels: [label], text, plan}]
+## (`plan` empty for a lone preset). Place one with apply_option.
+static func options(row: Dictionary, max_n: int = 3) -> Array:
+	var out: Array = []
+	var seen: Dictionary = {}
+	for pl in row.get("plans", []):
+		var labels: Array = []
+		for st in (pl as Dictionary).get("steps", []):
+			if str((st as Dictionary).get("type", "")) == "preset":
+				labels.append(str(st["label"]))
+		var key := " → ".join(labels)
+		if labels.is_empty() or seen.has(key):
+			continue
+		seen[key] = true
+		for l in labels:
+			seen[str(l)] = true
+		out.append({"labels": labels, "text": key, "plan": pl})
+		if out.size() >= max_n:
+			return out
+	for p in row.get("presets", []):
+		if seen.has(str(p)):
+			continue
+		seen[str(p)] = true
+		out.append({"labels": [str(p)], "text": str(p), "plan": {}})
+		if out.size() >= max_n:
+			break
+	return out
+
+
+## Place an options() entry inside the camp. Returns the new item ids.
+static func apply_option(model, comp_id: String, opt: Dictionary) -> Array:
+	if not (opt.get("plan", {}) as Dictionary).is_empty():
+		return apply_plan(model, comp_id, opt["plan"])
+	return _place_chain(model, comp_id, opt.get("labels", []))
+
+
+static var _plan_cache: Dictionary = {}
+
+## {"kind:side": [plan]} for the camp's scope, cached on the model's
+## revisions (the camps panel asks once a row, every rebuild).
+static func _planned(model, comp_id: String) -> Dictionary:
+	if model == null:
+		return {}
+	var comp: Dictionary = model.get_item(comp_id)
+	var scope := str(comp.get("child_scope_id", ""))
+	if scope.is_empty():
+		return {}
+	var key := "%s|%d|%d" % [comp_id, int(model.get("struct_rev")), int(model.get("user_rev"))]
+	if _plan_cache.has(key):
+		return _plan_cache[key]
+	var out: Dictionary = {}
+	for row in LoopPlanner.plan_scope(model, scope, 6):
+		var od: Dictionary = row["open"]
+		out["%s:%s" % [str(od["kind"]), str(od["side"])]] = row["plans"]
+	if _plan_cache.size() > 64:
+		_plan_cache.clear()
+	_plan_cache[key] = out
+	return out
+
+
+## The preset in a plan that touches the open kind itself: the first step of
+## a sink plan, the last of a source plan ("" = it is a class).
+static func _touching_preset(plan: Dictionary) -> String:
+	var steps: Array = plan.get("steps", [])
+	if steps.is_empty():
+		return ""
+	var st: Dictionary = steps[0] if str(plan.get("side", "")) == "sink" else steps[steps.size() - 1]
+	return str(st["label"]) if str(st.get("type", "")) == "preset" else ""
 
 
 ## Drop the preset `label` into the camp's sub-graph, wired to the camp's own
 ## tanks: each of its inputs from the camp tank of that kind, each output into
 ## the camp tank of that kind. Returns the new item id ("" = refused).
 static func apply(model, comp_id: String, label: String) -> String:
-	if model == null:
-		return ""
-	var preset := ComponentPresets.find_preset_by_label(label)
+	var ids := _place_chain(model, comp_id, [label])
+	return str(ids[0]) if not ids.is_empty() else ""
+
+
+## Place every machine of a planner chain inside the camp, in flow order:
+## each from the camp's tank of what it takes, else straight from the step
+## before it that makes that kind; each into the camp's tank of what it
+## makes. Class steps (no machine yet) are skipped. Returns the new ids.
+static func apply_plan(model, comp_id: String, plan: Dictionary) -> Array:
+	var labels: Array = []
+	for st in plan.get("steps", []):
+		if str((st as Dictionary).get("type", "")) == "preset":
+			labels.append(str(st["label"]))
+	return _place_chain(model, comp_id, labels)
+
+
+static func _place_chain(model, comp_id: String, labels: Array) -> Array:
+	var out: Array = []
+	if model == null or labels.is_empty():
+		return out
 	var comp: Dictionary = model.get_item(comp_id)
 	var scope := str(comp.get("child_scope_id", ""))
-	if preset.is_empty() or scope.is_empty():
-		return ""
+	if scope.is_empty():
+		return out
 	var tanks: Dictionary = {}
 	var stores: Dictionary = {}
 	var max_x := 0.0
@@ -139,38 +243,79 @@ static func apply(model, comp_id: String, label: String) -> String:
 		max_x = maxf(max_x, float(d.get("x", 0.0)))
 		if str(d.get("type", "")) == "resource":
 			var ds: Dictionary = d.get("specs", {})
-			var k := ResourceKinds.normalize_kind(str(ds.get("resource_kind", "")))
+			var k := _k(str(ds.get("resource_kind", "")))
 			# The camp's own stores (CampTemplates marks them camp_store) win
 			# over a tank the player added later.
 			if not tanks.has(k) or bool(ds.get("camp_store", false)) and not stores.has(k):
 				tanks[k] = str(d.get("id", ""))
 				if bool(ds.get("camp_store", false)):
 					stores[k] = true
-	var iid: String = model.generate_item_id()
-	var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
-	model.add_item({"id": iid, "type": str(preset.get("type", "processor")), "scope_id": scope,
-		"x": max_x + 240.0, "y": 0.0, "width": float(preset.get("width", 140.0)),
-		"height": float(preset.get("height", 130.0)), "specs": specs})
-	var ins: Array = specs.get("inputs", [])
-	for i in ins.size():
-		var k2 := ResourceKinds.normalize_kind(str((ins[i] as Dictionary).get("kind", "")))
-		if tanks.has(k2):
-			model.add_connection({"scope_id": scope, "source": tanks[k2], "source_handle": "output",
-				"target": iid, "target_handle": "res_in_%d" % i, "polarity": "resource", "resource_type": k2})
-	var outs: Array = specs.get("outputs", [])
-	for j in outs.size():
-		var k3 := ResourceKinds.normalize_kind(str((outs[j] as Dictionary).get("kind", "")))
-		if tanks.has(k3):
-			model.add_connection({"scope_id": scope, "source": iid, "source_handle": "res_out_%d" % j,
-				"target": tanks[k3], "target_handle": "input", "polarity": "resource", "resource_type": k3})
-	if str(preset.get("type", "")) == "plant":
-		# A plant's ports are fixed (water_in / biomass_out): water from the
-		# camp's water store, the crop into its food or firewood store.
-		if tanks.has("water"):
-			model.add_connection({"scope_id": scope, "source": tanks["water"], "source_handle": "output",
-				"target": iid, "target_handle": "water_in", "polarity": "resource", "resource_type": "water"})
-		var out_k := "food" if float(specs.get("food_fraction", 0.0)) > 0.0 else "biomass"
-		if tanks.has(out_k):
-			model.add_connection({"scope_id": scope, "source": iid, "source_handle": "biomass_out",
-				"target": tanks[out_k], "target_handle": "input", "polarity": "resource", "resource_type": out_k})
-	return iid
+	# Place them all first, then wire, so a step can feed the next.
+	var placed: Array = []
+	for i in labels.size():
+		var preset := ComponentPresets.find_preset_by_label(str(labels[i]))
+		if preset.is_empty():
+			continue
+		var iid: String = model.generate_item_id()
+		var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
+		model.add_item({"id": iid, "type": str(preset.get("type", "processor")), "scope_id": scope,
+			"x": max_x + 240.0 * float(placed.size() + 1), "y": 0.0, "width": float(preset.get("width", 140.0)),
+			"height": float(preset.get("height", 130.0)), "specs": specs})
+		placed.append({"id": iid, "ins": _ports(str(preset.get("type", "")), specs, true),
+			"outs": _ports(str(preset.get("type", "")), specs, false)})
+		out.append(iid)
+	for n in placed.size():
+		var p: Dictionary = placed[n]
+		var iid2 := str(p["id"])
+		for ip in p["ins"]:
+			var k2 := str(ip[0])
+			if tanks.has(k2):
+				_wire(model, scope, str(tanks[k2]), "output", iid2, str(ip[1]), k2)
+				continue
+			var from := _maker_before(placed, n, k2)
+			if not from.is_empty():
+				_wire(model, scope, str(from[0]), str(from[1]), iid2, str(ip[1]), k2)
+		for op in p["outs"]:
+			var k3 := str(op[0])
+			if tanks.has(k3):
+				_wire(model, scope, iid2, str(op[1]), str(tanks[k3]), "input", k3)
+	return out
+
+
+## [[kind, handle]] of an item's inputs (`ins`) or outputs. A plant's ports
+## are fixed: water_in, nutrients_in, and the crop on biomass_out (food for a
+## food crop, its residue biomass on residue_out).
+static func _ports(type: String, specs: Dictionary, ins: bool) -> Array:
+	var out: Array = []
+	if type == "plant":
+		var food := float(specs.get("food_fraction", 0.0)) > 0.0
+		if ins:
+			out.append(["water", "water_in"])
+			out.append(["nutrients", "nutrients_in"])
+		else:
+			out.append(["food" if food else "biomass", "biomass_out"])
+			if food:
+				out.append(["biomass", "residue_out"])
+		return out
+	var list: Array = specs.get("inputs" if ins else "outputs", [])
+	for i in list.size():
+		out.append([_k(str((list[i] as Dictionary).get("kind", ""))), ("res_in_%d" if ins else "res_out_%d") % i])
+	return out
+
+
+static func _k(kind: String) -> String:
+	return CompositionCatalog.canonical(ResourceKinds.normalize_kind(kind))
+
+
+## [item id, handle] of the nearest earlier placed step that makes `kind`.
+static func _maker_before(placed: Array, n: int, kind: String) -> Array:
+	for m in range(n - 1, -1, -1):
+		for op in (placed[m] as Dictionary)["outs"]:
+			if str(op[0]) == kind:
+				return [str((placed[m] as Dictionary)["id"]), str(op[1])]
+	return []
+
+
+static func _wire(model, scope: String, src: String, sh: String, dst: String, dh: String, kind: String) -> void:
+	model.add_connection({"scope_id": scope, "source": src, "source_handle": sh,
+		"target": dst, "target_handle": dh, "polarity": "resource", "resource_type": kind})
