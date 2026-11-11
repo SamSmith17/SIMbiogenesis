@@ -314,14 +314,23 @@ func _draw_v2_hover_port_tooltip() -> void:
 		_hover_port = {}
 		return
 	var txt := GraphPortLabels.port_label(hover_item, handle_id, rk)
+	# What the resource is made of, one line under the name (CompositionCatalog).
+	var made := CompositionCatalog.summary(rk) if not rk.is_empty() else ""
+	var fs2 := UITheme.FONT_XS
 	var ts := fnt.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
-	var sz := Vector2(ts.x + 14.0, float(fs) + 10.0)
+	var w := ts.x
+	if not made.is_empty():
+		w = maxf(w, fnt.get_string_size(made, HORIZONTAL_ALIGNMENT_LEFT, -1, fs2).x)
+	var sz := Vector2(w + 14.0, float(fs) + 10.0 + (float(fs2) + 3.0 if not made.is_empty() else 0.0))
 	var port_pos := _hover_port.get("pos", Vector2.INF) as Vector2
 	var rect := Rect2(_feedback_plate_origin(_interaction.last_pointer_pos, port_pos, sz), sz)
 	draw_rect(rect, Color(0.05, 0.08, 0.16, 0.92), true)
 	draw_rect(rect, Color(0.26, 0.34, 0.50, 0.85), false, 1.0)
 	draw_string(fnt, rect.position + Vector2(7.0, float(fs) + 3.0), txt,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.86, 0.91, 0.98, 0.97))
+	if not made.is_empty():
+		draw_string(fnt, rect.position + Vector2(7.0, float(fs) + float(fs2) + 6.0), made,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, fs2, Color(0.62, 0.70, 0.82, 0.95))
 
 
 func _render_item(item: Dictionary) -> void:

@@ -2868,9 +2868,14 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 			if tank_id.is_empty():
 				tank_id = _tank_at_port(proc_id, "output", false)
 			if tank_id.is_empty():
-				# Unwired output blocks the processor (all-or-nothing).
 				if not out_kind.is_empty() and not unconnected_out.has(out_kind):
 					unconnected_out.append(out_kind)
+				# An OPTIONAL output (a filter's backwash, a kitchen's washing-
+				# up water, a reactor's cooling heat) drains on site when
+				# nothing is wired to it; ElementLedger lists it as lost.
+				if bool(outp.get("optional", false)):
+					continue
+				# Unwired output blocks the processor (all-or-nothing).
 				block_reason = GraphNodeState.REASON_OUTPUT_UNWIRED
 				block_kinds = [out_kind] if not out_kind.is_empty() else []
 				throughput = 0.0
@@ -3678,6 +3683,9 @@ func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 	var waste_credits: Dictionary = {
 		"greywater": water_consumed_lph * HABITAT_GREYWATER_YIELD,
 		"blackwater": maxf(water_consumed_lph * HABITAT_BLACKWATER_YIELD - urine_lph, 0.0),
+		# A urine-diverting habitat's toilet port carries brownwater (the
+		# same flow as the blackwater it replaces).
+		"brownwater": maxf(water_consumed_lph * HABITAT_BLACKWATER_YIELD - urine_lph, 0.0),
 		"urine": urine_lph,
 		"biomass": food_consumed_kgph * HABITAT_FOOD_SCRAP_YIELD,
 	}

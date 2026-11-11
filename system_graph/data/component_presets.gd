@@ -358,6 +358,7 @@ const PROCESSORS: Array = [
 		"width": 130.0, "height": 120.0,
 		"specs": {
 			"name": "Water Pump", "watts": 500.0, "cost": 80.0,
+			"unit_ops": ["pumping"],
 			"energy_source": "ac",
 			"efficiency": 0.92, "energy_wh_per_unit": 10.0,
 			"inputs": [],
@@ -371,6 +372,7 @@ const PROCESSORS: Array = [
 		"width": 140.0, "height": 130.0,
 		"specs": {
 			"name": "PP Shredder", "watts": 600.0, "cost": 450.0,
+			"unit_ops": ["shredding"],
 			"energy_source": "ac",
 			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
 			"kind": "pp_shredder",
@@ -391,6 +393,7 @@ const PROCESSORS: Array = [
 		"width": 150.0, "height": 140.0,
 		"specs": {
 			"name": "PP Injection Molder", "watts": 1800.0, "cost": 1400.0,
+			"unit_ops": ["molding"],
 			"energy_source": "ac",
 			"efficiency": 1.0, "energy_wh_per_unit": 150.0,
 			"io_absolute": true,
@@ -406,16 +409,25 @@ const PROCESSORS: Array = [
 			"name": "Biochar Reactor", "watts": 1200.0, "cost": 2200.0,
 			"energy_source": "ac",
 			"efficiency": 0.88, "energy_wh_per_unit": 240.0,
+			"unit_ops": ["pyrolysis"],
+			# Sealed and heated by its elements: no air in or out. The rates
+			# close carbon, hydrogen and oxygen with the feed's composition
+			# (MassBalance; tools/diag/preset_tune.gd): char ~30 % of the dry
+			# feed (slow pyrolysis at ~500 °C), the moisture and reaction water
+			# leaving as wood vinegar, a little gas. The condenser's cooling
+			# water is a closed loop, so it leaves as HEAT (30 L/h warmed
+			# 45 K = 1.6 kW), not water made from nothing; optional.
+			"daily_note": "Biomass 8 kg/h + 1.2 kW → 2.24 kg/h biochar + 0.5 m³/h gas + 2.5 L/h wood vinegar + 2.5 kg/h tar, and 1.6 kW of warm cooling water.",
 			"inputs": [{"kind": "biomass", "rate": 8.0, "unit": "kg/h"}],
 			"outputs": [
-				{"kind": "biochar", "rate": 2.5, "unit": "kg/h"},
-				{"kind": "hot_water", "rate": 30.0, "unit": "L/h"},
-				{"kind": "woodgas", "rate": 4.0, "unit": "m³/h"},
+				{"kind": "biochar", "rate": 2.24, "unit": "kg/h"},
+				{"kind": "thermal", "rate": 1.6, "unit": "kW", "optional": true, "label": "Cooling water heat"},
+				{"kind": "woodgas", "rate": 0.5, "unit": "m³/h"},
 				# The condensers' drains (appended: the first three keep
 				# their handles). A lab run's summary (TC Process Lab: Use
 				# this run on the graph) replaces these rates with a batch.
-				{"kind": "wood_vinegar", "rate": 0.5, "unit": "L/h"},
-				{"kind": "tar", "rate": 0.15, "unit": "kg/h"},
+				{"kind": "wood_vinegar", "rate": 2.5, "unit": "L/h"},
+				{"kind": "tar", "rate": 2.5, "unit": "kg/h"},
 			],
 			# The tri-clamp designer's reactor (TcPresets.biochar_reactor):
 			# its feed, woodgas and warm cooling-water ends are this node's
@@ -431,8 +443,11 @@ const PROCESSORS: Array = [
 		# run on the graph"): the lab's default batch is 8 kg of PP on two 600 W
 		# elements. Thermal cracking of PP gives mostly liquids and wax with
 		# 10-30 % gas (Scheirs & Kaminsky, Feedstock Recycling and Pyrolysis of
-		# Waste Plastics, 2006). The oil and wax leave as the `tar` kind
-		# (alias pyrolysis_oil).
+		# Waste Plastics, 2006). The oil and wax leave as `plastic_oil` (a
+		# hydrocarbon; `tar` is wood bio-oil); the light gas carries its own
+		# mix (C3H6-rich, like the lab's runs); the PET and label oxygen
+		# leaves as an aqueous condensate; the coke stays in the retort and is
+		# scraped out (retain C). Rates close H and O (MassBalance).
 		"type": "processor", "label": "Plastic-to-Fuel Retort", "icon": "⛽",
 		"width": 150.0, "height": 140.0,
 		"specs": {
@@ -440,11 +455,15 @@ const PROCESSORS: Array = [
 			"energy_source": "ac",
 			"efficiency": 1.0, "energy_wh_per_unit": 1200.0,
 			"io_absolute": true,
-			"daily_note": "Shredded plastic 1 kg/h + 1.2 kW -> ~0.6 kg/h pyrolysis oil and wax + ~0.2 m³/h of light gas. A TC Process Lab run replaces these rates with its batch.",
+			"unit_ops": ["pyrolysis"],
+			"retain": ["C"],
+			"daily_note": "Shredded plastic 1 kg/h + 1.2 kW -> ~0.5 kg/h pyrolysis oil and wax + ~0.15 m³/h of light gas + a little watery condensate; the coke stays in the retort. A TC Process Lab run replaces these rates with its batch.",
 			"inputs": [{"kind": "plastic_waste", "rate": 1.0, "unit": "kg/h"}],
 			"outputs": [
-				{"kind": "tar", "rate": 0.6, "unit": "kg/h"},
-				{"kind": "woodgas", "rate": 0.2, "unit": "m³/h"},
+				{"kind": "plastic_oil", "rate": 0.47, "unit": "kg/h"},
+				{"kind": "woodgas", "rate": 0.15, "unit": "m³/h",
+					"composition": {"C3H6": 0.6, "CH4": 0.3, "H2": 0.1}},
+				{"kind": "wood_vinegar", "rate": 0.13, "unit": "L/h", "optional": true, "label": "Watery condensate"},
 			],
 			"model_id": "tclab_plastic_retort",
 		},
@@ -454,6 +473,7 @@ const PROCESSORS: Array = [
 		"width": 130.0, "height": 120.0,
 		"specs": {
 			"name": "Well Pump", "watts": 1500.0, "cost": 350.0,
+			"unit_ops": ["pumping"],
 			"energy_source": "ac",
 			"efficiency": 0.90, "energy_wh_per_unit": 10.0,
 			"inputs": [],
@@ -478,6 +498,7 @@ const PROCESSORS: Array = [
 		"width": 130.0, "height": 120.0,
 		"specs": {
 			"name": "Electric Water Heater", "watts": 4500.0, "cost": 500.0,
+			"unit_ops": ["heating"],
 			"energy_source": "ac",
 			"efficiency": 0.98, "energy_wh_per_unit": 112.5,
 			"inputs": [{"kind": "water", "rate": 40.0, "unit": "L/h"}],
@@ -504,8 +525,14 @@ const PROCESSORS: Array = [
 			"name": "Greywater Filter", "watts": 40.0, "cost": 180.0,
 			"energy_source": "ac",
 			"efficiency": 0.85, "energy_wh_per_unit": 0.8,
+			"unit_ops": ["filtration"],
+			# 15 % of the feed backwashes the media and carries what it caught;
+			# optional: unwired, it drains on site.
 			"inputs": [{"kind": "greywater", "rate": 20.0, "unit": "L/h"}],
-			"outputs": [{"kind": "water", "rate": 17.0, "unit": "L/h"}],
+			"outputs": [
+				{"kind": "water", "rate": 17.0, "unit": "L/h"},
+				{"kind": "greywater", "rate": 3.0, "unit": "L/h", "optional": true, "label": "Backwash"},
+			],
 		},
 	},
 	{
@@ -521,6 +548,7 @@ const PROCESSORS: Array = [
 		"width": 140.0, "height": 130.0,
 		"specs": {
 			"name": "RO Purifier", "watts": 36.0, "cost": 260.0,
+			"unit_ops": ["reverse_osmosis"],
 			"energy_source": "ac",
 			"efficiency": 1.0, "energy_wh_per_unit": 1.2,
 			"energy_curve": "cold_water",
@@ -547,6 +575,8 @@ const PROCESSORS: Array = [
 			"energy_source": "ac",
 			"efficiency": 1.0, "energy_wh_per_unit": 300.0,
 			"daily_note": "300 W → 1 L/h (~24 L/day) condensed from air at the 26.7 °C / 60% RH rating point. Yield collapses in dry or cold air (not simulated).",
+			"unit_ops": ["condensation"],
+			"air": "condense",
 			"inputs": [],
 			"outputs": [{"kind": "water", "rate": 1.0, "unit": "L/h"}],
 		},
@@ -566,6 +596,8 @@ const PROCESSORS: Array = [
 			"energy_floor_wh_per_unit": 627.0,
 			"io_absolute": true,
 			"daily_note": "Greywater 0.8 L/h + 580 W → 0.7 L/h distilled. Latent heat alone is 627 Wh/L — distillation is the expensive, treat-anything option.",
+			"unit_ops": ["distillation"],
+			"air": "evaporate",
 			"inputs": [{"kind": "greywater", "rate": 0.8, "unit": "L/h"}],
 			"outputs": [{"kind": "water", "rate": 0.7, "unit": "L/h"}],
 		},
@@ -592,6 +624,9 @@ const PROCESSORS: Array = [
 			# establish_days: a bed built from its kit is planted then and
 			# comes up to a steady harvest over about six weeks.
 			"establish_days": 45.0,
+			"unit_ops": ["growing"],
+			"air": "grow",
+			"retain": ["P", "K"],
 			"daily_note": "Water 2 L/h + nutrients 1 g/h (N+P+K) + 120 W of pumps → 0.1 kg/h food (~2.4 kg/day) once established, about six weeks after planting. Sunlit bed — no grow-light energy modeled.",
 			"inputs": [
 				{"kind": "water", "rate": 2.0, "unit": "L/h"},
@@ -614,15 +649,19 @@ const PROCESSORS: Array = [
 			"name": "Kitchen", "role": "kitchen", "watts": 1500.0, "cost": 600.0,
 			"energy_source": "ac",
 			"efficiency": 0.9, "energy_wh_per_unit": 150.0,
-			"daily_note": "meal_prep: 4 kg food + 10 L water + 1.5 kWh → 8 meals + scraps + packaging",
+			"unit_ops": ["cooking"],
+			# Packaging comes off when supplies are unpacked, not at the stove;
+			# the peelings come out of the food (4.8 kg buys 4 kg of meals);
+			# the water washes up and drains as greywater (optional).
+			"daily_note": "meal_prep: 4.8 kg food + 10 L water + 1.5 kWh → 8 meals + 1.4 kg scraps + 9.4 L washing-up water",
 			"inputs": [
-				{"kind": "food", "rate": 4.0, "unit": "kg/h"},
+				{"kind": "food", "rate": 4.8, "unit": "kg/h"},
 				{"kind": "water", "rate": 10.0, "unit": "L/h"},
 			],
 			"outputs": [
 				{"kind": "meal", "rate": 8.0, "unit": "meals/h"},
-				{"kind": "food_waste", "rate": 0.8, "unit": "L/h"},
-				{"kind": "packaging_waste", "rate": 0.3, "unit": "kg/h"},
+				{"kind": "food_waste", "rate": 1.4, "unit": "L/h"},
+				{"kind": "greywater", "rate": 9.4, "unit": "L/h", "optional": true, "label": "Washing-up water"},
 			],
 		},
 	},
@@ -633,11 +672,18 @@ const PROCESSORS: Array = [
 			"name": "Compost Digester", "watts": 0.0, "cost": 120.0,
 			"energy_source": "",
 			"efficiency": 0.70, "energy_wh_per_unit": 0.0,
+			"unit_ops": ["composting"],
+			# Aerobic: the carbon leaves as CO2, water as vapour, ~30 % of the
+			# N as ammonia (Bernal et al. 2009); finished compost carries the
+			# rest, P and K whole. It used to make 1.5 kg/h of "nutrients",
+			# the old compost-mass meaning of that kind.
+			"air": "oxidize_nh3",
+			"daily_note": "Biomass 2 kg/h + blackwater 1 L/h → 1.56 kg/h finished compost; carbon to the air as CO2.",
 			"inputs": [
 				{"kind": "biomass", "rate": 2.0, "unit": "kg/h"},
 				{"kind": "blackwater", "rate": 1.0, "unit": "L/h"},
 			],
-			"outputs": [{"kind": "nutrients", "rate": 1.5, "unit": "kg/h"}],
+			"outputs": [{"kind": "compost", "rate": 1.56, "unit": "kg/h"}],
 		},
 	},
 	{
@@ -654,10 +700,11 @@ const PROCESSORS: Array = [
 			"energy_source": "",
 			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
 			"io_absolute": true,
-			"daily_note": "Biochar 0.5 kg/h + compost nutrients 4.5 kg/h → 5 kg/h growing medium (10% char by mass, IBI amendment band).",
+			"unit_ops": ["mixing"],
+			"daily_note": "Biochar 0.5 kg/h + compost 4.5 kg/h → 5 kg/h growing medium (10% char by mass, IBI amendment band).",
 			"inputs": [
 				{"kind": "biochar", "rate": 0.5, "unit": "kg/h"},
-				{"kind": "nutrients", "rate": 4.5, "unit": "kg/h"},
+				{"kind": "compost", "rate": 4.5, "unit": "kg/h"},
 			],
 			"outputs": [{"kind": "soil", "rate": 5.0, "unit": "kg/h"}],
 		},
@@ -670,6 +717,11 @@ const PROCESSORS: Array = [
 			"energy_source": "ac",
 			"efficiency": 0.85, "energy_wh_per_unit": 15.0,
 			"processor_template": "ibc_biodigester",
+			"unit_ops": ["anaerobic_digestion"],
+			# What the listed biogas does not carry vents from the open
+			# effluent; P and K settle in the tank as sludge.
+			"air": "anaerobic",
+			"retain": ["P", "K"],
 			"daily_note": "5 gal blackwater + 1 kg scraps + 300 Wh → 5 gal effluent + 1 m³ biogas",
 			"inputs": [
 				{"kind": "blackwater", "rate": 0.7886, "unit": "L/h"},
@@ -693,6 +745,9 @@ const PROCESSORS: Array = [
 			"name": "HomeBiogas 2.0", "role": "biodigester",
 			"kind": "home_biogas_2",
 			"processor_template": "home_biogas_2",
+			"unit_ops": ["anaerobic_digestion"],
+			"air": "anaerobic",
+			"retain": ["P", "K"],
 			"watts": 0.0, "cost": 1200.0,
 			"energy_source": "",
 			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
@@ -747,6 +802,8 @@ const PROCESSORS: Array = [
 			"energy_wh_per_unit": 1000.0,
 			"current_output_kw": 0.0,
 			"daily_note": "DC output scales with fuel throughput — wire the +/- ports straight to a battery's +/-, or a controller's pvPositive/pvNegative.",
+			"unit_ops": ["combustion"],
+			"air": "burn",
 			"inputs": [{"kind": "woodgas", "rate": 3.0, "unit": "m³/h"}],
 			"outputs": [{"kind": "dc_electricity", "rate": 3.0, "unit": "kW"}],
 			# Default automation: run only while fuel is connected/available
@@ -790,6 +847,8 @@ const PROCESSORS: Array = [
 			"efficiency": 1.0, "energy_wh_per_unit": 100.0,
 			"io_absolute": true,
 			"daily_note": "Urine 1 L/h + 100 W (nitrify, distil, desalt) → 8.5 g/h N+P+K + 0.95 L/h distillate (irrigation) + 0.04 L/h brine.",
+			"unit_ops": ["nitrification", "distillation"],
+			"air": "oxidize_nh3",
 			"inputs": [{"kind": "urine", "rate": 1.0, "unit": "L/h"}],
 			"outputs": [
 				{"kind": "nutrients", "rate": 0.0085, "unit": "kg/h"},
@@ -812,7 +871,10 @@ const PROCESSORS: Array = [
 			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
 			"io_absolute": true,
 			"daily_note": "Brownwater 4 L/h → 3.95 L/h digestate + 0.016 m³/h biogas. About a month in the tank; the settled sludge is pumped out every few years.",
-			"inputs": [{"kind": "blackwater", "rate": 4.0, "unit": "L/h"}],
+			"unit_ops": ["anaerobic_digestion"],
+			"air": "anaerobic",
+			"retain": ["P", "K"],
+			"inputs": [{"kind": "brownwater", "rate": 4.0, "unit": "L/h"}],
 			"outputs": [
 				{"kind": "liquid_fertilizer", "rate": 3.95, "unit": "L/h"},
 				{"kind": "biogas", "rate": 0.016, "unit": "m³/h"},
@@ -835,6 +897,9 @@ const PROCESSORS: Array = [
 			"efficiency": 1.0, "energy_wh_per_unit": 7.5,
 			"io_absolute": true,
 			"daily_note": "Digestate 4 L/h + 30 W (aeration, UV) → 2.4 g/h N+P+K + 3.8 L/h reclaimed water.",
+			"unit_ops": ["nitrification", "filtration", "disinfection"],
+			"air": "denitrify",
+			"retain": ["P", "K"],
 			"inputs": [{"kind": "liquid_fertilizer", "rate": 4.0, "unit": "L/h"}],
 			"outputs": [
 				{"kind": "nutrients", "rate": 0.0024, "unit": "kg/h"},
@@ -857,6 +922,11 @@ const PROCESSORS: Array = [
 			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
 			"io_absolute": true,
 			"daily_note": "Biomass 0.2 kg/h (~5 kg/day) → 2.2 g/h N+P+K as compost tea.",
+			"unit_ops": ["composting"],
+			# Carbon to the air, ~30 % of the N as ammonia; the P and K the tea
+			# does not carry stay in the finished compost in the bays.
+			"air": "oxidize_nh3",
+			"retain": ["P", "K"],
 			"inputs": [{"kind": "biomass", "rate": 0.2, "unit": "kg/h"}],
 			"outputs": [{"kind": "nutrients", "rate": 0.0022, "unit": "kg/h"}],
 		},
@@ -875,12 +945,13 @@ const PROCESSORS: Array = [
 			"energy_source": "",
 			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
 			"io_absolute": true,
-			"daily_note": "Packaged supplies 3 kg/h → 3 kg/h food + 0.12 kg/h plastic + 0.24 kg/h card and tin.",
-			"inputs": [{"kind": "packaged_food", "rate": 3.0, "unit": "kg/h"}],
+			"unit_ops": ["sorting"],
+			"daily_note": "Packaged supplies 3.41 kg/h → 3 kg/h food + 0.136 kg/h plastic + 0.273 kg/h card and tin.",
+			"inputs": [{"kind": "packaged_food", "rate": 3.41, "unit": "kg/h"}],
 			"outputs": [
 				{"kind": "food", "rate": 3.0, "unit": "kg/h"},
-				{"kind": "plastic_waste", "rate": 0.12, "unit": "kg/h"},
-				{"kind": "packaging_waste", "rate": 0.24, "unit": "kg/h"},
+				{"kind": "plastic_waste", "rate": 0.136, "unit": "kg/h"},
+				{"kind": "packaging_waste", "rate": 0.273, "unit": "kg/h"},
 			],
 		},
 	},
@@ -892,6 +963,7 @@ const PROCESSORS: Array = [
 		"width": 140.0, "height": 130.0,
 		"specs": {
 			"name": "Sand Filter + UV", "watts": 25.0, "cost": 700.0,
+			"unit_ops": ["filtration", "disinfection"],
 			"energy_source": "ac",
 			"efficiency": 1.0, "energy_wh_per_unit": 0.42,
 			"io_absolute": true,
@@ -1001,8 +1073,10 @@ const HABITATS: Array = [
 	{
 		# The same people with urine-diverting (NoMix) flush toilets: the
 		# bowl sends urine to its own port (~1.1 L a person a day caught of
-		# 1.42) and only the brownwater goes to the blackwater port. The
-		# flush water, and so the water balance, is unchanged
+		# 1.42) and only the brownwater (faeces, paper, the urine that missed)
+		# leaves by the toilet port, as `brownwater` (2026-11-10; it was
+		# blackwater, which carries all the urine's nitrogen). The flush
+		# water, and so the water balance, is unchanged
 		# (ResourceFlowEngine.HABITAT_URINE_YIELD / _DIVERSION).
 		"type": "processor", "label": "Population (urine-diverting toilets)", "icon": "🏠",
 		"width": 150.0, "height": 150.0,
@@ -1021,7 +1095,7 @@ const HABITATS: Array = [
 			],
 			"outputs": [
 				{"kind": "greywater", "rate": 1.666, "unit": "L/h"},
-				{"kind": "blackwater", "rate": 0.37, "unit": "L/h"},
+				{"kind": "brownwater", "rate": 0.37, "unit": "L/h"},
 				{"kind": "biomass", "rate": 0.0125, "unit": "kg/h"},
 				{"kind": "urine", "rate": 0.047, "unit": "L/h"},
 			],
@@ -2037,6 +2111,7 @@ const TOOLS: Array = [
 		"width": 140.0, "height": 130.0,
 		"specs": {
 			"name": "PP Shredder", "watts": 600.0, "cost": 450.0,
+			"unit_ops": ["shredding"],
 			"energy_source": "ac",
 			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
 			"kind": "pp_shredder",

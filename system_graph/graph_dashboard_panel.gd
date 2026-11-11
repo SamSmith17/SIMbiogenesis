@@ -42,11 +42,14 @@ var _settlement_vbox: VBoxContainer = null
 var _settlement_sig := "<unset>"
 ## SITE BALANCE card (SiteBalance.lines) — rebuilt on content change only.
 var _balance_vbox: VBoxContainer = null
-var _balance_sig := "<unset>"
-## Row structure of the balance card (types + keys) and the value nodes built
-## for it, so a tick that only changes numbers updates labels in place.
-var _balance_shape := "<unset>"
-var _balance_values: Array = []
+## Its render state for _render_rows: the rows' signature, their structure
+## (types + keys) and the value nodes built for it, so a tick that only
+## changes numbers updates labels in place.
+var _balance_state: Dictionary = {"sig": "<unset>", "shape": "<unset>", "values": []}
+## MADE OF card (ElementLedger.rows): what the site's stores hold by element,
+## water recovery, what does not add up. 1 Hz with the balance.
+var _made_of_vbox: VBoxContainer = null
+var _made_of_state: Dictionary = {"sig": "<unset>", "shape": "<unset>", "values": []}
 ## SolarUI.sim_tick_serial last shown — LIVE POWER and the balance follow
 ## SolarUI's own tick, the same one the graph cards sync on, so "Making" is
 ## the figure the panel and controller cards show on that frame.
@@ -127,6 +130,9 @@ func refresh(force: bool = false) -> void:
 		_refresh_stores()
 		_refresh_settlement()
 		_refresh_balance()
+		PerfSpan.begin("gv_dash_made_of")
+		_refresh_made_of()
+		PerfSpan.end("gv_dash_made_of")
 		PerfSpan.end("gv_dash_slow")
 
 
@@ -214,6 +220,14 @@ func _build_ui() -> void:
 	_balance_vbox = VBoxContainer.new()
 	_balance_vbox.add_theme_constant_override("separation", 2)
 	bal_body.add_child(_balance_vbox)
+
+	add_child(_card_section("🧪 WATER & NUTRIENTS"))
+	var made_wrap := _card_body()
+	add_child(made_wrap)
+	var made_body := _card_inner(made_wrap)
+	_made_of_vbox = VBoxContainer.new()
+	_made_of_vbox.add_theme_constant_override("separation", 2)
+	made_body.add_child(_made_of_vbox)
 
 	add_child(_card_section("🔁 NEEDS & CLOSURE"))
 	var closure_wrap := _card_body()
@@ -679,6 +693,27 @@ func _cost_extra(model: GraphModel) -> Dictionary:
 	return out
 
 
+## What the site's stores hold by element and how much used water comes back
+## clean (ElementLedger over the whole site, or the system the player is in).
+func _refresh_made_of() -> void:
+	if _made_of_vbox == null:
+		return
+	var model: GraphModel = null
+	if _graph_view != null:
+		model = _graph_view.get("model") as GraphModel
+	var rows: Array = []
+	if model != null:
+		var scope := "root"
+		if _graph_view.has_method("active_system_id") and _inside_system():
+			var sid := str(_graph_view.call("active_system_id"))
+			var sys_item: Dictionary = model.get_item(sid)
+			if not sys_item.is_empty() and not str(sys_item.get("child_scope_id", "")).is_empty():
+				scope = str(sys_item["child_scope_id"])
+		rows = ElementLedger.rows(ElementLedger.compute(model, scope))
+	_render_rows(_made_of_vbox, rows, _made_of_state,
+		"Add tanks and machines to see the water and nutrients they hold")
+
+
 func _refresh_balance() -> void:
 	if _balance_vbox == null:
 		return
@@ -717,13 +752,23 @@ func _refresh_balance() -> void:
 			key = {"Next 1 d": "Next 24 hours", "Next 7 d": "Next 7 days"}.get(key, key)
 			rows.append({"t": "note", "k": key,
 				"v": txt.substr(colon + 1).strip_edges() if colon > 0 else txt, "tone": str(pl.get("tone", "muted"))})
+	_render_rows(_balance_vbox, rows, _balance_state,
+		"Add generators, a battery or a pond to see the site balance")
+
+
+## Draws a card of SiteBalance-shaped rows ({t: kv | sub | note | alert, k, v,
+## tone}) into `vbox`, rebuilding only when the rows change and updating the
+## numbers in place when only they do. `st` keeps {sig, shape, values}.
+func _render_rows(vbox: VBoxContainer, rows: Array, st: Dictionary, empty_hint: String) -> void:
+	if not st.has("values"):
+		st["values"] = []
 	var parts := PackedStringArray()
 	for r_v in rows:
 		parts.append(JSON.stringify(r_v))
 	var sig := "\n".join(parts)
-	if sig == _balance_sig:
+	if sig == str(st.get("sig", "")):
 		return
-	_balance_sig = sig
+	st["sig"] = sig
 	var shape_parts := PackedStringArray()
 	for r_v3 in rows:
 		var r3: Dictionary = r_v3
@@ -733,11 +778,11 @@ func _refresh_balance() -> void:
 		else:
 			shape_parts.append(t3 + "|" + str(r3.get("level", "")) + "|" + str(r3.get("text", "")))
 	var shape := "\n".join(shape_parts)
-	if shape == _balance_shape and _balance_values.size() == rows.size():
+	if shape == str(st.get("shape", "")) and (st["values"] as Array).size() == rows.size():
 		# Same rows, new numbers — update in place (this runs every SolarUI tick).
 		for i in rows.size():
 			var rr: Dictionary = rows[i]
-			var node: Variant = _balance_values[i]
+			var node: Variant = (st["values"] as Array)[i]
 			if node == null or not is_instance_valid(node):
 				continue
 			var tn := str(rr.get("tone", ""))
@@ -749,18 +794,18 @@ func _refresh_balance() -> void:
 				(node as Label).text = str(rr.get("v", ""))
 				(node as Label).add_theme_color_override("font_color", UITheme.C_WARN if tn == "warn" else UITheme.C_TEXT)
 		return
-	_balance_shape = shape
-	_balance_values.clear()
-	for c in _balance_vbox.get_children():
-		_balance_vbox.remove_child(c)
+	st["shape"] = shape
+	(st["values"] as Array).clear()
+	for c in vbox.get_children():
+		vbox.remove_child(c)
 		c.free()
 	if rows.is_empty():
 		var hint := Label.new()
-		hint.text = "Add generators, a battery or a pond to see the site balance"
+		hint.text = empty_hint
 		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-		_balance_vbox.add_child(hint)
+		vbox.add_child(hint)
 		return
 	# A grid, not a paragraph: key / value rows, critical state as a banner,
 	# each pond under its own small heading, the look-ahead as wrapped notes.
@@ -773,8 +818,8 @@ func _refresh_balance() -> void:
 				var ban := AlertBanner.new()
 				ban.show_alert(AlertBanner.ERROR if str(r.get("level", "")) == "error" else AlertBanner.WARN,
 					str(r.get("text", "")))
-				_balance_vbox.add_child(ban)
-				_balance_values.append(null)
+				vbox.add_child(ban)
+				(st["values"] as Array).append(null)
 			"sub":
 				var sub := Label.new()
 				sub.text = str(r.get("text", ""))
@@ -782,29 +827,31 @@ func _refresh_balance() -> void:
 				sub.add_theme_font_override("font", UITheme.font("semibold"))
 				sub.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 				sub.add_theme_color_override("font_color", UITheme.C_TEXT)
-				_balance_vbox.add_child(sub)
-				_balance_values.append(null)
+				vbox.add_child(sub)
+				(st["values"] as Array).append(null)
 			"note":
 				var box := VBoxContainer.new()
 				box.add_theme_constant_override("separation", 0)
-				var k := Label.new()
-				k.text = str(r.get("k", ""))
-				k.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-				k.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-				box.add_child(k)
+				# A note with no key is a line under the row above it.
+				if not str(r.get("k", "")).is_empty():
+					var k := Label.new()
+					k.text = str(r.get("k", ""))
+					k.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+					k.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+					box.add_child(k)
 				var v := Label.new()
 				v.text = str(r.get("v", ""))
 				v.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 				v.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 				v.add_theme_color_override("font_color", UITheme.C_WARN if tone == "warn" else UITheme.C_TEXT)
 				box.add_child(v)
-				_balance_vbox.add_child(box)
-				_balance_values.append(v)
+				vbox.add_child(box)
+				(st["values"] as Array).append(v)
 			_:
 				var row := KVRow.make(str(r.get("k", "")), str(r.get("v", "")))
 				row.set_tone(tone_col if tone != "muted" else UITheme.C_TEXT)
-				_balance_vbox.add_child(row)
-				_balance_values.append(row)
+				vbox.add_child(row)
+				(st["values"] as Array).append(row)
 
 
 ## The next 24 h and 7 days at today's loads and hydro, with solar from the

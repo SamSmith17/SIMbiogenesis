@@ -42,6 +42,17 @@ func run(main: Node, harness: Node) -> Dictionary:
 			if str(n.get("preset", "")) == "Population":
 				(n["set"] as Dictionary)["pop_driven"] = false
 
+	# The design is its own site: a world's scheduled drives (living vehicles
+	# with an arrival in its own year) would mark the design's camp as not
+	# arrived yet for the whole run (NpcPopulationBridge._update_away).
+	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+	if loader != null and loader.has_method("clear_vehicle_arrivals"):
+		var n_drives := int(loader.call("clear_vehicle_arrivals"))
+		if loader.has_method("clear_vehicle_departures"):
+			n_drives += int(loader.call("clear_vehicle_departures"))
+		if n_drives > 0:
+			print("sysdesign: cleared %d scheduled vehicle drive(s) on the world" % n_drives)
+
 	var built := Site.apply(main, sgv, design)
 	for e in (built.get("errors", []) as Array):
 		print("sysdesign build error: ", e)

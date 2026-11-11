@@ -186,7 +186,8 @@
     "capacity": "6000 L",
     "capacity_qty": 6000.0,
     "level": 0.0,
-    "name": "Brownwater Tank"
+    "name": "Brownwater Tank",
+    "resource_kind": "brownwater"
    }
   },
   {
@@ -1131,7 +1132,7 @@
   [
    "hab",
    "black",
-   "blackwater"
+   "brownwater"
   ],
   [
    "hab",
@@ -1216,7 +1217,7 @@
   [
    "black",
    "bwdig",
-   "blackwater"
+   "brownwater"
   ],
   [
    "bwdig",

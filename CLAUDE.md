@@ -1785,6 +1785,36 @@ Godot.exe.exe --headless --path . --script core/linkage/linkage_selftest.gd
 # and the LinkageLab packed envelope solved at the EFFECTIVE min fold angle;
 # run --import first so PackedSpec registers):
 Godot.exe.exe --headless --path . --script core/packing/packing_selftest.gd
+# Resource composition (offline — core/composition/, plans/RESOURCE_COMPOSITION_PLAN.md
+# Phase 1): every builtin material kind composed and every row a real kind,
+# fractions summing to 1, rows sourced or marked est, the formula parser,
+# hand numbers (urine N 7.27 g/kg, seawater Cl 19.35 g/kg, a person's N in
+# = out, gas densities + heating values), the water grade ladder, embodied
+# totals, MassBalance (a burner closes with its air side declared; the air
+# modes burn / breathe / anaerobic … solved as one linear system, retained
+# elements, source / sink, a gas output's own mix). EXPECTED_CHECKS;
+# --import first. The audits (per-preset element balance through
+# PresetBalance, kind inventory) are tools/diag/preset_balance_audit.gd and
+# tools/diag/composition_inventory.gd (-- --out=<md>); tools/diag/preset_tune.gd
+# solves the output rates that would close a preset:
+Godot.exe.exe --headless --path . --script core/composition/composition_selftest.gd
+# Every library preset + builtin recipe closes (Phase 3): PresetBalance at
+# its listed rates with its own air mode and retained elements is ok /
+# estimate / source / sink / runtime, bar the documented EXCEPTIONS (the
+# brownwater digester: one make-up per kind cannot show a weaker digestate).
+# A new preset that does not close fails here — set its `air` and `retain`
+# (MassBalance.AIR_MODES) or fix its rates:
+Godot.exe.exe --headless --path . --script core/composition/preset_balance_selftest.gd
+# ElementLedger (offline — Phase 2/3): stocks (usable vs bound water, N in
+# store), rain / import sides, ISS-style water recovery by hand, each node
+# judged by MassBalance with its air side closed (people breathe out vapour),
+# the scope's air side and what unwired optional outputs drain off site,
+# leaks, the dashboard rows. EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script core/composition/element_ledger_selftest.gd
+# The same on a real world (sandbox, read-only): the ledger on the live
+# graph with its cost in ms, the dashboard WATER & NUTRIENTS card, the
+# inspector's Made of / Mass balance sections; prints the numbers:
+tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/element_ledger_check.gd -Label element_ledger -Timeout 900
 # Process recipes + chore ledger + workflow runner (offline — normalize/catalog,
 # legacy batch migration, scrub-safe progress, hybrid chore confirm, part credits,
 # workflow step advance; run --import first so class_names register):

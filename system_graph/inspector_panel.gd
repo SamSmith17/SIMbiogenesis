@@ -703,6 +703,9 @@ func _rebuild_for_item(item: Dictionary) -> void:
 	# section for every physical type; abstract nodes resolve empty and skip.
 	_build_packed_section(itype, specs)
 
+	# What it is made of, down to elements (resource composition plan Phase 2).
+	_build_composition_section(item)
+
 	# Automations are sim/gameplay-first - surfaced right after the core specs
 	# so bound rules are visible without scrolling. HA export lives under Advanced.
 	if _item_supports_automation(item):
@@ -758,6 +761,141 @@ func _build_packed_section(itype: String, specs: Dictionary) -> void:
 	_readonly_field("Ship weight", PackedSpec.format_mass(packed))
 
 
+## What a store holds / a machine's listed rates add up to / a group's
+## water and nutrients, by element (CompositionCatalog, MassBalance,
+## ElementLedger). Read-only.
+func _build_composition_section(item: Dictionary) -> void:
+	var itype := str(item.get("type", ""))
+	var specs: Dictionary = item.get("specs", {})
+	if itype == "resource":
+		var kind := str(specs.get("resource_kind", ""))
+		if kind.is_empty() or not CompositionCatalog.is_material(kind):
+			return
+		_section("Made of")
+		if CompositionCatalog.row(kind).is_empty():
+			_hint_label("This kind's make-up is unknown, so it is left out of the water and nutrient totals.")
+			return
+		# One row per part: the column is too narrow for a sentence.
+		for tc in CompositionCatalog.top_components(kind, 4):
+			if float(tc[1]) >= 0.0005:
+				_readonly_field(CompositionCatalog.component_name(str(tc[0])).capitalize(), _comp_pct(float(tc[1])))
+		var g := CompositionCatalog.grade_of(kind)
+		if g >= 0:
+			_readonly_field("Water grade", "%s (%d of 6)" % [str(CompositionData.GRADES.get(g, "")), g])
+		var unlimited := bool(specs.get("unlimited_capacity", false)) or bool(specs.get("allow_negative", false))
+		var emb: Dictionary = {}
+		if not unlimited:
+			emb = CompositionCatalog.embodied(kind, ResourceKinds.tank_stock_qty(specs))
+			_readonly_field("In this store", ElementLedger.fmt_kg(float(emb["kg"])))
+			_readonly_field("Water in it", ElementLedger.fmt_water_l(float(emb["water_kg"])))
+		var per_kg := CompositionCatalog.elements_of(kind)
+		for e in ["C", "N", "P", "K"]:
+			var f := float(per_kg.get(e, 0.0))
+			if f < 0.0001:
+				continue
+			var val := _comp_pct(f)
+			if not emb.is_empty():
+				val += " · %s here" % ElementLedger.fmt_kg(float((emb["elements"] as Dictionary).get(e, 0.0)))
+			_readonly_field(str(ElementLedger.ELEMENT_NAMES.get(e, e)), val)
+		if not emb.is_empty() and float(emb["energy_mj"]) > 0.01:
+			_readonly_field("Energy in it", ElementLedger.fmt_energy_mj(float(emb["energy_mj"])))
+		if unlimited:
+			_hint_label("An unlimited supply: counted as brought in, not as stock.")
+		var src := CompositionCatalog.source_of(kind)
+		var note := ("Source: %s" % src) if not src.is_empty() else ""
+		if CompositionCatalog.is_estimate(kind):
+			note += " (an estimate)" if not note.is_empty() else "An estimated make-up"
+		if not note.is_empty():
+			_hint_label(note)
+	elif itype == "processor" or itype == "plant":
+		if itype == "processor" and (specs.get("inputs", []) as Array).is_empty() and (specs.get("outputs", []) as Array).is_empty():
+			return
+		var mb := MassBalance.of_item(item)
+		if float((mb["in"] as Dictionary)["kg"]) <= 0.0 and float((mb["out"] as Dictionary)["kg"]) <= 0.0 \
+				and str(mb["verdict"]) != "unknown":
+			return
+		_section("Mass balance")
+		var v := str(mb["verdict"])
+		var words := ""
+		match v:
+			"ok":
+				words = "✓ Balanced: every element in comes out"
+			"estimate":
+				words = "≈ Balanced (on estimated make-ups)"
+			"unknown":
+				words = "? Some kinds have no make-up: %s" % ", ".join(mb["unknown"])
+			_:
+				words = "⚠ " + _balance_words(mb)
+		_hint_label(words)
+		if v != "unknown":
+			_readonly_field("In / out (listed)", ("%s / %s per kg of crop" if itype == "plant" else "%s / %s per h") % [ElementLedger.fmt_kg(float((mb["in"] as Dictionary)["kg"])),
+				ElementLedger.fmt_kg(float((mb["out"] as Dictionary)["kg"]))])
+			var dw := float(mb["water_delta_kg"])
+			if absf(dw) > 0.001:
+				_readonly_field("Water out − in", "%s/h" % UiText.num(dw, "L"))
+			var gases: Dictionary = mb.get("air", {})
+			for g in gases.keys():
+				var kg := float(gases[g])
+				if absf(kg) < 1e-6:
+					continue
+				_readonly_field(str(ElementLedger.GAS_NAMES.get(g, g)), "%s %s/h" % ["gives off" if kg > 0.0 else "takes in",
+					ElementLedger.fmt_kg(absf(kg))])
+			var kept: Dictionary = mb.get("retained", {})
+			if not kept.is_empty():
+				_hint_label("Keeps %s on site (ash, sludge or the soil)." % ", ".join(kept.keys()))
+		if v == "unbalanced":
+			_hint_label("From its listed rates, with its air side closed. The listed outputs carry more or less of an element than its inputs: a rate or a make-up is off.")
+	elif itype == "compound":
+		var scope := str(item.get("child_scope_id", ""))
+		if scope.is_empty() or _model == null:
+			return
+		var led := ElementLedger.compute(_model, scope)
+		var st: Dictionary = led["stock"]
+		if (led["stores"] as Array).is_empty() and (led["nodes"] as Dictionary).is_empty():
+			return
+		_section("Water and nutrients inside")
+		_readonly_field("Usable water stored", ElementLedger.fmt_water_l(float(st["usable_water_kg"])))
+		if float(st["bound_water_kg"]) > 0.5:
+			_readonly_field("Water held in other stores", ElementLedger.fmt_water_l(float(st["bound_water_kg"])))
+		var ratio := float((led["water"] as Dictionary)["ratio"])
+		_readonly_field("Water recovery", "no used water flowing" if is_nan(ratio) else UiText.pct(ratio))
+		var b: Dictionary = led["boundary"]
+		var din: Dictionary = b["in"]
+		var dout: Dictionary = b["out"]
+		if float(din["kg_h"]) > 0.0 or float(dout["kg_h"]) > 0.0:
+			_readonly_field("Water in / out", "%s / %s per day" % [UiText.num(float(din["water_kg_h"]) * 24.0, "L"),
+				UiText.num(float(dout["water_kg_h"]) * 24.0, "L")])
+			_readonly_field("N in / out", "%s / %s per day" % [
+				ElementLedger.fmt_kg(float((din["elements"] as Dictionary).get("N", 0.0)) * 24.0),
+				ElementLedger.fmt_kg(float((dout["elements"] as Dictionary).get("N", 0.0)) * 24.0)])
+		for u in (led["unaccounted"] as Array).slice(0, 2):
+			_hint_label("⚠ %s: %s" % [str(u["name"]), ElementLedger.unaccounted_text(u)])
+
+
+func _comp_pct(f: float) -> String:
+	var p := f * 100.0
+	if p >= 10.0:
+		return "%d %%" % int(round(p))
+	if p >= 1.0:
+		return "%.1f %%" % p
+	return "%.2f %%" % p
+
+
+func _balance_words(mb: Dictionary) -> String:
+	var parts := PackedStringArray()
+	var main := ["C", "H", "O", "N", "P", "K"]
+	var cr_main: Array = (mb.get("creates", []) as Array).filter(func(e) -> bool: return main.has(e))
+	var ls_main: Array = (mb.get("loses", []) as Array).filter(func(e) -> bool: return main.has(e))
+	if not cr_main.is_empty():
+		parts.append("makes %s from nothing" % ", ".join(cr_main))
+	if not ls_main.is_empty():
+		parts.append("%s go missing" % ", ".join(ls_main))
+	if parts.is_empty():
+		var mr := float(mb.get("mass_rel", 0.0))
+		parts.append("%s %s of its mass" % ["gains" if mr > 0.0 else "loses", UiText.pct(absf(mr))])
+	return "; ".join(parts)
+
+
 func _rebuild_for_connection(conn: Dictionary) -> void:
 	_updating_form = true
 	_clear_form()
@@ -789,6 +927,16 @@ func _rebuild_for_connection(conn: Dictionary) -> void:
 		else:
 			_hint_label("No conduit diameter — sunlight isn't piped. Dash speed tracks SoI flux.")
 	elif is_res:
+		var fr := float(conn.get("flow_rate", 0.0))
+		if fr > 0.0 and CompositionCatalog.is_material(rkind) and not CompositionCatalog.row(rkind).is_empty():
+			var emb := CompositionCatalog.embodied(rkind, fr)
+			_section("Carries now")
+			_readonly_field("Mass", "%s/h" % ElementLedger.fmt_kg(float(emb["kg"])))
+			_readonly_field("Water", "%s/h" % UiText.num(float(emb["water_kg"]), "L"))
+			for e in ["C", "N", "P", "K"]:
+				var ekg := float((emb["elements"] as Dictionary).get(e, 0.0))
+				if ekg >= 1e-6:
+					_readonly_field(str(ElementLedger.ELEMENT_NAMES.get(e, e)), ElementLedger.fmt_kg_h(ekg))
 		_section("Conduit Info")
 		_num_field("Diameter (mm)",    float(conn.get("conduit_diameter",   25.0)), "conduit_diameter",       1, 1000, 1.0)
 		_length_field(conn)

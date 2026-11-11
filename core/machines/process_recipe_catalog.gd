@@ -91,8 +91,15 @@ const BUILTINS: Array = [
 			{"kind": "electric", "qty": 500.0, "mode": "continuous"},
 		],
 		"outputs": [
-			{"kind": "biochar", "qty": 12.0, "mode": "end_batch"},
+			{"kind": "biochar", "qty": 2.8, "mode": "end_batch"},
 		],
+		# A batch char kiln (TLUD-style): the volatiles burn off to make the
+		# heat, so ~35 % of the dry feed comes out as char and the rest leaves
+		# as CO2, water vapour and N2 (MassBalance "burn"). It made 12 kg of
+		# char from 10 kg of biomass before 2026-11-10.
+		"air": "burn",
+		# The ash (P, K) stays with the char in the kiln.
+		"retain": ["P", "K"],
 		"steps": [
 			{"id": "load", "label": "Load feedstock", "at_frac": 0.0,
 				"chore_hours": 0.15, "require_confirm": false},
@@ -106,7 +113,7 @@ const BUILTINS: Array = [
 	},
 	{
 		# The meal loop's producer half (see the Kitchen preset). One batch =
-		# one cooked round: 4 kg raw food + 10 L water + 1.5 kWh → 8 meals
+		# one cooked round: 4.8 kg raw food + 10 L water + 1.5 kWh → 8 meals
 		# (1 meal ~ 0.5 kg raw, the same sitting the eating activity draws),
 		# plus the honest waste stream — wet scraps to the digester loop, dry
 		# packaging to the bins. The two chore-hours steps are what put a COOK
@@ -122,14 +129,17 @@ const BUILTINS: Array = [
 		"chore_hours": 0.0,
 		"require_confirm_start": false,
 		"inputs": [
-			{"kind": "food", "qty": 4.0, "mode": "frontloaded"},
+			{"kind": "food", "qty": 4.8, "mode": "frontloaded"},
 			{"kind": "water", "qty": 10.0, "mode": "continuous"},
 			{"kind": "electric", "qty": 1500.0, "mode": "continuous"},
 		],
+		# 4.8 kg of food makes 4 kg of meals and 0.8 kg of peelings; the water
+		# washes up and drains as greywater (unwired, it drains on site).
+		# Packaging comes off when supplies are unpacked, not at the stove.
 		"outputs": [
 			{"kind": "meal", "qty": 8.0, "mode": "end_batch"},
-			{"kind": "food_waste", "qty": 0.8, "mode": "end_batch"},
-			{"kind": "packaging_waste", "qty": 0.3, "mode": "end_batch"},
+			{"kind": "food_waste", "qty": 1.4, "mode": "end_batch"},
+			{"kind": "greywater", "qty": 9.4, "mode": "continuous"},
 		],
 		"steps": [
 			{"id": "prep", "label": "Prep ingredients", "at_frac": 0.0,

@@ -98,7 +98,7 @@ func _test_catalog() -> void:
 		out_kinds.append(str((o as Dictionary).get("kind", "")))
 	_check("meal_prep outputs the full waste stream",
 		out_kinds.has("meal") and out_kinds.has("food_waste")
-			and out_kinds.has("packaging_waste"), str(out_kinds))
+			and out_kinds.has("greywater"), str(out_kinds))
 	# Neither crew step demands a player Confirm — with a finite ledger they
 	# become real cooking chores through the labour merge instead.
 	var any_confirm := false

@@ -325,8 +325,8 @@ func _test_loop_presets() -> void:
 		out_l += float(o.get("rate", 0.0))
 	_check("Urine Nutrient Recovery: 1 L in, ~1 L out", absf(out_l - 1.0) < 0.01, "%.4f" % out_l)
 	var dig := _preset_specs("Brownwater Digester (3 m³)")
-	_check("Brownwater Digester takes blackwater",
-		str(((dig.get("inputs", []) as Array)[0] as Dictionary).get("kind", "")) == "blackwater")
+	_check("Brownwater Digester takes brownwater (the urine-diverting toilet's flush)",
+		str(((dig.get("inputs", []) as Array)[0] as Dictionary).get("kind", "")) == "brownwater")
 	var flt := _preset_specs("Digestate Nitrification Filter")
 	var f_in := float(((flt.get("inputs", []) as Array)[0] as Dictionary).get("rate", 0.0))
 	var f_water := 0.0
@@ -343,7 +343,9 @@ func _test_loop_presets() -> void:
 		elif str(o3.get("kind", "")) == "plastic_waste":
 			plastic = float(o3.get("rate", 0.0))
 	_check("Unpack: all the food comes out", absf(food_out - 3.0) < 1e-6)
-	_check("Unpack: about 4 % plastic", absf(plastic / food_out - 0.04) < 0.005)
+	var packed_in := float(((up.get("inputs", []) as Array)[0] as Dictionary).get("rate", 0.0))
+	_check("Unpack: about 4 % of the packed supplies is plastic", packed_in > 0.0
+		and absf(plastic / packed_in - 0.04) < 0.005, "%.4f" % (plastic / maxf(packed_in, 1e-9)))
 	var imp := _preset_specs("Plastic Collection Run")
 	_check("Plastic Collection Run is a material import",
 		bool(imp.get("counts_as_import", false)) and bool(imp.get("material_import", false)))
