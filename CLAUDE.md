@@ -1893,6 +1893,22 @@ Godot.exe.exe --headless --path . --script core/composition/built_stock_selftest
 # store's "Close this loop" shows the kiln; a REAL Tab places it; a sim day
 # turns the lumber into biochar:
 tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/built_stock_check.gd -Label built_stock -Timeout 1200
+# What is in a tank as it really is (offline — Phase 10): MakeUp's kind
+# make-ups and mixing; derive_outputs conserving every element for each
+# preset PresetBalance.EXCEPTIONS lets off, half the N in giving half out,
+# fractions within a kg; CompositionTrack's buckets / truncate / round
+# trip; water grades and the grade-aware port rule (distilled fits a water
+# port; greywater and raw rain stay amber); catchments make rainwater; the
+# flow engine mixing a tracked tank, deriving a machine's outputs, wires
+# carrying the make-up, scrub back and truncation. EXPECTED_CHECKS:
+Godot.exe.exe --headless --path . --script core/composition/make_up_selftest.gd
+# The same with REAL input (sandbox): REAL clicks turn on "Track what is
+# in it" for the world's urine and nutrient stores; diluted urine gives
+# N-poor nutrients out of the machine (x0.50) and the store drifts down by
+# mass; the inspector shows the tracked make-up beside the kind's; a scrub
+# back rewinds it; a rain wire into a drinking-water store shows the grade
+# warning:
+tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/make_up_check.gd -Label make_up -Timeout 1200
 # Process recipes + chore ledger + workflow runner (offline — normalize/catalog,
 # legacy batch migration, scrub-safe progress, hybrid chore confirm, part credits,
 # workflow step advance; run --import first so class_names register):

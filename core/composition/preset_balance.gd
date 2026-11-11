@@ -13,6 +13,20 @@ extends RefCounted
 ## unit), habitats per person, plants per kg of crop (MassBalance.plant_io),
 ## recipes per batch.
 
+## Presets the static check lets off, with the reason: their output kind
+## shares one make-up with another machine's, and their feed does not fit
+## it. With composition tracked (Phase 10, MakeUp.derive_outputs) each of
+## them conserves every element; make_up_selftest holds them to that.
+const EXCEPTIONS := {
+	# Shares the liquid_fertilizer kind with the blackwater digester, but a
+	# urine-diverting toilet's brownwater carries about a third of the N:
+	# one static make-up per kind cannot show both digestates.
+	"Brownwater Digester (3 m³)": "digestate weaker than the shared kind's make-up",
+	# Shares the biochar kind with the crop-residue reactor, whose char holds
+	# that feed's ash; char from clean timber has almost none (C, H, O close).
+	"Biochar Kiln (scrap lumber)": "wood char has less ash than the shared kind's make-up",
+}
+
 const GROUP_MACHINES := "Processors and machines"
 const GROUP_HABITATS := "Habitats (per person)"
 const GROUP_PLANTS := "Plants (per kg of crop out)"

@@ -52,8 +52,8 @@ func _test_effective_area() -> int:
 
 
 func _test_catchment_output_kind() -> int:
-	if PbiBiomassScript.catchment_output_kind({"catchment_kind": "rain"}) != "water":
-		push_error("catchment_output_kind rain should be water")
+	if PbiBiomassScript.catchment_output_kind({"catchment_kind": "rain"}) != "rainwater":
+		push_error("catchment_output_kind rain should be rainwater")
 		return 1
 	if PbiBiomassScript.catchment_output_kind({"catchment_kind": "biomass"}) != "biomass":
 		push_error("catchment_output_kind biomass should be biomass")

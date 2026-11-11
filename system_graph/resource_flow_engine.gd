@@ -157,6 +157,17 @@ var _resource_conns_by_target_item: Dictionary = {}  # item_id -> Array[Dictiona
 ## full _model.connections re-scan by id on every call).
 var _conn_by_id: Dictionary = {}
 
+## What is in a tracked tank (resource composition plan Phase 10): opt-in
+## per tank (`specs.track_composition`). Each step a machine fed from a
+## tracked tank derives its outputs' make-up from its inputs
+## (MakeUp.derive_outputs); a tracked tank mixes in what flowed into it by
+## mass; the make-up is kept per 15 min (CompositionTrack) so scrubbing and
+## the pre-render replay read it as it was. Nothing runs while no tank is
+## tracked.
+var _tracks: Dictionary = {}        # tank id -> CompositionTrack
+var _out_makeup: Dictionary = {}    # processor id -> {output index: make-up}
+var _mu_active := false
+
 
 ## Rebuilds every adjacency index above from _model.connections. O(connections)
 ## once per tick, replacing what used to be an O(connections) scan PER PORT
@@ -312,6 +323,144 @@ func replay_at(abs_hours: float) -> void:
 func truncate_timelines_after(abs_hours: float) -> void:
 	for tl in _timelines.values():
 		(tl as ResourceTimeline).truncate_after(abs_hours)
+	for tr in _tracks.values():
+		(tr as CompositionTrack).truncate_after(abs_hours)
+
+
+# --- what is in tracked tanks (Phase 10) ------------------------------------
+
+## A tank's make-up now: its tracked one, else its kind's own.
+func tank_make_up(iid: String) -> Dictionary:
+	var it := _model.get_item(iid) if _model != null else {}
+	var sp: Dictionary = it.get("specs", {})
+	if bool(sp.get("track_composition", false)) and sp.get("make_up") is Dictionary \
+			and not (sp["make_up"] as Dictionary).is_empty():
+		return sp["make_up"]
+	return MakeUp.of_kind(str(sp.get("resource_kind", "")))
+
+
+func composition_track(iid: String) -> CompositionTrack:
+	return _tracks.get(iid) as CompositionTrack
+
+
+## Before tanks integrate: machines fed from a tracked tank derive their
+## outputs; every material wire carries the make-up its source gives it.
+func _prepare_composition() -> void:
+	var any := false
+	for t: Dictionary in _model.items_of_type("resource"):
+		if bool((t.get("specs", {}) as Dictionary).get("track_composition", false)):
+			any = true
+			break
+	if not any:
+		if _mu_active:
+			for conn: Dictionary in _model.connections:
+				conn.erase("make_up")
+			_out_makeup.clear()
+			_mu_active = false
+		return
+	_mu_active = true
+	_out_makeup.clear()
+	for proc: Dictionary in _model.items_of_type("processor"):
+		var sp: Dictionary = proc.get("specs", {})
+		if str(sp.get("role", "")) == "habitat" or DesignGap.is_gap(sp) or bool(sp.get("batch_mode", false)):
+			continue
+		var pid := str(proc.get("id", ""))
+		var ins: Array = []
+		var tracked_in := false
+		var inputs: Array = sp.get("inputs", [])
+		for i in inputs.size():
+			var inp: Dictionary = inputs[i]
+			var k := ResourceKinds.normalize_kind(str(inp.get("kind", "")))
+			if not CompositionCatalog.is_material(k):
+				continue
+			var tid := _tank_at_port(pid, "res_in_%d" % i, true)
+			if tid.is_empty():
+				tid = _tank_at_port(pid, "input", true)
+			var mu: Dictionary = {}
+			if not tid.is_empty() and bool(((_model.get_item(tid).get("specs", {})) as Dictionary).get("track_composition", false)):
+				mu = tank_make_up(tid)
+				tracked_in = true
+			ins.append({"kind": k, "kg_h": float(inp.get("rate", 0.0)) * CompositionCatalog.kg_per_unit(k), "make_up": mu})
+		if not tracked_in:
+			continue
+		var outs: Array = []
+		var outputs: Array = sp.get("outputs", [])
+		for o in outputs:
+			var ok := ResourceKinds.normalize_kind(str((o as Dictionary).get("kind", "")))
+			var kg := float((o as Dictionary).get("rate", 0.0)) * CompositionCatalog.kg_per_unit(ok) \
+				if CompositionCatalog.is_material(ok) else 0.0
+			outs.append({"kind": ok, "kg_h": kg})
+		var res := MakeUp.derive_outputs(ins, outs)
+		var by: Dictionary = {}
+		for j in res.size():
+			if float((outs[j] as Dictionary)["kg_h"]) > 0.0:
+				by[j] = res[j]
+		_out_makeup[pid] = by
+	for conn: Dictionary in _model.connections:
+		if str(conn.get("polarity", "")) != "resource":
+			continue
+		var src := str(conn.get("source_item_id", ""))
+		var mu2: Dictionary = {}
+		if _out_makeup.has(src):
+			var h := str(conn.get("source_handle_id", ""))
+			if h.begins_with("res_out_"):
+				mu2 = (_out_makeup[src] as Dictionary).get(int(h.substr(8)), {})
+		else:
+			var sit := _model.get_item(src)
+			if str(sit.get("type", "")) == "resource" and bool((sit.get("specs", {}) as Dictionary).get("track_composition", false)):
+				mu2 = tank_make_up(src)
+		if mu2.is_empty():
+			conn.erase("make_up")
+		else:
+			conn["make_up"] = MakeUp.rounded(mu2)
+
+
+## Mix what flowed into a tracked tank this step into what it held.
+func _mix_tank(iid: String, specs: Dictionary, net: float, dt_hours: float) -> Dictionary:
+	var kind := ResourceKinds.normalize_kind(str(specs.get("resource_kind", "")))
+	var kgpu := CompositionCatalog.kg_per_unit(kind)
+	var cur := tank_make_up(iid)
+	var stock_kg := clampf(float(specs.get("level", 0.0)), 0.0, 1.0) * _effective_capacity_qty(specs) * kgpu
+	var wired_kg := 0.0
+	var mu := cur
+	var kg_have := stock_kg
+	for conn: Dictionary in _model.connections:
+		if str(conn.get("target_item_id", "")) != iid or str(conn.get("polarity", "")) != "resource":
+			continue
+		var rate := float((_conn_flow.get(str(conn.get("id", "")), {}) as Dictionary).get("rate", 0.0))
+		if rate <= 0.0:
+			continue
+		var ck := ResourceKinds.normalize_kind(str(conn.get("resource_type", kind)))
+		if not CompositionCatalog.is_material(ck):
+			ck = kind
+		var kg := rate * dt_hours * CompositionCatalog.kg_per_unit(ck)
+		var cmu: Dictionary = conn.get("make_up", {}) if conn.get("make_up") is Dictionary else {}
+		if cmu.is_empty():
+			cmu = MakeUp.of_kind(ck)
+		mu = MakeUp.mix(mu, kg_have, cmu, kg)
+		kg_have += kg
+		wired_kg += kg
+	# Inflow no wire explains (rain on a pond, a stream, a delivery): the
+	# tank's own kind.
+	var other := maxf(net, 0.0) * dt_hours * kgpu - wired_kg
+	if other > 1e-9:
+		mu = MakeUp.mix(mu, kg_have, MakeUp.of_kind(kind), other)
+	return mu
+
+
+func _store_make_up(iid: String, mu: Dictionary, abs_hours: float) -> void:
+	if abs_hours >= 0.0:
+		if not _tracks.has(iid):
+			_tracks[iid] = CompositionTrack.new()
+		(_tracks[iid] as CompositionTrack).record(abs_hours, mu)
+	var it := _model.get_item(iid)
+	var sp: Dictionary = it.get("specs", {})
+	var old: Dictionary = sp.get("make_up", {}) if sp.get("make_up") is Dictionary else {}
+	if not old.is_empty() and MakeUp.same(old, mu, 1e-5):
+		return
+	var sp2 := sp.duplicate(false)
+	sp2["make_up"] = MakeUp.rounded(mu)
+	_model.update_item(iid, {"specs": sp2})
 
 
 ## The wire-animation flows as the render saw them at one instant …
@@ -558,6 +707,10 @@ func _read_all_tanks_at(abs_hours: float) -> void:
 		var tl: ResourceTimeline = _timelines[iid] as ResourceTimeline
 		var sample := tl.seek(abs_hours)
 		_apply_tank_sample(item, sample, tl, abs_hours)
+		if _tracks.has(iid):
+			var mu := (_tracks[iid] as CompositionTrack).at(abs_hours)
+			if not mu.is_empty():
+				_store_make_up(iid, mu, -1.0)
 
 
 ## Stage–storage curve helpers — thin delegators to PondBathymetry, the one
@@ -708,6 +861,7 @@ func _simulate_step(abs_hours: float, dt_hours: float) -> void:
 	_credit_stream_inflows(net_rates, dt_hours, abs_hours)
 	_apply_external_flows(net_rates, dt_hours)
 	_pond_budget_pass(net_rates, dt_hours, abs_hours)
+	_prepare_composition()
 
 	# Integrate timelines
 	for item: Dictionary in _model.items_of_type("resource"):
@@ -725,9 +879,14 @@ func _simulate_step(abs_hours: float, dt_hours: float) -> void:
 		var net: float = float(net_rates.get(iid, 0.0))
 		var infl: float = maxf(net, 0.0)
 		var outf: float = maxf(-net, 0.0)
+		var mixed: Dictionary = {}
+		if _mu_active and bool(specs.get("track_composition", false)):
+			mixed = _mix_tank(iid, specs, net, dt_hours)
 		tl.record_step(abs_hours, net, infl, outf)
 		var sample := tl.sample_at(abs_hours)
 		_apply_tank_sample(item, sample, tl, abs_hours)
+		if not mixed.is_empty():
+			_store_make_up(iid, mixed, abs_hours)
 
 
 ## Rain / Sunlight / Wind PBI: environment-driven telemetry + optional wire viz.
@@ -1159,7 +1318,7 @@ func _process_catchment(item: Dictionary, net_rates: Dictionary, dt_hours: float
 	var abs_h: float = abs_hours if abs_hours >= 0.0 else _get_abs_hours()
 	if abs_h < 0.0:
 		abs_h = 0.0
-	_credit_catchment_flow(item, net_rates, capture_lph, "water", dt_hours, abs_h)
+	_credit_catchment_flow(item, net_rates, capture_lph, "rainwater", dt_hours, abs_h)
 
 
 ## Auto pond capacity: prefer TerrainLoader bathymetry over stale import estimate.
@@ -2545,7 +2704,10 @@ func _credit_catchment_flow(item: Dictionary, net_rates: Dictionary,
 			continue
 		var tgt_specs: Dictionary = (tgt.get("specs", {}) as Dictionary).duplicate(true)
 		_rk.migrate_resource_specs(tgt_specs)
-		if str(tgt_specs.get("resource_kind", "")) != want_kind:
+		var tk := ResourceKinds.normalize_kind(str(tgt_specs.get("resource_kind", "")))
+		# Rain also fills plain water stores (worlds wired before rain was its
+		# own kind; the wire now says rainwater and the inspector warns).
+		if tk != want_kind and not (want_kind == "rainwater" and tk == "water"):
 			continue
 		var tl: ResourceTimeline = _timelines.get(tgt_id) as ResourceTimeline
 		if not _is_pond_tank(tgt_specs) and not _tank_accepts_inflow(tgt_specs, tl, abs_h):
@@ -2566,7 +2728,7 @@ func _credit_catchment_flow(item: Dictionary, net_rates: Dictionary,
 			# Ponds: the spill pass caps them and routes the surplus.
 			if not bool(tgt_specs2.get("input_valve_open", true)):
 				credit = 0.0
-			elif want_kind == "water":
+			elif want_kind == "water" or want_kind == "rainwater":
 				_book_pond(tgt_id2, "rain", credit)
 		# Cap to remaining headroom so catchments do not toast-overflow tanks.
 		# Use 0.999 ceiling to stay below ResourceTimeline.is_overflowing_at.

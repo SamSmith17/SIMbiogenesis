@@ -786,17 +786,36 @@ func _build_composition_section(item: Dictionary) -> void:
 		if g >= 0:
 			_readonly_field("Water grade", "%s (%d of 6)" % [str(CompositionData.GRADES.get(g, "")), g])
 		var unlimited := bool(specs.get("unlimited_capacity", false)) or bool(specs.get("allow_negative", false))
+		# Track what is in it (Phase 10): the store's own make-up as things
+		# mix in it, instead of its kind's.
+		var track_row := _row_container()
+		var track_h: HBoxContainer = track_row.get_child(0) as HBoxContainer
+		track_h.add_child(_key_label("Track what is in it"))
+		var track_cb := CheckBox.new()
+		track_cb.name = "track_composition"
+		track_cb.button_pressed = bool(specs.get("track_composition", false))
+		track_cb.focus_mode = Control.FOCUS_NONE
+		track_cb.tooltip_text = "Mix what flows in by mass, and let machines fed from here pass on what it really holds (a weaker feed makes weaker outputs). Off: it holds its kind's own make-up."
+		track_cb.toggled.connect(func(on: bool) -> void: _commit_field("specs/track_composition", on))
+		track_h.add_child(track_cb)
+		_form_vbox.add_child(track_row)
+		var tracked_mu: Dictionary = specs.get("make_up", {}) \
+			if bool(specs.get("track_composition", false)) and specs.get("make_up") is Dictionary else {}
+		var kind_mu := MakeUp.of_kind(kind)
 		var emb: Dictionary = {}
 		if not unlimited:
-			emb = CompositionCatalog.embodied(kind, ResourceKinds.tank_stock_qty(specs))
+			emb = MakeUp.embodied(kind, ResourceKinds.tank_stock_qty(specs), tracked_mu)
 			_readonly_field("In this store", ElementLedger.fmt_kg(float(emb["kg"])))
 			_readonly_field("Water in it", ElementLedger.fmt_water_l(float(emb["water_kg"])))
 		var per_kg := CompositionCatalog.elements_of(kind)
 		for e in ["C", "N", "P", "K"]:
-			var f := float(per_kg.get(e, 0.0))
-			if f < 0.0001:
+			var f := float(tracked_mu.get(e, per_kg.get(e, 0.0))) if not tracked_mu.is_empty() else float(per_kg.get(e, 0.0))
+			if f < 0.0001 and float(kind_mu.get(e, 0.0)) < 0.0001:
 				continue
 			var val := _comp_pct(f)
+			if not tracked_mu.is_empty() and absf(f - float(kind_mu.get(e, 0.0))) > 0.005 * maxf(float(kind_mu.get(e, 0.0)), 1e-6):
+				# Three significant figures, or a small drift rounds away.
+				val = "%s (its kind: %s)" % [_sig_pct(f), _sig_pct(float(kind_mu.get(e, 0.0)))]
 			if not emb.is_empty():
 				val += " · %s here" % ElementLedger.fmt_kg(float((emb["elements"] as Dictionary).get(e, 0.0)))
 			_readonly_field(str(ElementLedger.ELEMENT_NAMES.get(e, e)), val)
@@ -953,8 +972,37 @@ func _rebuild_for_connection(conn: Dictionary) -> void:
 			_hint_label("No conduit diameter — sunlight isn't piped. Dash speed tracks SoI flux.")
 	elif is_res:
 		var fr := float(conn.get("flow_rate", 0.0))
+		# The wire's live make-up sits on the model's own connection (Phase 10).
+		var live_mu: Dictionary = {}
+		var tgt_need := ""
+		if _model != null:
+			for mc in _model.connections:
+				if str((mc as Dictionary).get("id", "")) == str(conn.get("id", "-")):
+					fr = float((mc as Dictionary).get("flow_rate", fr))
+					if (mc as Dictionary).get("make_up") is Dictionary:
+						live_mu = (mc as Dictionary)["make_up"]
+					break
+			var tgt: Dictionary = _model.get_item(str(conn.get("target_item_id", "")))
+			var tsp: Dictionary = tgt.get("specs", {})
+			var th := str(conn.get("target_handle_id", ""))
+			if str(tgt.get("type", "")) == "resource":
+				tgt_need = str(tsp.get("resource_kind", ""))
+			elif th.begins_with("res_in_"):
+				var tins: Array = tsp.get("inputs", [])
+				var ti := int(th.substr(7))
+				if ti >= 0 and ti < tins.size():
+					tgt_need = str((tins[ti] as Dictionary).get("kind", ""))
+		var gw := MakeUp.grade_warning(rkind, tgt_need) if not tgt_need.is_empty() else ""
+		if not gw.is_empty():
+			var gl := Label.new()
+			gl.name = "grade_warning"
+			gl.text = "⚠ " + gw
+			gl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			gl.add_theme_color_override("font_color", UITheme.C_WARN)
+			gl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+			_form_vbox.add_child(_wrap_margin(gl, 12, 4))
 		if fr > 0.0 and CompositionCatalog.is_material(rkind) and not CompositionCatalog.row(rkind).is_empty():
-			var emb := CompositionCatalog.embodied(rkind, fr)
+			var emb := MakeUp.embodied(rkind, fr, live_mu)
 			_section("Carries now")
 			_readonly_field("Mass", "%s/h" % ElementLedger.fmt_kg(float(emb["kg"])))
 			_readonly_field("Water", "%s/h" % UiText.num(float(emb["water_kg"]), "L"))
@@ -1548,6 +1596,15 @@ func _build_gap_section(item: Dictionary, specs: Dictionary) -> void:
 			else:
 				lc.call(fn, iid))
 		_form_vbox.add_child(b)
+
+
+## A fraction as a percentage to three significant figures ("74.7 %").
+func _sig_pct(f: float) -> String:
+	var p := f * 100.0
+	if p <= 0.0:
+		return "0 %"
+	var dec := clampi(2 - int(floorf(log(p) / log(10.0))), 0, 6)
+	return ("%." + str(dec) + "f %%") % p
 
 
 ## "Close this loop": the loop closer's ghosts for that kind (Phase 7).

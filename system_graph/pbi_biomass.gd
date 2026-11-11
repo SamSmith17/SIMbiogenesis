@@ -42,4 +42,6 @@ static func effective_area_m2(specs: Dictionary, soi_area_m2: float) -> float:
 static func catchment_output_kind(specs: Dictionary) -> String:
 	if str(specs.get("catchment_kind", "rain")) == "biomass":
 		return "biomass"
-	return "water"
+	# Rain is its own kind (Phase 10): grade 4, not drinking water until it is
+	# filtered. Catchments still fill plain water stores they are wired to.
+	return "rainwater"

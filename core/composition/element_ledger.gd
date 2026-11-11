@@ -66,9 +66,13 @@ static func compute(model: GraphModel, scope_id: String = "root") -> Dictionary:
 	# Live rates sit on the model's own connection dicts (flat copies are
 	# cached per revision and carry stale telemetry).
 	var rate_of: Dictionary = {}
+	var mu_of: Dictionary = {}
 	for c in model.connections:
 		var cd: Dictionary = c
 		rate_of[str(cd.get("id", ""))] = float(cd.get("flow_rate", 0.0))
+		# What the wire really carries when composition is tracked (Phase 10).
+		if cd.get("make_up") is Dictionary:
+			mu_of[str(cd.get("id", ""))] = cd["make_up"]
 	var nodes: Dictionary = out["nodes"]
 	var has_mat_in: Dictionary = {}
 	var inflow_to: Dictionary = {}
@@ -89,7 +93,7 @@ static func compute(model: GraphModel, scope_id: String = "root") -> Dictionary:
 		var rate := float(rate_of.get(str(f.get("id", "")), 0.0))
 		if rate <= 0.0:
 			continue
-		var emb := CompositionCatalog.embodied(kind, rate)
+		var emb := MakeUp.embodied(kind, rate, mu_of.get(str(f.get("id", "")), {}))
 		if not bool(emb["known"]):
 			continue
 		wires.append({"src": src, "tgt": tgt, "kind": kind, "emb": emb, "rate": rate})
@@ -152,7 +156,8 @@ static func _stocks(items: Array, out: Dictionary) -> void:
 			continue
 		var qty := ResourceKinds.tank_stock_qty(specs)
 		var name := str(specs.get("name", d.get("id", "")))
-		var emb := CompositionCatalog.embodied(kind, qty)
+		var tracked: Dictionary = specs.get("make_up", {}) 			if bool(specs.get("track_composition", false)) and specs.get("make_up") is Dictionary else {}
+		var emb := MakeUp.embodied(kind, qty, tracked)
 		var row := {"id": str(d.get("id", "")), "name": name, "kind": kind, "qty": qty,
 			"unit": ResourceKinds.default_unit(kind), "known": bool(emb["known"])}
 		if not bool(emb["known"]):

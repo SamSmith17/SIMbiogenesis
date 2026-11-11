@@ -644,7 +644,13 @@ static func kinds_compatible(src_kind: String, tgt_kind: String) -> bool:
 	var b := normalize_kind(tgt_kind)
 	if a.is_empty() or b.is_empty():
 		return false
-	return a == b
+	if a == b:
+		return true
+	# Grade-aware water (resource composition plan Phase 10): any water at or
+	# above the grade a port asks for fits it (distilled water into a
+	# drinking-water input). A lower grade is the amber "unusual" wire.
+	return CompositionCatalog.family_of(a) == "water" and CompositionCatalog.family_of(b) == "water" \
+		and MakeUp.grade_ok(a, b)
 
 
 ## Maps a unit string to its fundamental measure so kinds with different
