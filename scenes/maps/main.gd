@@ -1003,6 +1003,9 @@ func _ready() -> void :
 	_setup_help_overlay_ui()
 	_setup_unified_library_ui()
 	_maybe_show_first_run_help()
+	# Designs an AI tool simulated and sent to the game (docs/SIMKIT_MCP.md).
+	if not SimkitMode.active() :
+		get_tree().create_timer( 8.0 ).timeout.connect( _notify_ai_inbox )
 
 	_apply_scenario_rules()
 
@@ -5644,6 +5647,14 @@ var _compare_view : Node = null
 ## fork id), run: bool}.
 ## `selection`: [start, end] absolute hours as a PackedFloat64Array (a
 ## Vector2 is accepted but float32 has already rounded it to 2 h).
+## A toast when designs from AI tools are waiting in user://simkit/inbox.
+func _notify_ai_inbox() -> void :
+	var inbox := load( "res://core/simkit/simkit_inbox.gd" )
+	var n : int = int( inbox.call( "count" ) ) if inbox != null else 0
+	if n > 0 :
+		show_toast( "%s from your AI tools: open Compare (⧉ on the timeline) → A vs B → From AI tools." % UiText.count( n, "design" ) )
+
+
 func open_compare_view( selection: Variant = PackedFloat64Array( [ NAN, NAN ] ), opts: Dictionary = {} ) -> Node :
 	if _compare_view != null and is_instance_valid( _compare_view ) :
 		if not opts.is_empty() and _compare_view.has_method( "apply_opts" ) :

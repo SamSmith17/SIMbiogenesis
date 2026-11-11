@@ -51,6 +51,10 @@ const SIM_COLORS := [UITheme.C_AMBER, UITheme.C_PRIMARY, UITheme.C_LAVENDER]
 const VERDICT_WORDS := {"good": "Matches", "fair": "Roughly", "poor": "Off", "n/a": "—"}
 
 var _main: Node = null
+const _Inbox := preload("res://core/simkit/simkit_inbox.gd")
+var _inbox_btn: Button = null
+var _inbox_menu: PopupMenu = null
+var _inbox_items: Array = []
 ## [start, end] of the timeline selection, absolute hours (NAN = none).
 var _selection := PackedFloat64Array([NAN, NAN])
 var _frame: ModalFrame = null
@@ -112,6 +116,7 @@ func open_on(main: Node, selection: Variant, opts: Dictionary = {}) -> void:
 		o["mode"] = str(_store.last.get("mode", MODE_CAL))
 	_frame.open()
 	apply_opts(o)
+	_refresh_inbox_button()
 
 
 ## {mode, a, b, span (a span key), metric, run}.
@@ -823,6 +828,8 @@ func _build_ab(box: VBoxContainer) -> void:
 	_edit_btn = _button(r2, "Edit B…", _on_edit_fork)
 	_rename_btn = _button(r2, "Rename B…", _on_rename_toggle)
 	_delete_btn = _button(r2, "Delete B", _on_delete_fork)
+	_inbox_btn = _button(r2, "From AI tools", _on_inbox_pressed)
+	_inbox_btn.tooltip_text = "Designs an AI tool simulated and sent here (docs/SIMKIT_MCP.md). Importing one makes a fork; nothing changes in the world."
 	_forks_note = _lbl(r2, "")
 	_rename_row = _row(box)
 	_lbl(_rename_row, "New name")
@@ -931,6 +938,68 @@ func _variant_graph(id: String) -> Dictionary:
 	if id == ExperimentStore.CURRENT:
 		return _current_graph()
 	return _store.get_fork(id).get("graph", {})
+
+
+## Designs sent by an AI tool (core/simkit/simkit_inbox.gd): a menu of them;
+## picking one makes it a fork and selects it as B.
+func _on_inbox_pressed() -> void:
+	var items := _Inbox.entries()
+	if items.is_empty():
+		_banner.show_alert(AlertBanner.INFO,
+			"No designs from AI tools. Connect one to the simulation server (docs/SIMKIT_MCP.md) and have it submit a design.")
+		return
+	if _inbox_menu == null:
+		_inbox_menu = PopupMenu.new()
+		add_child(_inbox_menu)
+		_inbox_menu.id_pressed.connect(_on_inbox_item)
+	_inbox_menu.clear()
+	_inbox_items = items
+	for i in items.size():
+		var e: Dictionary = items[i]
+		_inbox_menu.add_item("Import “%s” — %s" % [str(e["name"]), _Inbox.describe(e)], i)
+		_inbox_menu.set_item_tooltip(_inbox_menu.get_item_count() - 1, str(e["note"]))
+	_inbox_menu.add_separator()
+	_inbox_menu.add_item("Discard them all", 9000)
+	_inbox_menu.position = Vector2i(get_viewport().get_mouse_position())
+	_inbox_menu.popup()
+
+
+func _on_inbox_item(id: int) -> void:
+	if id == 9000:
+		for e in _inbox_items:
+			_Inbox.archive(str(e["path"]), "discarded")
+		_refresh_inbox_button()
+		return
+	if id < 0 or id >= _inbox_items.size():
+		return
+	if _store_path.is_empty():
+		_banner.show_alert(AlertBanner.WARN, "Forks need a world — load one first.")
+		return
+	var e: Dictionary = _inbox_items[id]
+	var graph := _Inbox.graph_of(str(e["path"]))
+	if graph.is_empty():
+		_banner.show_alert(AlertBanner.WARN, "“%s” has no usable graph; it was set aside." % str(e["name"]))
+		_Inbox.archive(str(e["path"]), "discarded")
+		_refresh_inbox_button()
+		return
+	var name := _store.unique_name("AI: " + str(e["name"]))
+	var fid := _store.add_fork(name, graph, "From an AI tool. %s\n%s" % [_Inbox.describe(e), str(e["note"])])
+	_save_store()
+	_Inbox.archive(str(e["path"]))
+	_refresh_inbox_button()
+	_refresh_variants(ExperimentStore.CURRENT, fid)
+	var here := WorldPaths.active_world_id()
+	var other := not str(e["site"]).is_empty() and not here.is_empty() and str(e["site"]) != here
+	_banner.show_alert(AlertBanner.WARN if other else AlertBanner.INFO,
+		"Imported “%s” as B (%s).%s Run A vs B to see it on this world, or Edit B to open it in the graph." % [
+			name, _Inbox.describe(e), " It was designed for another site." if other else ""])
+
+
+func _refresh_inbox_button() -> void:
+	if _inbox_btn == null:
+		return
+	var n := _Inbox.count()
+	_inbox_btn.text = "From AI tools (%d)" % n if n > 0 else "From AI tools"
 
 
 func _on_new_fork() -> void:

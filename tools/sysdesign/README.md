@@ -5,7 +5,9 @@ year or more on the game's simulation, and read what happened.
 
 ## The loop
 
-1. Write a design: `designs/<name>.json`.
+1. Write a design: `core/simkit/designs/<name>.json` (the engine, builder,
+   stepper and report live in `core/simkit/` so the headless kernel and the
+   MCP server use them too; see `docs/SIMKIT_MCP.md`).
 2. Dry-run it in the harness sandbox (the world is not changed):
 
    ```
@@ -25,7 +27,7 @@ board or a node's state at the end.
 
 ## What a run is
 
-`sysdesign_year.gd` steps the LIVE graph of the loaded world with the game's
+`core/simkit/simkit_year.gd` steps the LIVE graph of the loaded world with the game's
 own pieces, in the order the pre-render uses:
 
 | Part | Source |
@@ -44,7 +46,7 @@ hours is zero, so a recipe step that needs hands waits for a person.
 
 ## What "sustained" means
 
-`sysdesign_report.gd` passes a run only if all of these hold:
+`core/simkit/simkit_report.gd` passes a run only if all of these hold:
 
 - nobody went without water or food (an empty meal counter does not count:
   people fall back to the pantry);
@@ -84,7 +86,7 @@ hours is zero, so a recipe step that needs hands waits for a person.
   `"dc"` wires a generator's DC pair to a battery.
 - Processors are OFF unless switched on; a node with automations starts off
   and its rules switch it (the game's own rule).
-- `recipes/*.json` are fitted from the TC Process Lab's model by
+- `core/simkit/recipes/*.json` are fitted from the TC Process Lab's model by
   `fit_tc_recipes.gd` (headless), with a crew step to load and one to empty.
 
 ## Building a world from a design

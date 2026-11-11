@@ -1,0 +1,26 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scenes/maps/main.gd" id="1_main"]
+[ext_resource type="PackedScene" path="res://scenes/ui/solar_ui.tscn" id="2_solar"]
+[ext_resource type="PackedScene" path="res://system_graph/system_graph_view.tscn" id="3_sgv"]
+[ext_resource type="Script" path="res://core/simkit/simkit_runner.gd" id="4_runner"]
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1_main")
+latitude = 33.36
+longitude = -115.74
+enable_random_fires = false
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+
+[node name="Moon" type="DirectionalLight3D" parent="."]
+
+[node name="UILayer" type="CanvasLayer" parent="."]
+
+[node name="SolarUI" parent="UILayer" instance=ExtResource("2_solar")]
+
+[node name="SystemGraphView" parent="UILayer" instance=ExtResource("3_sgv")]
+visible = false
+
+[node name="SimKit" type="Node" parent="."]
+script = ExtResource("4_runner")

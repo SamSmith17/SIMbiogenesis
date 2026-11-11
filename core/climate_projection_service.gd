@@ -487,7 +487,7 @@ func _fetch_open_meteo_network(lat: float, lon: float) -> void:
 		+ "&models=%s&daily=temperature_2m_max,temperature_2m_min,precipitation_sum"
 		+ "&timezone=UTC"
 	) % [CLIMATE_URL, lat, lon, BASELINE_START, PROJ_END, model]
-	var err := _http.request(url)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("climate") else _http.request(url)
 	if err != OK:
 		_fetching = false
 		projection_failed.emit("HTTPRequest error %d" % err)

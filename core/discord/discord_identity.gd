@@ -233,7 +233,7 @@ func _bind_loopback() -> Dictionary:
 	_close_server()
 	_server = TCPServer.new()
 	for port in DiscordConfig.REDIRECT_PORTS:
-		if _server.listen(int(port), "127.0.0.1") == OK:
+		if not SimkitMode.blocks("discord") and _server.listen(int(port), "127.0.0.1") == OK:
 			return {"ok": true, "redirect": DiscordConfig.redirect_uri(int(port))}
 	_server = null
 	# There is no runtime workaround: the redirect URI must be one Discord

@@ -7,7 +7,7 @@ extends SceneTree
 ##
 ##   Godot --headless --path . --script tools/sysdesign/fit_tc_recipes.gd
 ##
-## Writes tools/sysdesign/recipes/<preset>.json.
+## Writes core/simkit/recipes/<preset>.json.
 
 const JOBS := [
 	{"preset": "biochar_reactor", "binds": "Biochar Reactor",
@@ -21,7 +21,7 @@ const UNLOAD_H := 0.3
 
 
 func _initialize() -> void:
-	DirAccess.make_dir_recursive_absolute("res://tools/sysdesign/recipes")
+	DirAccess.make_dir_recursive_absolute("res://core/simkit/recipes")
 	for job: Dictionary in JOBS:
 		var spec := TcPresets.builtin(str(job["preset"]))
 		var pr := TcProcSpec.resolve(spec.get("process", {}))
@@ -66,7 +66,7 @@ func _initialize() -> void:
 		var keep := {"watts": recipe.get("watts", 0.0), "gas_lhv_mj_nm3": recipe.get("gas_lhv_mj_nm3", 0.0),
 			"gas_composition": recipe.get("gas_composition", {}), "tc_summary": recipe.get("tc_summary", {})}
 		recipe = ProcessRecipe.normalize(recipe).merged(keep)
-		var path := "res://tools/sysdesign/recipes/%s.json" % str(job["preset"])
+		var path := "res://core/simkit/recipes/%s.json" % str(job["preset"])
 		var f := FileAccess.open(path, FileAccess.WRITE)
 		f.store_string(JSON.stringify(recipe, "  "))
 		f.close()

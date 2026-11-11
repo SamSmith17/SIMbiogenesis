@@ -157,7 +157,7 @@ func request_air_quality(lat: float, lon: float) -> void:
 		% [AQ_URL, lat, lon, AQ_VARS, PAST_DAYS, FORECAST_DAYS]
 	_pending_url = url
 	_retries = 0
-	var err := _http.request(url)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("air_quality") else _http.request(url)
 	if err != OK:
 		# Deferred so a consumer that connects right after this call still sees
 		# the notification — the project-wide rule for this pattern.
@@ -330,7 +330,7 @@ func _on_completed(result: int, code: int, _headers: PackedStringArray,
 			return
 		var delay := RETRY_BACKOFF * float(_retries)
 		get_tree().create_timer(delay).timeout.connect(func() -> void:
-			if _fetching and not _pending_url.is_empty():
+			if _fetching and not _pending_url.is_empty() and not SimkitMode.blocks("air_quality"):
 				_http.request(_pending_url), CONNECT_ONE_SHOT)
 		return
 	if code != 200:

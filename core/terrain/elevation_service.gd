@@ -656,7 +656,7 @@ func _dispatch_next(worker: int) -> void:
 		lon_parts.append("%.5f" % lons[i])
 	var url := "%s?latitude=%s&longitude=%s" % [
 		OPEN_METEO_URL, ",".join(lat_parts), ",".join(lon_parts)]
-	var err := _pool[worker].request(url)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("terrain") else _pool[worker].request(url)
 	if err != OK:
 		_fail("HTTPRequest error %d" % err)
 
@@ -886,7 +886,7 @@ static func sample_terrarium_mosaic(mosaic: PackedFloat32Array, w: int, h: int,
 func _fire_terrarium_tile() -> void:
 	var t: Vector2i = (_job["tiles"] as Array)[int(_job["tile_i"])]
 	var url := TERRARIUM_URL % [int(_job["z"]), t.x, t.y]
-	var err := _terrarium_http.request(url)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("terrain") else _terrarium_http.request(url)
 	if err != OK:
 		if _advance_ladder("HTTPRequest error %d" % err):
 			return
@@ -1013,7 +1013,7 @@ func _fire_opentopo_tile() -> void:
 	var tile: Dictionary = tiles[int(_job["tile_i"])]
 	_job["url"] = _build_opentopo_url(str(_job["base_url"]), str(_job["dem_name"]),
 		tile["req"], str(_job["api_key"]))
-	var err := _opentopo_http.request(str(_job["url"]))
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("terrain") else _opentopo_http.request(str(_job["url"]))
 	if err != OK:
 		if _advance_ladder("HTTPRequest error %d" % err):
 			return

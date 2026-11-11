@@ -90,7 +90,7 @@ func request_gistemp() -> void:
 		gistemp_ready.emit.call_deferred()
 		return
 	_ensure_http()
-	var err := _http.request(GISTEMP_URL)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("climate") else _http.request(GISTEMP_URL)
 	if err != OK:
 		gistemp_failed.emit.call_deferred("HTTPRequest error %d" % err)
 		return

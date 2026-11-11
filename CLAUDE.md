@@ -1324,6 +1324,16 @@ tools\harness.ps1 -Capture globe -UserArgs @("--window-size=1280x720")
 # Globe mode in a running world (Shift+L, own site, sun on the sim clock,
 # disable_3d handed back, L still the picker):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/globe_ingame_check.gd -Label globe_ingame
+# Headless sim kernel (offline — core/simkit/: the design guard and cleaners,
+# compact-report rounding, the AI inbox on a TEMP folder, the catalog covering
+# every preset bombay_ten names; EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/simkit/simkit_selftest.gd
+# The MCP server end to end (offline guard + patch tests; with --godot it starts
+# the server over stdio in a TEMP workspace and runs two 3-day kernel jobs,
+# report / compare / submit to a TEMP inbox):
+python tools/simkit_mcp/mcp_selftest.py --godot <Godot console exe>
+# An AI-submitted design becomes a fork with REAL clicks (sandbox):
+tools\harness.ps1 -World w6ad922917357 -RunScript res://tools/checks/simkit_inbox_check.gd -Label simkit_inbox
 # Terrain pipeline self-test (offline, deterministic — geo math + mesh builder;
 # also the pallet rack + its design elements, _test_pallet_rack_elements):
 Godot.exe.exe --headless --path . --script core/terrain/terrain_selftest.gd
@@ -6450,20 +6460,109 @@ figshare bot check and its tiles are an undocumented staging server).
     (the 10–11 May 2024 storm from the GFZ archive: overhead, shots north,
     up and south; a quiet night not seen; Settings off).
 
+## Headless sim kernel + the AI simulation server (core/simkit/, tools/simkit_mcp/, 2026-11-11)
+
+User docs: `docs/SIMKIT_MCP.md`. A design runs for a year on the game's own
+simulation with nothing rendered, driven by any MCP client (Claude, LM Studio,
+a local Ollama model via `tools/simkit_mcp/local_llm_loop.py`). User's asks:
+run only what the sim needs, a compact report an LLM can parse and diff, push
+designs into the game, secure, no AI inside the game, easy for local LLMs.
+- **The kernel** is `core/simkit/sim_kernel.tscn`: the game's own `Main`
+  (main.gd) + `UILayer/SolarUI` + `UILayer/SystemGraphView` and nothing else,
+  so a run uses exactly the code a world uses. Boots headless in ~18 s with no
+  errors. `simkit_runner.gd` reads `--simkit-job=<job.json>` (`mode` run |
+  validate | catalog, `design`, `site {id, lat, lon}`, `days`, `step_min`,
+  `people` agents | rates, `allow_download`, `out_dir`) and writes under
+  `out_dir`: status.json (every 2 s), summary.json (the compact report),
+  report.md / report.json / daily.csv / daily_ids.csv / monthly.csv, graph.json
+  (the built graph). Cancel = a `cancel` file in out_dir.
+- **The engine moved** from tools/sysdesign/ to core/simkit/ (tools/ is not in
+  releases): `simkit_site.gd`, `simkit_builder.gd`, `simkit_year.gd`,
+  `simkit_report.gd`, `recipes/`, `designs/bombay_ten.json`. The harness runner
+  `tools/sysdesign/run_design.gd` and the closed_loop fixes preload them there.
+- **Three stepper bugs this found** (they affected the harness too):
+  - the live `AutomationEngine` ran beside the sim-time rules and switched
+    machines off from the LIVE battery (a sandbox with no saved battery read
+    "nearly flat"): `simkit_year.begin` stops it, `release` restores it (as
+    fork edit does);
+  - the load proxies (what a rule switches) are made a frame after a build,
+    and a NEW proxy with automations starts OFF, undoing rules that fired on
+    step 1: the runner (and run_design.gd) waits 3 frames and calls
+    `GraphSimLoadHost.refresh()` before `begin`;
+  - `step_chunk` never told the load host it was writing in bulk, so every
+    model write re-synced all proxies: it now brackets the chunk with
+    `begin_bulk_sync` / `end_bulk_sync` (flow cost 12 -> 4.6 ms a step, same
+    results to the kWh).
+- **Two more, found by a like-for-like parity run against the harness:** the
+  kernel has no TerrainLoader, so the flow engine had NO chore ledger and every
+  recipe crew step ran by itself (`simkit_site.apply` now gives it a
+  `ChoreLedger`, finite with a zero pool unless the design says
+  `infinite_labor`); and the harness's "people off" switch matched the preset
+  label `"Population"` exactly, which bombay_ten's never is (now
+  `begins_with`). People as `rates` = labour free (nobody is simulated to do a
+  crew step); `fidelity.labour` says which.
+- **Hazards follow the world** (`run` `hazards`: site | on | off): the server
+  reads `gameplay_rules.extreme_weather_enabled` from the world's snapshot and
+  copies the player's `extreme_weather.cfg`, `solar_panel_config.cfg`,
+  `sim_settings.cfg` and the site's cached air-quality / NWS zone / alert
+  files read-only; the runner sets `GameplayRules.extreme_weather_enabled`.
+  Bombay Beach has dust on: with hazards off its array made 6 % more.
+- **Parity** (bombay_ten, 60 days, people as rates, free labour, hazards on):
+  harness vs kernel loads 435.31 = 435.31 kWh, other generation equal, all 156
+  store / machine fields within 2 %, raw solar 0.5 % apart.
+- **Offline by construction.** `SimkitMode` (core/simkit/simkit_mode.gd, static,
+  autoload-free) is active when the process has `--simkit-job=`;
+  `SimkitMode.blocks(kind)` is asked at EVERY network call in the game's
+  services (weather archive / forecast, NWS, GISTEMP, climate, elevation,
+  imagery, OSM, Mapillary, AI imagery, air quality, space weather, HA,
+  Discord, multiplayer + LAN). Only kind "weather" is let through, and only
+  with `allow_download`. A new service that opens a connection must ask it.
+- **Design guard** (`simkit_guard.gd`, mirrored in the Python server):
+  limits (300 nodes, count 60, depth, string length, 600 kB), known keys only,
+  bare-name recipe files; `clean_design` / `clean_graph` drop spec keys whose
+  WORDS (split at `_`) are path / url / entity / device / token / … or that
+  start with ha_ / scene_ / bound_prop (whole words: a substring match
+  stripped `urine_fraction`), and automations keep only scene_node + delay.
+- **Compact report** (`simkit_compact.gd`, v1): 3 significant figures, tables
+  as {cols, rows}, rows keyed by DESIGN node id (gh_3), ranked `bottlenecks`,
+  `fidelity.not_simulated`, never coordinates. ~1.2 kB for a summary.
+  People as `rates`: the two people checks read "not simulated".
+- **MCP server** (`tools/simkit_mcp/simbio_sim_mcp.py`, stdlib, stdio,
+  protocol 2025-06-18): tools list / catalog / design_get / design_put (whole
+  or base + patch) / run / status / report / compare / cancel / submit. Every
+  file under one workspace (`%LOCALAPPDATA%/SIMbiogenesis_simkit`), ids
+  `[A-Za-z0-9_-]{1,64}`; sites = the player's worlds (world.json lat/lon only,
+  names hidden unless `--share-place-names`); weather copied read-only from
+  the player's cache; the kernel launched with a whitelisted env and APPDATA
+  = the workspace's `kernel_root` (no worlds, no HA profile, no tokens). stdio
+  must be reconfigured to UTF-8 (cp1252 crashed on "→").
+- **Into the game**: `submit` writes `user://simkit/inbox/<id>.json` (design +
+  built graph + summary). `SimkitInbox` lists them; the Compare window's A vs B
+  row has **From AI tools (N)**: importing one cleans the graph again, makes an
+  experiment fork "AI: <name>", selects it as B and archives the entry. A toast
+  says how many are waiting 8 s after a world loads. Nothing is applied to a
+  world without the player.
+- Cost on bombay_ten (117 items): 60 days rates ~2.3 min (the harness: ~3 min
+  plus a 35 s sandbox seed and the world load). The flow engine and people are
+  the cost; nothing draws.
+- Not simulated in the kernel yet: terrain ponds / streams, panel shade from
+  trees and buildings, camp power; observed (HA) data is not served.
+
 ## Whole-system design harness + the closed-loop world (tools/sysdesign/, 2026-11-09)
 
 Design a site as data, build it from library presets, run it a year on the
 game's own simulation, read a verdict. Full notes: `tools/sysdesign/README.md`.
-- **Loop:** `designs/<name>.json` -> `$env:SYSDESIGN="<name>"; $env:SYSDESIGN_DAYS="366";
+The engine now lives in `core/simkit/` (see the section above).
+- **Loop:** `core/simkit/designs/<name>.json` -> `$env:SYSDESIGN="<name>"; $env:SYSDESIGN_DAYS="366";
   tools\harness.ps1 -World <id> -RunScript res://tools/sysdesign/run_design.gd -Label <dir> -Timeout 3400`
   -> `screenshots/<dir>/report.md` (+ report.json, daily.csv). A year with ten
   people at 6-min steps is ~27 min. `SYSDESIGN_PEOPLE=0` skips the people.
-- `SysdesignBuilder` (nodes by library LABEL, `count`, `set`, recipes,
-  automations, wires by kind, `"a>b"` cross-kind), `sysdesign_year.gd` (the
+- `simkit_builder.gd` (nodes by library LABEL, `count`, `set`, recipes,
+  automations, wires by kind, `"a>b"` cross-kind), `simkit_year.gd` (the
   stepper: SolarUI's pure evaluator, `EnergyTimeline.step_soc` + hysteresis,
   `NpcPopulationBridge.tick_at`, `AutomationSim` switching through the
   GraphSimLoad proxy, `ResourceFlowEngine.render_step`, the view's machine
-  ticks), `sysdesign_report.gd` (the eight SUSTAINED checks).
+  ticks), `simkit_report.gd` (the eight SUSTAINED checks).
 - The run resets `PopTestPrefs` in memory and sets the chore ledger to finite
   labour with a ZERO abstract pool, so recipe crew steps wait for a person.
 - **`bombay_ten`** (10 people, Bombay Beach): 15.2 kWp, 62.4 kWh, a 12,000 m2

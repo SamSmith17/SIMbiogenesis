@@ -114,11 +114,11 @@ static func build(model: GraphModel, design: Dictionary, sgv: Node = null) -> Di
 				ResourceKinds.new().migrate_processor_specs(live)
 				# A recipe rewrites the ports: resolve it now so wiring by
 				# kind sees the recipe's inputs / outputs.
-				# A fitted TC Process Lab run (tools/sysdesign/recipes/<x>.json,
+				# A fitted TC Process Lab run (core/simkit/recipes/<x>.json,
 				# made by fit_tc_recipes.gd), or a recipe written in the design
 				# (what the recipe editor makes).
 				if n.has("recipe_file"):
-					var rp := "res://tools/sysdesign/recipes/%s.json" % str(n["recipe_file"])
+					var rp := "res://core/simkit/recipes/%s.json" % str(n["recipe_file"])
 					var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(rp)) \
 						if FileAccess.file_exists(rp) else null
 					if parsed is Dictionary:

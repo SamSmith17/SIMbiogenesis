@@ -475,7 +475,7 @@ func request_weather(lat: float, lon: float, year: int) -> void:
 	_ensure_http()
 	var url := "%s?latitude=%.4f&longitude=%.4f&start_date=%d-01-01&end_date=%d-12-31&hourly=%s&timezone=auto" \
 		% [ARCHIVE_URL, lat, lon, year, year, HOURLY_VARS]
-	var err := _http.request(url)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("weather") else _http.request(url)
 	if err != OK:
 		# Deferred so callers that connect right after request_weather()
 		# still receive the failure.
@@ -522,7 +522,7 @@ func request_forecast(lat: float, lon: float) -> void:
 	_ensure_http_forecast()
 	var url := "%s?latitude=%.4f&longitude=%.4f&hourly=%s&forecast_days=%d&past_days=%d&timezone=auto" \
 		% [FORECAST_URL, lat, lon, FORECAST_HOURLY_VARS, FORECAST_FUTURE_DAYS, FORECAST_PAST_DAYS]
-	var err := _http_forecast.request(url)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("forecast") else _http_forecast.request(url)
 	if err != OK:
 		forecast_fetch_failed.emit.call_deferred("HTTPRequest error %d" % err)
 		return
@@ -1267,7 +1267,7 @@ func _request_current_year(lat: float, lon: float, year: int) -> void:
 		_http_cy.request_completed.connect(_on_current_year_completed)
 	var url := "%s?latitude=%.4f&longitude=%.4f&start_date=%d-01-01&end_date=%s&hourly=%s&timezone=auto" \
 		% [ARCHIVE_URL, lat, lon, year, _today_date_str(), HOURLY_VARS]
-	if _http_cy.request(url) != OK:
+	if SimkitMode.blocks("weather") or _http_cy.request(url) != OK:
 		return
 	_fetching_cy = true
 	set_meta("pending_cy", {"lat": lat, "lon": lon, "year": year})
@@ -1540,7 +1540,7 @@ func _dispatch_training_fetch() -> void:
 	var year := _training_fetch_queue[0]
 	var url := "%s?latitude=%.4f&longitude=%.4f&start_date=%d-01-01&end_date=%d-12-31&hourly=%s&timezone=auto" \
 		% [ARCHIVE_URL, _training_lat, _training_lon, year, year, HOURLY_VARS]
-	var err := _http_training.request(url)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("weather") else _http_training.request(url)
 	if err != OK:
 		training_fetch_failed.emit("HTTPRequest error %d" % err)
 		return
@@ -1886,7 +1886,7 @@ func request_records(lat: float, lon: float) -> void:
 	var end_year := effective_year(_current_calendar_year())
 	var url := "%s?latitude=%.4f&longitude=%.4f&start_date=1940-01-01&end_date=%d-12-31&daily=%s&timezone=auto" \
 		% [ARCHIVE_URL, lat, lon, end_year, RECORDS_DAILY_VARS]
-	var err := _http_records.request(url)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("forecast") else _http_records.request(url)
 	if err != OK:
 		_fetching_records = false
 		return

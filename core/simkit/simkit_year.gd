@@ -68,6 +68,8 @@ var _released := false
 var _pop_driven := false
 var _conn_flow: Dictionary = {}
 var _conn_ends := {}
+var _live_engine: Node = null
+var _live_engine_was := false
 
 
 func begin(p_main: Node, p_sgv: Node, opts: Dictionary) -> String:
@@ -87,6 +89,14 @@ func begin(p_main: Node, p_sgv: Node, opts: Dictionary) -> String:
 	cursor = start_abs
 
 	main.call("push_clock_claim", CLOCK_OWNER, {"time_scale": 0.0}, true)
+	# The live AutomationEngine evaluates the same rules against the LIVE
+	# battery and sensors at 10 Hz. Left running it fights the sim-time rules
+	# (a "battery nearly flat" rule read SolarUI's live battery and switched
+	# machines off the sim had just switched on). Fork edit stops it the same way.
+	_live_engine = main.get_node_or_null("/root/AutomationEngine")
+	if _live_engine != null:
+		_live_engine_was = _live_engine.is_processing()
+		_live_engine.set_process(false)
 	main.call("set_absolute_hours", start_abs)
 	sgv.call("set_ambient_flow_suspended", true)
 	if sgv.has_method("_sync_solar_ui_from_graph"):
@@ -131,6 +141,8 @@ func release() -> void:
 		sgv.call("set_ambient_flow_suspended", false)
 	if main != null and main.has_method("pop_clock_claim"):
 		main.call("pop_clock_claim", CLOCK_OWNER)
+	if _live_engine != null and is_instance_valid(_live_engine):
+		_live_engine.set_process(_live_engine_was)
 	if solar != null and solar.has_method("reanchor_live_battery"):
 		solar.call("reanchor_live_battery", soc)
 
@@ -158,10 +170,18 @@ func mark_weather_year(y: int) -> void:
 ## Step up to `n` steps. Call inside nothing: it brackets its own sim writes.
 func step_chunk(n: int) -> void:
 	sgv.call("_begin_sim_writes")
+	# The load-proxy host re-syncs every proxy on each model write unless told
+	# a bulk write is on (the live ambient tick tells it; this did not, and
+	# that was most of a step's cost). It syncs once at the end instead.
+	var host: Node = sgv.get_node_or_null("GraphSimLoadHost")
+	if host != null and host.has_method("begin_bulk_sync"):
+		host.call("begin_bulk_sync")
 	var stop := n
 	while stop > 0 and not done():
 		_step()
 		stop -= 1
+	if host != null and host.has_method("end_bulk_sync"):
+		host.call("end_bulk_sync")
 	sgv.call("_end_sim_writes")
 	if sgv.has_method("_flush_sim_bulk_update"):
 		sgv.call("_flush_sim_bulk_update")

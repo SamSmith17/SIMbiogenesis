@@ -215,7 +215,7 @@ func _fire_tile() -> void:
 	var chain: Array = _job.get("chain", ImagerySources.default_chain())
 	var src := str(chain[clampi(int(_job.get("src_i", 0)), 0, chain.size() - 1)])
 	var url := ImagerySources.tile_url(src, int(_job["z"]), t.x, t.y)
-	var err := _http.request(url)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("terrain") else _http.request(url)
 	if err != OK:
 		_fail("HTTPRequest error %d" % err)
 

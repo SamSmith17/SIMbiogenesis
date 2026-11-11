@@ -4,13 +4,13 @@ extends RefCounted
 ## spaces, labour rule, the date), shared by the dry-run runner and the world
 ## builder.
 
-const Builder := preload("res://tools/sysdesign/sysdesign_builder.gd")
+const Builder := preload("res://core/simkit/simkit_builder.gd")
 
 
 static func load_design(name_or_path: String) -> Dictionary:
 	var path := name_or_path
 	if not path.begins_with("res://") and not path.begins_with("user://"):
-		path = "res://tools/sysdesign/designs/%s.json" % name_or_path
+		path = "res://core/simkit/designs/%s.json" % name_or_path
 	if not FileAccess.file_exists(path):
 		return {}
 	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
@@ -112,6 +112,22 @@ static func apply(main: Node, sgv: Node, design: Dictionary) -> Dictionary:
 				ledger.set("chore_hours_available", 0.0)
 	if sgv.has_method("_sync_chore_ledger_to_flow"):
 		sgv.call("_sync_chore_ledger_to_flow")
+	# A scene with no TerrainLoader (the headless kernel) has no ledger, and a
+	# flow engine with none lets every recipe step that needs hands run by
+	# itself. Give it one, set the same way.
+	var flow: Object = sgv.call("resource_flow_engine") if sgv.has_method("resource_flow_engine") else null
+	if flow != null and flow.get("chore_ledger") == null:
+		var own := ChoreLedger.create_default()
+		own.infinite_labor = bool(design.get("infinite_labor", false))
+		if not own.infinite_labor:
+			own.chore_hours_available = 0.0
+		flow.set("chore_ledger", own)
 	if sgv.has_method("_sync_solar_ui_from_graph"):
 		sgv.call("_sync_solar_ui_from_graph")
+	# The load proxies (what an automation switches) are made a frame after a
+	# structural change, and a NEW proxy with automations starts OFF. A rule
+	# that fires on the run's first step would be undone by that; make them now.
+	var host: Node = sgv.get_node_or_null("GraphSimLoadHost")
+	if host != null and host.has_method("refresh"):
+		host.call("refresh")
 	return res

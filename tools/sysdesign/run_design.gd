@@ -3,7 +3,7 @@ extends RefCounted
 ## Whole-system design harness: load a design onto the world, run it, report.
 ## Dry run (the sandbox copy of the world is thrown away afterwards):
 ##
-##   $env:SYSDESIGN = "bombay_ten"          # tools/sysdesign/designs/<name>.json
+##   $env:SYSDESIGN = "bombay_ten"          # core/simkit/designs/<name>.json
 ##   $env:SYSDESIGN_DAYS = "366"            # optional, default the design's
 ##   tools\harness.ps1 -World <world id> -RunScript res://tools/sysdesign/run_design.gd `
 ##       -Label sysdesign -Timeout 3000
@@ -13,9 +13,9 @@ extends RefCounted
 ## check table. SYSDESIGN_PEOPLE=0 runs without simulated people (the
 ## habitat bills its headcount at the preset rates) for a fast first look.
 
-const Site := preload("res://tools/sysdesign/sysdesign_site.gd")
-const Year := preload("res://tools/sysdesign/sysdesign_year.gd")
-const Report := preload("res://tools/sysdesign/sysdesign_report.gd")
+const Site := preload("res://core/simkit/simkit_site.gd")
+const Year := preload("res://core/simkit/simkit_year.gd")
+const Report := preload("res://core/simkit/simkit_report.gd")
 
 
 func run(main: Node, harness: Node) -> Dictionary:
@@ -39,7 +39,7 @@ func run(main: Node, harness: Node) -> Dictionary:
 	var with_people := OS.get_environment("SYSDESIGN_PEOPLE") != "0"
 	if not with_people:
 		for n: Dictionary in (design.get("nodes", []) as Array):
-			if str(n.get("preset", "")) == "Population":
+			if str(n.get("preset", "")).begins_with("Population"):
 				(n["set"] as Dictionary)["pop_driven"] = false
 
 	# The design is its own site: a world's scheduled drives (living vehicles
@@ -71,6 +71,13 @@ func run(main: Node, harness: Node) -> Dictionary:
 		await main.get_tree().process_frame
 		bridge = sgv.call("npc_population_bridge")
 	var n_spaces := Site.tag_spaces(main, bridge, design, built["ids"]) if bridge != null else 0
+	# Let the view's deferred work after the build run, then make the load
+	# proxies now: a proxy made after a rule fired starts OFF (simkit_runner).
+	for i in 3:
+		await main.get_tree().process_frame
+	var load_host: Node = sgv.get_node_or_null("GraphSimLoadHost")
+	if load_host != null and load_host.has_method("refresh"):
+		load_host.call("refresh")
 	var model: GraphModel = sgv.get("model")
 	print("sysdesign: '%s' built: %d items, %d wires, %d spaces" % [str(design.get("name", design_name)),
 		model.items.size(), model.connections.size(), n_spaces])

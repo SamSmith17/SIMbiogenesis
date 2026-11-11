@@ -171,7 +171,7 @@ func _fetch(kind: String, url: String) -> void:
 			_pending.erase(kind.trim_prefix("gfz_"))
 			return
 		_on_body(kind, body))
-	if h.request(url, PackedStringArray(["User-Agent: SIMbiogenesis"])) != OK:
+	if SimkitMode.blocks("space_weather") or h.request(url, PackedStringArray(["User-Agent: SIMbiogenesis"])) != OK:
 		_http.erase(kind)
 		h.queue_free()
 

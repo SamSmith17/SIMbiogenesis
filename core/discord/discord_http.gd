@@ -130,7 +130,7 @@ func _start_next() -> void:
 	var bearer := str(_job["bearer"])
 	if not bearer.is_empty():
 		headers.append("Authorization: Bearer %s" % bearer)
-	var err := _http.request(str(_job["url"]), headers, int(_job["method"]), str(_job["body"]))
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("discord") else _http.request(str(_job["url"]), headers, int(_job["method"]), str(_job["body"]))
 	if err != OK:
 		var job := _job
 		_busy = false

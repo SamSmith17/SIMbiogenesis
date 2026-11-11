@@ -19,8 +19,8 @@ extends RefCounted
 ## the schedule's DEPLOY event). Wires between design nodes are rebuilt from
 ## the design; the solar arrays' wires and the vehicles' own systems are left.
 
-const Site := preload("res://tools/sysdesign/sysdesign_site.gd")
-const Builder := preload("res://tools/sysdesign/sysdesign_builder.gd")
+const Site := preload("res://core/simkit/simkit_site.gd")
+const Builder := preload("res://core/simkit/simkit_builder.gd")
 const World := preload("res://tools/fixes/closed_loop_world.gd")
 ## Standing chores an earlier design put on the board that the design no
 ## longer has (found by label and removed).
@@ -152,7 +152,7 @@ func run(p_main: Node, _harness: Node) -> Dictionary:
 					a2["conditions"] = []
 			sp["graph_automations"] = list
 		if n4.has("recipe_file"):
-			var rp := "res://tools/sysdesign/recipes/%s.json" % str(n4["recipe_file"])
+			var rp := "res://core/simkit/recipes/%s.json" % str(n4["recipe_file"])
 			var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(rp)) if FileAccess.file_exists(rp) else null
 			if parsed is Dictionary:
 				TcProcSummary.apply_to_specs(sp, parsed as Dictionary)

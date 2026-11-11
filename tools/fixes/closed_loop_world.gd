@@ -5,7 +5,7 @@ extends RefCounted
 ## use, the day's chores and an arrive -> deploy schedule, so the player can
 ## watch the crew drive in, unload, build the site and then run it.
 ##
-##   $env:SYSDESIGN = "bombay_ten"      # tools/sysdesign/designs/<name>.json
+##   $env:SYSDESIGN = "bombay_ten"      # core/simkit/designs/<name>.json
 ##   tools\harness.ps1 -World <new world id> -RunScript res://tools/fixes/closed_loop_world.gd            # dry run
 ##   tools\harness.ps1 -World <new world id> -RunScript res://tools/fixes/closed_loop_world.gd -Persist   # keep it
 ##
@@ -13,7 +13,7 @@ extends RefCounted
 ## the graph and removes every prop an earlier run of it placed. Positions in
 ## the design's "world" block are metres east / south of the site marker.
 
-const Site := preload("res://tools/sysdesign/sysdesign_site.gd")
+const Site := preload("res://core/simkit/simkit_site.gd")
 const TAG := "sysdesign"
 
 var main: Node

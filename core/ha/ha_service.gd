@@ -598,7 +598,7 @@ func _start(url: String, token: String, auto_retry: bool) -> bool:
 	_attempt_t0_ms = Time.get_ticks_msec()
 	_phase_t0_ms = _attempt_t0_ms
 	_phase = "connecting"
-	var err := _ws.connect_to_url(_url)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("ha") else _ws.connect_to_url(_url)
 	if err != OK:
 		_ws = null
 		_fail(HaFailure.BAD_URL, "Godot could not open %s (error %d)." % [_url, err], _url)
@@ -964,7 +964,7 @@ func _start_probes(url: String) -> void:
 	var now := Time.get_ticks_msec()
 	for cand in HaUrl.candidates(url, probe_ports):
 		var peer := WebSocketPeer.new()
-		if peer.connect_to_url(str(cand)) == OK:
+		if not SimkitMode.blocks("ha") and peer.connect_to_url(str(cand)) == OK:
 			_probes.append({"url": str(cand), "peer": peer, "t0": now})
 	if not _probes.is_empty():
 		_info["finding"] = true

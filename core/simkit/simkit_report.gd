@@ -28,14 +28,22 @@ static func assess(y: Object, design: Dictionary) -> Dictionary:
 		float(e["ac_off_h"]) <= 0.5,
 		"%.1f h with AC off in %d outage(s), lowest battery %.0f %%" % [
 			float(e["ac_off_h"]), int(e["ac_off_events"]), float(e["min_soc_pct"])])
+	# People run as preset rates (no individuals): nobody can leave or be
+	# unhappy, so those two checks say so instead of failing.
+	var agents := int(p["samples"]) > 0 or bool(y.get("_pop_driven"))
 	var present := int(last.get("count", people_n)) if not last.is_empty() else -1
-	_chk(checks, "Everyone stayed",
-		present == people_n and int(p["departures"]) == 0,
-		"%d of %d on site, %d left" % [present, people_n, int(p["departures"])])
 	var mean_morale := float(p["morale_sum"]) / maxf(float(p["samples"]), 1.0)
-	_chk(checks, "People were doing fine", mean_morale >= 0.6,
-		"mean morale %.2f (%s), worst moment %.2f" % [mean_morale,
-			NpcMorale.label(mean_morale), float(p["min_morale"])])
+	if agents:
+		_chk(checks, "Everyone stayed",
+			present == people_n and int(p["departures"]) == 0,
+			"%d of %d on site, %d left" % [present, people_n, int(p["departures"])])
+		_chk(checks, "People were doing fine", mean_morale >= 0.6,
+			"mean morale %.2f (%s), worst moment %.2f" % [mean_morale,
+				NpcMorale.label(mean_morale), float(p["min_morale"])])
+	else:
+		_chk(checks, "Everyone stayed", true, "not simulated: people billed at the preset rates")
+		_chk(checks, "People were doing fine", true, "not simulated: people billed at the preset rates")
+		mean_morale = NAN
 
 	# Nothing from outside: no import node ran, no ideal-supply top-ups.
 	# A MATERIAL import (waste plastic to make things with) is reported, not

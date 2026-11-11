@@ -121,7 +121,7 @@ func request_zone(lat: float, lon: float) -> void:
 				return
 	_ensure_http()
 	var url := POINTS_URL.replace("{lat}", "%.4f" % lat).replace("{lon}", "%.4f" % lon)
-	var err := _http_points.request(url, _HEADERS)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("nws") else _http_points.request(url, _HEADERS)
 	if err != OK:
 		zone_failed.emit.call_deferred("HTTPRequest error %d" % err)
 		return
@@ -182,7 +182,7 @@ func _on_points_completed(result: int, response_code: int,
 	_pending_county = county_url.split("/")[-1]
 	_pending_stations_url = stations_url
 	# Step 2: fetch station list.
-	var err := _http_stations.request(stations_url, _HEADERS)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("nws") else _http_stations.request(stations_url, _HEADERS)
 	if err != OK:
 		_busy = false
 		zone_failed.emit("stations HTTPRequest error %d" % err)

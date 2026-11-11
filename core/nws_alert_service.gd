@@ -310,7 +310,7 @@ func _request_active(ugc: String) -> void:
 					return
 	_ensure_http()
 	var url := NWS_ACTIVE_URL.replace("{ugc}", ugc)
-	var err := _http_active.request(url, _NWS_HEADERS)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("nws") else _http_active.request(url, _NWS_HEADERS)
 	if err != OK:
 		alerts_failed.emit.call_deferred("active HTTPRequest error %d" % err)
 		return
@@ -402,7 +402,7 @@ func _request_zone_hist(ugc: String) -> void:
 	_ensure_http()
 	var placeholder_year := str(int(Time.get_date_dict_from_system().year))
 	var url := IEM_HIST_URL.replace("{ugc}", ugc).replace("{year}", placeholder_year)
-	var err := _http_hist.request(url, _IEM_HEADERS)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("nws") else _http_hist.request(url, _IEM_HEADERS)
 	if err != OK:
 		alerts_failed.emit.call_deferred("hist HTTPRequest error %d" % err)
 		_process_hist_queue()

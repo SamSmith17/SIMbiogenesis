@@ -152,7 +152,7 @@ func _start_next() -> void:
 	var headers := PackedStringArray()
 	if str(_job.get("kind", "")) == "index":
 		headers.append("Authorization: OAuth %s" % _access_token())
-	var err := _http.request(str(_job["url"]), headers)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("mapillary") else _http.request(str(_job["url"]), headers)
 	if err != OK:
 		_finish_job_failed("http request error %d" % err)
 

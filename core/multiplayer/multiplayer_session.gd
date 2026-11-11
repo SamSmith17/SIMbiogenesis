@@ -250,7 +250,7 @@ func host_session(port: int = DEFAULT_PORT, p_session_name: String = "",
 	require_trusted = bool(opts.get("require_trusted", false)) and not trusted_keys.is_empty()
 	session_expires_unix = MpHardeningScript.expiry_unix(code_ttl_sec)
 	var peer := ENetMultiplayerPeer.new()
-	var err := peer.create_server(host_port, MAX_PEERS - 1)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("multiplayer") else peer.create_server(host_port, MAX_PEERS - 1)
 	if err != OK:
 		return {"ok": false, "error": "Could not bind port %d (err %d)" % [host_port, err]}
 	multiplayer.multiplayer_peer = peer
@@ -619,7 +619,7 @@ func start_lan_listen(enabled: bool = true) -> void:
 	if _udp_listen != null:
 		return
 	_udp_listen = PacketPeerUDP.new()
-	var err := _udp_listen.bind(LAN_DISCOVERY_PORT)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("multiplayer") else _udp_listen.bind(LAN_DISCOVERY_PORT)
 	if err != OK:
 		_udp_listen = null
 		_emit_status("LAN discovery bind failed (%d)" % err, "warn")
@@ -898,7 +898,7 @@ func _try_next_candidate() -> Dictionary:
 		multiplayer.multiplayer_peer.close()
 		multiplayer.multiplayer_peer = null
 	var peer := ENetMultiplayerPeer.new()
-	var err := peer.create_client(ip, port)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("multiplayer") else peer.create_client(ip, port)
 	if err != OK:
 		# A local failure (bad address, no socket) — move straight on.
 		return _try_next_candidate()

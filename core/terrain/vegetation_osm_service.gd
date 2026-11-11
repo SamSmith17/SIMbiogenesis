@@ -113,7 +113,7 @@ func _post_query(query: String) -> void:
 		"User-Agent: SIMbiogenesis-Terrain/1.0",
 	])
 	var body := "data=%s" % query.uri_encode()
-	var err := _http.request(OVERPASS_URL, headers, HTTPClient.METHOD_POST, body)
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("osm") else _http.request(OVERPASS_URL, headers, HTTPClient.METHOD_POST, body)
 	if err != OK:
 		_fail("HTTPRequest error %d" % err)
 

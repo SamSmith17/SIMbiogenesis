@@ -125,7 +125,7 @@ func _start_next() -> void:
 		"x-goog-api-key: %s" % _api_key(),
 	])
 	var url := ENDPOINT % MODEL
-	var err := _http.request(url, headers, HTTPClient.METHOD_POST, str(_job["body"]))
+	var err := ERR_UNAVAILABLE if SimkitMode.blocks("ai") else _http.request(url, headers, HTTPClient.METHOD_POST, str(_job["body"]))
 	if err != OK:
 		_fail("HTTPRequest error %d" % err)
 

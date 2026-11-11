@@ -427,6 +427,20 @@ def write_uid_list(group: str, files: list[str]) -> str:
 
 # -- packaging --------------------------------------------------------------
 
+def add_simkit_server(stage: Path) -> None:
+    """The AI simulation server (docs/SIMKIT_MCP.md) beside the game: the
+    script, its local-model loop, the built-in designs it lists, the doc.
+    Point it at the game's executable with --godot."""
+    dst = stage / "simkit_mcp"
+    dst.mkdir(parents=True, exist_ok=True)
+    for f in ["simbio_sim_mcp.py", "local_llm_loop.py"]:
+        shutil.copyfile(ROOT / "tools/simkit_mcp" / f, dst / f)
+    (dst / "designs").mkdir(exist_ok=True)
+    for f in (ROOT / "core/simkit/designs").glob("*.json"):
+        shutil.copyfile(f, dst / "designs" / f.name)
+    shutil.copyfile(ROOT / "docs/SIMKIT_MCP.md", dst / "README.md")
+
+
 def zip_dir(src_dir: Path, zip_path: Path) -> None:
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as z:
         for p in sorted(src_dir.rglob("*")):
@@ -544,6 +558,7 @@ def main() -> None:
                 shutil.rmtree(stage)
             stage.mkdir(parents=True)
             run_godot(args.godot, [mode, pname, str(stage / fname)], logs / f"export_{plat}.log", stage / fname)
+            add_simkit_server(stage)
             zip_path = out / f"SIMbiogenesis-{version}-{plat}.zip"
             if plat == "macos":
                 shutil.move(str(stage / fname), zip_path)    # Godot writes the .app as a zip already
