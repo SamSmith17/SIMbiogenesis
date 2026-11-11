@@ -394,6 +394,10 @@ func _on_reverse_btn() -> void:
 # UI construction
 # ---------------------------------------------------------------------------
 
+var _finder: SettingFinder = null
+var _tiles: StatTiles = null
+
+
 func _build_ui() -> void:
 	var dim := ColorRect.new()
 	dim.color = Color(C_BG.r, C_BG.g, C_BG.b, 0.92)
@@ -403,6 +407,7 @@ func _build_ui() -> void:
 	var root := VBoxContainer.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 6)
 	root.add_theme_constant_override("separation", 6)
+	root.set_meta("ui_modal", true)   # UiAudit.MODAL_META: audited and measured as a modal
 	add_child(root)
 
 	root.add_child(_build_topbar())
@@ -600,6 +605,9 @@ func _build_topbar() -> Control:
 		UiIcons.apply(b, str(pair[1]))
 	btn_steps.text = "Steps"
 	UiIcons.apply(btn_steps, "video")
+	for named in [[btn_guide, "Guide"], [btn_hw, "Hardware"], [btn_save, "Save"], [btn_load, "Load"],
+			[btn_export, "Export"], [btn_import, "Import"]]:
+		(named[0] as Button).text = str(named[1])
 	return _panel_wrap(bar)
 
 
@@ -829,6 +837,13 @@ func _build_sidebar() -> Control:
 		_preset_opt.add_item(str(p["name"]))
 	_preset_opt.item_selected.connect(_on_preset_selected)
 	pre.add_child(_preset_opt)
+	# Presets lead (where a design starts), then the search.
+	for card in side.get_children():
+		if str(card.get_meta("group_title", "")) == "Presets":
+			side.move_child(card, 0)
+	_finder = SettingFinder.make(side)
+	side.add_child(_finder)
+	side.move_child(_finder, 0)
 
 	return _panel_wrap(scroll)
 
@@ -1422,7 +1437,11 @@ func _group(parent: Control, title: String, collapsed: bool) -> VBoxContainer:
 	var card := PanelContainer.new()
 	card.add_theme_stylebox_override("panel", _group_card_style())
 	parent.add_child(card)
-	var sec := Collapsible.make(title, not collapsed)
+	# Start → Essentials → Everything: only the essentials open by default
+	# (`collapsed` is the old per-group default, kept for callers).
+	var sec := Collapsible.make(title, GROUPS_OPEN.has(title) and not collapsed)
+	sec.persist("linkage_lab", title.to_lower().replace(" ", "_"))
+	card.set_meta("group_title", title)
 	card.add_child(sec)
 
 	var content := VBoxContainer.new()
@@ -1435,6 +1454,10 @@ func _group(parent: Control, title: String, collapsed: bool) -> VBoxContainer:
 	pad.add_child(content)
 	sec.body.add_child(pad)
 	return content
+
+
+## The sidebar groups open on first use.
+const GROUPS_OPEN := ["Presets", "Structure Type"]
 
 
 func _group_card_style() -> StyleBoxFlat:
@@ -1800,13 +1823,16 @@ func _build_right_panel() -> Control:
 	var stats := VBoxContainer.new()
 	stats.add_theme_constant_override("separation", 2)
 	stats.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	stats.add_child(SectionHeader.make("Dimensions & Structure"))
+	_tiles = StatTiles.make(2)
+	stats.add_child(_tiles)
+	var all_numbers := Collapsible.make("All the numbers", false, "Counts, angles and the packed size").persist("linkage_lab", "numbers")
+	stats.add_child(all_numbers)
 	for key in ["Height", "Diameter", "Modules", "Beams", "Support Beams",
 			"Brackets", "Bolts", "Panels", "Array Watts",
 			"Fold Angle", "Closed Angle", "Min Fold",
 			"Packed Size", "Packed Wt"]:
 		var row := HBoxContainer.new()
-		stats.add_child(row)
+		all_numbers.body.add_child(row)
 		var k := Label.new()
 		k.text = key
 		k.add_theme_color_override("font_color", C_TEXT_S)
@@ -2701,6 +2727,15 @@ func _update_stats() -> void:
 	(_stat_vals["Packed Size"] as Label).text = "—" if packed.is_empty() \
 		else "%s × %s × %s" % [_fmt_len(pw), _fmt_len(pd), _fmt_len(ph)]
 	(_stat_vals["Packed Wt"] as Label).text = PackedSpec.format_mass(packed)
+	if _tiles != null:
+		_tiles.set_tiles([
+			{"caption": "Height", "value": (_stat_vals["Height"] as Label).text, "tip": "At this fold angle"},
+			{"caption": "Diameter", "value": (_stat_vals["Diameter"] as Label).text, "tip": "At this fold angle"},
+			{"caption": "Solar", "value": (_stat_vals["Array Watts"] as Label).text if panel_count > 0 else "None",
+				"level": "" if panel_count > 0 else "muted", "tip": "%d panels" % panel_count},
+			{"caption": "Modules", "value": (_stat_vals["Modules"] as Label).text, "tip": "Scissor modules round the ring"},
+			{"caption": "Packs to", "value": (_stat_vals["Packed Size"] as Label).text, "tip": "Folded as far as it honestly goes"},
+			{"caption": "Packed weight", "value": (_stat_vals["Packed Wt"] as Label).text, "tip": "Frame and hardware, panels apart"}])
 	# Honest-fold clamp: the slider floor tracks the physical minimum so a
 	# design can no longer be dragged through itself (the brackets/outer
 	# V-beams used to intersect below this angle, faking smaller shipping

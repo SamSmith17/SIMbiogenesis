@@ -209,6 +209,10 @@ const DYNAMIC_MODELS := {
 	# as a tube bundle; this fallback is the default 2 m dish (estimate).
 	"csplab_concentrator": {"w_m": 2.2, "d_m": 1.2, "h_m": 0.9,
 		"mass_kg": 190.0, "form": "crate", "source": "estimated"},
+	# A FarmBot kit ships boxed (tracks, extrusions, electronics, tools); the
+	# raised bed is built on site. An XL's boxes, estimated.
+	"farmbot": {"w_m": 1.6, "d_m": 0.6, "h_m": 0.45,
+		"mass_kg": 75.0, "form": "crate", "source": "estimated"},
 	"windlab_turbine": {"w_m": 3.05, "d_m": 1.27, "h_m": 0.12,
 		"mass_kg": 10.0, "form": "crate", "source": "estimated"},
 	# A designed gantry packs as its extrusion bundle plus boxed parts; the
@@ -239,6 +243,9 @@ const NON_PACKABLE := {
 	"generic_box": "abstract placeholder — the graph node's preset packs",
 	"generic_tank": "abstract placeholder — the graph node's preset packs",
 	"mud_building": "built in place from site material",
+	"earthship_phoenix": "built in place: tyres rammed with the site's earth",
+	"earthship_detail": "built in place: tyres rammed with the site's earth",
+	"earthshiplab_structure": "built in place: tyres rammed with the site's earth",
 }
 
 

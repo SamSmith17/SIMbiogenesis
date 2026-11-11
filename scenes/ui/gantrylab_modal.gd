@@ -61,9 +61,15 @@ var _subtitle: Label
 var _undo_btn: Button
 var _redo_btn: Button
 var _app_box: VBoxContainer
-var _kin_box: VBoxContainer
+var _kin_list: DesignGallery
+var _palette_sec: Collapsible
+var _part_sec: Collapsible
+var _left_scroll: ScrollContainer
+var _edit_btn: Button
+var _edit_parts := false
+var _col: DesignerColumn
 var _why_lbl: Label
-var _design_list: ItemList
+var _design_list: DesignGallery
 var _design_entries: Array = []
 var _tabs: TabBar
 var _view_stack: Control
@@ -182,6 +188,8 @@ func close() -> void:
 
 
 func _process(delta: float) -> void:
+	if _edit_btn != null and not _edit_parts and (not _parts.sel.is_empty() or not _parts.sel_mod.is_empty() or not _parts.tool_ref.is_empty()):
+		_set_edit_parts(true)
 	if _rebuild_timer >= 0.0:
 		_rebuild_timer -= delta
 		if _rebuild_timer < 0.0:
@@ -306,49 +314,17 @@ func _scroll_column(width: float) -> Array:
 func _build_left() -> Control:
 	var col := _scroll_column(250)
 	var box: VBoxContainer = col[1]
-	# The parts palette first: it is the Machine tab's main tool.
-	box.add_child(SectionHeader.make("Parts", "wrench"))
-	var pbox := VBoxContainer.new()
-	pbox.add_theme_constant_override("separation", UITheme.SPACE_XS)
-	box.add_child(pbox)
-	_parts.build_palette(pbox)
-	box.add_child(SectionHeader.make("What is it for", "target"))
-	_app_box = VBoxContainer.new()
-	_app_box.add_theme_constant_override("separation", 2)
-	box.add_child(_app_box)
-	for a in GantryLabSpec.APPLICATIONS:
-		var b := Button.new()
-		b.text = str(a["label"])
-		b.tooltip_text = str(a["why"])
-		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		b.custom_minimum_size = Vector2(0, 26)
-		UITheme.style_button(b)
-		b.pressed.connect(_on_application.bind(str(a["id"])))
-		_app_box.add_child(b)
-	box.add_child(SectionHeader.make("Pattern", "box"))
-	_kin_box = VBoxContainer.new()
-	_kin_box.add_theme_constant_override("separation", 2)
-	box.add_child(_kin_box)
-	for kin in GantryLabSpec.KINEMATICS:
-		var b := Button.new()
-		b.text = str(GantryLabSpec.KINEMATICS_LABELS[kin])
-		b.toggle_mode = true
-		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		b.custom_minimum_size = Vector2(0, 28)
-		b.set_meta("kin", kin)
-		b.tooltip_text = str(GantryLabSpec.KINEMATICS_WHY[kin])
-		b.pressed.connect(_on_kinematics.bind(kin))
-		_kin_box.add_child(b)
-	_why_lbl = Label.new()
-	_why_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_why_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	_why_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	box.add_child(_why_lbl)
-	box.add_child(SectionHeader.make("Designs", "layout-grid"))
-	_design_list = ItemList.new()
-	_design_list.custom_minimum_size = Vector2(0, 220)
-	_design_list.auto_height = true
-	_design_list.item_activated.connect(_on_design_activated)
+	_left_scroll = col[0]
+	# The parts bin: only while "Edit parts" is on (it used to head the
+	# column, ahead of choosing a machine at all).
+	_palette_sec = Collapsible.make("Parts to add", true, "Click one, then a slot or face on the machine")
+	_palette_sec.visible = false
+	box.add_child(_palette_sec)
+	_parts.build_palette(_palette_sec.body)
+	# Start: a machine to begin from, pictured.
+	box.add_child(SectionHeader.make("Start from", "layout-grid"))
+	_design_list = DesignGallery.make("gantrylab")
+	_design_list.set_thumbnailer(_thumb_for)
 	_design_list.item_selected.connect(_on_design_activated)
 	box.add_child(_design_list)
 	var lib := HBoxContainer.new()
@@ -360,10 +336,40 @@ func _build_left() -> Control:
 	lib.add_child(save)
 	var forget := Button.new()
 	forget.text = "Forget"
+	forget.tooltip_text = "Remove the selected saved machine"
 	UITheme.style_button(forget)
 	forget.pressed.connect(_on_forget_design)
 	lib.add_child(forget)
 	box.add_child(lib)
+	# The seven motion patterns as pictured cards with their "why".
+	box.add_child(SectionHeader.make("Pattern", "box", "how it moves"))
+	_kin_list = DesignGallery.make("gantrylab_kin")
+	_kin_list.set_thumbnailer(_kin_thumb_for)
+	_kin_list.item_selected.connect(func(i: int) -> void: _on_kinematics(str(GantryLabSpec.KINEMATICS[i])))
+	box.add_child(_kin_list)
+	for kin in GantryLabSpec.KINEMATICS:
+		var ki := _kin_list.add_item(str(GantryLabSpec.KINEMATICS_LABELS[kin]))
+		_kin_list.set_item_tooltip(ki, str(GantryLabSpec.KINEMATICS_WHY[kin]))
+		_kin_list.set_item_subtitle(ki, str(GantryLabSpec.KINEMATICS_WHY[kin]))
+	_why_lbl = Label.new()
+	_why_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_why_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_why_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	box.add_child(_why_lbl)
+	var apps := Collapsible.make("By what it is for", false, "Pick a job; it chooses the pattern, tool and size").persist("gantrylab", "apps")
+	box.add_child(apps)
+	_app_box = VBoxContainer.new()
+	_app_box.add_theme_constant_override("separation", 2)
+	apps.body.add_child(_app_box)
+	for a in GantryLabSpec.APPLICATIONS:
+		var b := Button.new()
+		b.text = str(a["label"])
+		b.tooltip_text = str(a["why"])
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.custom_minimum_size = Vector2(0, 26)
+		UITheme.style_button(b)
+		b.pressed.connect(_on_application.bind(str(a["id"])))
+		_app_box.add_child(b)
 	return col[0]
 
 
@@ -408,6 +414,15 @@ func _build_centre() -> Control:
 	_view_stack.add_child(_config_panel)
 	var bar := HBoxContainer.new()
 	bar.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	_edit_btn = Button.new()
+	_edit_btn.name = "edit_parts"
+	_edit_btn.text = "Edit parts"
+	_edit_btn.icon = UiIcons.icon("wrench", 16)
+	_edit_btn.toggle_mode = true
+	_edit_btn.tooltip_text = "Add, move and remove single parts: opens the parts bin on the left and the selected part's card on the right. Clicking a part on the machine turns it on too."
+	UITheme.style_button(_edit_btn)
+	_edit_btn.toggled.connect(_set_edit_parts)
+	bar.add_child(_edit_btn)
 	var home := Button.new()
 	home.text = "Home"
 	home.tooltip_text = "Tool to the work origin"
@@ -444,7 +459,12 @@ func _build_studio_world() -> void:
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
 	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.035, 0.043, 0.063)
+	# The kit studios' backdrop (StudioViewport): soft grey haze, not a void.
+	e.background_color = StudioViewport.BACKDROP_HAZE
+	e.fog_enabled = true
+	e.fog_light_color = StudioViewport.BACKDROP_HAZE
+	e.fog_density = 0.004
+	e.fog_sky_affect = 0.0
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	e.ambient_light_color = Color(0.55, 0.58, 0.64)
 	e.ambient_light_energy = 0.7
@@ -656,9 +676,10 @@ func _build_config_panel() -> Control:
 func _build_right() -> Control:
 	var col := _scroll_column(400)
 	var box: VBoxContainer = col[1]
-	var psec := Collapsible.make("Selected part", true)
-	box.add_child(psec)
-	_parts.build_card(psec.body)
+	_part_sec = Collapsible.make("Selected part", true)
+	_part_sec.visible = false
+	box.add_child(_part_sec)
+	_parts.build_card(_part_sec.body)
 	var sec := Collapsible.make("Work volume", true)
 	box.add_child(sec)
 	_size_box = sec.body
@@ -710,7 +731,52 @@ func _build_right() -> Control:
 	_export_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_export_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_export_status)
+	# Essentials: the work volume. Everything else folded with its summary.
+	_col = DesignerColumn.setup(box, "gantrylab", {"open": ["Work volume"], "fold": ["Bill of materials", "Files"], "tile_cols": 4})
+	_part_sec.folded = false
 	return col[0]
+
+
+## "Edit parts": the parts bin (left) and the selected part's card (right).
+func _set_edit_parts(on: bool) -> void:
+	_edit_parts = on
+	_edit_btn.set_pressed_no_signal(on)
+	_palette_sec.visible = on
+	_part_sec.visible = on
+	if on:
+		_palette_sec.folded = false
+		_part_sec.folded = false
+		_left_scroll.set_deferred("scroll_vertical", 0)
+	else:
+		_parts.call("_disarm")
+		_parts.sel = ""
+		_parts.sel_mod = ""
+		_parts.call("_refresh_marks")
+		_parts.call("refresh_card")
+
+
+## One design's picture for the gallery: its key and how to build it.
+func _thumb_for(i: int) -> Dictionary:
+	if i < 0 or i >= _design_entries.size():
+		return {}
+	var spec: Dictionary = GantryLabSpec.resolve((_design_entries[i]["spec"] as Dictionary).duplicate(true))
+	return {"key": JSON.stringify(spec), "build": func() -> Node3D:
+		return GantryLabBuilder.build_node(spec, "Thumb")}
+
+
+## A pattern's picture: the stock machine of that pattern.
+func _kin_thumb_for(i: int) -> Dictionary:
+	if i < 0 or i >= GantryLabSpec.KINEMATICS.size():
+		return {}
+	var kin := str(GantryLabSpec.KINEMATICS[i])
+	var spec: Dictionary = GantryLabSpec.resolve({})
+	spec["kinematics"] = kin
+	spec = GantryLabSpec.resolve(spec)
+	if kin == "delta":
+		var r := float(spec["volume"]["x_mm"]) * 0.5
+		spec["delta"] = {"arm_mm": r * 2.4 + 50.0, "tower_r_mm": r + 60.0, "effector_r_mm": 32.0, "carriage_r_mm": 20.0}
+	return {"key": "kin|" + kin + "|" + JSON.stringify(spec), "build": func() -> Node3D:
+		return GantryLabBuilder.build_node(spec, "Thumb")}
 
 
 func _build_footer() -> Control:
@@ -850,6 +916,18 @@ func _refresh_header() -> void:
 	var st: Dictionary = _design["stats"]
 	_subtitle.text = "%s · %.0f L · %.1f kg · $%.0f · %.0f W" % [GantryLabSpec.describe(_spec), float(st["volume_l"]), float(st["mass_kg"]), float(st["usd"]), float(st["watts"])]
 	_why_lbl.text = str(GantryLabSpec.KINEMATICS_WHY[_spec["kinematics"]])
+	if _col != null:
+		var v: Dictionary = _spec["volume"]
+		_col.set_tiles([
+			{"caption": "Work volume", "value": "%.0f L" % float(st["volume_l"]),
+				"tip": "%.0f × %.0f × %.0f mm" % [float(v["x_mm"]), float(v["y_mm"]), float(v["z_mm"])]},
+			{"caption": "Weight", "value": "%.1f kg" % float(st["mass_kg"]), "tip": "Frame, motion, electronics and tool"},
+			{"caption": "Parts cost", "value": "$%.0f" % float(st["usd"]), "tip": "The bill of materials at catalogue prices"},
+			{"caption": "Power", "value": "%.0f W" % float(st["watts"]), "tip": "What the supply is sized for"}])
+		_col.set_summary("Work volume", "%.0f × %.0f × %.0f mm" % [float(v["x_mm"]), float(v["y_mm"]), float(v["z_mm"])])
+		_col.set_summary("Frame", str(_spec["frame"].get("profile", "")) if _spec.get("frame") is Dictionary else "")
+		_col.set_summary("Tool and bed", str(_spec.get("tool", "")) if _spec.get("tool") is String else "")
+		_col.set_summary("Bill of materials", "$%.0f" % float(st["usd"]))
 
 
 func _on_name_changed() -> void:
@@ -888,9 +966,7 @@ func _on_kinematics(kin: String) -> void:
 
 
 func _sync_kin_buttons() -> void:
-	for b in _kin_box.get_children():
-		if b is Button and b.has_meta("kin"):
-			(b as Button).set_pressed_no_signal(str(b.get_meta("kin")) == str(_spec["kinematics"]))
+	_kin_list.select(GantryLabSpec.KINEMATICS.find(str(_spec["kinematics"])))
 	_delta_sec.visible = str(_spec["kinematics"]) == "delta"
 
 

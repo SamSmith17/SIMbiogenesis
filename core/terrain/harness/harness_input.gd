@@ -188,6 +188,42 @@ static func find_button(root: Node, text: String, partial: bool = false) -> Butt
 	return null
 
 
+## find_button, but a button put away by the designer pattern is brought
+## out first: folded sections above it are opened, and a DesignerShell flyout
+## it lives in ("Add …", "View") is shown. Null when no such button exists.
+static func find_button_revealing(root: Node, text: String, partial: bool = false) -> Button:
+	var b := find_button(root, text, partial)
+	if b != null or root == null:
+		return b
+	for n in root.find_children("*", "Button", true, false):
+		var c := n as Button
+		if not (c.text == text or (partial and c.text.find(text) >= 0)):
+			continue
+		var p: Node = c.get_parent()
+		var shell: Node = null
+		var fly := ""
+		var unfolded := false
+		while p != null:
+			if p is FoldableContainer and (p as FoldableContainer).folded:
+				(p as FoldableContainer).folded = false
+				unfolded = true
+			if str(p.name).begins_with("flyout_body_"):
+				fly = str(p.name).substr(12)
+			# Duck-typed: naming DesignerShell here pulls the CursorController
+			# autoload into every --script selftest that loads this file.
+			if p.has_method("show_flyout") and p.has_method("add_flyout_button"):
+				shell = p
+				break
+			p = p.get_parent()
+		if shell != null and not fly.is_empty():
+			shell.call("show_flyout", fly)
+		# A section just opened shows its rows on the next layout pass: the
+		# caller's settle (every _press helper has one) covers it.
+		if c.is_visible_in_tree() or (unfolded and c.visible):
+			return c
+	return null
+
+
 static func center_of(c: Control) -> Vector2:
 	var r := c.get_global_rect()
 	return r.position + r.size / 2.0

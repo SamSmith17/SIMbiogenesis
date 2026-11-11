@@ -290,10 +290,26 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 			pn_i.name = "P%d" % i
 			root.add_child(pn_i)
 	else:
+		# Clear sheets (a greenhouse's polycarbonate, glass) go in their own
+		# mesh that casts no shadow: Godot's shadows ignore transparency, so a
+		# glazed dome left everything inside it in full shade. It does not
+		# collide either, so a player can step into a greenhouse between the
+		# struts (there is no door; the frame still collides).
+		var glaze_keys := ["glass"]
+		if DomeLabMaterials.sheet_look(str(s["face"]["material"])) == "glazing":
+			glaze_keys.append("panel")
 		var mi := MeshInstance3D.new()
 		mi.name = "Mesh"
-		mi.mesh = _commit(sts, accs, d, ghost)
+		mi.mesh = _commit(sts, accs, d, ghost, glaze_keys, true)
 		root.add_child(mi)
+		var gm := _commit(sts, accs, d, ghost, glaze_keys, false)
+		if gm.get_surface_count() > 0:
+			var gi := MeshInstance3D.new()
+			gi.name = "Glazing"
+			gi.mesh = gm
+			gi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			gi.set_meta("skip_prop_collision", true)
+			root.add_child(gi)
 	if record:
 		root.set_meta("picks", picks)
 	var st_: Dictionary = d["stats"]
@@ -303,9 +319,12 @@ static func build_from_design(d: Dictionary, node_name: String = "DomeStructure"
 
 ## The SurfaceTools (prisms) and packed accumulators (faces) of one build
 ## as a mesh, a surface per material.
-static func _commit(sts: Dictionary, accs: Dictionary, d: Dictionary, ghost: bool) -> ArrayMesh:
+static func _commit(sts: Dictionary, accs: Dictionary, d: Dictionary, ghost: bool,
+		keys: Array = [], exclude: bool = true) -> ArrayMesh:
 	var mesh := ArrayMesh.new()
 	for key in ["strut", "slat", "hub", "panel", "glass", "hl"]:
+		if not keys.is_empty() and keys.has(key) == exclude:
+			continue
 		var verts_k := PackedVector3Array()
 		var norms_k := PackedVector3Array()
 		if sts.has(key):

@@ -44,11 +44,24 @@ func _reveal(c: Control, tree: SceneTree) -> void:
 
 func _click_named(ui: Control, vp: Viewport, tree: SceneTree, name: String) -> bool:
 	var b := ui.find_child(name, true, false) as Control
+	# The view controls open from the transport's "View" button (a real
+	# click on it), and the popover is put away after.
+	var in_view := name.begins_with("view_")
+	var shell := ui.get("_shell") as DesignerShell
+	if in_view and shell != null and shell.flyout_shown() != "view":
+		var opener := ui.find_child("proc_view", true, false) as Control
+		if opener == null or not opener.is_visible_in_tree():
+			return false
+		await HarnessInput.click(vp, HarnessInput.center_of(opener))
+		await _settle(tree, 3)
 	if b == null or not b.is_visible_in_tree():
 		return false
 	await _reveal(b, tree)
 	await HarnessInput.click(vp, HarnessInput.center_of(b))
 	await _settle(tree, 3)
+	if in_view and shell != null:
+		shell.hide_flyout()
+		await _settle(tree, 2)
 	return true
 
 
@@ -131,12 +144,13 @@ func run(main: Node, harness: Node) -> Dictionary:
 	_ok(chart != null and chart.is_visible_in_tree(), "the chart is shown")
 	if chart != null:
 		await _reveal(chart, tree)
-		var r: Rect2 = chart.get_global_rect()
-		var plot_l: float = r.position.x + 44.0
-		var plot_w: float = r.size.x - 44.0 - 8.0
+		# In the chart's OWN pixels, then through its transform: a full-screen
+		# modal is zoomed, so screen offsets are not the chart's.
+		var plot_l := 44.0
+		var plot_w: float = chart.size.x - 44.0 - 8.0
 		for want in [1.0, 3.0]:
 			var x: float = plot_l + float(want) / float(proc["duration_h"]) * plot_w
-			await HarnessInput.click(vp, Vector2(x, r.position.y + r.size.y * 0.5))
+			await HarnessInput.click(vp, chart.get_global_transform() * Vector2(x, chart.size.y * 0.5))
 			await _settle(tree, 6)
 			var th := float(panel.call("time_h"))
 			_ok(absf(th - want) < 0.1, "a click on the chart scrubs to %.0f h (%.2f h)" % [want, th])
@@ -173,7 +187,7 @@ func run(main: Node, harness: Node) -> Dictionary:
 	var p11: Vector2 = ui.call("part_pos", "p11")
 	var studio: StudioViewport = ui.call("studio")
 	if p11.x >= 0.0:
-		await HarnessInput.click(vp, studio.container.get_global_rect().position + p11)
+		await HarnessInput.click(vp, studio.screen_pos(p11))
 		await _settle(tree, 6)
 	var want_cv := TcProcNet.cv_of_part(sim.net, "p11", "product")
 	_ok(int(panel.get("sel_cv")) == want_cv, "a click on a condenser selects its volume (%d vs %d)" % [int(panel.get("sel_cv")), want_cv])
@@ -210,7 +224,7 @@ func run(main: Node, harness: Node) -> Dictionary:
 		await _shot(main, "04_section_pyrolysis")
 		# The cut follows a clicked condenser.
 		if p11.x >= 0.0:
-			await HarnessInput.click(vp, studio.container.get_global_rect().position + p11)
+			await HarnessInput.click(vp, studio.screen_pos(p11))
 			await _settle(tree, 8)
 			await _shot(main, "05_section_condenser")
 		_ok(await _click_named(ui, vp, tree, "view_xray"), "the X-ray button is there")

@@ -73,6 +73,23 @@ static func designed_csp_preset(spec: Dictionary) -> Dictionary:
 	return p
 
 
+## The "FarmBot bed (designed)" preset carrying a design from the FarmBot
+## designer: the bed's area, the kit's price, its name.
+static func designed_farmbot_preset(spec: Dictionary) -> Dictionary:
+	var p := find_preset_by_label("FarmBot bed (designed)")
+	if p.is_empty():
+		return {}
+	var d := FarmBotDesign.solve(spec)
+	var sp: Dictionary = p["specs"]
+	for k in FarmBotDesign.graph_specs(d):
+		sp[k] = FarmBotDesign.graph_specs(d)[k]
+	sp["farmbot_spec"] = FarmBotSpec.to_json_safe(d["spec"])
+	sp["cost"] = FarmBotSpec.kit_price_usd(d["spec"])
+	sp["name"] = str(d["spec"]["name"])
+	p["specs"] = sp
+	return p
+
+
 static func spawn_dimensions(preset: Dictionary) -> Vector2:
 	var t := str(preset.get("type", ""))
 	return Vector2(_GraphCanvas.default_width(t), _GraphCanvas.default_height(t))
@@ -568,10 +585,17 @@ const PROCESSORS: Array = [
 			"energy_source": "ac",
 			"efficiency": 1.0, "energy_wh_per_unit": 1200.0,
 			"io_absolute": true,
-			"daily_note": "Water 2 L/h + nutrients 0.05 kg/h + 120 W of pumps → 0.1 kg/h food (~2.4 kg/day). Sunlit bed — no grow-light energy modeled.",
+			# Nutrients are kg of N + P + K: vegetables take about 0.6–1 % of
+			# their fresh weight (lettuce ~6 g/kg, potato ~9 g/kg; Marschner
+			# 2012, Mineral Nutrition of Higher Plants), roots and trimmings
+			# included. It was 0.05 kg/h: half the crop's weight in fertilizer.
+			# establish_days: a bed built from its kit is planted then and
+			# comes up to a steady harvest over about six weeks.
+			"establish_days": 45.0,
+			"daily_note": "Water 2 L/h + nutrients 1 g/h (N+P+K) + 120 W of pumps → 0.1 kg/h food (~2.4 kg/day) once established, about six weeks after planting. Sunlit bed — no grow-light energy modeled.",
 			"inputs": [
 				{"kind": "water", "rate": 2.0, "unit": "L/h"},
-				{"kind": "nutrients", "rate": 0.05, "unit": "kg/h"},
+				{"kind": "nutrients", "rate": 0.001, "unit": "kg/h"},
 			],
 			"outputs": [{"kind": "food", "rate": 0.1, "unit": "kg/h"}],
 		},
@@ -744,8 +768,157 @@ const PROCESSORS: Array = [
 			],
 		},
 	},
+	# --- Closing the nutrient loop --------------------------------------
+	# Nutrients are kg of N + P + K (see ResourceKinds "nutrients"). The four
+	# routes a settlement has: diverted urine, brownwater digestate, food-
+	# scrap digestate (HomeBiogas) and compost.
+	{
+		# Nitrification then distillation (the Eawag / Vuna "Aurin" process:
+		# Udert & Wächter 2012, Water Research 46: 453–464), about 0.1 kWh a
+		# litre with vapour compression. Urine carries ~9.5 g N+P+K a litre
+		# (Jönsson et al. 2004); ~90 % ends in the concentrate. The salt step
+		# is an ESTIMATE: Aurin itself keeps the salt in its fertilizer; here
+		# the concentrate is crystallised and the sodium chloride drawn off as
+		# brine, so the product can go into a recirculating hydroponic bed,
+		# where sodium would otherwise build up. Mass: 1 L in = 0.95 L of
+		# distillate + 0.04 L brine + ~9 g of nutrients.
+		"type": "processor", "label": "Urine Nutrient Recovery", "icon": "⚗",
+		"width": 160.0, "height": 140.0,
+		"specs": {
+			"name": "Urine Nutrient Recovery", "watts": 100.0, "cost": 4500.0,
+			"energy_source": "ac",
+			"efficiency": 1.0, "energy_wh_per_unit": 100.0,
+			"io_absolute": true,
+			"daily_note": "Urine 1 L/h + 100 W (nitrify, distil, desalt) → 8.5 g/h N+P+K + 0.95 L/h distillate (irrigation) + 0.04 L/h brine.",
+			"inputs": [{"kind": "urine", "rate": 1.0, "unit": "L/h"}],
+			"outputs": [
+				{"kind": "nutrients", "rate": 0.0085, "unit": "kg/h"},
+				{"kind": "irrigation_water", "rate": 0.95, "unit": "L/h"},
+				{"kind": "brine", "rate": 0.04, "unit": "L/h"},
+			],
+		},
+	},
+	{
+		# A sealed septic digester for the brownwater (faeces + flush) of a
+		# urine-diverting camp: ~3 m³, about a month's retention at 10 people.
+		# Human excreta give ~0.02–0.04 m³ of biogas a person a day (Kossmann
+		# et al., GTZ Biogas Digest vol. I) — 0.004 m³ a litre of brownwater
+		# here. Below ~15 °C it slows (not simulated). Passive.
+		"type": "processor", "label": "Brownwater Digester (3 m³)", "icon": "♻",
+		"width": 160.0, "height": 140.0,
+		"specs": {
+			"name": "Brownwater Digester", "watts": 0.0, "cost": 1400.0,
+			"energy_source": "",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"io_absolute": true,
+			"daily_note": "Brownwater 4 L/h → 3.95 L/h digestate + 0.016 m³/h biogas. About a month in the tank; the settled sludge is pumped out every few years.",
+			"inputs": [{"kind": "blackwater", "rate": 4.0, "unit": "L/h"}],
+			"outputs": [
+				{"kind": "liquid_fertilizer", "rate": 3.95, "unit": "L/h"},
+				{"kind": "biogas", "rate": 0.016, "unit": "m³/h"},
+			],
+		},
+	},
+	{
+		# Digestate into a hydroponic nutrient: settle, then an aerated
+		# biofilter turns the ammonium into nitrate (the bioponics step), a
+		# sand filter and UV lamp take out what pathogens are left. Brownwater
+		# digestate carries ~0.7 g N+P+K a litre (excreta at ~3 g a person a
+		# day plus the urine that missed the bowl, in ~9 L of flush); food-
+		# scrap digestate ~2 g. ~0.6 g a litre recovered. The water is clean
+		# enough to irrigate, not to drink.
+		"type": "processor", "label": "Digestate Nitrification Filter", "icon": "🧪",
+		"width": 160.0, "height": 140.0,
+		"specs": {
+			"name": "Digestate Nitrification Filter", "watts": 30.0, "cost": 900.0,
+			"energy_source": "ac",
+			"efficiency": 1.0, "energy_wh_per_unit": 7.5,
+			"io_absolute": true,
+			"daily_note": "Digestate 4 L/h + 30 W (aeration, UV) → 2.4 g/h N+P+K + 3.8 L/h reclaimed water.",
+			"inputs": [{"kind": "liquid_fertilizer", "rate": 4.0, "unit": "L/h"}],
+			"outputs": [
+				{"kind": "nutrients", "rate": 0.0024, "unit": "kg/h"},
+				{"kind": "irrigation_water", "rate": 3.8, "unit": "L/h"},
+			],
+		},
+	},
+	{
+		# Thermophilic compost bays for prunings, plate scraps and plot
+		# biomass. Mixed garden matter is ~1.6 % N+P+K dry; ~30 % of the
+		# nitrogen is lost as ammonia while it heats (Bernal et al. 2009,
+		# Bioresource Technology 100: 5444). What the bays give back is the
+		# nutrient, extracted as a compost tea for the beds; the carbon goes
+		# to the air. Passive (turning it is a chore).
+		"type": "processor", "label": "Hot Compost Bays", "icon": "🌱",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Hot Compost Bays", "watts": 0.0, "cost": 300.0,
+			"energy_source": "",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"io_absolute": true,
+			"daily_note": "Biomass 0.2 kg/h (~5 kg/day) → 2.2 g/h N+P+K as compost tea.",
+			"inputs": [{"kind": "biomass", "rate": 0.2, "unit": "kg/h"}],
+			"outputs": [{"kind": "nutrients", "rate": 0.0022, "unit": "kg/h"}],
+		},
+	},
+	{
+		# Supplies come in packed. Opening them leaves the packaging: about
+		# 4 % of the food's weight in plastic and 8 % in card and tin for
+		# shelf-stable bulk food (an ESTIMATE from EU households' ~36 kg of
+		# plastic packaging a person a year, Eurostat 2021, most of it food's,
+		# against ~550 kg of food eaten). Sorted at the bench: plastic for the
+		# shredder, card and tin for the haul to town. Passive (hands).
+		"type": "processor", "label": "Unpack & Sort Supplies", "icon": "📦",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Unpack & Sort Supplies", "watts": 0.0, "cost": 50.0,
+			"energy_source": "",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"io_absolute": true,
+			"daily_note": "Packaged supplies 3 kg/h → 3 kg/h food + 0.12 kg/h plastic + 0.24 kg/h card and tin.",
+			"inputs": [{"kind": "packaged_food", "rate": 3.0, "unit": "kg/h"}],
+			"outputs": [
+				{"kind": "food", "rate": 3.0, "unit": "kg/h"},
+				{"kind": "plastic_waste", "rate": 0.12, "unit": "kg/h"},
+				{"kind": "packaging_waste", "rate": 0.24, "unit": "kg/h"},
+			],
+		},
+	},
+	{
+		# Rain off a ground apron is not drinking water: a slow sand filter
+		# (WHO: 90–99 % of bacteria) then a UV-C lamp (40 mJ/cm², the NSF/ANSI
+		# 55 Class A dose) before the day tank. 25 W of lamp for 60 L/h.
+		"type": "processor", "label": "Sand Filter + UV", "icon": "💧",
+		"width": 140.0, "height": 130.0,
+		"specs": {
+			"name": "Sand Filter + UV", "watts": 25.0, "cost": 700.0,
+			"energy_source": "ac",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.42,
+			"io_absolute": true,
+			"daily_note": "Raw rainwater 60 L/h + 25 W UV → 60 L/h drinking water.",
+			"inputs": [{"kind": "water", "rate": 60.0, "unit": "L/h"}],
+			"outputs": [{"kind": "water", "rate": 60.0, "unit": "L/h"}],
+		},
+	},
 	# Boundary imports — infinite supply that counts AGAINST closure score.
 	# Earth play allows partial openness; Moon/Mars challenges forbid these.
+	{
+		# Waste plastic gathered from the town and the shoreline, for a site
+		# whose own packaging has dried up. A MATERIAL import (something to
+		# make with), not a supply anybody lives on.
+		"type": "processor", "label": "Plastic Collection Run", "icon": "🚚",
+		"width": 130.0, "height": 110.0,
+		"specs": {
+			"name": "Plastic Collection Run", "role": "import",
+			"counts_as_import": true, "material_import": true,
+			"watts": 0.0, "cost": 0.0,
+			"energy_source": "",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"daily_note": "Bring in waste plastic, 1 kg/h while running (a run to town or along the shore).",
+			"inputs": [],
+			"outputs": [{"kind": "plastic_waste", "rate": 1.0, "unit": "kg/h"}],
+		},
+	},
 	{
 		"type": "processor", "label": "Grid Import", "icon": "🔌",
 		"width": 130.0, "height": 110.0,
@@ -822,6 +995,35 @@ const HABITATS: Array = [
 				{"kind": "greywater", "rate": 1.666, "unit": "L/h"},
 				{"kind": "blackwater", "rate": 0.417, "unit": "L/h"},
 				{"kind": "biomass", "rate": 0.0125, "unit": "kg/h"},
+			],
+		},
+	},
+	{
+		# The same people with urine-diverting (NoMix) flush toilets: the
+		# bowl sends urine to its own port (~1.1 L a person a day caught of
+		# 1.42) and only the brownwater goes to the blackwater port. The
+		# flush water, and so the water balance, is unchanged
+		# (ResourceFlowEngine.HABITAT_URINE_YIELD / _DIVERSION).
+		"type": "processor", "label": "Population (urine-diverting toilets)", "icon": "🏠",
+		"width": 150.0, "height": 150.0,
+		"specs": {
+			"name": "Population", "role": "habitat", "occupants": 1,
+			"pop_driven": false,
+			"sanitation": "urine_diverting",
+			"watts": 0.0, "cost": 0.0,
+			"energy_source": "",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"inputs": [
+				{"kind": "water", "rate": 2.083, "unit": "L/h"},
+				{"kind": "food", "rate": 0.0625, "unit": "kg/h"},
+				{"kind": "meal", "rate": 0.0, "unit": "meals/h"},
+				{"kind": "biomass", "rate": 0.0, "unit": "kg/h"},
+			],
+			"outputs": [
+				{"kind": "greywater", "rate": 1.666, "unit": "L/h"},
+				{"kind": "blackwater", "rate": 0.37, "unit": "L/h"},
+				{"kind": "biomass", "rate": 0.0125, "unit": "kg/h"},
+				{"kind": "urine", "rate": 0.047, "unit": "L/h"},
 			],
 		},
 	},
@@ -1042,6 +1244,50 @@ const RESOURCES: Array = [
 		},
 	},
 	{
+		# A month's urine for ten people (~14 L a day): stored urine sanitises
+		# itself in about a month at 20 °C (WHO 2006, Guidelines for the safe
+		# use of excreta, vol. 4).
+		"type": "resource", "label": "Urine Storage Tank (1000 L)", "icon": "🟡",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Urine Storage Tank", "resource_kind": "urine",
+			"capacity": "1000 L", "capacity_qty": 1000.0, "capacity_unit": "L",
+			"level": 0.0, "cost": 250.0,
+		},
+	},
+	{
+		# Treated greywater and distillate for the plots: never wire it to a
+		# drinking tap.
+		"type": "resource", "label": "Reclaimed Water Tank", "icon": "🪣",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Reclaimed Water Tank", "resource_kind": "irrigation_water",
+			"capacity": "1000 L", "capacity_qty": 1000.0, "capacity_unit": "L",
+			"level": 0.0, "cost": 200.0,
+		},
+	},
+	{
+		# A lined, shallow pan the brine dries in (in the desert sun, a few
+		# litres a day evaporate from a square metre).
+		"type": "resource", "label": "Salt Pan (brine)", "icon": "🧂",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Salt Pan", "resource_kind": "brine",
+			"capacity": "500 L", "capacity_qty": 500.0, "capacity_unit": "L",
+			"level": 0.0, "cost": 60.0,
+		},
+	},
+	{
+		# What a camp brings in to eat while its own food is getting going.
+		"type": "resource", "label": "Supply Stores (packaged food)", "icon": "📦",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Supply Stores", "resource_kind": "packaged_food",
+			"capacity": "1500 kg", "capacity_qty": 1500.0, "capacity_unit": "kg",
+			"level": 1.0, "cost": 0.0,
+		},
+	},
+	{
 		"type": "resource", "label": "Biogas Store", "icon": "💨",
 		"width": 90.0, "height": 100.0,
 		"specs": {
@@ -1190,6 +1436,54 @@ const PLANTS: Array = [
 			"sunlight_factor": 1.0, "cost": 600.0,
 			"food_fraction": 0.6,
 			"model_id": "grow_bed",
+		},
+	},
+	{
+		# The beds of one 20 m greenhouse dome (DomeLabPresets "greenhouse_20m"):
+		# five concentric ring beds 1.2 m wide with 0.6 m paths, a keyhole slot
+		# from the door to a compost basket in the middle. 192.5 m² of soil.
+		"type": "plant", "label": "Greenhouse Keyhole Beds (20 m dome)", "icon": "🥬",
+		"width": 170.0, "height": 140.0,
+		"specs": {
+			"name": "Greenhouse Beds", "area_m2": 192.5, "use_soi_area": false,
+			"lue_g_per_mj": 2.0,
+			# Net of the water a closed dome condenses back out of its air and
+			# returns to the drip line (a closed greenhouse recovers most of what
+			# its plants transpire; vented, it would be several times this).
+			"water_l_per_kg": 40.0,
+			# N + P + K taken up per kg of whole-plant dry matter (vegetables run
+			# 1.5-3 %; the low end, for beds fed on compost and urine).
+			"nutrient_kg_per_kg": 0.015,
+			# Twin-wall polycarbonate passes about 80 % of the light.
+			"sunlight_factor": 0.8,
+			# Protected cropping: the dome keeps the winter cold and (with shade
+			# cloth and its vents) the summer heat off, so growth follows the light
+			# all year (PlantGrowth.season_for_specs).
+			"protected_season": 0.9,
+			"food_fraction": 0.6,
+			# Sown section by section when the beds are built; a full harvest about
+			# two months on.
+			"establish_days": 60.0,
+			"cost": 4800.0,
+			"daily_note": "192.5 m² of mixed vegetables under polycarbonate: twelve domes make about 15 kg of food a day at Bombay Beach once established, more in spring and summer, less in winter. Stalks, leaves and vines leave on the residue port for compost.",
+			"model_id": "grow_bed",
+			"grow_bed_spec": {"layout": "keyhole", "crops": "garden"},
+		},
+	},
+	{
+		# A garden robot's bed from the FarmBot designer (core/farmbotlab/):
+		# the bed's area grows food like any vegetable bed; the robot sows,
+		# waters, weeds and photographs it (its days in FarmBotJobs). Open
+		# "Edit FarmBot…" on its prop to change the bed, crops or schedule.
+		"type": "plant", "label": "FarmBot bed (designed)", "icon": "🤖",
+		"width": 160.0, "height": 130.0,
+		"specs": {
+			"name": "FarmBot bed", "area_m2": 18.0, "use_soi_area": false,
+			"lue_g_per_mj": 2.0, "water_l_per_kg": 50.0, "nutrient_kg_per_kg": 0.02,
+			"sunlight_factor": 1.0, "food_fraction": 0.6, "establish_days": 45.0,
+			"cost": 4500.0, "farmbot_spec": {},
+			"daily_note": "A raised bed tended by a gantry robot: it sows, waters, weeds and photographs the bed on its own schedule.",
+			"model_id": "farmbot",
 		},
 	},
 	{

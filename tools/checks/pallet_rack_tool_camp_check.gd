@@ -62,13 +62,14 @@ func _click(world: Vector3) -> void:
 
 
 func _press(text: String) -> bool:
-	var btn := HarnessInput.find_button(_ui, text, false)
+	var btn := HarnessInput.find_button_revealing(_ui, text, false)
 	if btn == null:
 		return false
 	var p: Node = btn.get_parent()
 	while p != null and not (p is ScrollContainer):
 		p = p.get_parent()
 	if p is ScrollContainer:
+		await _settle(2)   # a section the finder just opened lays out first
 		(p as ScrollContainer).ensure_control_visible(btn)
 		await _settle(3)
 	await HarnessInput.click(_win, HarnessInput.center_of(btn))

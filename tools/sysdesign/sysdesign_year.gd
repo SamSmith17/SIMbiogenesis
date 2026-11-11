@@ -418,3 +418,6 @@ func finish() -> void:
 		var tl: Object = flow.call("get_timeline", iid)
 		if tl != null:
 			a["overflow"] = float(tl.get("total_overflow_qty"))
+		# A batch's frontloaded charge moves no wire flow, so the per-wire
+		# `out` misses it: the store's own balance is the floor.
+		a["out"] = maxf(float(a["out"]), float(a["start"]) + float(a["in"]) - float(a["end"]) - float(a["overflow"]))

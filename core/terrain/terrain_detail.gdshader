@@ -81,6 +81,12 @@ uniform vec3 litter_color : source_color = vec3(0.40, 0.25, 0.11);
 // Forest-floor moss (VegFloorMoss, 2026-10-15): a coverage mask fitted to the
 // forested rectangle (moss_rect = x0, z0, size m), painted moss-green in
 // patches under the trees. strength 0 = off (the default).
+// Structure openings (core/earthworks/terrain_hole_mask.gd): the terrain is
+// not drawn inside a building's footprint, cut per pixel at the wall line, so
+// sunken rooms and basements show the structure's own floor and walls.
+uniform sampler2DArray hole_tex : filter_linear, repeat_disable;
+uniform int hole_count = 0;
+uniform vec4 hole_rects[16];
 uniform sampler2D moss_tex : filter_linear, repeat_disable;
 uniform vec4 moss_rect = vec4(0.0);
 uniform float moss_strength : hint_range(0.0, 1.0) = 0.0;
@@ -195,6 +201,14 @@ void vertex() {
 
 void fragment() {
 	soi_clip_fragment(v_world_pos);
+	for (int hi = 0; hi < hole_count; hi++) {
+		vec4 hr = hole_rects[hi];
+		vec2 huv = (v_world_pos.xz - hr.xy) / hr.zw;
+		if (huv.x > 0.0 && huv.x < 1.0 && huv.y > 0.0 && huv.y < 1.0
+				&& texture(hole_tex, vec3(huv, float(hi))).r > 0.5) {
+			discard;
+		}
+	}
 	vec2 uv = UV;
 	vec3 col;
 

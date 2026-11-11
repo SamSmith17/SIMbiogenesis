@@ -307,6 +307,9 @@ func _apply_test_baseline() -> void:
 		print("PlaytestHarness: player's testing switches reset to shipped defaults for this run (not saved): %s, target %d" % [
 			str(PopTestPrefs.saved_flags()), PopTestPrefs.festival_target_people()])
 	PopTestPrefs.reset_defaults()
+	# Designer sections open with their DEFAULT folds (the player's saved
+	# folds would move every density number and hide rows a check clicks).
+	Collapsible.ignore_saved = true
 	# NPC display taste (body style, light crowd off, hero budget, names…) is a
 	# global file the captures' assertions were calibrated without — Walton's
 	# festival hero-pool check read 15 of 79 overflow people drawn with the
@@ -8396,6 +8399,9 @@ func _run_hub_settings_capture() -> void:
 	var restored := false
 	if chip != null and reset_btn != null:
 		var sc := panel.get("_tabs") as TabContainer
+		# Long pages fold their later sections: open the row's own.
+		if panel.has_method("reveal_control"):
+			await panel.call("reveal_control", chip)
 		# The row may sit below the fold of the page's ScrollContainer.
 		var scroll := chip.get_parent()
 		while scroll != null and not (scroll is ScrollContainer):

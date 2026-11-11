@@ -118,6 +118,11 @@ const _GROUPS := [
 ]
 
 var _rows_container: VBoxContainer = null
+var _search: LineEdit = null
+var _groups_flow: HFlowContainer = null
+var _no_match: Control = null
+## Width of one group of keys; the page shows as many columns as fit.
+const GROUP_W := 430.0
 var _panel: PanelContainer = null
 
 
@@ -147,7 +152,11 @@ func toggle() -> void:
 func open() -> void:
 	_rebuild_rows()
 	visible = true
-	UiScreenLayout.clamped_center(_panel, Vector2(560.0, 620.0))
+	UiFit.keep_fitted(_panel, Vector2(560.0, 620.0))
+	UiFit.set_content_column(_panel, 1380.0)  # three columns of keys, not edge to edge
+	if _search != null:
+		_search.text = ""
+		_search.grab_focus()
 	CursorController.request_modal("help_overlay", Callable(self, "close"))
 	HudLayout.claim_modal("help_overlay")
 
@@ -205,9 +214,19 @@ func _build_ui() -> void:
 	var close_btn := IconButton.close(close)
 	title_row.add_child(close_btn)
 
-	outer.add_child(HSeparator.new())
+	_search = LineEdit.new()
+	_search.name = "help_search"
+	_search.placeholder_text = "Find a key (graph, drone, pause…)"
+	_search.clear_button_enabled = true
+	_search.right_icon = UiIcons.icon("search", 14)
+	_search.custom_minimum_size.x = 360
+	_search.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_search.text_changed.connect(func(_t: String) -> void: _apply_search())
+	outer.add_child(_search)
 
 	var scroll := ScrollContainer.new()
+	scroll.name = "scroll"
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	outer.add_child(scroll)
@@ -229,22 +248,69 @@ func _rebuild_rows() -> void:
 	for child in _rows_container.get_children():
 		child.queue_free()
 
-	_rows_container.add_child(SectionHeader.make("Tips"))
+	# The keys first, a card per group, as many columns as fit.
+	_groups_flow = HFlowContainer.new()
+	_groups_flow.add_theme_constant_override("h_separation", UITheme.SPACE_MD)
+	_groups_flow.add_theme_constant_override("v_separation", UITheme.SPACE_MD)
+	_rows_container.add_child(_groups_flow)
+	for group in _GROUPS:
+		var group_name: String = group[0]
+		var actions: Array = group[1]
+		var card := PanelContainer.new()
+		card.add_theme_stylebox_override("panel", UITheme.card_style())
+		card.custom_minimum_size.x = GROUP_W
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", UITheme.SPACE_XS)
+		card.add_child(col)
+		col.add_child(SectionHeader.make(group_name))
+		for entry in actions:
+			var row := _make_row(entry[0], entry[1])
+			row.set_meta("find", ("%s %s" % [str(entry[1]), group_name]).to_lower())
+			col.add_child(row)
+		_groups_flow.add_child(card)
+
+	# Tips: folded, after the keys.
+	var tips := Collapsible.make("Tips", false, UiText.count(_TIPS.size(), "tip"))
+	tips.name = "tips"
 	for tip in _TIPS:
 		var tip_lbl := Label.new()
 		tip_lbl.text = "• %s" % tip
 		tip_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		tip_lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		tip_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-		_rows_container.add_child(tip_lbl)
-	_rows_container.add_child(HSeparator.new())
+		tips.body.add_child(tip_lbl)
+	_rows_container.add_child(tips)
+	_no_match = null
 
-	for group in _GROUPS:
-		var group_name: String = group[0]
-		var actions: Array = group[1]
-		_rows_container.add_child(SectionHeader.make(group_name))
-		for entry in actions:
-			_rows_container.add_child(_make_row(entry[0], entry[1]))
+
+## Rows whose name (or group) holds every typed word; empty groups go.
+func _apply_search() -> void:
+	if _groups_flow == null:
+		return
+	var words := _search.text.strip_edges().to_lower().split(" ", false)
+	var any := false
+	for card in _groups_flow.get_children():
+		var shown := 0
+		for row in (card as Control).get_child(0).get_children():
+			if not (row as Node).has_meta("find"):
+				continue
+			var ok := true
+			for w in words:
+				if not (w in str((row as Node).get_meta("find"))):
+					ok = false
+					break
+			(row as Control).visible = ok
+			if ok:
+				shown += 1
+		(card as Control).visible = shown > 0
+		any = any or shown > 0
+	if is_instance_valid(_no_match):
+		_no_match.queue_free()
+		_no_match = null
+	if not any:
+		_no_match = EmptyState.make("search", "No key matches “%s”." % _search.text.strip_edges())
+		_rows_container.add_child(_no_match)
+		_rows_container.move_child(_no_match, 0)
 
 
 func _make_row(action: String, display_label: String) -> HBoxContainer:
@@ -255,6 +321,9 @@ func _make_row(action: String, display_label: String) -> HBoxContainer:
 	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	lbl.add_theme_color_override("font_color", UITheme.C_TEXT)
+	lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	lbl.tooltip_text = display_label
+	lbl.mouse_filter = Control.MOUSE_FILTER_STOP
 	row.add_child(lbl)
 	if action.begins_with("key:"):
 		row.add_child(_make_key_chip(action.trim_prefix("key:")))

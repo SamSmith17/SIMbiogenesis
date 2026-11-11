@@ -65,7 +65,11 @@ static func build(model: GraphModel, design: Dictionary, sgv: Node = null) -> Di
 		for iid: String in ids_of(design, nid):
 			var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
 			for k in (n.get("set", {}) as Dictionary).keys():
-				specs[k] = (n["set"] as Dictionary)[k]
+				var v: Variant = (n["set"] as Dictionary)[k]
+				# "@start": the run's first hour (a bed planted on day one).
+				if v is String and str(v) == "@start":
+					v = float(design.get("_start_abs", NAN))
+				specs[k] = v
 			if int(n.get("count", 1)) > 1 and not (n.get("set", {}) as Dictionary).has("name"):
 				specs["name"] = "%s %s" % [str(specs.get("name", label)), iid.get_slice("_", iid.get_slice_count("_") - 1)]
 			var ptype := str(preset.get("type", "appliance"))
@@ -135,6 +139,12 @@ static func build(model: GraphModel, design: Dictionary, sgv: Node = null) -> Di
 						ProcessRecipe.apply_to_specs(live, rec)
 			made.append(iid)
 		ids[nid] = made
+
+	# A nodes-only build (the world sync adds the nodes a design gained and
+	# wires the whole design itself).
+	if bool(design.get("_nodes_only", false)):
+		model.changed.emit("sysdesign_build")
+		return {"ok": errors.is_empty(), "ids": ids, "errors": errors, "notes": notes}
 
 	# Solar arrays: the view's own seeder (real panels in strings inside one
 	# array compound, wired PV+/PV- to the controller).
@@ -290,6 +300,11 @@ static func _source_handle(item: Dictionary, kind: String) -> String:
 		"resource", "catchment", "pbi":
 			return "output"
 		"plant":
+			# A food crop's food leaves on biomass_out and the rest of the
+			# plant (stalks, leaves, vines) on residue_out.
+			var sp: Dictionary = item.get("specs", {})
+			if float(sp.get("food_fraction", 0.0)) > 0.0 and ResourceKinds.normalize_kind(kind) == "biomass":
+				return "residue_out"
 			return "biomass_out"
 		"processor":
 			var k := kind

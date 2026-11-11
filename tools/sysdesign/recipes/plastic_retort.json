@@ -23,7 +23,7 @@
     }
   ],
   "label": "Plastic retort: a lab run (8 kg polypropylene pellets, 2 × 600 W)",
-  "note": "From a TC Process Lab run: 8.0 h, 7.74 kWh, 0.00 kg char, 1.70 Nm³ gas at 83.5 MJ/Nm³, 0.00 L wood vinegar, 5.63 kg tar.",
+  "note": "From a TC Process Lab run: 8.0 h, 7.74 kWh, 0.00 kg char, 1.70 Nm³ gas at 83.5 MJ/Nm³, 0.00 L wood vinegar, 5.63 kg tar. Condensers on a closed radiator loop: the cooling water circulates and its heat goes to the air, so no water leaves the batch.",
   "outputs": [
     {
       "delay_hrs": 2.76805555555556,
@@ -48,15 +48,6 @@
       "qty": 1.70102198140026,
       "rate": 1.70102198140026,
       "unit": "m³"
-    },
-    {
-      "delay_hrs": 0.0,
-      "duration_hrs": 1.0,
-      "kind": "hot_water",
-      "mode": "continuous",
-      "qty": 954.166666666667,
-      "rate": 954.166666666667,
-      "unit": "L"
     }
   ],
   "require_confirm_start": false,

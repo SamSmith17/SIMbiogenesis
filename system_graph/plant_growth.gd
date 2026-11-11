@@ -42,10 +42,15 @@ static func par_mj_per_hour(par_wm2: float, area_m2: float) -> float:
 
 
 ## Potential (unstressed) dry biomass rate from light alone (kg/h).
+## `season` >= 0 replaces the month's seasonality: a greenhouse (protected
+## cropping) takes away the cold and heat limits the temperate curve stands
+## for, so its growth follows the light alone (season_for_specs).
 static func potential_biomass_kg_h(par_wm2: float, area_m2: float,
-		lue_g_per_mj: float = DEFAULT_LUE_G_PER_MJ, month: int = 6) -> float:
+		lue_g_per_mj: float = DEFAULT_LUE_G_PER_MJ, month: int = 6,
+		season: float = -1.0) -> float:
 	var mj_h := par_mj_per_hour(par_wm2, area_m2)
-	var g_h: float = maxf(0.0, lue_g_per_mj) * mj_h * season_factor(month)
+	var sf := season if season >= 0.0 else season_factor(month)
+	var g_h: float = maxf(0.0, lue_g_per_mj) * mj_h * sf
 	return g_h / 1000.0
 
 
@@ -55,8 +60,8 @@ static func potential_biomass_kg_h(par_wm2: float, area_m2: float,
 static func biomass_kg_per_hour(par_wm2: float, area_m2: float,
 		lue_g_per_mj: float = DEFAULT_LUE_G_PER_MJ, month: int = 6,
 		water_factor: float = 1.0, nutrient_factor: float = 1.0,
-		sunlight_factor: float = 1.0) -> float:
-	var potential := potential_biomass_kg_h(par_wm2, area_m2, lue_g_per_mj, month)
+		sunlight_factor: float = 1.0, season: float = -1.0) -> float:
+	var potential := potential_biomass_kg_h(par_wm2, area_m2, lue_g_per_mj, month, season)
 	var f_w := clampf(water_factor, 0.0, 1.0)
 	var f_n := clampf(nutrient_factor, 0.0, 1.0)
 	var f_s := clampf(sunlight_factor, 0.0, 1.2)
@@ -85,6 +90,16 @@ static func water_l_per_kg_from_specs(specs: Dictionary) -> float:
 
 static func nutrient_kg_per_kg_from_specs(specs: Dictionary) -> float:
 	return maxf(float(specs.get("nutrient_kg_per_kg", DEFAULT_NUTRIENT_KG_PER_KG)), 0.0)
+
+
+## A protected bed's fixed season factor (specs.protected_season, 0..1), or
+## -1 for the month's temperate curve. Greenhouse Keyhole Beds use 0.9: the
+## year is about as good as late spring all round once the cold and the heat
+## are kept out (an estimate; the light still follows the sun and the weather).
+static func season_for_specs(specs: Dictionary) -> float:
+	if not specs.has("protected_season"):
+		return -1.0
+	return clampf(float(specs.get("protected_season", 1.0)), 0.0, 1.0)
 
 
 ## Per-node shade / availability factor (default ambient full sun = 1.0).

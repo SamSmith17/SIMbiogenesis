@@ -1256,7 +1256,10 @@ func _container_door_near(pos: Vector2) -> Dictionary:
 ## yet is pinned ALL HANDS and the item waits for its next tick). Returns
 ## {ok, error, project_id, site}. Items wait under the record's `manual`
 ## stamp, which the tick services like an event's.
-func queue_item(kind: String, id: String, action: String) -> Dictionary:
+## opts.all_hands (default true) pins the crew ALL HANDS as an event does;
+## false leaves the work on the ordinary board, done in work hours (a long
+## build, weeks of it, is not a crunch).
+func queue_item(kind: String, id: String, action: String, opts: Dictionary = {}) -> Dictionary:
 	bind(_main)
 	var out := {"ok": false, "error": "", "project_id": "", "site": Vector2.ZERO}
 	if _loader == null or _bridge == null:
@@ -1285,10 +1288,12 @@ func queue_item(kind: String, id: String, action: String) -> Dictionary:
 		manual["before"] = {}
 	(manual["before"] as Dictionary)[id] = _snapshot(item)
 	var picked: Array = SiteDeployPlanner.pick_crews(crews_all, [item], 60)
+	var pin := bool(opts.get("all_hands", true))
 	for iid in picked:
 		if not (manual["crews"] as Array).has(str(iid)):
 			(manual["crews"] as Array).append(str(iid))
-		_bridge.call("set_all_hands", str(iid), true)
+		if pin:
+			_bridge.call("set_all_hands", str(iid), true)
 	(manual["items"] as Array).append({"kind": kind, "id": id})
 	# A crew with a board takes it at once; otherwise it waits for the tick.
 	var ready: Array = []

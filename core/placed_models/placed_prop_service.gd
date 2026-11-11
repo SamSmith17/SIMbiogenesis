@@ -110,8 +110,87 @@ static func place_model_at_xz(main: Node, model_id: String, x: float, z: float,
 		var sgv_pv := _system_graph_view(main)
 		if sgv_pv != null and sgv_pv.has_method("bind_pv_array_prop"):
 			Callable(sgv_pv, "bind_pv_array_prop").call_deferred(prop_id)
+	Callable(PlacedPropService, "apply_catalog_earthworks").call_deferred(main, prop_id)
 	_notify_mp_props_edited()
 	return {"ok": true, "prop_id": prop_id, "x": x, "z": z, "ground_y": gy}
+
+
+## A catalog model that comes with earthworks (key `earthworks` on its entry:
+## a simple form, `fit: true` = the footprint is the model's own outline, `roof_fit`
+## = its roof is the model's top) gets them stamped on its record once placed.
+## A record that already has its own earthworks keeps them.
+static func apply_catalog_earthworks(main: Node, prop_id: String) -> void:
+	var rec := get_prop_record(main, prop_id)
+	if rec.is_empty():
+		return
+	if str(rec.get("model_id", "")) == EarthshipBuilder.MODEL_ID:
+		sync_earthship(main, prop_id)
+		return
+	if rec.has(StructureEarthworks.KEY):
+		return
+	var cat: Variant = ModelCatalog.find(str(rec.get("model_id", ""))).get("earthworks", null)
+	if not (cat is Dictionary):
+		return
+	var sm: Dictionary = (cat as Dictionary).duplicate(true)
+	var node := PlacedPropRuntime.find_by_prop_id(main, prop_id)
+	if node != null and (bool(sm.get("fit", false)) or bool(sm.get("roof_fit", false))):
+		var bb := LightHosts.local_bounds(node)
+		var ws := ModelCatalog.resolved_scale(str(rec.get("model_id", "")), float(rec.get("scale", 1.0)))
+		if bb.size != Vector3.ZERO:
+			if bool(sm.get("fit", false)):
+				sm["rect"] = [bb.position.x * ws, bb.position.z * ws, bb.end.x * ws, bb.end.z * ws]
+			if bool(sm.get("roof_fit", false)):
+				sm["roof_y"] = bb.end.y * ws
+	sm.erase("fit")
+	sm.erase("roof_fit")
+	var patch := {StructureEarthworks.KEY: StructureEarthworks.from_simple(sm)}
+	if bool(ModelCatalog.find(str(rec.get("model_id", ""))).get("walk_in", false)):
+		patch["walk_in"] = true
+	update_prop_record(main, prop_id, patch, true)
+
+
+## A designed Earthship's record follows its design: the earthworks (sunk,
+## bermed, the opening over its rooms) and a sleep space for its beds. Run on
+## placement and after the designer's Apply. Keeps a sink or offset the
+## player set by hand in the prop editor? No: the design owns its earthworks
+## (edit them in the designer).
+static func sync_earthship(main: Node, prop_id: String) -> void:
+	var rec := get_prop_record(main, prop_id)
+	if rec.is_empty():
+		return
+	var spec: Dictionary = rec.get(EarthshipSpec.KEY, {}) if rec.get(EarthshipSpec.KEY, null) is Dictionary else {}
+	var d := EarthshipDesign.solve(spec)
+	update_prop_record(main, prop_id, {StructureEarthworks.KEY: EarthshipDesign.earthworks(spec),
+		"walk_in": true}, true)
+	_auto_tag_space(main, prop_id, "sleep", int(d["stats"]["sleeps"]), str(d["spec"]["name"]))
+	# The roof feeds the cisterns behind the berm (an Earthship's water).
+	var st: Dictionary = d["stats"]
+	_sync_roof_water(main, prop_id, str(d["spec"]["name"]), float(st["roof_m2"]), float(st["cistern_l"]))
+
+
+## Any structure with earthworks: its roof (the opening's footprint) as a rain
+## catchment into a cistern on the graph. Returns false without a graph.
+static func add_structure_roof_water(main: Node, prop_id: String, cistern_l: float = 5000.0) -> bool:
+	var rec := get_prop_record(main, prop_id)
+	if rec.is_empty():
+		return false
+	if str(rec.get("model_id", "")) == EarthshipBuilder.MODEL_ID:
+		sync_earthship(main, prop_id)
+		return true
+	var spec := StructureEarthworks.resolve(StructureEarthworks.spec_for_record(rec))
+	var area := BuildingBuilder.footprint_area_m2(StructureEarthworks.local_footprint(spec))
+	var name := str(ModelCatalog.find(str(rec.get("model_id", ""))).get("label", "Structure"))
+	return _sync_roof_water(main, prop_id, name, area, cistern_l)
+
+
+static func _sync_roof_water(main: Node, prop_id: String, label: String, roof_m2: float, cistern_l: float) -> bool:
+	var rec := get_prop_record(main, prop_id)
+	var sgv := ServiceLocator.graph()
+	if sgv == null or not sgv.has_method("sync_structure_water") or rec.is_empty():
+		return false
+	sgv.call("sync_structure_water", prop_id, label, roof_m2, cistern_l,
+		Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0))))
+	return true
 
 
 ## Read one prop record (works on loader AND baked maps, unlike the
@@ -289,13 +368,34 @@ static func begin_placement(main: Node, model_id: String, prep: Dictionary = {})
 	var cam := _player_camera(main)
 	if cam != null:
 		update_placement_aim(main, cam)
-	return {
+	var result := {
 		"ok": true,
 		"placed": true,
 		"placement_active": true,
 		"prop_id": "",
 		"model_id": model_id,
 	}
+	_hand_to_placement_driver(main, result)
+	return result
+
+
+## The ghost only follows the crosshair and commits on a click while
+## PlacedPropsUI is told a placement started (it runs the per-frame aim and the
+## click-to-confirm). Callers used to do this hand-off themselves, and a designer
+## that forgot it (the intermodal unit designer, the tri-clamp and ESP labs)
+## left a green ghost frozen where it was first aimed, deaf to clicks. Doing it
+## here covers every caller; the hand-off is idempotent, so callers that still
+## notify themselves are harmless.
+static func _hand_to_placement_driver(main: Node, result: Dictionary) -> void:
+	if main == null:
+		return
+	var loader := main.get_node_or_null("TerrainLoader")
+	if loader != null and loader.has_method("notify_external_placement_started"):
+		loader.call("notify_external_placement_started", result)
+		return
+	var ppui := main.get_node_or_null("UILayer/PlacedPropsUI")
+	if ppui != null and ppui.has_method("notify_bundle_imported"):
+		ppui.call("notify_bundle_imported", result)
 
 
 ## Start the ghost at the collector's best orientation for this site
@@ -657,6 +757,7 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 		var sgv_pv := _system_graph_view(main)
 		if sgv_pv != null and sgv_pv.has_method("bind_pv_array_prop"):
 			Callable(sgv_pv, "bind_pv_array_prop").call_deferred(prop_id)
+	Callable(PlacedPropService, "apply_catalog_earthworks").call_deferred(main, prop_id)
 	# Keep any bound graph node's site/elevation coords in sync with the 3D twin.
 	_notify_graph_prop_moved(main, prop_id)
 	# Generic post-commit hook (crew assembly queues its project here) —
@@ -1646,7 +1747,7 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 	# must build THAT design, not the builder's default (a concentrator's
 	# ghost was always the default dish).
 	var rec_extra_d: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
-	for dk in ["csplab_spec", "windlab_spec", "pelton_spec", "tc_spec", "esp_spec"]:
+	for dk in ["csplab_spec", "windlab_spec", "pelton_spec", "tc_spec", "esp_spec", "farmbot_spec", "earthship_spec", "building_spec"]:
 		if rec_extra_d.has(dk) and not extras.has(dk):
 			extras[dk] = rec_extra_d[dk]
 	var model := ModelCatalog.instantiate(model_id, extras)

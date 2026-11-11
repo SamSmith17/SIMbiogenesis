@@ -173,6 +173,9 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		return DomeLabBuilder.build_node(dl_spec, "DomeStructure",
 			{"ghost_highlight": bool(extras.get("ghost_highlight", false)),
 			"pieces": bool(extras.get("pieces", false))})
+	if model_id == EarthshipBuilder.MODEL_ID:
+		var es_spec: Dictionary = extras.get("earthship_spec", extras) as Dictionary
+		return EarthshipBuilder.build_node(es_spec, "Earthship")
 	if model_id == ToroidLabBuilder.MODEL_ID:
 		var tl_spec: Dictionary = extras.get("toroid_spec", extras) as Dictionary
 		return ToroidLabBuilder.build_node(tl_spec, "ToroidStructure",
@@ -196,6 +199,8 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		return TcBuilder.build_node(tc_spec, "TriClampAssembly", {"pieces": bool(extras.get("pieces", false))})
 	if EspBuilder.handles(model_id):
 		return EspBuilder.build_node(extras.get("esp_spec", {}) as Dictionary, "EspBoard")
+	if model_id == FarmBotBuilder.MODEL_ID:
+		return FarmBotBuilder.build_node(extras.get("farmbot_spec", {}) as Dictionary, "FarmBot")
 	if model_id == CspLabBuilder.MODEL_ID:
 		var cs_spec: Dictionary = extras.get("csplab_spec", extras) as Dictionary
 		return CspLabBuilder.build_node(cs_spec, "Concentrator", {})
@@ -767,6 +772,11 @@ static func _shipped_models() -> Array[Dictionary]:
 			"procedural": true, "preserve_scale": true, "category": "tools"},
 		{"id": "csplab_concentrator", "label": "Solar concentrator (designed)",
 			"procedural": true, "preserve_scale": true, "category": "structures"},
+		# Procedural garden robot on its raised bed (FarmBotBuilder): the
+		# FarmBot designer's bed, crops and gantry (record key farmbot_spec).
+		# Its runtime (FarmBotRuntime) plays the robot's day on the clock.
+		{"id": "farmbot", "label": "FarmBot bed (designed)",
+			"procedural": true, "preserve_scale": true, "category": "structures"},
 		# Procedural tri-clamp process assemblies (TcBuilder): the tri-clamp
 		# designer's vessels and sanitary fittings as one prop (record key
 		# tc_spec). One entry per built-in ("tclab_<builtin id>"); a record
@@ -785,6 +795,32 @@ static func _shipped_models() -> Array[Dictionary]:
 			"procedural": true, "preserve_scale": true, "category": "structures"},
 		{"id": "tclab_filter_train", "label": "Filter train 1½\" (tri-clamp)",
 			"procedural": true, "preserve_scale": true, "category": "structures"},
+		# Earthships (SketchUp via SimLab, already in metres). Both carry their
+		# own landform (the detailed one a 104 x 156 m hillside with roads, its
+		# rooms ~1.15 m below its yard). Placed, the world's terrain is opened
+		# over the whole model (catalog `earthworks`, fitted to the model's
+		# outline), so you walk on the model's own ground and down into its
+		# sunken rooms. Art is the player's (gitignored Imported Models/).
+		# A designed Earthship (core/earthshiplab/, record key earthship_spec);
+		# placing one stamps its earthworks (bermed, sunk, an opening over the
+		# rooms) from the design.
+		{"id": "earthshiplab_structure", "label": "Earthship (designed)",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"walk_in": true},
+		{"id": "earthship_phoenix", "label": "Earthship (Phoenix)",
+			"path": "res://Imported Models/Earthship/earthship_phoenix.glb",
+			"preserve_scale": true, "category": "structures",
+			"strip_nodes": ["Sree", "Active View", "Google Earth Snapshot"],
+			"walk_in": true,
+			"earthworks": {"fit": true, "roof_fit": true, "sink_m": 0.0, "hole": true,
+				"floor_y": 0.0}},
+		{"id": "earthship_detail", "label": "Earthship (detailed, with site)",
+			"path": "res://Imported Models/Earthship/earthship_detail.glb",
+			"preserve_scale": true, "category": "structures",
+			"strip_nodes": ["Sree", "Active View"],
+			"walk_in": true,
+			"earthworks": {"fit": true, "roof_fit": true, "sink_m": 0.0, "hole": true,
+				"floor_y": 0.0}},
 		{"id": "ali_pelton", "label": "Micro Pelton 8\u2033 (vertical shaft)",
 			"path": "res://Imported Models/Hydro/ali_pelton.glb",
 			"preserve_scale": true, "category": "structures",

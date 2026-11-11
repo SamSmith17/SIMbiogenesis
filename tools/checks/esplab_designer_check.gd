@@ -63,6 +63,17 @@ func _click_left(ui: Control, name: String, tree: SceneTree, vp: Viewport) -> bo
 	if ds != null and ds.is_folded() and not ds.left_popup_shown():
 		ds.show_left_popup()
 		await _settle(tree, 3)
+	# The parts open from the strip's "Add part" button (a real click on it).
+	if name.begins_with("add_") and ds != null and ds.flyout_shown() != "add":
+		ds.hide_left_popup()
+		var opener := _find(ds, "flyout_add")
+		if opener == null:
+			return false
+		await HarnessInput.click(vp, HarnessInput.center_of(opener))
+		await _settle(tree, 3)
+	elif not name.begins_with("add_") and ds != null and not ds.flyout_shown().is_empty():
+		ds.hide_flyout()
+		await _settle(tree, 2)
 	var b := _find(ds if ds != null else ui, name)
 	if b == null:
 		# A folded left column lives in the flyout, outside the shell's tree.
@@ -129,6 +140,11 @@ func run(main: Node, harness: Node) -> Dictionary:
 	diagram.call("fit")
 	await _settle(tree, 3)
 	_ok(_parts(ui) == 5, "five parts added by clicking the palette (%d)" % _parts(ui))
+	var ds_add := _shell(ui)
+	_ok(ds_add != null and ds_add.flyout_shown() == "add", "the Add part flyout stays up while adding")
+	if ds_add != null:
+		ds_add.hide_flyout()
+	await _settle(tree, 2)
 	var d2: Dictionary = ui.call("design")
 	var i2c: Array = d2["wire"]["buses"]["i2c"]
 	_ok(i2c.size() == 1 and (i2c[0]["members"] as Array).size() == 2, "BME280 and OLED share one I²C bus")

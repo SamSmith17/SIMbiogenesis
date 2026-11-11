@@ -39,6 +39,7 @@ func _build_ui() -> void:
 	panel.add_theme_stylebox_override("panel", UITheme.panel_style())
 	center.add_child(panel)
 	UiFit.adopt(panel)  # above the timeline, inside the screen at any size
+	UiFit.set_content_column(panel, 1040.0)  # full screen: a centred column, not edge to edge
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 8)
 	panel.add_child(root)

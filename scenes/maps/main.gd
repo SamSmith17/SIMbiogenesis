@@ -931,6 +931,8 @@ var esplab_ui : Control = null
 const ESPLAB_MODAL_SCRIPT := preload( "res://scenes/ui/esplab_modal.gd" )
 var csplab_ui : Control = null
 const CSPLAB_MODAL_SCRIPT := preload( "res://scenes/ui/csplab_modal.gd" )
+var farmbotlab_ui : Control = null
+const FARMBOTLAB_MODAL_SCRIPT := preload( "res://scenes/ui/farmbotlab_modal.gd" )
 const NPC_ANIM_EDITOR_SCRIPT := preload( "res://scenes/ui/npc_anim_editor.gd" )
 const LINKAGE_HARDWARE_SCRIPT := preload( "res://scenes/ui/linkage_hardware_modal.gd" )
 var scad_store_ui : Control = null
@@ -5180,6 +5182,38 @@ func _setup_csplab_ui() -> void :
 	ui.set_script( CSPLAB_MODAL_SCRIPT )
 	layer.add_child( ui )
 	csplab_ui = ui
+
+
+## The FarmBot designer (scenes/ui/farmbotlab_modal.gd), on its own
+## CanvasLayer above the graph.
+func _setup_farmbotlab_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing_layer := ui_layer.get_node_or_null( "FarmBotLabLayer" )
+	if existing_layer != null :
+		farmbotlab_ui = existing_layer.get_node_or_null( "FarmBotLabModal" ) as Control
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "FarmBotLabLayer"
+	layer.layer = UITheme.LAYER_MODAL + 1
+	ui_layer.add_child( layer )
+	var ui := Control.new()
+	ui.name = "FarmBotLabModal"
+	ui.set_anchors_and_offsets_preset( Control.PRESET_FULL_RECT )
+	ui.set_script( FARMBOTLAB_MODAL_SCRIPT )
+	layer.add_child( ui )
+	farmbotlab_ui = ui
+
+
+## Open the FarmBot designer. opts: {spec, prop_id}.
+func open_farmbotlab( opts: Dictionary = {} ) -> Control :
+	if not is_instance_valid( farmbotlab_ui ) :
+		_setup_farmbotlab_ui()
+	if not is_instance_valid( farmbotlab_ui ) :
+		return null
+	farmbotlab_ui.call( "open", opts )
+	return farmbotlab_ui
 
 
 ## Open the solar concentrator designer. opts: {spec, prop_id}.

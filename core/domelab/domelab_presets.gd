@@ -80,6 +80,18 @@ static func builtins() -> Array:
 	d["face"]["material"] = "polycarb_6"
 	out.append({"id": "covered_3v", "name": "3V greenhouse (polycarbonate)", "blurb": "The conduit frame with twin-wall panels cut to each face, nested on sheets.", "spec": d})
 	d = DomeLabSpec.default_spec("geodesic")
+	d["name"] = "20 m greenhouse"
+	d["radius_m"] = 10.0
+	d["geodesic"]["frequency"] = 6
+	d["geodesic"]["fraction"] = 0.625
+	d["strut"]["material"] = "emt_1"
+	d["face"]["material"] = "polycarb_6"
+	# Greenhouse twin-wall comes 2.1 m wide in long lengths; a 6V face of a
+	# 20 m dome does not fit a 4 x 8 sheet.
+	d["fabrication"]["sheet_w_mm"] = 2100.0
+	d["fabrication"]["sheet_h_mm"] = 6000.0
+	out.append({"id": "greenhouse_20m", "name": "20 m greenhouse dome (6V polycarbonate)", "blurb": "A 66 ft growing dome: 645 struts of 1\" EMT under twin-wall polycarbonate, about 300 m² of floor for keyhole beds.", "spec": d})
+	d = DomeLabSpec.default_spec("geodesic")
 	d["name"] = "Octa dome"
 	d["radius_m"] = 3.0
 	d["geodesic"]["base"] = "octa"

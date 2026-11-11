@@ -136,7 +136,11 @@ static func resolved_handles(item: Dictionary, static_handles: Dictionary) -> Ar
 			var hd: Dictionary = (h as Dictionary).duplicate()
 			if str(hd.get("id", "")) == "biomass_out":
 				hd["resource_kind"] = "food"
+				hd["rx"] = 0.35
 			out.append(hd)
+		# What is not eaten (stalks, leaves, vines) leaves as biomass.
+		out.append({"id": "residue_out", "polarity": "resource", "resource_kind": "biomass",
+			"rx": 0.7, "ry": 1.0})
 		return out
 	return static_handles.get(itype, []) as Array
 

@@ -738,8 +738,8 @@
       "status": "PASS",
       "failures": [],
       "image": "linkage_lab.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-09T11:26:12",
+      "image_commit": "0c31ecf"
     },
     "packing_lab": {
       "id": "packing_lab",
@@ -913,8 +913,8 @@
       "status": "PASS",
       "failures": [],
       "image": "pallet_rack.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-09T11:26:12",
+      "image_commit": "0c31ecf"
     },
     "graph_tools": {
       "id": "graph_tools",
@@ -1090,8 +1090,8 @@
       "status": "PASS",
       "failures": [],
       "image": "flatpack.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-09T11:26:12",
+      "image_commit": "0c31ecf"
     },
     "domelab": {
       "id": "domelab",
@@ -1119,8 +1119,8 @@
       "status": "PASS",
       "failures": [],
       "image": "domelab.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-09T11:26:12",
+      "image_commit": "0c31ecf"
     },
     "gantrylab": {
       "id": "gantrylab",
@@ -1147,8 +1147,8 @@
       "status": "PASS",
       "failures": [],
       "image": "gantrylab.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-09T11:26:12",
+      "image_commit": "0c31ecf"
     },
     "toroidlab": {
       "id": "toroidlab",
@@ -1175,8 +1175,8 @@
       "status": "PASS",
       "failures": [],
       "image": "toroidlab.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-09T11:26:12",
+      "image_commit": "0c31ecf"
     },
     "pvlab": {
       "id": "pvlab",
@@ -1203,8 +1203,8 @@
       "status": "PASS",
       "failures": [],
       "image": "pvlab.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-09T11:26:12",
+      "image_commit": "0c31ecf"
     },
     "render_sim": {
       "id": "render_sim",
@@ -1306,8 +1306,8 @@
       "status": "PASS",
       "failures": [],
       "image": "tc_process.jpg",
-      "image_run": "2026-11-06T23:57:58",
-      "image_commit": "ef51976"
+      "image_run": "2026-11-09T11:26:12",
+      "image_commit": "0c31ecf"
     },
     "esplab": {
       "id": "esplab",
@@ -1333,14 +1333,206 @@
       "status": "PASS",
       "failures": [],
       "image": "esplab.jpg",
-      "image_run": "2026-11-07T03:19:31",
-      "image_commit": "157b27f"
+      "image_run": "2026-11-09T11:26:12",
+      "image_commit": "0c31ecf"
+    },
+    "peltonlab": {
+      "id": "peltonlab",
+      "title": "Pelton wheel designer",
+      "chapter": "Build",
+      "summary": "Design a micro-hydro Pelton turbine round the common cup: how many cups, how big the wheel, the side discs, hub and bolt pattern, the jets, the housing, bearings, drive and generator — with the speed, power and strength worked out as you go.",
+      "how": [
+        "Library → Structures → Pelton wheel designer…, or the Hydro Lab's Design Pelton wheel… on a Pelton turbine",
+        "Wheel: the cup count, the overall diameter and the cup size; Set cups by the 15 + m/2 rule",
+        "Rotor: the side discs that clamp the cup tabs, the shaft, the hub flange and its bolt pattern",
+        "Jets, housing (auto-sized round the wheel), a horizontal or vertical shaft",
+        "Shaft, bearings and drive: pillow blocks or flange units, a coupler, V-belt, timing belt or gears; Match the ratio to the generator",
+        "Performance: power and speed against the wheel's size and its cups; Apply writes the wheel onto the Hydro Lab's turbine"
+      ],
+      "action": "",
+      "button": "Pelton wheel designer…",
+      "key": "",
+      "open_hints": [
+        "Click Pelton wheel designer…"
+      ],
+      "world": "mtvernon",
+      "blurb": "Every wheel here is built from the same cup — the common split bucket with one root tab, scaled whole — so the design is about the wheel round it. The cups' pitch circle and the jet set the speed (rpm = 60·2·0.46·v / π·PCD): a bigger wheel turns slower with more torque, the same water making the same shaft power, and the gearing then decides whether the generator is anywhere near its rated speed. The textbook proportions are checked as you go — jet ratio, cup width against the jet, 15 + m/2 cups, how many fit before their tabs touch — and so is the strength: the pull on the cup bolts at runaway, the tabs, the discs, the hub bolts with the jet stalled, the shaft under bending and torsion, the bearings' life, the coupler, the belt, the generator's speed limit and whether it makes enough volts to charge the bank. Opened from the Hydro Lab it designs that turbine against its real head and penstock, and Apply puts the designed machine on the map with its efficiencies on the graph; the disc and spacer come out as DXF and SVG cut files with every bolt hole.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "peltonlab.jpg",
+      "image_run": "2026-11-09T11:26:12",
+      "image_commit": "0c31ecf"
+    },
+    "windlab": {
+      "id": "windlab",
+      "title": "Wind turbine designer",
+      "chapter": "Build",
+      "summary": "Design a small wind turbine — Ugrinsky, Savonius, Lenz2, Darrieus, helical, a propeller or a farm windmill — and see its power curve, the wind it starts in, the gearing and generator that suit your site, and the sheets to cut and score or the blades to print.",
+      "how": [
+        "Library → Structures → Wind turbine designer…, or Design wind turbine… on a wind node's inspector",
+        "Pick a built-in — the Lawn-sign Ugrinsky comes out of one 18 × 24 in corrugated plastic sign",
+        "Rotor: size it, and its own proportions (the Ugrinsky's semicircle S and tail arc L, a Savonius's overlap, a propeller's tip speed ratio and airfoil)",
+        "Made from, mount, drive: sheet or printed blades, the mast, a timing belt or gears; Match the gearing",
+        "Generator and load: steppers to PMAs into a battery, an MPPT or a dump load; Rank every generator",
+        "Power, Cut & print, Gearing & motors tabs; Export files, Make on a machine…, Apply / Place in world"
+      ],
+      "action": "",
+      "button": "Wind turbine designer…",
+      "key": "",
+      "open_hints": [
+        "Click Wind turbine designer…"
+      ],
+      "world": "burningman",
+      "blurb": "A rotor turns a fraction Cp of the wind's ½ρAv³ into shaft power at its best tip speed ratio: drag rotors like the Savonius and the Ugrinsky near λ 0.5–1, lift rotors like the Darrieus and the propeller near λ 3–7. The designer works each one out — the Ugrinsky from the published optimisation of its semicircle and tail arc, the propeller's tapered, twisted blades from blade element theory — then finds where the rotor's torque meets the generator's at every wind speed: a stepper's cogging decides the wind it starts in, its inductance caps its current, a battery holds a PMA's speed and can stall a Darrieus, an MPPT holds the rotor at its best. The power curve and the site's wind give the year's energy; Match the gearing and Rank every generator find the drive and motor that make the most there. The lawn-sign build — two scored S-blades and two hub discs clamping a NEMA 17, all from one sign — scales to any size, nested on whatever sheet you have. Out come DXF and SVG cut sheets with the score lines, printable STLs, and a power curve the systems graph runs on.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "windlab.jpg",
+      "image_run": "2026-11-09T11:26:12",
+      "image_commit": "0c31ecf"
+    },
+    "vehiclelab": {
+      "id": "vehiclelab",
+      "title": "Vehicle designer",
+      "chapter": "Build",
+      "summary": "Build a twin of your van, skoolie, RV or box truck from its real chassis and body, paint it, bolt fans, AC, Starlink and solar onto it, and park it at camp: people sleep in its beds and cook in its galley.",
+      "how": [
+        "Library → Vehicles → Vehicle designer…",
+        "Pick a type, then its chassis and its body on their own (an E-450 dually under a fiberglass shuttle box)",
+        "Set the body's length, width, roof height and roof shape, its windows and doors, its paint or a wrap image",
+        "Arm a roof fan, an AC unit, solar panels or an awning and click where it goes; drag it to move it, Del removes it",
+        "Cutaway or Plan shows the inside: arm a bed, galley, fridge, shower or battery and click the floor; drag to move, R turns it",
+        "The checks want a 50 cm way in from a door to every bed and fixture, room to sit up in bed and to stand in the shower",
+        "Its battery, solar, loads and water tanks become one node on the system graph; its shower and galley draw on its own tank",
+        "Type the one-way miles: the round trip in gallons (or kWh) and dollars from a road-load model",
+        "Place in world: drive it, and the camp's people sleep in its beds"
+      ],
+      "action": "",
+      "button": "Vehicle designer…",
+      "key": "",
+      "open_hints": [
+        "Click Vehicle designer…"
+      ],
+      "world": "burningman",
+      "blurb": "Eleven kinds of converted vehicle — camper and cargo vans, shuttle and school buses, step vans, ambulances, Class C and Class A RVs, box trucks, travel trailers and a semi with a container home — each from a real chassis (wheelbase, tyres, duals, tank, weight rating, steering lock) under a body you size yourself. Roof items snap to the crown of the roof or the sides, solar comes as real modules in rows and columns, and a model of your own vehicle can be laid over the parametric one. Fuel use comes from rolling resistance and drag, and lands inside each chassis' real-world mpg.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "vehiclelab.jpg",
+      "image_run": "2026-11-09T11:26:12",
+      "image_commit": "0c31ecf"
+    },
+    "tclab": {
+      "id": "tclab",
+      "title": "Tri-clamp designer",
+      "chapter": "Build",
+      "summary": "Snap standard tri-clamp fittings together into process runs, design vessels with nozzles you drag round the shell, and place the result — like the biochar reactor and its condenser — on the map with its ends as pipe ports.",
+      "how": [
+        "Library → Structures → Tri-clamp designer…, or Edit tri-clamp assembly… on a placed one",
+        "Pick a clamp size and a part, then click an open end: it snaps on with a gasket and a clamp (Tab: which end, R: roll)",
+        "Vessel / tank: shell, heads, lid, jacket, legs and internals; + Clamp nozzle, then drag the nozzle round the shell",
+        "Label an open end and say what it carries; On the graph turns the assembly into a graph node",
+        "Cutaway to see inside; Export files; Place in world"
+      ],
+      "action": "",
+      "button": "Tri-clamp designer…",
+      "key": "",
+      "open_hints": [
+        "Click Tri-clamp designer…"
+      ],
+      "world": "burningman",
+      "blurb": "Tri-clamp (sanitary) fittings join on a clamp face: two ferrules, a gasket and a hinged clamp. The designer draws every part from the ASME BPE inch sizes — spools, 90° and 45° elbows, tees, crosses, reducers, adapters, sight glasses, dephlegmators, butterfly and ball valves with their actuators, gauges, strainers and cartridge housings — and snaps them end to end, checking that clamp faces match, that loops close and that nothing runs into anything. Vessels are parts too: a shell, heads and a lid, a jacket, legs and what is inside, with nozzles you drag round the shell. The biochar reactor preset rebuilds a real jacketed boiler with its retort can and its three-column condenser to within a few millimetres of the model it came from. Placed on the map it is one prop: its labelled ends are pipe ports, and it is the graph's Biochar Reactor node, so the woodgas line you draw in 3D starts on the woodgas fitting.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "tclab.jpg",
+      "image_run": "2026-11-09T11:26:12",
+      "image_commit": "0c31ecf"
+    },
+    "intermodal_units": {
+      "id": "intermodal_units",
+      "title": "Intermodal units",
+      "chapter": "Labs",
+      "summary": "Shipping containers, pallets and crates at real ISO and GMA sizes, ready to pack or place.",
+      "how": [
+        "Library → Structures → Intermodal unit designer…",
+        "Pick a container or pallet and adjust it",
+        "Place it on the site, or open it in the Packing Lab"
+      ],
+      "action": "",
+      "button": "Library → Structures → Intermodal unit designer…",
+      "key": "",
+      "open_hints": [
+        "Click Library → Structures → Intermodal unit designer…"
+      ],
+      "world": "burningman",
+      "blurb": "Every unit carries its interior, door opening, tare and payload, so the Packing Lab knows what really fits and what a forklift has to lift.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "intermodal_units.jpg",
+      "image_run": "2026-11-09T11:26:12",
+      "image_commit": "0c31ecf"
+    },
+    "graph_ring_3d": {
+      "id": "graph_ring_3d",
+      "title": "The ring in 3D: a cell, or a torus",
+      "chapter": "Systems",
+      "summary": "See the ring arrangement as nested spheres or a torus and orbit it with Ctrl+drag.",
+      "how": [
+        "Press G, then Layout ▾ → Ring in 3D → nested spheres or torus",
+        "Ctrl+drag to orbit, drag a card to move it over its shell",
+        "Double-click a group to open it; Esc comes back out"
+      ],
+      "action": "system_graph_toggle",
+      "button": "",
+      "key": "G",
+      "open_hints": [
+        "Press G"
+      ],
+      "world": "mtvernon",
+      "blurb": "The ring arrangement seen in space. As nested spheres the graph reads as a cell: the machines spread evenly over an outer membrane, one band per system, the stores they share on an inner nucleus, each toward the machines it is wired to, the people at the centre and the wires running through the inside. As a torus the machines run round its outer circumference at their ring angles and the stores round its inner edge. Ctrl+drag orbits; nothing about the flat graph changes.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "graph_ring_3d.jpg",
+      "image_run": "2026-11-10T02:52:43",
+      "image_commit": "6f9a2fb"
+    },
+    "earthship": {
+      "id": "earthship",
+      "title": "Earthships and rooms in the ground",
+      "chapter": "Build",
+      "summary": "Design an Earthship, place it, and walk down into it: the ground opens over its rooms, earth is piled against its back to the roof, and the front is dug down to the floor.",
+      "how": [
+        "Library → Designers → Earthship designer…",
+        "Pick a layout, the number of U rooms, their size, how far the floor sits below the ground and the greenhouse's glass angle (Best for this site)",
+        "Place in world: the terrain opens over the rooms, berms rise on the back and ends, a cut and a ramp lead down to the door",
+        "Any placed model can do the same: prop editor → Earthworks (sink, opening, berms per side, a daylight side and a ramp)",
+        "A house from the Building Builder can have a basement with a walkout or an areaway",
+        "Rain runs off the roof (Roof water to the graph fills a cistern); inside stays near the soil's temperature"
+      ],
+      "action": "",
+      "button": "Earthship designer…",
+      "key": "",
+      "open_hints": [
+        "Click Earthship designer…"
+      ],
+      "world": "burningman",
+      "blurb": "Earthships are built into the ground: walls of rammed tyres, the back and ends buried to the roof, a sloped wall of glass facing the sun. The designer draws one from a few numbers and works out the earth it needs. Placed, it asks the terrain for an opening over its rooms, berms against its walls and a cut with a ramp down to the door, and the ground follows it when it moves. You walk down the ramp and in; rain runs off the roof into its cisterns, and the rooms sit near the temperature of the soil at that depth. The same earthworks sink any placed model, and give houses their basements.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "earthship.jpg",
+      "image_run": "2026-11-10T18:06:28",
+      "image_commit": "0b7bb36"
     }
   },
   "last_run": {
-    "label": "tour_20261107-031737",
-    "generated": "2026-11-07T03:19:31",
-    "git_commit": "157b27f",
+    "label": "tour_20261110-180337",
+    "generated": "2026-11-10T18:06:28",
+    "git_commit": "0b7bb36",
     "passed": 1,
     "total": 1,
     "video_secs": null

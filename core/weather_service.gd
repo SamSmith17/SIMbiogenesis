@@ -2070,6 +2070,28 @@ func monthly_precip_mm() -> Array[float]:
 	return sums
 
 
+## Mean air temperature (°C) per calendar month over the cached year, or []
+## when no temperature series is loaded. Feeds the ground-temperature model
+## under earth-sheltered structures (EarthTemperature).
+func monthly_mean_temp_c() -> Array[float]:
+	var arr: PackedFloat32Array = _series.get("temperature_2m", PackedFloat32Array())
+	if arr.is_empty():
+		return []
+	var out: Array[float] = []
+	var leap := is_leap_layout(arr.size())
+	for m in 12:
+		var start := day_of_year0(m + 1, 1, leap) * 24
+		var end := mini((day_of_year0(m + 2, 1, leap) * 24) if m < 11 else arr.size(), arr.size())
+		var sum := 0.0
+		var n := 0
+		for i in range(start, end):
+			if not is_nan(arr[i]):
+				sum += arr[i]
+				n += 1
+		out.append(sum / float(n) if n > 0 else NAN)
+	return out
+
+
 func monthly_precip_multipliers() -> Array[float]:
 	var sums := monthly_precip_mm()
 	if sums.is_empty():

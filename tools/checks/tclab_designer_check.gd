@@ -35,7 +35,7 @@ func _shot(main: Node, name: String) -> void:
 
 func _screen(ui: Control, cpos: Vector2) -> Vector2:
 	var studio: StudioViewport = ui.call("studio")
-	return studio.container.get_global_rect().position + cpos
+	return studio.screen_pos(cpos)
 
 
 ## Scroll a button inside its ScrollContainer so a real click lands on it.
@@ -81,22 +81,32 @@ func _nozzles(ui: Control, vid: String) -> Array:
 ## Phases 4–6 with real input: a vessel off the palette, a nozzle added from
 ## its card and dragged round the shell, the cutaway, a valve on a nozzle and
 ## an actuator on its stem, then the biochar reactor preset.
+## The palette lives behind the strip's "Add part" button: a real click on it.
+func _open_add(ui: Control, vp: Viewport, tree: SceneTree, ds: DesignerShell) -> void:
+	if ds == null or ds.flyout_shown() == "add":
+		return
+	ds.hide_left_popup()
+	var opener := ui.find_child("flyout_add", true, false) as Button
+	if opener != null and opener.is_visible_in_tree():
+		await HarnessInput.click(vp, HarnessInput.center_of(opener))
+	else:
+		ds.show_flyout("add")
+	await _settle(tree, 3)
+
+
 func _vessel_phase(main: Node, ui: Control, vp: Viewport, tree: SceneTree, ds: DesignerShell) -> void:
 	ui.call("_on_new")
 	await _settle(tree, 4)
 	var vbtn := ui.find_child("tool_vessel", true, false) as Button
-	if ds != null and ds.is_folded():
-		ds.show_left_popup()
-		await _settle(tree, 3)
+	await _open_add(ui, vp, tree, ds)
 	if vbtn != null and vbtn.is_visible_in_tree():
 		await _reveal(vbtn, tree)
 		await HarnessInput.click(vp, HarnessInput.center_of(vbtn))
 	else:
+		_ok(false, "the vessel's palette button is on screen in the Add part flyout")
 		ui.call("arm_tool", "vessel", "2")
 	await _settle(tree, 3)
-	if ds != null and ds.is_folded():
-		ds.hide_left_popup()
-		await _settle(tree, 2)
+	_ok(ds == null or ds.flyout_shown().is_empty(), "picking a part closes the Add part flyout")
 	_ok(str(ui.call("tool_id")) == "vessel", "the palette arms the vessel")
 	var studio: StudioViewport = ui.call("studio")
 	var floor_pt := _screen(ui, studio.container.size * Vector2(0.5, 0.62))
@@ -254,9 +264,8 @@ func run(main: Node, harness: Node) -> Dictionary:
 	# Size 1½" and the elbow tool, by their buttons.
 	var size_btn := ui.find_child("size_1_5", true, false) as Button
 	var elbow_btn := ui.find_child("tool_elbow90", true, false) as Button
-	if ds != null and ds.is_folded():
-		ds.show_left_popup()
-		await _settle(tree, 3)
+	await _open_add(ui, vp, tree, ds)
+	_ok(ds != null and ds.flyout_shown() == "add", "a real click on Add part opens the palette")
 	if size_btn != null and size_btn.is_visible_in_tree():
 		await _reveal(size_btn, tree)
 		await HarnessInput.click(vp, HarnessInput.center_of(size_btn))
@@ -264,11 +273,9 @@ func run(main: Node, harness: Node) -> Dictionary:
 		await _reveal(elbow_btn, tree)
 		await HarnessInput.click(vp, HarnessInput.center_of(elbow_btn))
 	else:
+		_ok(false, "the elbow's palette button is on screen in the Add part flyout")
 		ui.call("arm_tool", "elbow90", "1.5")
 	await _settle(tree, 3)
-	if ds != null and ds.is_folded():
-		ds.hide_left_popup()
-		await _settle(tree, 2)
 	_ok(str(ui.call("tool_id")) == "elbow90", "clicking the palette arms the 90° elbow")
 	var floor_pt := _screen(ui, studio.container.size * Vector2(0.5, 0.62))
 	await HarnessInput.mouse_move(vp, floor_pt)

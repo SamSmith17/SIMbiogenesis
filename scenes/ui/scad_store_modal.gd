@@ -45,6 +45,7 @@ var _license_lbl: Label = null
 var _param_box: VBoxContainer = null
 var _status_lbl: Label = null
 var _preview_container: SubViewportContainer = null
+var _empty: EmptyState = null
 var _generate_btn: Button = null
 var _export_btn: Button = null
 var _place_btn: Button = null
@@ -142,6 +143,7 @@ func _build_ui() -> void:
 	# As large as the screen allows, but above the timeline (the full-rect
 	# inset reached down over it); the HUD is hidden by the modal claim.
 	UiFit.keep_fitted(panel, Vector2(1800, 1000), UiFit.MARGIN, false)
+	panel.set_meta("ui_modal", true)  # UiAudit.MODAL_META
 
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", UITheme.SPACE_MD)
@@ -149,10 +151,16 @@ func _build_ui() -> void:
 
 	# Header row.
 	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	var title_icon := TextureRect.new()
+	title_icon.texture = UiIcons.icon("wrench", 18)
+	title_icon.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	title_icon.modulate = UITheme.C_TEXT_S
+	header.add_child(title_icon)
 	var title := Label.new()
-	title.text = "⚙  Parametric Hardware Store"
-	title.add_theme_font_size_override("font_size", UITheme.FONT_XL)
-	title.add_theme_color_override("font_color", UITheme.C_PRIMARY)
+	title.text = "Parametric part store"
+	title.add_theme_font_size_override("font_size", UITheme.FONT_LG)
+	title.add_theme_color_override("font_color", UITheme.C_TEXT)
 	header.add_child(title)
 	var subtitle := Label.new()
 	subtitle.text = "OpenSCAD parts · adjust, render, place"
@@ -245,6 +253,9 @@ func _build_center_column() -> Control:
 	vpc.add_child(_viewport)
 	_setup_studio()
 	col.add_child(vpc)
+	_empty = EmptyState.make("box", "Pick a part on the left to see it here, set its sizes and place it.")
+	_empty.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	vpc.add_child(_empty)
 
 	_meta_lbl = RichTextLabel.new()
 	_meta_lbl.fit_content = true
@@ -437,6 +448,8 @@ func _select_part(id: String) -> void:
 	if part.is_empty():
 		return
 	_title_lbl.text = String(part.get("title", id))
+	if _empty != null:
+		_empty.visible = false
 
 	# Meta + description.
 	var desc := String(part.get("description", ""))

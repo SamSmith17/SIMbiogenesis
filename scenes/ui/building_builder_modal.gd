@@ -47,6 +47,10 @@ var _camera: Camera3D = null
 var _shape_opt: OptionButton = null
 var _pitch_slider: HSlider = null
 var _height_slider: HSlider = null
+var _basement_slider: HSlider = null
+var _basement_entry: OptionButton = null
+var _basement_edge: OptionButton = null
+const BASEMENT_ENTRY_LABELS := ["Areaway steps", "Walkout", "No outside door"]
 var _offset_slider: HSlider = null
 var _wall_picker: ColorPickerButton = null
 var _roof_picker: ColorPickerButton = null
@@ -422,6 +426,28 @@ func _build_right(side: VBoxContainer) -> void:
 			_refresh_designed_footprint(), "m")
 	_add_massing_options(side)
 
+	# Basement (core/earthworks/basement_builder.gd): dug under the footprint
+	# when placed; its door opens onto steps or a walkout on one wall.
+	side.add_child(SectionHeader.make("Basement", "", "dug under the house when placed"))
+	_basement_slider = _labeled_slider(side, "Depth", 0.0, 4.0, 0.0, 0.05,
+		func(v: float) -> void:
+			_set_basement("depth_m", v), "m")
+	_basement_entry = OptionButton.new()
+	for lbl in BASEMENT_ENTRY_LABELS:
+		_basement_entry.add_item(lbl)
+	_basement_entry.item_selected.connect(func(i: int) -> void:
+		if not _syncing:
+			_set_basement("entry", BasementBuilder.ENTRIES[i]))
+	side.add_child(FormRow.make("Way in", _basement_entry,
+		"Steps down in a narrow areaway, or the ground dug away for a walkout door", "", "basement_entry"))
+	_basement_edge = OptionButton.new()
+	for i in 4:
+		_basement_edge.add_item(["Front", "Right", "Back", "Left"][i])
+	_basement_edge.item_selected.connect(func(i: int) -> void:
+		if not _syncing:
+			_set_basement("edge", i))
+	side.add_child(FormRow.make("Door in", _basement_edge, "The wall the basement door is in", "", "basement_edge"))
+
 	side.add_child(SectionHeader.make("Walls & facade"))
 	_wall_picker = _color_row(side, "Walls", func(c: Color) -> void:
 		_working_style["wall_color"] = c
@@ -494,6 +520,15 @@ func _build_right(side: VBoxContainer) -> void:
 	_space_cap_spin.visibility_changed.connect(func() -> void:
 		cap_row.visible = _space_cap_spin.visible)
 	_space_cap_spin.visible = false
+
+
+func _set_basement(key: String, v: Variant) -> void:
+	var bs: Dictionary = BasementBuilder.defaults()
+	if _working_style.get(BasementBuilder.KEY, null) is Dictionary:
+		bs = (_working_style[BasementBuilder.KEY] as Dictionary).duplicate()
+	bs[key] = v
+	_working_style[BasementBuilder.KEY] = bs
+	_queue_rebuild()
 
 
 func _labeled_slider(parent: Control, label: String, minv: float, maxv: float,
@@ -607,6 +642,11 @@ func _sync_controls_from_style() -> void:
 	_shape_opt.select(maxi(sel, 0))
 	_pitch_slider.value = float(roof.get("angle_deg", 28.0))
 	_height_slider.value = float(params["height_m"])
+	var bs := BasementBuilder.resolve(_working_style.get(BasementBuilder.KEY, {}))
+	if _basement_slider != null:
+		_basement_slider.value = float(bs["depth_m"])
+		_basement_entry.select(maxi(BasementBuilder.ENTRIES.find(str(bs["entry"])), 0))
+		_basement_edge.select(clampi(int(bs["edge"]), 0, 3))
 	_offset_slider.value = float(params["base_offset_m"])
 	_wall_picker.color = colors["wall"]
 	_roof_picker.color = colors["roof"]

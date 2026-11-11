@@ -56,7 +56,8 @@ var _name_edit: LineEdit
 var _subtitle: Label
 var _undo_btn: Button
 var _redo_btn: Button
-var _design_list: ItemList
+var _design_list: DesignGallery
+var _col: DesignerColumn
 var _design_entries: Array = []
 var _tabs: TabBar
 var _view_stack: Control
@@ -288,9 +289,8 @@ func _build_left() -> Control:
 	var col := _scroll_column(240)
 	var box: VBoxContainer = col[1]
 	box.add_child(SectionHeader.make("Wheels", "layout-grid"))
-	_design_list = ItemList.new()
-	_design_list.custom_minimum_size = Vector2(0, 220)
-	_design_list.auto_height = true
+	_design_list = DesignGallery.make("peltonlab")
+	_design_list.set_thumbnailer(_thumb_for)
 	_design_list.item_selected.connect(_on_design_activated)
 	box.add_child(_design_list)
 	var lib := HBoxContainer.new()
@@ -390,7 +390,12 @@ func _build_studio_world() -> void:
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
 	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.035, 0.043, 0.063)
+	# The kit studios' backdrop (StudioViewport): soft grey haze, not a void.
+	e.background_color = StudioViewport.BACKDROP_HAZE
+	e.fog_enabled = true
+	e.fog_light_color = StudioViewport.BACKDROP_HAZE
+	e.fog_density = 0.004
+	e.fog_sky_affect = 0.0
 	var skymat := ProceduralSkyMaterial.new()
 	skymat.sky_top_color = Color(0.62, 0.68, 0.78)
 	skymat.sky_horizon_color = Color(0.42, 0.42, 0.44)
@@ -428,7 +433,7 @@ func _build_studio_world() -> void:
 	plane.size = Vector2(30, 30)
 	ground.mesh = plane
 	var gmat := StandardMaterial3D.new()
-	gmat.albedo_color = Color(0.13, 0.125, 0.12)
+	gmat.albedo_color = Color(0.36, 0.37, 0.39)
 	gmat.roughness = 0.95
 	ground.material_override = gmat
 	_studio.add_child(ground)
@@ -492,6 +497,7 @@ func _build_right() -> Control:
 	_status_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_status_lbl)
 	_build_settings_rows()
+	_col = DesignerColumn.setup(box, "peltonlab", {"open": ["Wheel"], "fold": ["Operating point", "Bill of materials", "Files"]})
 	return col[0]
 
 
@@ -895,6 +901,7 @@ func _rebuild_now() -> void:
 
 
 func _refresh_header() -> void:
+	_refresh_tiles()
 	if not _name_edit.has_focus():
 		_name_edit.text = str(_spec["name"])
 	var p: Dictionary = _design["perf"]
@@ -1093,12 +1100,22 @@ func pick_at(pos: Vector2) -> Dictionary:
 # Library
 # ---------------------------------------------------------------------------
 
+## One design's picture for the gallery: its key and how to build it.
+func _thumb_for(i: int) -> Dictionary:
+	if i < 0 or i >= _design_entries.size():
+		return {}
+	var spec: Dictionary = PeltonLabSpec.resolve((_design_entries[i] as Dictionary).duplicate(true))
+	return {"key": JSON.stringify(spec), "build": func() -> Node3D:
+		return PeltonLabBuilder.build_node(spec, "Thumb")}
+
+
 func _refresh_design_list() -> void:
 	_design_list.clear()
 	_design_entries.clear()
 	for b in PeltonLabPresets.builtins():
 		_design_list.add_item(str(b["label"]))
 		_design_list.set_item_tooltip(_design_list.item_count - 1, str(b["blurb"]))
+		_design_list.set_item_subtitle(_design_list.item_count - 1, str(b["blurb"]))
 		_design_entries.append(b["spec"])
 	for e in _library:
 		_design_list.add_item("★ " + str((e as Dictionary).get("name", "Saved wheel")))
@@ -1411,3 +1428,26 @@ class PerfCanvas extends Control:
 		draw_string(font, Vector2(r.position.x + 6, r.position.y + 14), "— electrical W", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, UITheme.C_AMBER)
 		draw_string(font, Vector2(r.position.x + 110, r.position.y + 14), "— wheel rpm", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, UITheme.C_PRIMARY)
 		draw_string(font, Vector2(r.position.x + 200, r.position.y + 14), "● won't build", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, UITheme.C_ERROR)
+
+
+## The headline numbers and what each folded section holds.
+func _refresh_tiles() -> void:
+	if _col == null or _design.is_empty():
+		return
+	var pf: Dictionary = _design["perf"]
+	var rn: Dictionary = _design["runner"]
+	_col.set_tiles([
+		{"caption": "Electrical", "value": UiText.num(float(pf["p_elec_w"]), "W"),
+			"tip": "Into the load at this site" + (" (the generator's limit)" if bool(pf["capped"]) else ""),
+			"level": "warn" if bool(pf["capped"]) else ""},
+		{"caption": "Wheel speed", "value": "%d rpm" % int(round(float(pf["rpm"]))),
+			"tip": "Runaway %d rpm" % int(round(float(pf["rpm_runaway"])))},
+		{"caption": "Water to wire", "value": "%.0f %%" % (float(pf["water_to_wire"]) * 100.0),
+			"tip": "Electrical power ÷ the water's power"},
+		{"caption": "Water", "value": "%.1f L/s" % float(pf["q_lps"]), "tip": "At %.1f m net head" % float(pf["h_net_m"])},
+		{"caption": "Pitch circle", "value": "Ø %.0f mm" % float(rn["pcd_mm"]), "tip": "Where the jet meets the cups"},
+		{"caption": "Weight", "value": PeltonLabSpec.fmt_kg(float(_design["mass"]["total"])),
+			"tip": "Spinning %s" % PeltonLabSpec.fmt_kg(float(_design["mass"]["rotating"]))}])
+	_col.set_summary("Wheel", "Ø %.0f mm, %d cups" % [float(rn["pcd_mm"]), int(_spec["runner"]["cups"])])
+	_col.set_summary("Site", "%.1f m head" % float(_spec["site"]["gross_head_m"]))
+	_col.set_summary("Operating point", "%d rpm, %s" % [int(round(float(pf["rpm"]))), UiText.num(float(pf["p_elec_w"]), "W")])

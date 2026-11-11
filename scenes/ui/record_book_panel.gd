@@ -723,7 +723,7 @@ func _build_status_bar(parent: VBoxContainer) -> void:
 	_status_lbl = Label.new()
 	_status_lbl.text = "Temperature records: 1940-present · NWS alerts: 1986-present (IEM) · Global anomaly: NASA GISTEMP v4"
 	_status_lbl.add_theme_color_override("font_color", C_TEXT_M)
-	_status_lbl.add_theme_font_size_override("font_size", 9)
+	_status_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	parent.add_child(_status_lbl)
 
 

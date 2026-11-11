@@ -767,8 +767,8 @@ func refresh_card() -> void:
 		else:
 			hint.text = "Inside the %s: click a part or sub-module; Esc steps back out." % _mod_label(ctx).to_lower()
 		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-		hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+		hint.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		hint.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 		card_box.add_child(hint)
 		return
 	var p: Dictionary = res["parts"][sel]["part"]

@@ -517,7 +517,7 @@ func _build_ui() -> void:
 	_style_section_label(a_l, "SEARCH LOCATION")
 	left.add_child(a_l)
 	_address_field = LineEdit.new()
-	_address_field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_address_field.custom_minimum_size.x = 460.0
 	_address_field.placeholder_text = "Search any address, coordinates, or place on Earth..."
 	_style_line_edit(_address_field)
 	var arow: HBoxContainer = HBoxContainer.new()
@@ -715,6 +715,8 @@ func _build_ui() -> void:
 	import_btn.text = "Add StarShade"
 	import_btn.tooltip_text = "Place the V1 StarShade model on the next map load (or begin placement in-game)"
 	import_btn.pressed.connect(_on_add_starshade_pressed)
+	import_btn.visible = false
+	add_child(import_btn)  # kept (hidden) so nothing that looks it up breaks
 	_close_btn = Button.new()
 	_close_btn.text = "Close"
 	_close_btn.pressed.connect(_close_dismiss)
@@ -734,11 +736,9 @@ func _build_ui() -> void:
 		_style_primary_button(_start_btn)
 		_start_btn.pressed.connect(func() -> void: _play_world(_world_sel_idx))
 		bot.add_child(_start_btn)
-		bot.add_child(import_btn)
 		_close_btn.visible = false
 		_confirm_btn.visible = false
 	else:
-		bot.add_child(import_btn)
 		bot.add_child(_close_btn)
 		bot.add_child(make)
 		bot.add_child(_confirm_btn)

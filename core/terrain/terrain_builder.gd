@@ -866,10 +866,19 @@ static func upsert_detail_patch(terrain: Node3D, elev: PackedFloat32Array, res: 
 		body = StaticBody3D.new()
 		body.name = "DetailCollision"
 		terrain.add_child(body)
+	# One shape, by name. It used to be added unnamed, so the lookup never
+	# found it and every rebuild stacked ANOTHER shape over the first — the
+	# load-time one (never sunk under edit tiles) kept bridging every cut,
+	# pond and sunken room for the rest of the session.
 	var cs := body.get_node_or_null("CollisionShape3D") as CollisionShape3D
 	if cs == null:
 		cs = CollisionShape3D.new()
+		cs.name = "CollisionShape3D"
 		body.add_child(cs)
+	for child in body.get_children():
+		if child != cs and child is CollisionShape3D:
+			body.remove_child(child)
+			child.queue_free()
 	cs.shape = build_heightmap_shape(elev, res, center_elev)
 	var spacing := detail_extent_m / float(maxi(res - 1, 1))
 	cs.scale = Vector3(spacing, 1.0, spacing)

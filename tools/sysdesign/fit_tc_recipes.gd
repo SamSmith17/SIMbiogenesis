@@ -54,6 +54,15 @@ func _initialize() -> void:
 		steps.append({"id": "unload", "label": str(job["unload"]), "at_frac": 1.0, "chore_hours": UNLOAD_H})
 		recipe["steps"] = steps
 		recipe["chore_hours"] = LOAD_H + UNLOAD_H
+		# The condensers run on a closed radiator loop: the cooling water goes
+		# round and its heat to the air, so no water leaves the batch (the
+		# lab's open cooling-water circuit would make it from nothing here).
+		var outs: Array = []
+		for o in (recipe.get("outputs", []) as Array):
+			if str((o as Dictionary).get("kind", "")) != "hot_water":
+				outs.append(o)
+		recipe["outputs"] = outs
+		recipe["note"] = str(recipe.get("note", "")) + " Condensers on a closed radiator loop: the cooling water circulates and its heat goes to the air, so no water leaves the batch."
 		var keep := {"watts": recipe.get("watts", 0.0), "gas_lhv_mj_nm3": recipe.get("gas_lhv_mj_nm3", 0.0),
 			"gas_composition": recipe.get("gas_composition", {}), "tc_summary": recipe.get("tc_summary", {})}
 		recipe = ProcessRecipe.normalize(recipe).merged(keep)

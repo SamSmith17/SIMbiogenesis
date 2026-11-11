@@ -332,6 +332,9 @@ var _shader_advanced: VBoxContainer = null
 var _rebuild_pending := false
 var _rebuild_timer := 0.0
 var _cam_dist_mult: float = 1.0
+var _subject_r := 0.0
+var _subject_fit := 0.0
+var _subject_mid_y := 0.0
 
 
 func _ready() -> void:
@@ -1463,15 +1466,15 @@ func _update_ground_and_camera() -> void:
 	cyl.height = 0.06
 	_ground.mesh = cyl
 	_ground.position.y = -0.03
-	_studio_view.target = Vector3(0.0, _patch_diameter * 0.12, 0.0)
+	_studio_view.target = Vector3(0.0, maxf(_patch_diameter * 0.12, _subject_mid_y), 0.0)
 	_studio_view.set_orbit(_studio_view.yaw, _studio_view.pitch,
-		_patch_diameter * 1.2 * _cam_dist_mult)
+		_frame_base() * _cam_dist_mult)
 
 
 ## The wheel zoom is kept as a multiple of the patch, so a resized patch is
 ## framed the way the player left it.
 func _on_studio_view_changed() -> void:
-	var base := _patch_diameter * 1.2
+	var base := _frame_base()
 	if base > 0.0 and _studio_view != null:
 		_cam_dist_mult = clampf(_studio_view.dist / base, 0.1, 5.0)
 
@@ -1708,6 +1711,40 @@ func _scatter_spots() -> Array:
 
 
 func _rebuild_preview() -> void:
+	if _veg_root == null:
+		return
+	# The old plants are freed at the end of the frame: hide them now so the
+	# framing below measures only the new ones.
+	for old_child in _veg_root.get_children():
+		if old_child is Node3D:
+			(old_child as Node3D).visible = false
+	_rebuild_preview_inner()
+	_fit_camera_to_plants()
+
+
+## Tall plants on a small patch (10 m shrubs on a 10 m patch) used to open
+## cropped: the camera was set from the patch alone. The distance is now the
+## larger of the patch's and what shows the plants whole; the wheel zoom is
+## still kept as a multiple of it.
+func _fit_camera_to_plants() -> void:
+	if _studio_view == null or _veg_root == null:
+		return
+	var bb := _studio_view.subject_aabb(_veg_root)
+	var r := bb.size.length() * 0.5
+	var was := _subject_r
+	_subject_r = r
+	_subject_fit = _studio_view.fit_distance(bb, 0.85) if r > 0.001 else 0.0
+	_subject_mid_y = bb.get_center().y if r > 0.001 else 0.0
+	if absf(was - r) > maxf(0.25, was * 0.08):
+		_update_ground_and_camera()
+
+
+func _frame_base() -> float:
+	var base := _patch_diameter * 1.2
+	return maxf(base, _subject_fit)
+
+
+func _rebuild_preview_inner() -> void:
 	if _veg_root == null:
 		return
 	for child in _veg_root.get_children():

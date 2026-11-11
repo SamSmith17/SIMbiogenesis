@@ -88,6 +88,24 @@ static func find_by_prop_id(main: Node, prop_id: String) -> PlacedProp:
 	return hit as PlacedProp if hit != null else null
 
 
+## The ground with no structure earthworks (TerrainLoader sets it). A
+## structure that shapes the terrain round itself (record key `earthworks`)
+## seats on THIS, at its grade minus its sink, never on the live ground —
+## its own opening reads as the floor and would pull it down into itself.
+static var earthworks_grade_fn: Callable = Callable()
+
+
+## Where a record's model y = 0 sits when it carries earthworks (NAN when it
+## does not, or no grade source is bound).
+static func earthworks_y0(rec: Dictionary) -> float:
+	if not StructureEarthworks.is_on(rec) or bool(rec.get("packed", false)) \
+			or not earthworks_grade_fn.is_valid():
+		return NAN
+	var e := StructureEarthworks.spec_for_record(rec)
+	var g := float(earthworks_grade_fn.call(float(rec.get("x", 0.0)), float(rec.get("z", 0.0))))
+	return g - float(e.get("sink_m", 0.0)) + float(rec.get("y_offset", 0.0))
+
+
 static var _node_index: Dictionary = {}
 static var _node_index_frame := -1
 static var _node_index_root: Node = null
@@ -223,6 +241,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		_maybe_attach_pv_tracker(prop, rec)
 		WindLabRuntime.attach(prop, rec)
 		CspLabRuntime.attach(prop, rec)
+		FarmBotRuntime.attach(prop, rec)
 		EspLabRuntime.attach(prop, rec)
 		PalletRackBuildSite.attach(prop, rec)
 		_maybe_attach_stream_intake_flow(prop, rec)
@@ -293,6 +312,8 @@ static func packed_spec_for_record(rec: Dictionary) -> Dictionary:
 		var fp := FlatpackDesign.packed_spec(FlatpackDesign.solve(rec.get("flatpack_spec") as Dictionary))
 		if not fp.is_empty():
 			return fp
+	if str(rec.get("model_id", "")) == GrowBed.MODEL_ID and rec.get("grow_bed_spec") is Dictionary 			and (rec.get("grow_bed_spec") as Dictionary).has("layout"):
+		return PackedSpec.normalize(GrowBed.packed_spec(rec.get("grow_bed_spec") as Dictionary))
 	if rec.get("domelab_spec") is Dictionary:
 		var dl := DomeLabDesign.packed_spec(DomeLabDesign.solve(rec.get("domelab_spec") as Dictionary))
 		if not dl.is_empty():
@@ -806,7 +827,10 @@ static func _apply_transform(_prop: PlacedProp, model: Node3D, rec: Dictionary,
 	model.rotation = Vector3(pitch, yaw, roll)
 	var grounded_y := gy - foot_y * world_scale
 	_prop.position = Vector3(x, grounded_y, z)
-	if rec.has("y_offset"):
+	var ew_y := earthworks_y0(rec)
+	if not is_nan(ew_y):
+		_prop.position.y = ew_y
+	elif rec.has("y_offset"):
 		_prop.position.y += float(rec["y_offset"])
 	elif rec.has("y") and not rec.has("ground_y"):
 		# Legacy absolute y — only when no ground_y was ever recorded.
@@ -832,7 +856,10 @@ static func model_world_xf(rec: Dictionary, ground_y_at: Callable) -> Transform3
 		deg_to_rad(float(rec.get("yaw", 0.0))), deg_to_rad(float(rec.get("roll", 0.0))))) \
 		.scaled(Vector3.ONE * ws)
 	var y := gy - ModelCatalog.foot_local_y(mid) * ws
-	if rec.has("y_offset"):
+	var ew_y := earthworks_y0(rec)
+	if not is_nan(ew_y):
+		y = ew_y
+	elif rec.has("y_offset"):
 		y += float(rec["y_offset"])
 	elif rec.has("y") and not rec.has("ground_y"):
 		y = float(rec["y"])
@@ -861,6 +888,12 @@ static func model_extras(rec: Dictionary) -> Dictionary:
 		extras["flatpack_spec"] = rec.get("flatpack_spec", {})
 	if rec.has("domelab_spec"):
 		extras["domelab_spec"] = rec.get("domelab_spec", {})
+	if rec.has("earthship_spec"):
+		extras["earthship_spec"] = rec.get("earthship_spec", {})
+	# Without this every placed parametric building drew the default cottage
+	# (and none had its basement).
+	if rec.has("building_spec"):
+		extras["building_spec"] = rec.get("building_spec", {})
 	if rec.has("gantry_spec"):
 		extras["gantry_spec"] = rec.get("gantry_spec", {})
 	if rec.has("toroid_spec"):
@@ -888,6 +921,8 @@ static func model_extras(rec: Dictionary) -> Dictionary:
 	# the default dish — whatever type the designer placed or applied.
 	if rec.has("csplab_spec"):
 		extras["csplab_spec"] = rec.get("csplab_spec", {})
+	if rec.has("farmbot_spec"):
+		extras["farmbot_spec"] = rec.get("farmbot_spec", {})
 	if rec.has("tc_spec"):
 		extras["tc_spec"] = rec.get("tc_spec", {})
 	if rec.has("esp_spec"):
@@ -902,6 +937,8 @@ static func model_extras(rec: Dictionary) -> Dictionary:
 			bed_spec["plant_abs_h"] = rec.get("plant_abs_h")
 		if rec.has("grow_days"):
 			bed_spec["grow_days"] = rec.get("grow_days")
+		if not bed_spec.has("seed"):
+			bed_spec["seed"] = absi(hash(str(rec.get("id", "")))) % 100000
 		extras["grow_bed_spec"] = bed_spec
 	if model_id == GeodesicDomeBuilder.MODEL_ID:
 		var dome_spec: Dictionary = {}

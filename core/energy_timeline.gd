@@ -272,7 +272,12 @@ func _append_exact_run(soc0: float, solar_kw: float, aux_kw: float, load_kw: flo
 ## step short — which would clamp the ramp loop one minute later than the
 ## per-minute reference computation. per_step must be > 0.
 func _steps_to_cover(amount: float, per_step: float) -> int:
-	var k := int(amount / per_step)
+	# A vanishing step (a net of a few µW) makes the ratio overflow, and
+	# int() of that is a huge NEGATIVE count that indexed the buffer at -9e18.
+	var q := amount / per_step
+	if is_nan(q) or q >= 1.0e9:
+		return 1000000000
+	var k := int(q)
 	if float(k) * per_step < amount - 1e-6:
 		k += 1
 	return k

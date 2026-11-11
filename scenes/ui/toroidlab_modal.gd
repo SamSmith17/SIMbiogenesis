@@ -54,7 +54,8 @@ var _name_edit: LineEdit
 var _subtitle: Label
 var _undo_btn: Button
 var _redo_btn: Button
-var _design_list: ItemList
+var _design_list: DesignGallery
+var _col: DesignerColumn
 var _design_entries: Array = []
 var _tabs: TabBar
 var _view_stack: Control
@@ -284,10 +285,8 @@ func _build_left() -> Control:
 	var col := _scroll_column(240)
 	var box: VBoxContainer = col[1]
 	box.add_child(SectionHeader.make("Designs", "layout-grid"))
-	_design_list = ItemList.new()
-	_design_list.custom_minimum_size = Vector2(0, 260)
-	_design_list.auto_height = true
-	_design_list.item_activated.connect(_on_design_activated)
+	_design_list = DesignGallery.make("toroidlab")
+	_design_list.set_thumbnailer(_thumb_for)
 	_design_list.item_selected.connect(_on_design_activated)
 	box.add_child(_design_list)
 	var lib := HBoxContainer.new()
@@ -425,7 +424,12 @@ func _build_studio_world() -> void:
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
 	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.035, 0.043, 0.063)
+	# The kit studios' backdrop (StudioViewport): soft grey haze, not a void.
+	e.background_color = StudioViewport.BACKDROP_HAZE
+	e.fog_enabled = true
+	e.fog_light_color = StudioViewport.BACKDROP_HAZE
+	e.fog_density = 0.004
+	e.fog_sky_affect = 0.0
 	var skymat := ProceduralSkyMaterial.new()
 	skymat.sky_top_color = Color(0.62, 0.68, 0.78)
 	skymat.sky_horizon_color = Color(0.42, 0.42, 0.44)
@@ -465,7 +469,7 @@ func _build_studio_world() -> void:
 	plane.size = Vector2(200, 200)
 	ground.mesh = plane
 	var gmat := StandardMaterial3D.new()
-	gmat.albedo_color = Color(0.13, 0.125, 0.12)
+	gmat.albedo_color = Color(0.36, 0.37, 0.39)
 	gmat.roughness = 0.95
 	ground.material_override = gmat
 	_studio.add_child(ground)
@@ -551,6 +555,7 @@ func _build_right() -> Control:
 	_export_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_export_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_export_status)
+	_col = DesignerColumn.setup(box, "toroidlab", {"open": ["Torus"], "fold": ["Bill of materials", "Fabrication files"]})
 	return col[0]
 
 
@@ -681,6 +686,7 @@ func _rebuild_now() -> void:
 
 
 func _refresh_header() -> void:
+	_refresh_tiles()
 	if not _name_edit.has_focus():
 		_name_edit.text = str(_spec["name"])
 	var st: Dictionary = _design.get("stats", {})
@@ -1179,12 +1185,22 @@ func _refresh_checks() -> void:
 # Designs
 # ---------------------------------------------------------------------------
 
+## One design's picture for the gallery: its key and how to build it.
+func _thumb_for(i: int) -> Dictionary:
+	if i < 0 or i >= _design_entries.size():
+		return {}
+	var spec: Dictionary = ToroidLabSpec.resolve((_design_entries[i]["spec"] as Dictionary).duplicate(true))
+	return {"key": JSON.stringify(spec), "build": func() -> Node3D:
+		return ToroidLabBuilder.build_node(spec, "Thumb")}
+
+
 func _refresh_design_list() -> void:
 	_design_list.clear()
 	_design_entries.clear()
 	for p in ToroidLabPresets.builtins():
 		_design_list.add_item(str(p["name"]))
 		_design_list.set_item_tooltip(_design_list.item_count - 1, str(p.get("blurb", "")))
+		_design_list.set_item_subtitle(_design_list.item_count - 1, str(p.get("blurb", "")))
 		_design_entries.append({"spec": p["spec"], "builtin": true, "id": str(p["id"])})
 	for d in _library:
 		_design_list.add_item("★ " + str(d["name"]))
@@ -1692,3 +1708,25 @@ class SheetCanvas extends Control:
 				draw_string(font, (pa + pb) * 0.5 + Vector2(3, 0), str(f["text"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 9, UITheme.C_GREEN)
 			draw_string(font, rect.position + Vector2(0, -8), "%s × %d sheets" % [str(g["sig"]), int(g["count"])],
 				HORIZONTAL_ALIGNMENT_LEFT, int(rect.size.x + pad - 6.0), UITheme.FONT_XS, UITheme.C_AMBER if on else UITheme.C_TEXT_S)
+
+
+## The headline numbers and what each folded section holds.
+func _refresh_tiles() -> void:
+	if _col == null or _design.is_empty():
+		return
+	var st: Dictionary = _design.get("stats", {})
+	var bom: Dictionary = _design.get("bom", {})
+	var so: Dictionary = _design.get("solar", {})
+	var n_pv := int(so.get("count", 0))
+	_col.set_tiles([
+		{"caption": "Height", "value": ToroidLabSpec.fmt_m(float(st.get("height_m", 0.0))), "tip": "Ground to the crown"},
+		{"caption": "Floor", "value": ToroidLabSpec.fmt_area(float(st.get("floor_area_m2", 0.0))), "tip": "Covered ground"},
+		{"caption": "Weight", "value": ToroidLabSpec.fmt_kg(float(bom.get("mass_kg", 0.0))), "tip": "Everything in the bill of materials"},
+		{"caption": "Solar", "value": ("%.1f kW" % (float(so.get("total_w", 0.0)) / 1000.0)) if n_pv > 0 else "None",
+			"level": "" if n_pv > 0 else "muted", "tip": "%d panels" % n_pv},
+		{"caption": "Tube", "value": ToroidLabSpec.fmt_m(float(bom.get("tube_m", 0.0))), "tip": "Total tube to buy and bend"},
+		{"caption": "Canopy", "value": UiText.count(int(bom.get("sheets", 0)), "sheet"), "tip": "Sheets the canopy is cut from"}])
+	_col.set_summary("Torus", "%s high" % ToroidLabSpec.fmt_m(float(st.get("height_m", 0.0))))
+	_col.set_summary("Solar", ("%d panels" % n_pv) if n_pv > 0 else "no panels")
+	_col.set_summary("Origami canopy", UiText.count(int(bom.get("sheets", 0)), "sheet"))
+	_col.set_summary("Bill of materials", ToroidLabSpec.fmt_kg(float(bom.get("mass_kg", 0.0))))

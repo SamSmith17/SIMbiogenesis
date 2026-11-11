@@ -46,6 +46,7 @@ var _accum := 0.0
 var _dim: ColorRect = null
 var _panel: PanelContainer = null
 var _tabs: TabContainer = null
+var _empty: EmptyState = null
 var _title: Label = null
 
 # Chores tab
@@ -402,6 +403,7 @@ func _build_ui() -> void:
 	_panel.offset_bottom = 340
 	add_child(_panel)
 	UiFit.adopt(_panel)  # above the timeline, inside the screen at any size
+	UiFit.set_content_column(_panel, 1240.0)  # full screen: a centred column, not edge to edge
 
 	var margin := MarginContainer.new()
 	for m in ["margin_left", "margin_right"]:
@@ -441,6 +443,11 @@ func _build_ui() -> void:
 	_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_tabs.tab_changed.connect(func(_i: int) -> void: _refresh())
 	root.add_child(_tabs)
+	# With nobody on the site every tab is blank: say so, and what to do.
+	_empty = EmptyState.make("users",
+		"There is nobody to plan work for yet. People come with a habitat that has Population Simulation on, or with festival mode (the Festival chip on the timeline).")
+	_empty.visible = false
+	root.add_child(_empty)
 
 	_build_chores_tab()
 	_build_tasks_tab()
@@ -737,7 +744,13 @@ func _refresh() -> void:
 	if not _active or _bridge == null:
 		return
 	var count := _roster_ids().size()
-	_title.text = "Work Planner — %d people" % count
+	_title.text = "Work Planner — %s" % UiText.count(count, "person", "people")
+	var nobody := count == 0 and _board() == null
+	if _empty != null:
+		_empty.visible = nobody
+		_tabs.visible = not nobody
+	if nobody:
+		return
 	# Re-list the person picker when roster MEMBERSHIP changes (departures,
 	# resets) — it used to be filled once on open and went stale, offering
 	# people who had already left.

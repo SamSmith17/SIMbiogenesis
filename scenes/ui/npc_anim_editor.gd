@@ -223,10 +223,15 @@ func _build_topbar() -> Control:
 	var bar := HBoxContainer.new()
 	bar.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	wrap.add_child(bar)
+	var title_icon := TextureRect.new()
+	title_icon.texture = UiIcons.icon("video", 18)
+	title_icon.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	title_icon.modulate = UITheme.C_TEXT_S
+	bar.add_child(title_icon)
 	var title := Label.new()
-	title.text = "🎬  NPC ANIMATION"
-	title.add_theme_color_override("font_color", C_PRIMARY)
-	title.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	title.text = "NPC animation editor"
+	title.add_theme_color_override("font_color", UITheme.C_TEXT)
+	title.add_theme_font_size_override("font_size", UITheme.FONT_LG)
 	bar.add_child(title)
 	_clip_pick = OptionButton.new()
 	_clip_pick.custom_minimum_size.x = 200

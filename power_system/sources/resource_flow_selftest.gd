@@ -81,6 +81,9 @@ func _initialize() -> void:
 	_test_isru_catalog_kinds()
 	_test_ro_purifier_mass_balance()
 	_test_soil_blender_passive()
+	_test_urine_diversion()
+	_test_establish_ramp()
+	_test_loop_presets()
 	if _failures == 0:
 		print("RESOURCE SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -231,6 +234,133 @@ func _test_soil_blender_passive() -> void:
 	var mass_out := soil_l * 50.0
 	_check("blend 1h: mass exact", absf(mass_in - mass_out) < 0.05,
 		"in=%.3f out=%.3f" % [mass_in, mass_out])
+
+
+## A habitat with a urine port (urine-diverting toilets): the urine leaves
+## through its own port, the blackwater carries only the rest, and the two
+## add up to what one flush toilet would send (the water balance is the same).
+func _test_urine_diversion() -> void:
+	var g := _build_habitat_graph(10, 1.0, 0.8)
+	var model = g["model"]
+	var engine = g["engine"]
+	var hab: Dictionary = model.get_item("hab")
+	var sp: Dictionary = (hab["specs"] as Dictionary).duplicate(true)
+	(sp["outputs"] as Array).append({"kind": "urine", "rate": 0.047, "unit": "L/h"})
+	model.update_item("hab", {"specs": sp})
+	model.add_item({"id": "urine", "type": "resource", "specs": {
+		"name": "Urine", "resource_kind": "urine", "capacity_qty": 1000.0, "capacity_unit": "L", "level": 0.0}})
+	model.add_connection({"id": "c_ur", "polarity": "resource", "resource_type": "urine",
+		"source_item_id": "hab", "source_handle_id": "res_out_3",
+		"target_item_id": "urine", "target_handle_id": "input"})
+	engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	var b0 := _tank_level(model, "black")
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(1.0, 1.0)
+	var urine_l := _tank_level(model, "urine") * 1000.0
+	var black_l := (_tank_level(model, "black") - b0) * float((model.get_item("black")["specs"] as Dictionary).get("capacity_qty", 1.0))
+	var water_lph := 2.083 * 10.0
+	var want_u := water_lph * ResourceFlowEngineScript.HABITAT_URINE_YIELD * ResourceFlowEngineScript.HABITAT_URINE_DIVERSION
+	_check("urine-diverting habitat: urine on its own port", absf(urine_l - want_u) < 0.02,
+		"urine=%.4f want %.4f" % [urine_l, want_u])
+	_check("urine-diverting habitat: urine + brownwater = the flush toilet's blackwater",
+		absf(urine_l + black_l - water_lph * ResourceFlowEngineScript.HABITAT_BLACKWATER_YIELD) < 0.05,
+		"urine %.3f + black %.3f vs %.3f" % [urine_l, black_l, water_lph * ResourceFlowEngineScript.HABITAT_BLACKWATER_YIELD])
+	_check("urine is about 1.1 L a person a day", absf(want_u / 10.0 * 24.0 - 1.14) < 0.05,
+		"%.3f L/p/d" % (want_u / 10.0 * 24.0))
+
+
+## establish_factor: 1 with no planting stamp, -1 before the planting hour,
+## the share of the establishment period after it; a planted bed yields
+## that share and draws at least the seedling floor.
+func _test_establish_ramp() -> void:
+	var E = ResourceFlowEngineScript
+	_check("establish: no planting stamp = established", E.establish_factor({"establish_days": 45.0}, 100.0) == 1.0)
+	_check("establish: no establish_days = established", E.establish_factor({"planted_abs_h": 50.0}, 10.0) == 1.0)
+	var s := {"establish_days": 10.0, "planted_abs_h": 100.0}
+	_check("establish: before planting = -1", E.establish_factor(s, 99.0) == -1.0)
+	_check("establish: half way", absf(E.establish_factor(s, 100.0 + 120.0) - 0.5) < 1e-6)
+	_check("establish: full after the period", E.establish_factor(s, 100.0 + 500.0) == 1.0)
+	var specs := _preset_specs("Greenhouse Grow Bed")
+	_check("greenhouse bed carries establish_days", float(specs.get("establish_days", 0.0)) > 0.0)
+	specs["current_state"] = "on"
+	specs["establish_days"] = 10.0
+	specs["planted_abs_h"] = 0.0
+	var model = GraphModelScript.new()
+	model.add_item({"id": "w", "type": "resource", "specs": {"name": "W", "resource_kind": "water",
+		"capacity_qty": 1000.0, "capacity_unit": "L", "level": 1.0}})
+	model.add_item({"id": "n", "type": "resource", "specs": {"name": "N", "resource_kind": "nutrients",
+		"capacity_qty": 10.0, "capacity_unit": "kg", "level": 1.0}})
+	model.add_item({"id": "gh", "type": "processor", "specs": specs})
+	model.add_item({"id": "f", "type": "resource", "specs": {"name": "F", "resource_kind": "food",
+		"capacity_qty": 100.0, "capacity_unit": "kg", "level": 0.0}})
+	model.add_connection({"id": "c0", "polarity": "resource", "source_item_id": "w", "source_handle_id": "output",
+		"target_item_id": "gh", "target_handle_id": "res_in_0"})
+	model.add_connection({"id": "c1", "polarity": "resource", "source_item_id": "n", "source_handle_id": "output",
+		"target_item_id": "gh", "target_handle_id": "res_in_1"})
+	model.add_connection({"id": "c2", "polarity": "resource", "source_item_id": "gh", "source_handle_id": "res_out_0",
+		"target_item_id": "f", "target_handle_id": "input"})
+	model.add_item({"id": "ctrl", "type": "controller", "specs": {"name": "Controller"}})
+	model.add_connection({"id": "c_pwr", "polarity": "ac", "source_item_id": "ctrl", "source_handle_id": "acOutput",
+		"target_item_id": "gh", "target_handle_id": "power_in"})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	engine.power_available_override = 1
+	# Day 5 of a 10-day establishment: half the yield, (0.25 + 0.75 × 0.5) of the draw.
+	engine.simulate_step_for_test(120.0, 0.0)
+	engine.simulate_step_for_test(121.0, 1.0)
+	var food_kg := _tank_level(model, "f") * 100.0
+	var water_l := (1.0 - _tank_level(model, "w")) * 1000.0
+	_check("establish: half-established bed yields half", absf(food_kg - 0.05) < 0.003, "food=%.4f" % food_kg)
+	_check("establish: and draws 62.5 % of its water", absf(water_l - 2.0 * 0.625) < 0.05, "water=%.3f" % water_l)
+
+
+## The nutrient-loop and supply presets: every port's kind is real, the
+## mass balances close, and nothing makes water from nothing.
+func _test_loop_presets() -> void:
+	var unr := _preset_specs("Urine Nutrient Recovery")
+	_check("Urine Nutrient Recovery exists + io_absolute", bool(unr.get("io_absolute", false)))
+	var out_l := 0.0
+	for o: Dictionary in (unr.get("outputs", []) as Array):
+		out_l += float(o.get("rate", 0.0))
+	_check("Urine Nutrient Recovery: 1 L in, ~1 L out", absf(out_l - 1.0) < 0.01, "%.4f" % out_l)
+	var dig := _preset_specs("Brownwater Digester (3 m³)")
+	_check("Brownwater Digester takes blackwater",
+		str(((dig.get("inputs", []) as Array)[0] as Dictionary).get("kind", "")) == "blackwater")
+	var flt := _preset_specs("Digestate Nitrification Filter")
+	var f_in := float(((flt.get("inputs", []) as Array)[0] as Dictionary).get("rate", 0.0))
+	var f_water := 0.0
+	for o2: Dictionary in (flt.get("outputs", []) as Array):
+		if str(o2.get("kind", "")) == "irrigation_water":
+			f_water = float(o2.get("rate", 0.0))
+	_check("Digestate filter: water out below water in", f_water > 0.0 and f_water < f_in)
+	var up := _preset_specs("Unpack & Sort Supplies")
+	var food_out := 0.0
+	var plastic := 0.0
+	for o3: Dictionary in (up.get("outputs", []) as Array):
+		if str(o3.get("kind", "")) == "food":
+			food_out = float(o3.get("rate", 0.0))
+		elif str(o3.get("kind", "")) == "plastic_waste":
+			plastic = float(o3.get("rate", 0.0))
+	_check("Unpack: all the food comes out", absf(food_out - 3.0) < 1e-6)
+	_check("Unpack: about 4 % plastic", absf(plastic / food_out - 0.04) < 0.005)
+	var imp := _preset_specs("Plastic Collection Run")
+	_check("Plastic Collection Run is a material import",
+		bool(imp.get("counts_as_import", false)) and bool(imp.get("material_import", false)))
+	var gh := _preset_specs("Greenhouse Grow Bed")
+	var n_rate := 0.0
+	for i2: Dictionary in (gh.get("inputs", []) as Array):
+		if str(i2.get("kind", "")) == "nutrients":
+			n_rate = float(i2.get("rate", 0.0))
+	_check("Greenhouse bed takes about 1 % of its food in N+P+K", absf(n_rate / 0.1 - 0.01) < 0.004,
+		"%.4f kg/kg" % (n_rate / 0.1))
+	var found_habitat := false
+	for h: Dictionary in ComponentPresetsScript.HABITATS:
+		if str(h.get("label", "")) == "Population (urine-diverting toilets)":
+			found_habitat = true
+	_check("urine-diverting Population preset exists", found_habitat)
+	for k: String in ["urine", "brine", "irrigation_water", "packaged_food"]:
+		_check("kind %s registered" % k, ResourceKindsScript.has_kind(k))
 
 
 func _test_step_level() -> void:

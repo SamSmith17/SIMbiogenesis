@@ -75,7 +75,9 @@ var _name_edit: LineEdit
 var _subtitle: Label
 var _undo_btn: Button
 var _redo_btn: Button
-var _list: ItemList
+var _list: DesignGallery
+var _col: DesignerColumn
+var _group_cols: Array = []
 var _tabs: TabBar
 var _vp_container: SubViewportContainer
 var _viewport: SubViewport
@@ -317,7 +319,7 @@ func _scroll_column(width: float) -> Array:
 func _build_left() -> Control:
 	var col := _scroll_column(250)
 	var box: VBoxContainer = col[1]
-	box.add_child(SectionHeader.make("Arrays and modules", "layout-grid"))
+	box.add_child(SectionHeader.make("Start from", "layout-grid"))
 	_search_edit = LineEdit.new()
 	_search_edit.placeholder_text = "Search panels and arrays (maker, model, watts…)"
 	_search_edit.clear_button_enabled = true
@@ -328,10 +330,8 @@ func _build_left() -> Control:
 	_search_count.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_search_count.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 	box.add_child(_search_count)
-	_list = ItemList.new()
-	_list.custom_minimum_size = Vector2(0, 200)
-	_list.auto_height = true
-	_list.item_activated.connect(_on_entry_activated)
+	_list = DesignGallery.make("pvlab")
+	_list.set_thumbnailer(_thumb_for)
 	_list.item_selected.connect(_on_entry_activated)
 	box.add_child(_list)
 	var lib := HFlowContainer.new()
@@ -347,6 +347,8 @@ func _build_left() -> Control:
 		btn.pressed.connect(b[2])
 		lib.add_child(btn)
 	box.add_child(lib)
+	var how_sec := Collapsible.make("My panel is not listed", false).persist("pvlab", "how")
+	box.add_child(how_sec)
 	var how := Label.new()
 	how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	how.add_theme_font_size_override("font_size", UITheme.FONT_XS)
@@ -355,7 +357,7 @@ func _build_left() -> Control:
 		"Search for your panel by maker or model: the real ones carry their data sheet. Not listed? " +
 		"Measure it with a tape (mm), count its cells, read the label on the back for Voc, Vmp, Isc " +
 		"and Imp, and put them in the Panel tab's data sheet: the twin then matches it exactly.")
-	box.add_child(how)
+	how_sec.body.add_child(how)
 	return col[0]
 
 
@@ -439,7 +441,11 @@ func _build_centre() -> Control:
 	shade.tooltip_text = "A test shadow: what it does to each string and the array's power"
 	shade.item_selected.connect(func(i): _shade_test = str(SHADE_TESTS[i][0]); _refresh_live(); _refresh_chart())
 	_bar_array.add_child(shade)
-	var tl := _small_label("Tracker")
+	_bar_array.move_child(shade, shade.get_index())
+	var shade_l := _small_label("Test shadow")
+	_bar_array.add_child(shade_l)
+	_bar_array.move_child(shade_l, shade.get_index())
+	var tl := _small_label("Turn tracker")
 	_bar_array.add_child(tl)
 	var trk := HSlider.new()
 	trk.min_value = -60.0
@@ -620,7 +626,30 @@ func _build_right() -> Control:
 	_export_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_export_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_export_status)
+	# Essentials per tab: one section open, the rest folded with a summary.
+	for grp in [[_cell_group, ["Cells"]], [_panel_group, ["Size, build and cell layout"]],
+			[_array_group, ["Selected part", "Layout and mount"]]]:
+		var gc := DesignerColumn.setup(grp[0], "pvlab", {"open": grp[1], "tiles": false, "finder": false})
+		_group_cols.append(gc)
+	_col = DesignerColumn.setup(box, "pvlab", {"fold": ["Live values", "Bill of materials", "Files"], "tile_cols": 3})
 	return col[0]
+
+
+## One array's picture for the gallery (modules are text rows).
+func _thumb_for(i: int) -> Dictionary:
+	if i < 0 or i >= _entries.size():
+		return {}
+	var e: Dictionary = _entries[i]
+	if str(e.get("kind", "")) != "design":
+		return {}
+	var spec: Dictionary = PvLabSpec.resolve((e["spec"] as Dictionary).duplicate(true))
+	return {"key": JSON.stringify(spec), "build": func() -> Node3D:
+		return PvLabBuilder.build_node(spec, "Thumb")}
+
+
+func _set_summary(title: String, text: String) -> void:
+	for gc in _group_cols:
+		(gc as DesignerColumn).set_summary(title, text)
 
 
 func _section(parent: Container, title: String, open: bool) -> VBoxContainer:
@@ -775,8 +804,24 @@ func _refresh_header() -> void:
 	if not _name_edit.has_focus():
 		_name_edit.text = str(_spec["name"])
 	var t: Dictionary = _design["totals"]
-	_subtitle.text = "%s · %s · %.1f × %.1f m · %s" % [PvLabSpec.describe(_spec), PvLabModule.describe(_spec["module"]),
-		float(t["width_m"]), float(t["depth_m"]), DomeLabSpec.fmt_kg(float(t["mass_kg"]))]
+	_subtitle.text = PvLabSpec.describe(_spec)
+	_subtitle.tooltip_text = PvLabModule.describe(_spec["module"])
+	if _col != null:
+		var unwired := int(t["panels"]) - int(t["wired"])
+		_col.set_tiles([
+			{"caption": "Peak power", "value": UiText.num(float(t["wired_wmp"]), "W"),
+				"tip": "The wired modules at standard test conditions"},
+			{"caption": "Modules", "value": str(int(t["panels"])), "level": "" if unwired == 0 else "warn",
+				"tip": "All wired into strings" if unwired == 0 else "%d not in a string yet" % unwired},
+			{"caption": "Footprint", "value": "%.1f × %.1f m" % [float(t["width_m"]), float(t["depth_m"])],
+				"tip": "%.1f m high" % float(t["height_m"])},
+			{"caption": "Weight", "value": DomeLabSpec.fmt_kg(float(t["mass_kg"])), "tip": "Modules, rack and hardware"},
+			{"caption": "Cost", "value": "$%s" % UiText.thousands(int(round(float(t["cost_usd"])))), "tip": "The bill of materials"},
+			{"caption": "Per watt", "value": "$%.2f" % (float(t["cost_usd"]) / maxf(float(t["wmp"]), 1.0)),
+				"tip": "Cost ÷ peak watts"}])
+		_col.set_summary("Bill of materials", "$%s" % UiText.thousands(int(round(float(t["cost_usd"])))))
+		_set_summary("Electrical (data sheet)", PvLabModule.describe(_spec["module"]))
+		_set_summary("Layout and mount", "%d modules" % int(t["panels"]))
 
 
 func _on_name_changed() -> void:
@@ -1496,30 +1541,35 @@ func _refresh_list() -> void:
 	var q := _search_edit.text if _search_edit != null else ""
 	# Lambdas capture locals by value: the counts live in an array.
 	var cnt := [0, 0]
+	# A group's caption goes in with its first match (none while a search
+	# leaves it empty). Lambdas capture by value: the pending title is boxed.
+	var head := [""]
 	var add_head := func(title: String) -> void:
-		_list.add_item(title)
-		_list.set_item_disabled(_list.item_count - 1, true)
-		_entries.append({})
+		head[0] = title
 	var add := func(text: String, tip: String, entry: Dictionary, hay: String) -> void:
 		cnt[1] += 1
 		if not PvLabCatalog.matches(hay, q):
 			return
 		cnt[0] += 1
-		_list.add_item(text)
-		_list.set_item_tooltip(_list.item_count - 1, tip)
+		if not str(head[0]).is_empty():
+			_list.add_caption(str(head[0]))
+			head[0] = ""
+		var row := _list.add_item(text, str(entry.get("kind", "")) == "design")
+		_list.set_item_tooltip(row, tip)
+		_list.set_item_subtitle(row, tip.get_slice("\n", 0))
 		_entries.append(entry)
-	add_head.call("— Arrays —")
+	add_head.call("Arrays")
 	for p in PvLabPresets.builtins():
 		add.call(str(p["name"]), str(p.get("blurb", "")), {"kind": "design", "spec": p["spec"], "builtin": true,
 			"id": str(p["id"])}, str(p["name"]) + " " + str(p.get("blurb", "")))
 	for d in _library["designs"]:
 		add.call("★ " + str(d["name"]), "", {"kind": "design", "spec": d["spec"], "builtin": false, "id": str(d["id"])},
 			str(d["name"]))
-	add_head.call("— Real panels (data sheets) —")
+	add_head.call("Real panels (data sheets)")
 	for e in PvLabCatalog.all():
 		add.call(PvLabCatalog.label(e), PvLabCatalog.tooltip(e), {"kind": "module", "catalog": str(e["id"]),
 			"builtin": true, "id": str(e["id"])}, PvLabCatalog.haystack(e))
-	add_head.call("— Module types —")
+	add_head.call("Module types")
 	for m in PvLabPresets.modules():
 		add.call(str(m["name"]), PvLabModule.describe(m["spec"]), {"kind": "module", "spec": m["spec"], "builtin": true,
 			"id": str(m["id"])}, str(m["name"]) + " " + PvLabModule.describe(m["spec"]))

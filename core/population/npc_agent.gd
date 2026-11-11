@@ -127,12 +127,24 @@ const QUORUM_WAIT_H := 0.5         # give a crew chore this long to gather hands
 ## thresholds apply (thirst 0.5), and at rise 0.2/h that is a preemption every
 ## ~2.5 h per person, which repeatedly collapsed six-person musters.
 const CHORE_PREEMPT_FLOOR := 0.80
+## The bar a worker in a crew AT QUORUM steps out at: a water break, not an
+## emergency. It was URGENT (0.95), past morale's pain threshold (0.75), so a
+## long build kept whole crews working parched for hours; on Closed Loop Ten's
+## greenhouse build three of ten people walked out over thirst in six days.
+## Just past the pain threshold the crew still holds for most of a job.
+const CREW_BREAK_BAR := 0.85
 ## Drinking still nudges the bladder, but at ~8 drinks/day the old 0.12 added
 ## ~1.0 of need per day on its own — more than the rise itself — which alone
 ## forced extra unscheduled trips.
 const DRINK_BLADDER_KICK := 0.06
 ## Below this much room in the day, nobody has the appetite for enrichment.
 const ENRICHMENT_MIN_FREE_H := 1.5
+## ALL HANDS takes a person's leisure for the board only while their
+## enrichment need is under this: someone who has gone about a day without
+## any time off takes their evening, then is back on it. Without it a pinned
+## crew worked every leisure block and morale fell to a walk-out within a
+## week of a long build (Closed Loop Ten, 0.84 -> 0.28 in three days).
+const ALL_HANDS_REST_BAR := 0.7
 ## Live trail: how many recent points to keep, and how far apart to sample.
 const TRAIL_MAX := 48
 const TRAIL_STEP_M := 1.5
@@ -686,7 +698,7 @@ func _step_chore(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 	# by ordinary thirst (threshold 0.5 at rise 0.2/h). Solo work still yields
 	# readily; a mustered crew holds out for a real emergency.
 	var urgent := _most_urgent()
-	var bar := URGENT if bool(board.has_quorum(chore_id)) else CHORE_PREEMPT_FLOOR
+	var bar := CREW_BREAK_BAR if bool(board.has_quorum(chore_id)) else CHORE_PREEMPT_FLOOR
 	if chore.is_empty() or (not urgent.is_empty() \
 			and float(needs.get(urgent, 0.0)) >= maxf(float(THRESHOLD.get(urgent, 1.0)), bar)):
 		_finish(ctx, false)
@@ -1103,6 +1115,7 @@ func _step_idle(abs_hours: float, ctx: Dictionary) -> void:
 		# and the site was never built. Sleep, meals and the other needs
 		# still come first (they are above and `scheduled` below).
 		if bool(ctx.get("all_hands", false)) and NpcComfort.LEISURE_KINDS.has(kind) \
+				and float(needs.get("enrichment", 0.0)) < ALL_HANDS_REST_BAR \
 				and abs_hours >= float(retry_at.get(CHORE_ACTIVITY, 0.0)) \
 				and _begin_chore(abs_hours, ctx):
 			routine_kind = kind
@@ -1149,14 +1162,24 @@ func _step_idle(abs_hours: float, ctx: Dictionary) -> void:
 			# Nothing on the board during a work block — fall through to
 			# gathering rather than standing still.
 		routine_kind = kind
+	# Out of a work block, someone who has gone about a day without time off
+	# takes it before more work (the ALL HANDS rest rule, for ordinary free
+	# time): with a long build on the board, chores ahead of gathering ate
+	# every evening and morale fell to walk-outs within the week.
+	var rest_first := routine_kind != NpcRoutine.WORK \
+			and float(needs.get("enrichment", 0.0)) >= ALL_HANDS_REST_BAR
 	# Tier 3: work the board.
-	if abs_hours >= float(retry_at.get(CHORE_ACTIVITY, 0.0)) and _begin_chore(abs_hours, ctx):
+	if not rest_first and abs_hours >= float(retry_at.get(CHORE_ACTIVITY, 0.0)) \
+			and _begin_chore(abs_hours, ctx):
 		return
 	# Tier 4: gathering — what lifts morale past the baseline ceiling.
 	if abs_hours >= float(retry_at.get("enrichment", 0.0)) and _wants_enrichment(ctx):
 		_begin_enrichment(abs_hours, ctx)
 		if state != State.IDLE:
 			return
+	if rest_first and abs_hours >= float(retry_at.get(CHORE_ACTIVITY, 0.0)) \
+			and _begin_chore(abs_hours, ctx):
+		return
 	# Nothing at all: do not hang about ON the spot just used.
 	_maybe_loiter(abs_hours, ctx)
 

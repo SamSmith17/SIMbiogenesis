@@ -459,6 +459,84 @@ A parametric designer for ring-shaped shade structures. Every rib is the same ci
 
 A parametric designer for the solar you actually own. Every cell is drawn to the millimetre by a shader — mono or poly, half-cut or full, busbars and fingers — and the module's electrics come from its cells or from the data sheet you type in. Arrays sit on racks of real members (2x4s, Unistrut, aluminium rail) with a span check, or on single-axis trackers that follow the sun and backtrack. Shade is checked substring by substring and run through a bypass-diode I–V model, so one leaf on one cell costs what it really does. Placed on the ground, a roof or a structure, the array lands on the systems graph as one node per MPPT input with every string of panels inside.
 
+<a id="peltonlab"></a>
+
+### Pelton wheel designer
+
+![Pelton wheel designer](tour/peltonlab.jpg)
+
+*Design a micro-hydro Pelton turbine round the common cup: how many cups, how big the wheel, the side discs, hub and bolt pattern, the jets, the housing, bearings, drive and generator — with the speed, power and strength worked out as you go.*
+
+**How to open:** **Click Pelton wheel designer…**
+
+- Library → Structures → Pelton wheel designer…, or the Hydro Lab's Design Pelton wheel… on a Pelton turbine
+- Wheel: the cup count, the overall diameter and the cup size; Set cups by the 15 + m/2 rule
+- Rotor: the side discs that clamp the cup tabs, the shaft, the hub flange and its bolt pattern
+- Jets, housing (auto-sized round the wheel), a horizontal or vertical shaft
+- Shaft, bearings and drive: pillow blocks or flange units, a coupler, V-belt, timing belt or gears; Match the ratio to the generator
+- Performance: power and speed against the wheel's size and its cups; Apply writes the wheel onto the Hydro Lab's turbine
+
+Every wheel here is built from the same cup — the common split bucket with one root tab, scaled whole — so the design is about the wheel round it. The cups' pitch circle and the jet set the speed (rpm = 60·2·0.46·v / π·PCD): a bigger wheel turns slower with more torque, the same water making the same shaft power, and the gearing then decides whether the generator is anywhere near its rated speed. The textbook proportions are checked as you go — jet ratio, cup width against the jet, 15 + m/2 cups, how many fit before their tabs touch — and so is the strength: the pull on the cup bolts at runaway, the tabs, the discs, the hub bolts with the jet stalled, the shaft under bending and torsion, the bearings' life, the coupler, the belt, the generator's speed limit and whether it makes enough volts to charge the bank. Opened from the Hydro Lab it designs that turbine against its real head and penstock, and Apply puts the designed machine on the map with its efficiencies on the graph; the disc and spacer come out as DXF and SVG cut files with every bolt hole.
+
+<a id="windlab"></a>
+
+### Wind turbine designer
+
+![Wind turbine designer](tour/windlab.jpg)
+
+*Design a small wind turbine — Ugrinsky, Savonius, Lenz2, Darrieus, helical, a propeller or a farm windmill — and see its power curve, the wind it starts in, the gearing and generator that suit your site, and the sheets to cut and score or the blades to print.*
+
+**How to open:** **Click Wind turbine designer…**
+
+- Library → Structures → Wind turbine designer…, or Design wind turbine… on a wind node's inspector
+- Pick a built-in — the Lawn-sign Ugrinsky comes out of one 18 × 24 in corrugated plastic sign
+- Rotor: size it, and its own proportions (the Ugrinsky's semicircle S and tail arc L, a Savonius's overlap, a propeller's tip speed ratio and airfoil)
+- Made from, mount, drive: sheet or printed blades, the mast, a timing belt or gears; Match the gearing
+- Generator and load: steppers to PMAs into a battery, an MPPT or a dump load; Rank every generator
+- Power, Cut & print, Gearing & motors tabs; Export files, Make on a machine…, Apply / Place in world
+
+A rotor turns a fraction Cp of the wind's ½ρAv³ into shaft power at its best tip speed ratio: drag rotors like the Savonius and the Ugrinsky near λ 0.5–1, lift rotors like the Darrieus and the propeller near λ 3–7. The designer works each one out — the Ugrinsky from the published optimisation of its semicircle and tail arc, the propeller's tapered, twisted blades from blade element theory — then finds where the rotor's torque meets the generator's at every wind speed: a stepper's cogging decides the wind it starts in, its inductance caps its current, a battery holds a PMA's speed and can stall a Darrieus, an MPPT holds the rotor at its best. The power curve and the site's wind give the year's energy; Match the gearing and Rank every generator find the drive and motor that make the most there. The lawn-sign build — two scored S-blades and two hub discs clamping a NEMA 17, all from one sign — scales to any size, nested on whatever sheet you have. Out come DXF and SVG cut sheets with the score lines, printable STLs, and a power curve the systems graph runs on.
+
+<a id="vehiclelab"></a>
+
+### Vehicle designer
+
+![Vehicle designer](tour/vehiclelab.jpg)
+
+*Build a twin of your van, skoolie, RV or box truck from its real chassis and body, paint it, bolt fans, AC, Starlink and solar onto it, and park it at camp: people sleep in its beds and cook in its galley.*
+
+**How to open:** **Click Vehicle designer…**
+
+- Library → Vehicles → Vehicle designer…
+- Pick a type, then its chassis and its body on their own (an E-450 dually under a fiberglass shuttle box)
+- Set the body's length, width, roof height and roof shape, its windows and doors, its paint or a wrap image
+- Arm a roof fan, an AC unit, solar panels or an awning and click where it goes; drag it to move it, Del removes it
+- Cutaway or Plan shows the inside: arm a bed, galley, fridge, shower or battery and click the floor; drag to move, R turns it
+- The checks want a 50 cm way in from a door to every bed and fixture, room to sit up in bed and to stand in the shower
+- Its battery, solar, loads and water tanks become one node on the system graph; its shower and galley draw on its own tank
+- Type the one-way miles: the round trip in gallons (or kWh) and dollars from a road-load model
+- Place in world: drive it, and the camp's people sleep in its beds
+
+Eleven kinds of converted vehicle — camper and cargo vans, shuttle and school buses, step vans, ambulances, Class C and Class A RVs, box trucks, travel trailers and a semi with a container home — each from a real chassis (wheelbase, tyres, duals, tank, weight rating, steering lock) under a body you size yourself. Roof items snap to the crown of the roof or the sides, solar comes as real modules in rows and columns, and a model of your own vehicle can be laid over the parametric one. Fuel use comes from rolling resistance and drag, and lands inside each chassis' real-world mpg.
+
+<a id="tclab"></a>
+
+### Tri-clamp designer
+
+![Tri-clamp designer](tour/tclab.jpg)
+
+*Snap standard tri-clamp fittings together into process runs, design vessels with nozzles you drag round the shell, and place the result — like the biochar reactor and its condenser — on the map with its ends as pipe ports.*
+
+**How to open:** **Click Tri-clamp designer…**
+
+- Library → Structures → Tri-clamp designer…, or Edit tri-clamp assembly… on a placed one
+- Pick a clamp size and a part, then click an open end: it snaps on with a gasket and a clamp (Tab: which end, R: roll)
+- Vessel / tank: shell, heads, lid, jacket, legs and internals; + Clamp nozzle, then drag the nozzle round the shell
+- Label an open end and say what it carries; On the graph turns the assembly into a graph node
+- Cutaway to see inside; Export files; Place in world
+
+Tri-clamp (sanitary) fittings join on a clamp face: two ferrules, a gasket and a hinged clamp. The designer draws every part from the ASME BPE inch sizes — spools, 90° and 45° elbows, tees, crosses, reducers, adapters, sight glasses, dephlegmators, butterfly and ball valves with their actuators, gauges, strainers and cartridge housings — and snaps them end to end, checking that clamp faces match, that loops close and that nothing runs into anything. Vessels are parts too: a shell, heads and a lid, a jacket, legs and what is inside, with nozzles you drag round the shell. The biochar reactor preset rebuilds a real jacketed boiler with its retort can and its three-column condenser to within a few millimetres of the model it came from. Placed on the map it is one prop: its labelled ends are pipe ports, and it is the graph's Biochar Reactor node, so the woodgas line you draw in 3D starts on the woodgas fitting.
+
 <a id="tc_process"></a>
 
 ### TC Process Lab
@@ -494,6 +572,25 @@ Every part of a tri-clamp design is also a volume of gas and liquid: the lab joi
 - Compare: lay the real board's Home Assistant history over the twin, then calibrate
 
 Eighteen ESPHome boards (ESP32, S2, S3, C3, C6, ESP8266, Pico W and screen boards) and sixty-odd modules, each with its real pinout and its protocol. The tool shares the I2C bus and moves a part to its other address on a clash, gives every SPI device its own chip select, keeps the logger's UART free, puts analog parts on ADC pins that work with Wi-Fi on, and warns about strapping pins and 5 V signals. The YAML it writes passes ESPHome's own validator. A simulated twin names its entities exactly as Home Assistant will and reads the world at its spot with each part's own resolution and accuracy, so the Compare tab can lay the real board's history over it and write a calibration.
+
+<a id="earthship"></a>
+
+### Earthships and rooms in the ground
+
+![Earthships and rooms in the ground](tour/earthship.jpg)
+
+*Design an Earthship, place it, and walk down into it: the ground opens over its rooms, earth is piled against its back to the roof, and the front is dug down to the floor.*
+
+**How to open:** **Click Earthship designer…**
+
+- Library → Designers → Earthship designer…
+- Pick a layout, the number of U rooms, their size, how far the floor sits below the ground and the greenhouse's glass angle (Best for this site)
+- Place in world: the terrain opens over the rooms, berms rise on the back and ends, a cut and a ramp lead down to the door
+- Any placed model can do the same: prop editor → Earthworks (sink, opening, berms per side, a daylight side and a ramp)
+- A house from the Building Builder can have a basement with a walkout or an areaway
+- Rain runs off the roof (Roof water to the graph fills a cistern); inside stays near the soil's temperature
+
+Earthships are built into the ground: walls of rammed tyres, the back and ends buried to the roof, a sloped wall of glass facing the sun. The designer draws one from a few numbers and works out the earth it needs. Placed, it asks the terrain for an opening over its rooms, berms against its walls and a cut with a ramp down to the door, and the ground follows it when it moves. You walk down the ramp and in; rain runs off the roof into its cisterns, and the rooms sit near the temperature of the soil at that depth. The same earthworks sink any placed model, and give houses their basements.
 
 <a id="systems"></a>
 
@@ -548,6 +645,22 @@ Tidy is a force layout whose direction comes from the ports — inputs on top, o
 - The green strip above the clips is what plays back without computing
 
 The simulation is a deterministic function of sim time, so a stretch of it can be rendered ahead — battery, tanks, hydro, camp power and the people's supplies — and then scrubbed or played back from the cache while you explore in first person. A green strip above the clips marks what is rendered; editing the graph cuts it at the playhead, as Premiere drops a stale preview.
+
+<a id="graph_ring_3d"></a>
+
+### The ring in 3D: a cell, or a torus
+
+![The ring in 3D: a cell, or a torus](tour/graph_ring_3d.jpg)
+
+*See the ring arrangement as nested spheres or a torus and orbit it with Ctrl+drag.*
+
+**How to open:** **Press G**
+
+- Press G, then Layout ▾ → Ring in 3D → nested spheres or torus
+- Ctrl+drag to orbit, drag a card to move it over its shell
+- Double-click a group to open it; Esc comes back out
+
+The ring arrangement seen in space. As nested spheres the graph reads as a cell: the machines spread evenly over an outer membrane, one band per system, the stores they share on an inner nucleus, each toward the machines it is wired to, the people at the centre and the wires running through the inside. As a torus the machines run round its outer circumference at their ring angles and the stores round its inner edge. Ctrl+drag orbits; nothing about the flat graph changes.
 
 <a id="site_plan"></a>
 
@@ -871,6 +984,22 @@ A native port of the LinkageLab designer: compound scissor mechanisms solved in 
 
 Everything on the site has a packed shipping size and mass. The Lab packs the site's cargo into U-Haul, trailer and ISO container interiors with door apertures and payload limits, and reports the load's centre of mass.
 
+<a id="intermodal_units"></a>
+
+### Intermodal units
+
+![Intermodal units](tour/intermodal_units.jpg)
+
+*Shipping containers, pallets and crates at real ISO and GMA sizes, ready to pack or place.*
+
+**How to open:** **Click Library → Structures → Intermodal unit designer…**
+
+- Library → Structures → Intermodal unit designer…
+- Pick a container or pallet and adjust it
+- Place it on the site, or open it in the Packing Lab
+
+Every unit carries its interior, door opening, tare and payload, so the Packing Lab knows what really fits and what a forklift has to lift.
+
 <a id="multiplayer"></a>
 
 ### Play together
@@ -888,4 +1017,4 @@ A listen server with no servers of ours: the host's world, clock and simulation 
 
 ---
 
-<sub>Generated by `tools/tour_docs.py` from tour run tour_20261107-031737 (2026-11-07T03:19:31, commit 157b27f; 1/1 stops passed). Regenerate with `tools\tour.ps1 -Mode stills` then `python tools/tour_docs.py`. Add a feature: copy `core/tour/stops/_template.gd`.</sub>
+<sub>Generated by `tools/tour_docs.py` from tour run tour_20261110-180337 (2026-11-10T18:06:28, commit 0b7bb36; 1/1 stops passed). Regenerate with `tools\tour.ps1 -Mode stills` then `python tools/tour_docs.py`. Add a feature: copy `core/tour/stops/_template.gd`.</sub>

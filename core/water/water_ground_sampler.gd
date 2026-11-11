@@ -60,7 +60,16 @@ func delta_at(x: float, z: float) -> float:
 
 
 func surface_at(x: float, z: float) -> float:
+	if not roofs.is_empty():
+		var h := StructureEarthworks.hole_at(roofs, Vector2(x, z))
+		if not h.is_empty():
+			return float(h["roof"])
 	return base_at(x, z) + delta_at(x, z)
+
+
+## Structure openings ({poly, rect, roof}): water reads the ROOF there, so
+## rain runs off a building and round it instead of pooling in its rooms.
+var roofs: Array = []
 
 
 ## Half the side of the hi-res detail square (0 when there is none). Channels

@@ -810,6 +810,12 @@ func wet_at(x: float, z: float) -> bool:
 	if is_nan(_level_m) or _loader == null:
 		return false
 	var y := drawn_level_m() - _center_elev()
+	# Inside a basement / Earthship the walls keep the lake out: dry unless
+	# the water stands over its roof.
+	if _loader.has_method("water_height_at"):
+		var wy := float(_loader.call("water_height_at", x, z))
+		if wy > float(_loader.call("surface_height_at", x, z)) + 0.01:
+			return wy < y
 	if _spill_ready:
 		var s := LakeSpill.spill_at(_spill, _spill_n, _spill_half, x, z)
 		if not is_nan(s):

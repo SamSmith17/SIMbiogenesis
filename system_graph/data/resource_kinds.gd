@@ -211,6 +211,9 @@ const BUILTIN: Dictionary = {
 		"flow_ref_rate": 2.0,
 		"aliases": ["packaging"],
 	},
+	# Plant-available nutrients, counted as kg of N + P + K. A crop takes
+	# roughly 0.6–1 % of its fresh weight (Marschner 2012); a plot's
+	# nutrient_kg_per_kg is on the same basis.
 	"nutrients": {
 		"display": "Nutrients",
 		"color": Color(0.820, 0.720, 0.180, 1.0),
@@ -225,6 +228,49 @@ const BUILTIN: Dictionary = {
 		"abbrev": "ðŸ§ª",
 		"flow_ref_rate": 40.0,
 		"aliases": ["fertilizer_effluent"],
+	},
+	# Source-separated urine (a urine-diverting toilet's bowl outlet). Carries
+	# most of what a person excretes in nutrients: about 7 g N, 0.7 g P and
+	# 1.8 g K per litre (Jönsson et al. 2004, Guidelines on the use of urine
+	# and faeces in crop production, EcoSanRes) — and about 9 g of salt.
+	"urine": {
+		"display": "Urine (diverted)",
+		"color": Color(0.910, 0.800, 0.240, 1.0),
+		"unit": "L",
+		"abbrev": "UR",
+		"flow_ref_rate": 2.0,
+		"aliases": ["diverted_urine", "yellowwater"],
+	},
+	# What is left when the nutrients are taken out of urine: a strong salt
+	# solution (mostly NaCl). Dried in a pan, it is not a fertilizer.
+	"brine": {
+		"display": "Brine",
+		"color": Color(0.780, 0.820, 0.860, 1.0),
+		"unit": "L",
+		"abbrev": "BR",
+		"flow_ref_rate": 1.0,
+		"aliases": ["salt_brine", "concentrate_brine"],
+	},
+	# Treated greywater, distillate and filtered digestate: clean enough to
+	# irrigate, never to drink. A separate kind so a wire into a drinking
+	# tank reads as the mistake it is.
+	"irrigation_water": {
+		"display": "Reclaimed Water (irrigation)",
+		"color": Color(0.360, 0.700, 0.660, 1.0),
+		"unit": "L",
+		"abbrev": "RW",
+		"flow_ref_rate": 40.0,
+		"aliases": ["reclaimed_water", "nonpotable_water", "non_potable_water"],
+	},
+	# Food as it arrives from outside: sacks, tins, wrappers and all. Counted
+	# by the food inside (kg); unpacking it leaves the packaging behind.
+	"packaged_food": {
+		"display": "Packaged Supplies",
+		"color": Color(0.900, 0.560, 0.360, 1.0),
+		"unit": "kg",
+		"abbrev": "PF",
+		"flow_ref_rate": 4.0,
+		"aliases": ["supplies", "packaged_supplies", "rations"],
 	},
 	"biogas": {
 		"display": "Biogas",
@@ -602,6 +648,14 @@ static func parse_capacity_text(text: String) -> Dictionary:
 ## Infer resource kind from a container preset name.
 static func infer_kind_from_name(name: String) -> String:
 	var n := name.to_lower()
+	if "urine" in n:
+		return "urine"
+	if "brine" in n or "salt pan" in n:
+		return "brine"
+	if "reclaimed" in n or "irrigation" in n:
+		return "irrigation_water"
+	if "supplies" in n or "packaged" in n or "ration" in n:
+		return "packaged_food"
 	if "grey" in n:
 		return "greywater"
 	if "black" in n and "water" in n:

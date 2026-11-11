@@ -93,8 +93,8 @@ func _build_ui() -> void:
 	_confirm_start.text = "Needs a person to start it"
 	_roles_edit = LineEdit.new()
 	_roles_edit.placeholder_text = "processor, pp_sheet_press, …"
-	form.add_child(FormRow.make("Machine roles", _roles_edit,
-		"Which machine roles can run this recipe, separated by commas", "", "roles"))
+	form.add_child(FormRow.make("Runs on", _roles_edit,
+		"The kinds of machine that can run this recipe, by their role id, separated by commas (processor = any generic processor)", "", "roles"))
 	_note_edit = LineEdit.new()
 	_note_edit.placeholder_text = "A short note"
 	form.add_child(FormRow.make("Note", _note_edit, "", "", "note"))

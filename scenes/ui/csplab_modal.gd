@@ -70,7 +70,8 @@ var _opt_spec_before: Dictionary = {}
 # UI
 var _shell: DesignerShell
 var _type_box: VBoxContainer
-var _design_list: ItemList
+var _design_list: DesignGallery
+var _col: DesignerColumn
 var _design_entries: Array = []
 var _tabs: TabBar
 var _view_stack: Control
@@ -353,9 +354,8 @@ func _build_left() -> void:
 	_type_why.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	box.add_child(_type_why)
 	box.add_child(SectionHeader.make("Designs", "layout-grid"))
-	_design_list = ItemList.new()
-	_design_list.custom_minimum_size = Vector2(0, 260)
-	_design_list.auto_height = true
+	_design_list = DesignGallery.make("csplab")
+	_design_list.set_thumbnailer(_thumb_for)
 	_design_list.item_selected.connect(_on_design_activated)
 	box.add_child(_design_list)
 	var lib := HBoxContainer.new()
@@ -628,6 +628,9 @@ func _build_right() -> void:
 	_status_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_status_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_status_lbl)
+	_col = DesignerColumn.setup(box, "csplab", {"open": ["Optic"], "fold": ["Results", "Where the light goes"], "tiles": false})
+	# The four headline tiles stay first, the search under them.
+	box.move_child(_col.finder, 1)
 
 
 ## A headline number: big value, small caption, a coloured edge.
@@ -1438,12 +1441,22 @@ func _fmt_obj(v: float) -> String:
 # Designs
 # ---------------------------------------------------------------------------
 
+## One design's picture for the gallery: its key and how to build it.
+func _thumb_for(i: int) -> Dictionary:
+	if i < 0 or i >= _design_entries.size():
+		return {}
+	var spec: Dictionary = CspLabSpec.resolve(((_design_entries[i] as Dictionary)["spec"] as Dictionary).duplicate(true))
+	return {"key": JSON.stringify(spec), "build": func() -> Node3D:
+		return CspLabBuilder.build_node(spec, "Thumb")}
+
+
 func _refresh_design_list() -> void:
 	_design_list.clear()
 	_design_entries.clear()
 	for p in CspLabPresets.builtins():
 		_design_list.add_item(str((p as Dictionary)["label"]))
 		_design_list.set_item_tooltip(_design_list.item_count - 1, str((p as Dictionary).get("blurb", "")))
+		_design_list.set_item_subtitle(_design_list.item_count - 1, str((p as Dictionary).get("blurb", "")))
 		_design_entries.append({"spec": (p as Dictionary)["spec"], "builtin": true, "id": str((p as Dictionary)["id"])})
 	for dv in _library:
 		var d: Dictionary = dv

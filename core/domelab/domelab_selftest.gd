@@ -19,7 +19,7 @@ extends SceneTree
 ## error, and the 3D builder's picking. Carries EXPECTED_CHECKS: a runtime
 ## error aborts a test function while PASS still prints.
 
-const EXPECTED_CHECKS := 197
+const EXPECTED_CHECKS := 198
 
 var _pass := 0
 var _fail := 0
@@ -557,21 +557,31 @@ func _test_folded_plates() -> void:
 	_check("bolts sit on the plane between the flanges", on_plane)
 	# 3D: corten skin, PMMA panes, bolts.
 	var node := DomeLabBuilder.build_from_design(d, "Helix", {"record": true})
-	var mi := node.get_node("Mesh") as MeshInstance3D
 	var kinds := {}
-	for si in mi.mesh.get_surface_count():
-		var mat := mi.mesh.surface_get_material(si) as StandardMaterial3D
-		kinds["glass" if mat.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED else ("corten" if mat.roughness > 0.8 else "metal")] = true
+	# Clear panes are their own mesh ("Glazing": no shadow, no collision).
+	for part in ["Mesh", "Glazing"]:
+		var mi := node.get_node_or_null(part) as MeshInstance3D
+		if mi == null:
+			continue
+		for si in mi.mesh.get_surface_count():
+			var mat := mi.mesh.surface_get_material(si) as StandardMaterial3D
+			kinds["glass" if mat.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED else ("corten" if mat.roughness > 0.8 else "metal")] = true
 	_check("helical home draws corten, glass and bolts", kinds.size() == 3, str(kinds))
+	var gz := node.get_node_or_null("Glazing") as MeshInstance3D
+	_check("its glass casts no shadow", gz != null and gz.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
 	# Winding: every triangle clockwise seen from where its normals point.
 	var wind_ok := true
-	for si in mi.mesh.get_surface_count():
-		var arr := mi.mesh.surface_get_arrays(si)
-		var vv: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
-		var nn: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
-		for i in range(0, mini(vv.size(), 60000), 3):
-			if (vv[i + 1] - vv[i]).cross(vv[i + 2] - vv[i]).dot(nn[i] + nn[i + 1] + nn[i + 2]) > 1e-12:
-				wind_ok = false
+	for part2 in ["Mesh", "Glazing"]:
+		var mw := node.get_node_or_null(part2) as MeshInstance3D
+		if mw == null:
+			continue
+		for si in mw.mesh.get_surface_count():
+			var arr: Array = mw.mesh.surface_get_arrays(si)
+			var vv: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var nn: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			for i in range(0, mini(vv.size(), 60000), 3):
+				if (vv[i + 1] - vv[i]).cross(vv[i + 2] - vv[i]).dot(nn[i] + nn[i + 1] + nn[i + 2]) > 1e-12:
+					wind_ok = false
 	_check("folded plates wind clockwise (Godot's front face)", wind_ok)
 	node.free()
 
@@ -823,7 +833,7 @@ func _test_cam() -> void:
 
 func _test_presets() -> void:
 	var bi := DomeLabPresets.builtins()
-	_check("sixteen built-in designs", bi.size() == 16, str(bi.size()))
+	_check("seventeen built-in designs (with the 20 m greenhouse)", bi.size() == 17, str(bi.size()))
 	var all_ok := true
 	var names := {}
 	for p in bi:

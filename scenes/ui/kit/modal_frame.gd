@@ -33,6 +33,10 @@ var close_on_backdrop := true
 ## Stop above the timeline bar instead of covering it (a modal about time,
 ## such as the video export, that wants the bar in view).
 var keep_timeline := false
+## Full screen, the content sits in a centred column this wide (the panel's
+## own pixels) instead of running edge to edge. 0 = use the whole width (a
+## chart, a wide table). Set before open().
+var content_max_w := 1040.0
 
 var _want_size := Vector2(900, 640)
 var _backdrop: ColorRect = null
@@ -182,6 +186,12 @@ func _exit_tree() -> void:
 func _fit() -> void:
 	if _panel == null or not is_inside_tree():
 		return
+	_panel.set_meta("ui_fit_content_max_w", content_max_w)
+	if UiFit.fills_screen(_want_size, keep_timeline):
+		UiFit.fill(_panel, _want_size)
+		return
+	_panel.scale = Vector2.ONE
+	UiFit._apply_content_column(_panel, 0.0)
 	var vp := get_viewport().get_visible_rect().size
 	var bottom := vp.y - UiFit.timeline_clearance(self, keep_timeline)
 	var avail := Vector2(vp.x - SCREEN_MARGIN * 2.0, bottom - SCREEN_MARGIN * 2.0)

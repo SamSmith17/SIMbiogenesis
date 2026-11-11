@@ -61,7 +61,8 @@ var _undo_btn: Button
 var _redo_btn: Button
 var _family_box: VBoxContainer
 var _system_box: VBoxContainer
-var _design_list: ItemList
+var _design_list: DesignGallery
+var _col: DesignerColumn
 var _design_entries: Array = []
 var _tabs: TabBar
 var _view_stack: Control
@@ -256,10 +257,8 @@ func _build_left() -> void:
 		b.pressed.connect(_on_system_pressed.bind(sys))
 		_system_box.add_child(b)
 	box.add_child(SectionHeader.make("Designs", "layout-grid"))
-	_design_list = ItemList.new()
-	_design_list.custom_minimum_size = Vector2(0, 280)
-	_design_list.auto_height = true
-	_design_list.item_activated.connect(_on_design_activated)
+	_design_list = DesignGallery.make("domelab")
+	_design_list.set_thumbnailer(_thumb_for)
 	_design_list.item_selected.connect(_on_design_activated)
 	box.add_child(_design_list)
 	var lib := HBoxContainer.new()
@@ -430,6 +429,7 @@ func _build_right() -> void:
 	_export_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_export_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_export_status)
+	_col = DesignerColumn.setup(box, "domelab", {"open": ["Size"], "fold": ["Bill of materials", "Fabrication files"]})
 
 
 func _build_footer() -> void:
@@ -535,6 +535,7 @@ func _rebuild_now() -> void:
 
 
 func _refresh_header() -> void:
+	_refresh_tiles()
 	if not _name_edit.has_focus():
 		_name_edit.text = str(_spec["name"])
 	var st: Dictionary = _design.get("stats", {})
@@ -1220,12 +1221,22 @@ func _refresh_checks() -> void:
 # Designs
 # ---------------------------------------------------------------------------
 
+## One design's picture for the gallery: its key and how to build it.
+func _thumb_for(i: int) -> Dictionary:
+	if i < 0 or i >= _design_entries.size():
+		return {}
+	var spec: Dictionary = DomeLabSpec.resolve((_design_entries[i]["spec"] as Dictionary).duplicate(true))
+	return {"key": JSON.stringify(spec), "build": func() -> Node3D:
+		return DomeLabBuilder.build_node(spec, "Thumb")}
+
+
 func _refresh_design_list() -> void:
 	_design_list.clear()
 	_design_entries.clear()
 	for p in DomeLabPresets.builtins():
 		_design_list.add_item(str(p["name"]))
 		_design_list.set_item_tooltip(_design_list.item_count - 1, str(p.get("blurb", "")))
+		_design_list.set_item_subtitle(_design_list.item_count - 1, str(p.get("blurb", "")))
 		_design_entries.append({"spec": p["spec"], "builtin": true, "id": str(p["id"])})
 	for d in _library:
 		_design_list.add_item("★ " + str(d["name"]))
@@ -1643,3 +1654,35 @@ class HubCanvas extends Control:
 				str(t["label"]), int(t["count"]), int(t["valence"]), " (base)" if bool(t["base"]) else "",
 				DomeLabBom._gap_text(t)], HORIZONTAL_ALIGNMENT_LEFT, int(cell.x) - 8, UITheme.FONT_XS,
 				UITheme.C_AMBER if on else UITheme.C_TEXT_S)
+
+
+## The headline numbers and what each folded section holds.
+func _refresh_tiles() -> void:
+	if _col == null or _design.is_empty():
+		return
+	var st: Dictionary = _design.get("stats", {})
+	var bom: Dictionary = _design.get("bom", {})
+	var checks: Array = _design.get("checks", [])
+	var bad := 0
+	for c in checks:
+		if c is Dictionary and str((c as Dictionary).get("level", "")) in ["error", "warn"]:
+			bad += 1
+	_col.set_tiles([
+		{"caption": "Height", "value": DomeLabSpec.fmt_m(float(st.get("height_m", 0.0))), "tip": "Floor to the top"},
+		{"caption": "Floor", "value": DomeLabSpec.fmt_area(float(st.get("floor_area_m2", 0.0))), "tip": "Area inside the base ring"},
+		{"caption": "Weight", "value": DomeLabSpec.fmt_kg(float(bom.get("mass_kg", 0.0))), "tip": "Everything in the bill of materials"},
+		{"caption": "Struts", "value": str(_count(_design.get("struts"))), "tip": "Straight members to cut"},
+		{"caption": "Hubs", "value": str(_count(_design.get("hubs"))), "tip": "Joints where struts meet"},
+		{"caption": "Checks", "value": "All pass" if bad == 0 else UiText.count(bad, "issue"),
+			"level": "ok" if bad == 0 else "warn", "tip": "See Checks below"}])
+	_col.set_summary("Geometry", DomeLabSpec.describe(_spec))
+	_col.set_summary("Size", "%s high" % DomeLabSpec.fmt_m(float(st.get("height_m", 0.0))))
+	_col.set_summary("Bill of materials", DomeLabSpec.fmt_kg(float(bom.get("mass_kg", 0.0))))
+
+
+static func _count(v: Variant) -> int:
+	if v is Array:
+		return (v as Array).size()
+	if v is Dictionary:
+		return (v as Dictionary).size()
+	return 0

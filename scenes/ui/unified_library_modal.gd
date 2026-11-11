@@ -20,15 +20,38 @@ var _loader: Node = null
 var _active := false
 var _dim: ColorRect = null
 var _panel: PanelContainer = null
-var _tabs: TabContainer = null
 var _search: LineEdit = null
-var _lists: Dictionary = {}   # tab_name -> ItemList
-var _entries: Dictionary = {} # tab_name -> Array[Dictionary] (full)
-var _filtered: Dictionary = {} # tab_name -> Array[Dictionary] (visible)
+var _chips: Dictionary = {}      # section -> Button
+var _sections: Dictionary = {}   # section -> {box, header, built}
+var _entries: Dictionary = {}    # section -> Array[Dictionary]
+var _section := "Designers"
+var _body: VBoxContainer = null
+var _scroll: ScrollContainer = null
+var _empty: Control = null
 var _status: Label = null
-var _detail: Label = null
-var _use_btn: Button = null
-var _place_btn: Button = null
+var _thumbs: ThumbRenderer = null
+
+## The page's sections, in order. `big` cards carry a picture on top.
+const SECTIONS := [
+	{"id": "Designers", "icon": "pencil", "big": true, "note": "Make your own, then place it"},
+	{"id": "Structures", "icon": "box", "big": true, "note": "Ready-made things to place in the world"},
+	{"id": "Vehicles", "icon": "truck", "big": true, "note": "Place one, walk up and drive"},
+	{"id": "Graph nodes", "icon": "workflow", "big": false, "note": "Parts of the systems graph"},
+	{"id": "Vegetation", "icon": "trees", "big": false, "note": "Paint plants and tune how they look"},
+	{"id": "Buildings", "icon": "house", "big": false, "note": "The map's buildings"},
+]
+const CARD_W := 232.0
+const PIC_H := 124.0
+const ROW_W := 352.0
+
+## A picture for each graph category with no 3D model.
+const CATEGORY_ICONS := {
+	"pbis": "globe", "my_components": "layers", "supernodes": "layers", "panels": "sun",
+	"wind": "wind", "hydro": "waves", "batteries": "battery", "controllers": "cpu",
+	"appliances": "plug", "habitats": "users", "processors": "workflow", "csp": "sun",
+	"tools": "wrench", "resources": "droplet", "catchments": "cloud-rain", "plants": "sprout",
+	"monitors": "gauge",
+}
 
 
 func _ready() -> void:
@@ -62,6 +85,7 @@ func toggle() -> void:
 		open()
 
 
+## `tab` names a section by its first letters ("Vehicles", "struct", "Building").
 func open(tab: String = "") -> void:
 	_resolve_loader()
 	_populate()
@@ -69,12 +93,16 @@ func open(tab: String = "") -> void:
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
-	if not tab.is_empty() and _tabs != null:
-		for i in _tabs.get_tab_count():
-			if _tabs.get_tab_title(i).to_lower().begins_with(tab.to_lower()):
-				_tabs.current_tab = i
+	if not tab.is_empty():
+		var t := tab.to_lower()
+		for sec in SECTIONS:
+			var sid := str(sec["id"]).to_lower()
+			if sid.begins_with(t) or t.begins_with(sid.trim_suffix("s")):
+				_section = str(sec["id"])
 				break
-	_refresh_action_buttons()
+	if _search != null:
+		_search.text = ""
+	_show_sections()
 	if _search != null:
 		_search.grab_focus()
 
@@ -85,6 +113,8 @@ func close() -> void:
 	_active = false
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if _thumbs != null:
+		_thumbs.clear_queue()
 	CursorController.release_modal(MODAL_NAME)
 
 
@@ -109,110 +139,97 @@ func _build_ui() -> void:
 	add_child(_dim)
 
 	_panel = PanelContainer.new()
-	_panel.custom_minimum_size = Vector2(720, 520)
+	_panel.custom_minimum_size = Vector2(960, 620)
 	_panel.set_anchors_preset(Control.PRESET_CENTER)
 	_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
 	_panel.add_theme_stylebox_override("panel", UITheme.panel_style())
 	add_child(_panel)
-	UiFit.adopt(_panel)  # above the timeline, inside the screen at any size
+	UiFit.adopt(_panel)
+	UiFit.set_content_column(_panel, 1500.0)  # a page of cards, not edge to edge
+
+	_thumbs = ThumbRenderer.make("library")
+	_panel.add_child(_thumbs)
 
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	_panel.add_child(root)
 
 	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	header.add_theme_constant_override("separation", UITheme.SPACE_MD)
 	root.add_child(header)
 	var title := Label.new()
 	title.text = "Library"
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_theme_color_override("font_color", C_TEXT)
 	title.add_theme_font_size_override("font_size", UITheme.FONT_XL)
 	header.add_child(title)
-	var close_btn := Button.new()
-	close_btn.text = "Close"
-	close_btn.focus_mode = Control.FOCUS_NONE
-	close_btn.tooltip_text = "Close library (Esc / U)"
-	UITheme.style_button(close_btn)
-	close_btn.pressed.connect(close)
-	header.add_child(close_btn)
-
 	_search = LineEdit.new()
-	_search.placeholder_text = "Filter… (name, type, model id)"
+	_search.name = "library_search"
+	_search.placeholder_text = "Search everything (dome, battery, bus, maple…)"
 	_search.clear_button_enabled = true
-	_search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_search.text_changed.connect(func(_t: String) -> void: _apply_filter())
-	root.add_child(_search)
+	_search.right_icon = UiIcons.icon("search", 14)
+	_search.custom_minimum_size.x = 420
+	_search.text_changed.connect(func(_t: String) -> void: _show_sections())
+	header.add_child(_search)
+	var gap := Control.new()
+	gap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(gap)
+	header.add_child(IconButton.close(close, "Close library (Esc / U)"))
 
-	_tabs = TabContainer.new()
-	_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_tabs.custom_minimum_size.y = 340
-	_tabs.tab_changed.connect(func(_i: int) -> void: _refresh_action_buttons())
-	root.add_child(_tabs)
+	var chips := HBoxContainer.new()
+	chips.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	root.add_child(chips)
+	for sec in SECTIONS:
+		var sid := str(sec["id"])
+		var b := IconButton.make(str(sec["icon"]), str(sec["note"]), Callable(), sid)
+		b.name = "section_%s" % sid.to_lower().replace(" ", "_")
+		b.flat = false
+		b.toggle_mode = true
+		UITheme.style_button(b)
+		b.pressed.connect(func() -> void:
+			_section = sid
+			_search.text = ""
+			_show_sections())
+		chips.add_child(b)
+		_chips[sid] = b
 
-	for tab_name in ["Building", "Graph nodes", "Vegetation", "Structures", "Vehicles"]:
-		var page := VBoxContainer.new()
-		page.name = tab_name
-		page.add_theme_constant_override("separation", UITheme.SPACE_SM)
-		_tabs.add_child(page)
-		var list := ItemList.new()
-		list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		list.custom_minimum_size.y = 280
-		list.allow_reselect = true
-		list.item_selected.connect(func(_i: int) -> void: _refresh_action_buttons())
-		list.item_activated.connect(func(i: int) -> void: _activate_entry(tab_name, i, false, true))
-		page.add_child(list)
-		_lists[tab_name] = list
-
-	_detail = Label.new()
-	_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_detail.add_theme_color_override("font_color", C_TEXT_S)
-	_detail.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	_detail.custom_minimum_size.y = 36
-	root.add_child(_detail)
-
-	var actions := HBoxContainer.new()
-	actions.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	root.add_child(actions)
-	_use_btn = Button.new()
-	_use_btn.text = "Use selected"
-	_use_btn.focus_mode = Control.FOCUS_NONE
-	_use_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UITheme.style_button(_use_btn)
-	_use_btn.add_theme_color_override("font_color", C_PRIMARY)
-	_use_btn.pressed.connect(func() -> void: _activate_selected(false))
-	actions.add_child(_use_btn)
-	_place_btn = Button.new()
-	_place_btn.text = "Place in world"
-	_place_btn.focus_mode = Control.FOCUS_NONE
-	_place_btn.visible = false
-	UITheme.style_button(_place_btn)
-	_place_btn.pressed.connect(func() -> void: _activate_selected(true))
-	actions.add_child(_place_btn)
+	_scroll = ScrollContainer.new()
+	_scroll.name = "scroll"
+	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	root.add_child(_scroll)
+	_body = VBoxContainer.new()
+	_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_body.add_theme_constant_override("separation", UITheme.SPACE_MD)
+	_scroll.add_child(_body)
 
 	_status = Label.new()
 	_status.add_theme_color_override("font_color", C_TEXT_S)
-	_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_status.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_status.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	root.add_child(_status)
+
+
+func _designer(kind: String, label: String, detail: String, model_id: String, icon: String = "pencil") -> Dictionary:
+	return {"kind": kind, "label": label, "detail": detail, "pic_model": model_id, "icon": icon, "verb": "Design…"}
 
 
 func _populate() -> void:
 	_entries.clear()
+	for sid in _sections:
+		var sec: Dictionary = _sections[sid]
+		if is_instance_valid(sec.get("box")):
+			(sec["box"] as Node).queue_free()
+	_sections.clear()
+	if _thumbs != null:
+		_thumbs.clear_queue()
 
-	var buildings: Array = [
-		{
-			"kind": "building_library",
-			"label": "Building library (styles & models)…",
-			"detail": "Open the OSM building style browser / model catalog.",
-		},
-		{
-			"kind": "building_key",
-			"label": "Edit focused building (B)",
-			"detail": "Customize the building under the crosshair, or start a new house.",
-		},
+	_entries["Buildings"] = [
+		{"kind": "building_library", "label": "Building library", "verb": "Open", "icon": "house",
+			"detail": "Styles and models for the map's buildings."},
+		{"kind": "building_key", "label": "Edit the building I am looking at", "verb": "Edit", "icon": "pencil",
+			"detail": "The building under the crosshair (B), or start a new house."},
 	]
-	_entries["Building"] = buildings
 
 	var graph: Array = []
 	for cat in ComponentPresets.CATEGORIES:
@@ -224,135 +241,87 @@ func _populate() -> void:
 			var pd: Dictionary = p
 			var specs: Dictionary = pd.get("specs", {}) as Dictionary
 			var mid := str(specs.get("model_id", ""))
-			var label := "%s — %s" % [clabel, str(pd.get("label", "?"))]
-			if not mid.is_empty():
-				label += "  ·  3D"
 			graph.append({
 				"kind": "graph_preset",
-				"label": label,
-				"detail": _graph_detail(pd),
+				"label": str(pd.get("label", "?")),
+				"group": clabel,
+				"detail": _graph_detail(pd, clabel),
 				"preset": pd,
 				"model_id": mid,
+				"pic_model": mid,
+				"icon": str(CATEGORY_ICONS.get(cid, "workflow")),
+				"verb": "Add to graph",
 			})
 	_entries["Graph nodes"] = graph
 
 	var veg: Array = [
-		{
-			"kind": "veg_paint",
-			"label": "Open vegetation paint (V)…",
-			"detail": "Paint / place / clear vegetation on the map.",
-		},
-		{
-			"kind": "veg_tune",
-			"label": "Tune look…",
-			"detail": "Live SubViewport studio for species shape, tint, and shaders.",
-		},
+		{"kind": "veg_paint", "label": "Paint vegetation", "verb": "Open", "icon": "sprout",
+			"detail": "Paint, place and clear plants on the map (V)."},
+		{"kind": "veg_tune", "label": "Tune look", "verb": "Open", "icon": "sliders-horizontal",
+			"detail": "Shape, colour and leaves of each species, in a studio."},
 	]
 	for sid in VegetationCardFactory.SPECS.keys():
 		veg.append({
 			"kind": "veg_species",
-			"label": "Species: %s" % sid,
-			"detail": "Open Tune look with this species in mind.",
+			"label": UiText.from_id(str(sid)),
+			"group": "Species",
+			"detail": "Open Tune look on this species.",
 			"species": sid,
+			"icon": "trees",
+			"verb": "Tune look",
 		})
 	_entries["Vegetation"] = veg
 
+	var designers: Array = [
+		_designer("building_designer", "Building designer",
+			"A house from a footprint: walls, roof, doors, windows, porch and lights.", "", "house"),
+		_designer("pallet_rack", "Pallet rack builder",
+			"Buildings from pallet racking: decks, stairs, walls, solar slopes.", PalletRackBuilder.MODEL_ID),
+		_designer("flatpack", "Flat-pack furniture",
+			"Slotted plywood sofas, benches, tables and chairs, with CNC cut files.", FlatpackBuilder.MODEL_ID),
+		_designer("domelab", "Domes and zomes",
+			"Geodesic domes, zomes and helix zomes: struts, hubs, plates, cut files.", DomeLabBuilder.MODEL_ID),
+		_designer("toroidlab", "Toroids",
+			"Bent-tube toroids on pipe fittings with a pleated canopy and a solar ring.", ToroidLabBuilder.MODEL_ID),
+		_designer("linkage_lab", "Linkage Lab",
+			"Folding scissor-linkage structures (the StarShade designer). Key: N.", "linkage_structure"),
+		_designer("pvlab", "Solar arrays",
+			"Your real panels on racks or a tracker, wired in strings with live output.", PvLabBuilder.MODEL_ID, "sun"),
+		_designer("csplab", "Solar concentrators",
+			"Lenses and mirrors: ray trace, suns, heat through a year, tracking structure.", "csplab_concentrator", "sun"),
+		_designer("farmbotlab", "Garden robots (FarmBot)",
+			"A gantry robot on a raised bed of any size: crop mix, packing, its day move by move, labour saved vs cost.", "farmbot", "sprout"),
+		_designer("windlab", "Wind turbines",
+			"Seven rotor types, generator matching, power curve, cut and print files.", "windlab_turbine", "wind"),
+		_designer("peltonlab", "Pelton wheels",
+			"Micro-hydro turbines round the standard cup: speed, power, strength checks.", "peltonlab_turbine", "waves"),
+		_designer("gantrylab", "CNC gantries",
+			"Printers, routers, lasers and plotters on V-slot, with a motion sim and BOM.", GantryLabBuilder.MODEL_ID, "cpu"),
+		_designer("tclab", "Tri-clamp assemblies",
+			"Sanitary fittings snapped into process runs: reactors, stills, kettles.", "tclab_biochar_reactor", "workflow"),
+		_designer("esplab", "ESP sensor boards",
+			"Pick a board, add sensors; it wires them and writes the ESPHome YAML.", "esplab_board", "cpu"),
+		_designer("earthship", "Earthships",
+			"Tyre-wall rooms sunk into the ground behind a sloped greenhouse; digs and berms the site.",
+			EarthshipBuilder.MODEL_ID, "house"),
+		_designer("intermodal", "Containers and pallets",
+			"Containers, pallets, IBC totes, drums and rack bays to place or pack into.", "cargo_container", "package"),
+		_designer("vehiclelab", "Living vehicles",
+			"Vans, buses, RVs, trucks and trailers people live in. Place and drive.", "vehiclelab_van", "truck"),
+		_designer("mud_building", "Mud buildings",
+			"Sketch a wall plan; the gantry prints it in mud.", "", "house"),
+	]
+	_entries["Designers"] = designers
+
 	var structs: Array = [
-		{
-			"kind": "building_designer",
-			"label": "Building designer…",
-			"detail": "A house from a footprint: walls, roof, doors, windows, porch and lights.",
-		},
-		{
-			"kind": "pallet_rack",
-			"label": "Pallet rack builder…",
-			"detail": "Parametric rack → place as a structure.",
-		},
-		{
-			"kind": "flatpack",
-			"label": "Flat-pack furniture designer…",
-			"detail": "Slotted plywood sofas, benches, stools, tables and chairs → CNC cut files.",
-		},
-		{
-			"kind": "intermodal",
-			"label": "Intermodal unit designer…",
-			"detail": "Containers, pallets, IBC totes, gaylords, drums, rack bays → place or pack into.",
-		},
-		{
-			"kind": "domelab",
-			"label": "Dome & zome designer…",
-			"detail": "Geodesic domes, zomes and helix zomes: conduit, hubs, flat bars, rotegrity, plates → BOM + cut files.",
-		},
-		{
-			"kind": "pvlab",
-			"label": "Solar designer…",
-			"detail": "Digital twins of your real panels (cells, size, frame, junction box, leads) on racks of 2x4s, Unistrut or rail, or a tracker; strings with live A / V / W.",
-		},
-		{
-			"kind": "toroidlab",
-			"label": "Toroid designer…",
-			"detail": "Bent-tube toroids on pipe fittings: rings, bracing and tension lines, a pleated correx canopy, a solar ring → cut list, bend templates, sheets.",
-		},
-		{
-			"kind": "windlab",
-			"label": "Wind turbine designer…",
-			"detail": "Ugrinsky, Savonius, Lenz2, Darrieus, helical, propeller and farm rotors — incl. one cut from a single 18 × 24 in lawn sign → power curve, start-up, gearing and motor matching, cut/score files, printable STLs.",
-		},
-		{
-			"kind": "tclab",
-			"label": "Tri-clamp designer…",
-			"detail": "Sanitary tri-clamp fittings by the standard sizes (ferrules, caps, spools, elbows, tees, crosses, reducers, NPT and barb adapters) snapped end to end into process runs, with gaskets, clamps, loop checks and a parts list → GLB, STL, BOM.",
-		},
-		{
-			"kind": "esplab",
-			"label": "ESP board designer (ESPHome)…",
-			"detail": "Pick an ESP32 / ESP8266 / Pico W board, add sensors, actuators and breakouts, and it wires them by protocol (I²C, SPI, UART, 1-Wire, analog, GPIO) with the board's pin rules → a wiring diagram and ready-to-flash ESPHome YAML.",
-		},
-		{
-			"kind": "csplab",
-			"label": "Solar concentrator designer…",
-			"detail": "Lenses (glass, ball, Fresnel, water) and mirrors (trough, dish, linear Fresnel, heliostat tower) → ray trace, suns, optical + thermal efficiency, tracking structure, a year of heat from the site's direct sunlight.",
-		},
-		{
-			"kind": "peltonlab",
-			"label": "Pelton wheel designer…",
-			"detail": "Micro-hydro Pelton turbines round the standard cup: cups, wheel size, hub and bolt pattern, housing, bearings, belt or gears, generator → speed, power, strength checks, cut files.",
-		},
-		{
-			"kind": "gantrylab",
-			"label": "CNC gantry designer…",
-			"detail": "Printers, routers, lasers, plotters on V-slot: CoreXY, delta, bed-slinger… → kinematics sim, G-code, BOM, firmware config.",
-		},
-		{
-			"kind": "linkage_lab",
-			"label": "Linkage Lab… (N)",
-			"detail": "Design folding scissor-linkage structures (StarShade designer).",
-		},
-		{
-			"kind": "mud_building",
-			"label": "Mud Building Designer…",
-			"detail": "Sketch wall plans → dual-perimeter mud print on the gantry.",
-		},
-		{
-			"kind": "starshade_place",
-			"label": "Place StarShade",
-			"detail": "Ghost-place the default StarShade canopy.",
-			"model_id": "starshade",
-		},
-		{
-			"kind": "structure",
-			"label": "Grow Bed",
-			"detail": "Procedural raised bed — also available under Graph → Grow Beds (Place).",
-			"model_id": GrowBed.MODEL_ID,
-		},
+		{"kind": "starshade_place", "label": "StarShade", "detail": "The folding solar canopy.",
+			"model_id": "starshade", "pic_model": "starshade", "verb": "Place"},
+		{"kind": "structure", "label": "Grow Bed", "detail": "A raised bed. Also under Graph nodes, Grow Beds.",
+			"model_id": GrowBed.MODEL_ID, "pic_model": GrowBed.MODEL_ID, "verb": "Place"},
 	]
 	var seen: Dictionary = {GrowBed.MODEL_ID: true, "starshade": true,
 		ModelCatalog.GENERIC_BOX_ID: true}
-	var vehicles: Array = [{
-		"kind": "vehiclelab",
-		"label": "Vehicle designer…",
-		"detail": "Vans, buses, RVs, trucks and trailers people live in: chassis + body, paint, roof fans, AC, solar, awning → place and drive.",
-	}]
+	var vehicles: Array = []
 	for m in ModelCatalog.listed_models():
 		var mid := str(m.get("id", ""))
 		if mid.is_empty() or seen.has(mid):
@@ -360,141 +329,263 @@ func _populate() -> void:
 		seen[mid] = true
 		var cat := str(m.get("category", ""))
 		if not PlacedVehicle.profile_for_model(mid).is_empty():
-			# Driveable: its own tab. Placed like any prop; Interact drives it.
 			vehicles.append({
 				"kind": "structure",
-				"label": str(m.get("label", mid)),
-				"detail": "Place it, then walk up and Interact to drive (X gets out). Click it to move or delete.",
-				"model_id": mid,
+				"label": str(m.get("label", mid)).trim_prefix("Living vehicle: "),
+				"detail": "Place it, walk up and Interact to drive (X gets out).",
+				"model_id": mid, "pic_model": mid, "icon": "truck", "verb": "Place",
 			})
 			continue
-		var prefix := ""
+		var group := "Structures"
 		if cat == "nature":
-			prefix = "Nature: "
+			group = "Nature"
 		elif str(m.get("source", "")) == "user" or mid.begins_with("user_"):
-			prefix = "User: "
-		elif cat != "structures":
-			prefix = "%s: " % cat.capitalize() if not cat.is_empty() else ""
+			group = "Your models"
+		elif cat != "structures" and not cat.is_empty():
+			group = cat.capitalize()
 		structs.append({
 			"kind": "structure",
-			"label": "%s%s" % [prefix, str(m.get("label", mid))],
-			"detail": "Place %s in the world (move/edit like other props)." % mid,
-			"model_id": mid,
+			"label": str(m.get("label", mid)),
+			"group": group,
+			"detail": "Place in the world; click it later to move or edit.",
+			"model_id": mid, "pic_model": mid, "verb": "Place",
 		})
 	_entries["Structures"] = structs
 	_entries["Vehicles"] = vehicles
-
-	_apply_filter()
-	_status.text = "Pick an item → Use selected (double-click). 3D-linked graph nodes also offer Place in world."
+	_status.text = ""
 
 
-func _graph_detail(preset: Dictionary) -> String:
+func _graph_detail(preset: Dictionary, category: String) -> String:
 	var specs: Dictionary = preset.get("specs", {}) as Dictionary
-	var bits: PackedStringArray = []
-	bits.append("type=%s" % str(preset.get("type", "?")))
-	var mid := str(specs.get("model_id", ""))
-	if not mid.is_empty():
-		bits.append("model=%s" % mid)
-	var name := str(specs.get("name", ""))
-	if not name.is_empty():
-		bits.append(name)
+	var bits: PackedStringArray = [category]
+	if not str(specs.get("model_id", "")).is_empty():
+		bits.append("has a 3D model")
 	return " · ".join(bits)
 
 
-func _apply_filter() -> void:
-	var q := ""
-	if _search != null:
-		q = _search.text.strip_edges().to_lower()
-	_filtered.clear()
-	for tab_name in _entries.keys():
-		var src: Array = _entries[tab_name] as Array
-		var out: Array = []
-		for it in src:
-			if not (it is Dictionary):
-				continue
-			var d: Dictionary = it
-			if q.is_empty() or _entry_matches(d, q):
-				out.append(d)
-		_filtered[tab_name] = out
-		var list: ItemList = _lists.get(tab_name) as ItemList
-		if list == null:
-			continue
-		list.clear()
-		for it2 in out:
-			list.add_item(str((it2 as Dictionary).get("label", "?")))
-	_refresh_action_buttons()
-
-
 func _entry_matches(e: Dictionary, q: String) -> bool:
-	for key in ["label", "detail", "model_id", "species", "kind"]:
+	for key in ["label", "detail", "model_id", "species", "kind", "group"]:
 		if q in str(e.get(key, "")).to_lower():
 			return true
 	var preset: Variant = e.get("preset", {})
 	if preset is Dictionary:
 		var p: Dictionary = preset
-		if q in str(p.get("label", "")).to_lower():
-			return true
 		if q in str(p.get("type", "")).to_lower():
 			return true
 		var specs: Dictionary = p.get("specs", {}) as Dictionary
 		if q in str(specs.get("name", "")).to_lower():
 			return true
-		if q in str(specs.get("model_id", "")).to_lower():
-			return true
 	return false
 
 
-func _current_tab_name() -> String:
-	if _tabs == null or _tabs.get_tab_count() <= 0:
-		return ""
-	return _tabs.get_tab_title(_tabs.current_tab)
+## One section while browsing; every section with a match while searching.
+func _show_sections() -> void:
+	var q := _search.text.strip_edges().to_lower() if _search != null else ""
+	var words := q.split(" ", false)
+	var shown := 0
+	for sec in SECTIONS:
+		var sid := str(sec["id"])
+		(_chips[sid] as Button).set_pressed_no_signal(q.is_empty() and sid == _section)
+		var want := sid == _section if q.is_empty() else true
+		if not want:
+			if _sections.has(sid):
+				((_sections[sid] as Dictionary)["box"] as Control).visible = false
+			continue
+		_ensure_section(sec)
+		var st: Dictionary = _sections[sid]
+		var n := 0
+		for card in st["cards"]:
+			var e: Dictionary = (card as Control).get_meta("entry")
+			var ok := true
+			for w in words:
+				if not _entry_matches(e, w):
+					ok = false
+					break
+			(card as Control).visible = ok
+			if ok:
+				n += 1
+		for g in st["groups"]:
+			var any := false
+			for c in ((g as Dictionary)["flow"] as Control).get_children():
+				any = any or (c as Control).visible
+			((g as Dictionary)["flow"] as Control).visible = any
+			if (g as Dictionary)["head"] != null:
+				((g as Dictionary)["head"] as Control).visible = any
+		(st["box"] as Control).visible = n > 0
+		shown += n
+	if _empty != null:
+		_empty.queue_free()
+		_empty = null
+	if shown == 0:
+		_empty = EmptyState.make("search", "Nothing in the library matches “%s”." % q if not q.is_empty()
+			else "Nothing here yet.")
+		_body.add_child(_empty)
+	if _scroll != null:
+		_scroll.scroll_vertical = 0
 
 
-func _selected_entry() -> Dictionary:
-	var tab_name := _current_tab_name()
-	var list: ItemList = _lists.get(tab_name) as ItemList
-	if list == null:
-		return {}
-	var sel := list.get_selected_items()
-	if sel.is_empty():
-		return {}
-	var items: Array = _filtered.get(tab_name, []) as Array
-	var idx: int = sel[0]
-	if idx < 0 or idx >= items.size():
-		return {}
-	return items[idx] as Dictionary
-
-
-func _refresh_action_buttons() -> void:
-	if _detail == null or _use_btn == null or _place_btn == null:
-		return  # tab_changed can fire mid-_build_ui before widgets exist
-	var e := _selected_entry()
-	if e.is_empty():
-		_detail.text = "Select an entry to see details."
-		_use_btn.disabled = true
-		_place_btn.visible = false
+func _ensure_section(sec: Dictionary) -> void:
+	var sid := str(sec["id"])
+	if _sections.has(sid):
 		return
-	_use_btn.disabled = false
-	_detail.text = str(e.get("detail", e.get("label", "")))
-	var can_place := _entry_can_place(e)
-	_place_btn.visible = can_place
-	if can_place and str(e.get("kind", "")) == "graph_preset":
-		_use_btn.text = "Add to graph"
-		_place_btn.text = "Place in world"
-	elif can_place:
-		_use_btn.text = "Place in world"
-		_place_btn.visible = false
+	var box := VBoxContainer.new()
+	box.name = "sec_%s" % sid.to_lower().replace(" ", "_")
+	box.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	_body.add_child(box)
+	box.add_child(SectionHeader.make(sid, str(sec["icon"]), str(sec["note"])))
+	var big := bool(sec["big"])
+	var groups: Array = []
+	var by_group: Dictionary = {}
+	var cards: Array = []
+	for e in (_entries.get(sid, []) as Array):
+		var gname := str((e as Dictionary).get("group", ""))
+		if not by_group.has(gname):
+			var head: Label = null
+			if not gname.is_empty():
+				head = Label.new()
+				head.text = gname
+				head.add_theme_color_override("font_color", C_TEXT_S)
+				head.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+				box.add_child(head)
+			var flow := HFlowContainer.new()
+			flow.add_theme_constant_override("h_separation", UITheme.SPACE_SM)
+			flow.add_theme_constant_override("v_separation", UITheme.SPACE_SM)
+			box.add_child(flow)
+			by_group[gname] = flow
+			groups.append({"head": head, "flow": flow})
+		var card := _make_card(e as Dictionary, big)
+		(by_group[gname] as Container).add_child(card)
+		cards.append(card)
+	_sections[sid] = {"box": box, "cards": cards, "groups": groups}
+
+
+func _picture(e: Dictionary, size: Vector2, icon_px: int) -> Control:
+	var holder := PanelContainer.new()
+	holder.custom_minimum_size = size
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(C_BG, 0.55)
+	sb.set_corner_radius_all(6)
+	holder.add_theme_stylebox_override("panel", sb)
+	var ico := TextureRect.new()
+	ico.texture = UiIcons.icon(str(e.get("icon", "box")), icon_px, 1.5)
+	ico.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	ico.modulate = Color(C_TEXT_S, 0.55)
+	ico.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_child(ico)
+	var mid := str(e.get("pic_model", ""))
+	if not mid.is_empty() and _thumbs != null:
+		var tr := TextureRect.new()
+		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		holder.add_child(tr)
+		# The icon stays under the picture until it lands (or if nothing draws).
+		tr.draw.connect(func() -> void: ico.visible = tr.texture == null)
+		var build := func() -> Node3D:
+			return ModelCatalog.instantiate(mid)
+		_thumbs.request("model:%s" % mid, build, tr)
+	return holder
+
+
+func _verb_button(text: String, primary: bool, cb: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(b)
+	if primary:
+		b.add_theme_color_override("font_color", C_PRIMARY)
+	b.pressed.connect(cb)
+	return b
+
+
+## A card: picture, name, one line, the verb. Double-click = the verb.
+func _make_card(e: Dictionary, big: bool) -> Control:
+	var card := PanelContainer.new()
+	card.name = "card_%s" % str(e.get("label", "")).to_lower().replace(" ", "_").validate_node_name()
+	card.set_meta("entry", e)
+	card.add_theme_stylebox_override("panel", UITheme.card_style())
+	card.custom_minimum_size.x = CARD_W if big else ROW_W
+	card.tooltip_text = str(e.get("detail", ""))
+	var title := Label.new()
+	title.text = str(e.get("label", "?"))
+	title.add_theme_color_override("font_color", C_TEXT)
+	title.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var detail := Label.new()
+	detail.text = str(e.get("detail", ""))
+	detail.add_theme_color_override("font_color", C_TEXT_S)
+	detail.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	detail.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var verbs := HBoxContainer.new()
+	verbs.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	var main_verb := _verb_button(str(e.get("verb", "Open")), true, func() -> void: _activate(e, false))
+	main_verb.name = "verb"
+	verbs.add_child(main_verb)
+	if str(e.get("kind", "")) == "graph_preset" and _entry_can_place(e):
+		var pb := _verb_button("Place", false, func() -> void: _activate(e, true))
+		pb.name = "place"
+		pb.tooltip_text = "Place it in the world; its node joins the graph"
+		verbs.add_child(pb)
+	if big:
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", UITheme.SPACE_XS)
+		card.add_child(col)
+		col.add_child(_picture(e, Vector2(CARD_W - 16.0, PIC_H), 44))
+		col.add_child(title)
+		detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		detail.custom_minimum_size = Vector2(CARD_W - 16.0, 50)
+		detail.max_lines_visible = 3
+		detail.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		col.add_child(detail)
+		col.add_child(verbs)
 	else:
-		_use_btn.text = "Use selected"
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", UITheme.SPACE_SM)
+		card.add_child(row)
+		row.add_child(_picture(e, Vector2(64, 44), 22))
+		var col2 := VBoxContainer.new()
+		col2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		col2.add_theme_constant_override("separation", 0)
+		row.add_child(col2)
+		col2.add_child(title)
+		detail.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		col2.add_child(detail)
+		verbs.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(verbs)
+	card.gui_input.connect(func(ev: InputEvent) -> void:
+		if ev is InputEventMouseButton and (ev as InputEventMouseButton).double_click \
+				and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+			_activate(e, false))
+	return card
+
+
+## Harness / tour: the card of an entry by its label ("" when not built).
+func card_for(label: String) -> Control:
+	for sid in _sections:
+		for card in (_sections[sid] as Dictionary)["cards"]:
+			if str(((card as Control).get_meta("entry") as Dictionary).get("label", "")) == label:
+				return card as Control
+	return null
+
+
+func section_shown() -> String:
+	return _section
+
+
+func card_count(section_id: String) -> int:
+	return ((_sections.get(section_id, {}) as Dictionary).get("cards", []) as Array).size()
 
 
 func _entry_can_place(e: Dictionary) -> bool:
 	var kind := str(e.get("kind", ""))
-	if kind in ["structure", "starshade_place", "pallet_rack", "flatpack", "intermodal", "domelab", "toroidlab", "gantrylab", "pvlab", "peltonlab", "windlab", "csplab", "tclab", "esplab", "building_designer", "vehiclelab"]:
+	if kind in ["structure", "starshade_place"]:
 		return true
 	if kind == "graph_preset":
 		# Any non-component graph preset can be placed (a bespoke GLB if it has
-		# one, else a gray-box placeholder — F).
+		# one, else a gray-box placeholder).
 		return not _preset_is_component(e.get("preset", {}) as Dictionary)
 	return false
 
@@ -507,23 +598,7 @@ func _preset_is_component(preset: Dictionary) -> bool:
 			or preset.has("def_id")
 
 
-func _activate_selected(force_place: bool) -> void:
-	var tab_name := _current_tab_name()
-	var list: ItemList = _lists.get(tab_name) as ItemList
-	if list == null:
-		return
-	var sel := list.get_selected_items()
-	if sel.is_empty():
-		_status.text = "Select an item first."
-		return
-	_activate_entry(tab_name, sel[0], force_place, false)
-
-
-func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_click: bool) -> void:
-	var items: Array = _filtered.get(tab_name, []) as Array
-	if idx < 0 or idx >= items.size():
-		return
-	var e: Dictionary = items[idx]
+func _activate(e: Dictionary, force_place: bool) -> void:
 	var kind := str(e.get("kind", ""))
 	match kind:
 		"building_library":
@@ -537,7 +612,7 @@ func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_
 			var preset: Dictionary = e.get("preset", {}) as Dictionary
 			# Place button, or double-click on any placeable preset (bespoke GLB
 			# or gray-box placeholder) → world placement.
-			if force_place or (from_double_click and _entry_can_place(e)):
+			if force_place:
 				_place_graph_preset(preset)
 			else:
 				_spawn_graph_preset(preset)
@@ -557,6 +632,11 @@ func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_
 				close()
 			else:
 				_status.text = "Pallet rack builder needs a location map (TerrainLoader)."
+		"earthship":
+			var esm: GDScript = load("res://scenes/ui/earthshiplab_modal.gd")
+			var etree: SceneTree = get_tree()
+			close()
+			esm.call("open", etree)
 		"intermodal":
 			var ims: GDScript = load("res://scenes/ui/intermodal_unit_modal.gd")
 			if ims != null:
@@ -613,6 +693,14 @@ func _activate_entry(tab_name: String, idx: int, force_place: bool, from_double_
 				main_esp.call("open_esplab", {})
 			else:
 				_status.text = "The ESP board designer needs a world."
+		"farmbotlab":
+			# Hosted by Main, so it opens on every map.
+			var main_fb := get_tree().current_scene if get_tree() != null else null
+			if main_fb != null and main_fb.has_method("open_farmbotlab"):
+				close()
+				main_fb.call("open_farmbotlab", {})
+			else:
+				_status.text = "The FarmBot designer needs a world."
 		"csplab":
 			# Hosted by Main, so it opens on every map (no location needed).
 			var main_cs := get_tree().current_scene if get_tree() != null else null

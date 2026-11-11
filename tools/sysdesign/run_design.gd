@@ -87,9 +87,9 @@ func run(main: Node, harness: Node) -> Dictionary:
 		await main.get_tree().process_frame
 		if y.progress() - last_print >= 0.1:
 			last_print = y.progress()
-			print("sysdesign: %3.0f %%  day %.0f  battery %.0f %%  (%.0f s)" % [y.progress() * 100.0,
-				(y.cursor - y.start_abs) / 24.0, 100.0 * y.soc / y.cap_kwh,
-				(Time.get_ticks_msec() - t_wall) / 1000.0])
+			print("sysdesign: %3.0f %%  day %.0f  battery %.0f %%  (%.0f s; people %.0f s, resources %.0f s, all steps %.0f s)" % [
+				y.progress() * 100.0, (y.cursor - y.start_abs) / 24.0, 100.0 * y.soc / y.cap_kwh,
+				(Time.get_ticks_msec() - t_wall) / 1000.0, y.t_pop_us / 1e6, y.t_flow_us / 1e6, y.t_misc_us / 1e6])
 	y.finish()
 	y.release()
 

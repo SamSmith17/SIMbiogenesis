@@ -40,6 +40,17 @@ const HABITAT_GREYWATER_YIELD := 0.80
 const HABITAT_BLACKWATER_YIELD := 0.20
 ## Food scraps / inedible fraction → biomass (~20% kitchen waste fraction).
 const HABITAT_FOOD_SCRAP_YIELD := 0.20
+## Urine per litre of water the habitat uses: 1.42 L a person a day (Rose
+## et al. 2015, Crit Rev Environ Sci Technol 45) of the ~50 L a day the
+## habitat preset bills.
+const HABITAT_URINE_YIELD := 0.0284
+## Share of that urine a urine-diverting (NoMix) toilet catches; field trials
+## report roughly 70–90 % (Larsen & Lienert 2007, Novaquatis final report).
+## The rest goes down with the flush into the brownwater.
+const HABITAT_URINE_DIVERSION := 0.8
+## A growing machine with `establish_days` draws this share of its inputs on
+## the day it is planted, rising with its yield (seedlings drink less).
+const ESTABLISH_DRAW_FLOOR := 0.25
 
 ## Power-availability override for selftests / diagnostics:
 ## -1 = auto (query AcPowerBus / SolarUI), 0 = force unpowered, 1 = force powered.
@@ -918,7 +929,22 @@ func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
 	var sun_f := PlantGrowthScript.sunlight_factor_from_specs(specs)
 	var lue := PlantGrowthScript.lue_from_specs(specs)
 	var month := _sim_month()
-	var potential := PlantGrowthScript.potential_biomass_kg_h(par, area, lue, month) * sun_f
+	var season := PlantGrowthScript.season_for_specs(specs)
+	var potential := PlantGrowthScript.potential_biomass_kg_h(par, area, lue, month, season) * sun_f
+	# A bed built from its kit is sown then and comes up over establish_days
+	# (the processor rule, establish_factor): nothing before it is planted.
+	var est := establish_factor(specs, abs_h)
+	if bool(specs.get("packed_3d", false)):
+		# Its bed is still a kit: nothing is planted yet.
+		est = -1.0
+	if est < 0.0:
+		specs["biomass_kg_h"] = 0.0
+		specs["display_value"] = "not planted"
+		_write_node_state(iid, specs, GraphNodeState.IDLE)
+		_model.update_item(iid, {"specs": specs})
+		return
+	if specs.has("establish_days"):
+		specs["established_pct"] = roundf(est * 100.0)
 
 	specs["irradiance_wm2"] = ghi
 	specs["par_wm2"] = par
@@ -1010,10 +1036,26 @@ func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
 		_model.update_item(iid, {"specs": specs})
 		return
 
-	var rate := PlantGrowthScript.biomass_kg_per_hour(
-			par, area, lue, month, water_factor, nutrient_factor, sun_f)
+	var grown := PlantGrowthScript.biomass_kg_per_hour(
+			par, area, lue, month, water_factor, nutrient_factor, sun_f, season) * est
+	var rate := grown
 	if out_kind == "food":
 		rate *= food_frac   # the edible share of what grew
+	# The rest of a food crop (stalks, leaves, vines, roots) goes to a biomass
+	# store on residue_out when one is wired (compost, the digester), else it
+	# is left on the bed.
+	var residue_id := ""
+	var residue_rate := 0.0
+	if out_kind == "food":
+		residue_id = _tank_at_port(iid, "residue_out", false)
+		if not residue_id.is_empty():
+			var rs: Dictionary = (_model.get_item(residue_id).get("specs", {}) as Dictionary).duplicate(true)
+			_rk.migrate_resource_specs(rs)
+			var rtl: ResourceTimeline = _timelines.get(residue_id) as ResourceTimeline
+			if ResourceKinds.normalize_kind(str(rs.get("resource_kind", ""))) == "biomass" 					and bool(rs.get("input_valve_open", true)) and _tank_accepts_inflow(rs, rtl, abs_h):
+				residue_rate = grown * (1.0 - food_frac)
+			else:
+				residue_id = ""
 	# Cap by remaining biomass headroom so we don't overflow.
 	if not _tank_is_unlimited(bio_specs) and dt_hours > 0.001:
 		var lvl: float = bio_tl.level_at(abs_h) if bio_tl != null else float(bio_specs.get("level", 0.0))
@@ -1028,12 +1070,19 @@ func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
 		_model.update_item(iid, {"specs": specs})
 		return
 
+	# A food crop drinks and feeds for the whole plant it grows, not only the
+	# share that is eaten (the rate is capped by the store's headroom above,
+	# so scale the whole plant by the same cap).
+	var whole := rate / food_frac if out_kind == "food" and food_frac > 0.0 else rate
 	var water_lph := PlantGrowthScript.water_demand_lph(
-			rate, PlantGrowthScript.water_l_per_kg_from_specs(specs))
+			whole, PlantGrowthScript.water_l_per_kg_from_specs(specs))
 	var nut_kgph := 0.0
 	if nutrients_wired:
 		nut_kgph = PlantGrowthScript.nutrient_demand_kgph(
-				rate, PlantGrowthScript.nutrient_kg_per_kg_from_specs(specs))
+				whole, PlantGrowthScript.nutrient_kg_per_kg_from_specs(specs))
+	if not residue_id.is_empty():
+		residue_rate = whole * (1.0 - food_frac)
+		net_rates[residue_id] = float(net_rates.get(residue_id, 0.0)) + residue_rate
 
 	# Apply rates
 	net_rates[water_id] = float(net_rates.get(water_id, 0.0)) - water_lph
@@ -1058,10 +1107,14 @@ func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
 			# Radiant wire is informational — animate at PAR×area (kW of PAR).
 			_cache_conn_flow(str(conn.get("id", "")), par * area / 1000.0, "sunlight")
 	for conn: Dictionary in (_resource_conns_by_source_item.get(iid, []) as Array):
-		_cache_conn_flow(str(conn.get("id", "")), rate, out_kind)
+		if str(conn.get("source_handle_id", conn.get("source_handle", ""))) == "residue_out":
+			_cache_conn_flow(str(conn.get("id", "")), residue_rate, "biomass")
+		else:
+			_cache_conn_flow(str(conn.get("id", "")), rate, out_kind)
 
 	specs["biomass_kg_h"] = rate
 	specs["food_kg_h"] = rate if out_kind == "food" else 0.0
+	specs["residue_kg_h"] = residue_rate
 	specs["water_lph"] = water_lph
 	specs["nutrient_kgph"] = nut_kgph
 	if rate >= 0.01:
@@ -2882,6 +2935,19 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 		_write_node_state(proc_id, specs, GraphNodeState.BLOCKED, block_reason, block_kinds)
 		return
 
+	# A growing machine (a greenhouse bed) planted at `planted_abs_h` yields
+	# nothing before then and comes up to full over `establish_days`.
+	var est := establish_factor(specs, abs_h)
+	if bool(specs.get("packed_3d", false)):
+		# Its bed is still a kit: nothing is planted yet.
+		est = -1.0
+	if est < 0.0:
+		specs["current_output_kw"] = 0.0
+		_write_node_state(proc_id, specs, GraphNodeState.IDLE)
+		return
+	_stamp_established(proc_id, specs, est)
+	var in_scale := 1.0 if est >= 1.0 else lerpf(ESTABLISH_DRAW_FLOOR, 1.0, est)
+
 	# RUNNING (switched on + powered + fed): move resources.
 	throughput *= efficiency
 	_stamp_cold_curve(proc_id, specs)
@@ -2922,6 +2988,7 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 			continue
 		var portion: float = (rate * throughput) if io_absolute \
 				else throughput * (rate / maxf(in_total, 0.001))
+		portion *= in_scale
 		var tank_id := _tank_at_port(str(item.get("id", "")), "res_in_%d" % i, true)
 		if tank_id.is_empty():
 			tank_id = _tank_at_port(str(item.get("id", "")), "input", true)
@@ -2941,6 +3008,7 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 			continue
 		var portion: float = (rate * throughput) if io_absolute \
 				else throughput * (rate / maxf(out_total, 0.001))
+		portion *= est
 		var tank_id := _tank_at_port(str(item.get("id", "")), "res_out_%d" % i, false)
 		if tank_id.is_empty():
 			tank_id = _tank_at_port(str(item.get("id", "")), "output", false)
@@ -2952,6 +3020,44 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 		if i == 0 and outputs.size() == 1:
 			for conn: Dictionary in _connections_from_handle(str(item.get("id", "")), "output"):
 				_cache_conn_flow(str(conn.get("id", "")), portion, str(outp.get("kind", "")))
+
+
+## How far a growing machine has come since it was planted: 1.0 when it has
+## no `establish_days` or no `planted_abs_h` (an established bed, every other
+## machine), the share of the establishment period gone by, or -1.0 before
+## the planting hour. A pure function of the clock, so it scrubs.
+static func establish_factor(specs: Dictionary, abs_h: float) -> float:
+	var days := float(specs.get("establish_days", 0.0))
+	if days <= 0.0 or not specs.has("planted_abs_h"):
+		return 1.0
+	var planted := float(specs.get("planted_abs_h", NAN))
+	if is_nan(planted):
+		return 1.0
+	if abs_h < planted:
+		return -1.0
+	return clampf((abs_h - planted) / (days * 24.0), 0.0, 1.0)
+
+
+## The share established, on the item for the card and the inspector
+## (written in whole percent steps, so it costs one write a few hours).
+func _stamp_established(proc_id: String, specs: Dictionary, est: float) -> void:
+	if float(specs.get("establish_days", 0.0)) <= 0.0:
+		return
+	var pct := roundi(est * 100.0)
+	# Gate on what THIS engine last wrote: the item dict the step loop hands
+	# in can be an older copy, and judging by it wrote every step.
+	specs["established_pct"] = pct
+	if int(_established_written.get(proc_id, -1)) == pct:
+		return
+	_established_written[proc_id] = pct
+	var live: Dictionary = (_model.get_item(proc_id).get("specs", {}) as Dictionary)
+	if int(live.get("established_pct", -1)) == pct:
+		return
+	live["established_pct"] = pct
+	_model.update_item(proc_id, {"specs": live})
+
+
+var _established_written: Dictionary = {}
 
 
 ## Batch-mode quantity for one I/O entry: prefers the explicit "value" field
@@ -3560,12 +3666,21 @@ func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 			food_consumed_kgph += rate
 
 	# Stoichiometric waste from actual consumption (mass-conserving yields).
+	var outputs: Array = specs.get("outputs", []) as Array
+	# A habitat with a urine output has urine-diverting toilets: the urine
+	# leaves through its own port and only the brownwater (faeces + flush)
+	# is blackwater. Same total, so the water balance does not move.
+	var urine_lph := 0.0
+	for o: Variant in outputs:
+		if ResourceKinds.normalize_kind(str((o as Dictionary).get("kind", ""))) == "urine":
+			urine_lph = water_consumed_lph * HABITAT_URINE_YIELD * HABITAT_URINE_DIVERSION
+			break
 	var waste_credits: Dictionary = {
 		"greywater": water_consumed_lph * HABITAT_GREYWATER_YIELD,
-		"blackwater": water_consumed_lph * HABITAT_BLACKWATER_YIELD,
+		"blackwater": maxf(water_consumed_lph * HABITAT_BLACKWATER_YIELD - urine_lph, 0.0),
+		"urine": urine_lph,
 		"biomass": food_consumed_kgph * HABITAT_FOOD_SCRAP_YIELD,
 	}
-	var outputs: Array = specs.get("outputs", []) as Array
 	for i: int in outputs.size():
 		var outp: Dictionary = outputs[i] as Dictionary
 		var kind: String = ResourceKinds.normalize_kind(str(outp.get("kind", "")))

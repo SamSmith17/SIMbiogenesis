@@ -223,22 +223,10 @@ func _rebuild_studio() -> void:
 func _fit_camera() -> void:
 	if _studio_view == null or _model_inst == null:
 		return
-	var aabb := AABB()
-	var found := false
-	for n in _model_inst.find_children("*", "MeshInstance3D", true, false):
-		var mi := n as MeshInstance3D
-		if mi == null or mi.mesh == null:
-			continue
-		var box := mi.global_transform * mi.mesh.get_aabb()
-		if not found:
-			aabb = box
-			found = true
-		else:
-			aabb = aabb.merge(box)
-	var center := aabb.get_center() if found else Vector3(0, 1, 0)
-	var msize := maxf(aabb.size.length(), 2.0) if found else 4.0
-	_studio_view.target = center
-	_studio_view.set_orbit(0.7, 0.3, clampf(msize * 1.1, 3.0, 200.0))
+	_studio_view.set_orbit(0.7, 0.3)
+	if not _studio_view.frame_subject(_model_inst):
+		_studio_view.target = Vector3(0, 1, 0)
+		_studio_view.set_orbit(0.7, 0.3, 4.0)
 
 
 func _populate_controls() -> void:

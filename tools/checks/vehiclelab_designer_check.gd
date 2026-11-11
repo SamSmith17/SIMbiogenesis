@@ -425,7 +425,7 @@ func _scroll_into_view(c: Control, tree: SceneTree) -> void:
 ## A vehicle-local point as a viewport position for a real click.
 func _screen(studio: StudioViewport, ui: Control, local: Vector3) -> Vector2:
 	var cpos: Vector2 = ui.call("studio_pos_of", local)
-	return studio.container.get_global_rect().position + cpos
+	return studio.screen_pos(cpos)
 
 
 func _in_count(ui: Control) -> int:

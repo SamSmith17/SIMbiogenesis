@@ -25,6 +25,18 @@ extends RefCounted
 
 const MARGIN := 24.0
 
+## FULL SCREEN (2026-11-08, the user's call: a modal blocks every other UI
+## anyway, so it may as well have the whole screen). A modal with a size
+## (`want` > 0 on both axes) fills the screen edge to edge, and its contents
+## are ZOOMED (Control.scale) by how much room the screen has over `want`, up
+## to `ZOOM_MAX` — a 900 × 640 form at 1080p draws its text 25 % larger in a
+## 1536 × 864 logical panel; a 1600 × 960 designer gets 1.125×. The zoom never
+## goes below 1 and never makes the panel's content minimum overflow the
+## screen. Kept as before: content-sized panels (a `want` axis of 0: small
+## dialogs) and panels that keep the timeline in view.
+const FULLSCREEN := true
+const ZOOM_MAX := 1.25
+
 
 ## The rectangle a modal may use: the visible canvas minus a margin on every
 ## side, and minus the timeline bar when `keep_timeline` or when the panel
@@ -73,9 +85,14 @@ static func fit(panel: Control, want: Vector2, margin: float = MARGIN,
 		keep_timeline: bool = false) -> void:
 	if panel == null or not panel.is_inside_tree():
 		return
-	var a := area(panel, margin, keep_timeline)
 	panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	panel.custom_minimum_size = Vector2.ZERO
+	if fills_screen(want, keep_timeline):
+		fill(panel, want)
+		return
+	panel.scale = Vector2.ONE
+	_apply_content_column(panel, 0.0)
+	var a := area(panel, margin, keep_timeline)
 	# A size of 0 on an axis = "as big as its content" (a content-sized panel).
 	var content := panel.get_combined_minimum_size()
 	var w := Vector2(want.x if want.x >= 1.0 else content.x, want.y if want.y >= 1.0 else content.y)
@@ -84,6 +101,98 @@ static func fit(panel: Control, want: Vector2, margin: float = MARGIN,
 	var s := panel.size
 	var pos := a.position + (a.size - s) * 0.5
 	panel.global_position = Vector2(maxf(pos.x, a.position.x), maxf(pos.y, a.position.y))
+
+
+## True when a modal of this `want` goes full screen (see FULLSCREEN).
+static func fills_screen(want: Vector2, keep_timeline: bool = false) -> bool:
+	return FULLSCREEN and not keep_timeline and want.x >= 1.0 and want.y >= 1.0
+
+
+## The zoom a full-screen modal of `want` gets on a screen area of `avail`
+## (and with `content` its minimum size, so the content still fits).
+## `min_logical` (a DesignerShell's fold thresholds): where the screen itself
+## is at least that big, the zoom stops short of shrinking the panel's logical
+## size below it. Without it a modal that wants less than 1600 x 900 was
+## zoomed 1.25x at 1080p, its logical width fell to 1536 and its left column
+## folded away on a screen with room for it.
+static func zoom_for(avail: Vector2, want: Vector2, content: Vector2 = Vector2.ZERO,
+		min_logical: Vector2 = Vector2.ZERO) -> float:
+	if avail.x <= 0.0 or avail.y <= 0.0:
+		return 1.0
+	var z := minf(avail.x / maxf(want.x, 1.0), avail.y / maxf(want.y, 1.0))
+	if content.x >= 1.0:
+		z = minf(z, avail.x / content.x)
+	if content.y >= 1.0:
+		z = minf(z, avail.y / content.y)
+	if min_logical.x >= 1.0 and avail.x >= min_logical.x:
+		z = minf(z, avail.x / min_logical.x)
+	if min_logical.y >= 1.0 and avail.y >= min_logical.y:
+		z = minf(z, avail.y / min_logical.y)
+	return clampf(z, 1.0, ZOOM_MAX)
+
+
+## A panel's `min_logical` (see zoom_for): meta "ui_fit_min_logical".
+static func min_logical_of(ci: CanvasItem) -> Vector2:
+	if ci != null and ci.has_meta("ui_fit_min_logical"):
+		return ci.get_meta("ui_fit_min_logical") as Vector2
+	return Vector2.ZERO
+
+
+## The logical size a full-screen modal of `want` lays out in (the screen
+## divided by its zoom). DesignerShell folds its left column on this.
+static func fill_logical_size(ci: CanvasItem, want: Vector2) -> Vector2:
+	var a := area(ci, 0.0)
+	return a.size / zoom_for(a.size, want, Vector2.ZERO, min_logical_of(ci))
+
+
+## Fill the screen with `panel` (anchored top-left), its contents zoomed.
+static func fill(panel: Control, want: Vector2) -> void:
+	var a := area(panel, 0.0)
+	panel.pivot_offset = Vector2.ZERO
+	panel.scale = Vector2.ONE
+	_apply_content_column(panel, 0.0)
+	var content := panel.get_combined_minimum_size()
+	var z := zoom_for(a.size, want, content, min_logical_of(panel))
+	panel.scale = Vector2(z, z)
+	panel.size = a.size / z
+	panel.global_position = a.position
+	_apply_content_column(panel, panel.size.x)
+
+
+## A full-screen DIALOG lays its content in a centred column instead of edge
+## to edge (a form stretched over 1900 px puts each label a metre from its
+## control). `max_w` is the column's width in the panel's own pixels; 0 = off.
+## Works on a PanelContainer: the side content margins of its "panel" style
+## grow to centre the column. Call before or after keep_fitted.
+static func set_content_column(panel: Control, max_w: float) -> void:
+	if panel == null:
+		return
+	panel.set_meta("ui_fit_content_max_w", max_w)
+	if panel.is_inside_tree() and panel.is_visible_in_tree() and panel.has_meta("ui_fit_want"):
+		_refit.call_deferred(panel)
+
+
+static func _apply_content_column(panel: Control, width: float) -> void:
+	if not (panel is PanelContainer) or not panel.has_meta("ui_fit_content_max_w"):
+		return
+	var max_w := float(panel.get_meta("ui_fit_content_max_w"))
+	var sb: StyleBox = null
+	if panel.has_meta("ui_fit_column_style"):
+		sb = panel.get_meta("ui_fit_column_style") as StyleBox
+	else:
+		var base := panel.get_theme_stylebox("panel")
+		if base == null:
+			return
+		sb = base.duplicate() as StyleBox
+		panel.set_meta("ui_fit_column_style", sb)
+		panel.set_meta("ui_fit_column_base", Vector2(base.content_margin_left, base.content_margin_right))
+		panel.add_theme_stylebox_override("panel", sb)
+	var base_m := panel.get_meta("ui_fit_column_base") as Vector2
+	var side := 0.0
+	if max_w >= 1.0 and width > max_w:
+		side = (width - max_w) * 0.5
+	sb.content_margin_left = maxf(base_m.x, side)
+	sb.content_margin_right = maxf(base_m.y, side)
 
 
 ## `fit` now and again whenever the window or the timeline changes size, or

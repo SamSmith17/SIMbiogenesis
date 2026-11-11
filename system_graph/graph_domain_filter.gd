@@ -36,7 +36,9 @@ const LABELS := {
 const KIND_DOMAIN := {
 	"electric": POWER, "dc_electricity": POWER,
 	"water": WATER, "greywater": WATER, "blackwater": WATER, "hot_water": WATER,
-	"stormwater": WATER,
+	"stormwater": WATER, "irrigation_water": WATER, "brine": WATER,
+	"urine": FOOD, "packaged_food": FOOD, "wood_vinegar": FOOD,
+	"tar": FUEL,
 	"food": FOOD, "meal": FOOD, "biomass": FOOD, "food_waste": FOOD, "manure": FOOD,
 	"nutrients": FOOD, "liquid_fertilizer": FOOD, "soil": FOOD, "biochar": FOOD,
 	"steam": FUEL, "woodgas": FUEL, "biogas": FUEL, "propane": FUEL, "thermal": FUEL,

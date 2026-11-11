@@ -45,6 +45,8 @@ func run() -> Dictionary:
 	entries.append({"id": "scad_store", "open": func() -> void: main.call("open_scad_store")})
 	entries.append({"id": "packing_lab", "open": func() -> void:
 		load("res://scenes/ui/packing_lab_modal.gd").call("open_site_cargo", get_tree())})
+	entries.append({"id": "earthshiplab", "open": func() -> void:
+		load("res://scenes/ui/earthshiplab_modal.gd").call("open", get_tree())})
 	entries.append({"id": "intermodal_units", "open": func() -> void:
 		load("res://scenes/ui/intermodal_unit_modal.gd").call("open", get_tree())})
 	entries.append({"id": "anim_editor", "open": func() -> void: main.call("open_npc_anim_editor", "")})
@@ -117,7 +119,7 @@ func run() -> Dictionary:
 		var shade := _first_prop(loader, ["starshade"])
 		if not shade.is_empty() and loader.has_method("open_starshade_editor"):
 			entries.append({"id": "starshade_edit", "open": func() -> void: loader.call("open_starshade_editor", shade)})
-	for d in [["peltonlab", "open_peltonlab"], ["windlab", "open_windlab"], ["tclab", "open_tclab"], ["esplab", "open_esplab"], ["ha_links", "open_ha_links"],
+	for d in [["peltonlab", "open_peltonlab"], ["windlab", "open_windlab"], ["tclab", "open_tclab"], ["esplab", "open_esplab"], ["csplab", "open_csplab"], ["farmbotlab", "open_farmbotlab"], ["ha_links", "open_ha_links"],
 			["ha_presets", "open_ha_presets"], ["compare", "open_compare_view"],
 			["linkage_guide", "open_linkage_build_guide"]]:
 		var fn := str(d[1])
@@ -140,6 +142,9 @@ func run() -> Dictionary:
 	if gv != null:
 		if gv.has_method("open_process_recipe_editor"):
 			entries.append({"id": "recipe_editor", "open": func() -> void: gv.call("open_process_recipe_editor", "", "")})
+		# Needs a mud printer on the graph (the opener says no without one).
+		if gv.has_method("open_mud_building_designer") and _has_mud_printer(gv):
+			entries.append({"id": "mud_designer", "open": func() -> void: gv.call("open_mud_building_designer", "")})
 		if gv.has_method("open_camps_panel"):
 			entries.append({"id": "camps_panel", "open": func() -> void: gv.call("open_camps_panel")})
 	if tl != null and tl.has_method("_on_export_clim_mp4_pressed"):
@@ -210,8 +215,11 @@ func _audit_one(e: Dictionary) -> void:
 		var fd: Dictionary = f
 		if fd.get("severity", "") == "error" and lines.size() < 6:
 			lines.append("%s %s %s" % [fd.get("kind", ""), str(fd.get("path", "")).get_file(), str(fd.get("rect", []))])
+	# How crowded it is (UiDensity): reported, and listed in modal_audit.json.
+	var dens := UiDensity.measure(get_tree().root)
 	_results[id] = {"errors": errs, "warnings": int(res.get("warnings", 0)), "opened_modal": opened,
-		"counts": res.get("counts", {}), "first": lines, "hud_up": Array(hud_up)}
+		"counts": res.get("counts", {}), "first": lines, "hud_up": Array(hud_up), "density": dens}
+	print("modaldensity %s: %s" % [id, UiDensity.summary_line(dens)])
 	print("modalaudit %s: %s%s%s" % [id, UiAudit.summary_line(res), "" if opened else " (no modal claim seen)",
 		"" if hud_up.is_empty() else " · hud up: " + ", ".join(hud_up)])
 	for l in lines:
@@ -284,8 +292,11 @@ func _walk_settings_pages() -> void:
 		if img != null:
 			img.save_png("%s/settings_%s.png" % [shots_dir, str(t).to_lower().replace(" ", "_").replace("&", "and")])
 		var errs := int(res.get("errors", 0))
-		_results[id] = {"errors": errs, "warnings": int(res.get("warnings", 0)), "counts": res.get("counts", {})}
+		var dens := UiDensity.measure(get_tree().root)
+		_results[id] = {"errors": errs, "warnings": int(res.get("warnings", 0)), "counts": res.get("counts", {}),
+			"density": dens}
 		print("modalaudit %s: %s" % [id, UiAudit.summary_line(res)])
+		print("modaldensity %s: %s" % [id, UiDensity.summary_line(dens)])
 		if strict and errs > 0:
 			print("modals FAIL %s: %d audit errors" % [id, errs])
 	if not start.is_empty():
@@ -327,6 +338,17 @@ func _first_prop(loader: Node, prefixes: Array) -> String:
 			if mid == str(pf) or mid.begins_with(str(pf)):
 				return str(rec.get("id", ""))
 	return ""
+
+
+func _has_mud_printer(gv: Node) -> bool:
+	var model: Variant = gv.get("model")
+	if model == null:
+		return false
+	for it in GraphNesting.walk_items(model, "root"):
+		var sp: Dictionary = (it as Dictionary).get("specs", {})
+		if str(sp.get("model_id", "")) == "mud_printer" or str(sp.get("machine_kind", "")) == "mud":
+			return true
+	return false
 
 
 func _first_item(gv: Node, role: String) -> String:

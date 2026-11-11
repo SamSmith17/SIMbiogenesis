@@ -53,7 +53,9 @@ var _ghost: MeshInstance3D
 var _markers: Node3D
 var _size_btns: Dictionary = {}
 var _tool_btns: Dictionary = {}
-var _design_list: ItemList
+var _design_list: DesignGallery
+var _col: DesignerColumn
+var _add_btn: Button
 var _card: VBoxContainer
 var _checks_box: VBoxContainer
 var _summary: Label
@@ -214,6 +216,10 @@ func set_run_mode(on: bool) -> void:
 	_drag = {}
 	_press = {}
 	_design_left.visible = not on
+	if _add_btn != null:
+		_add_btn.visible = not on
+		if on:
+			_shell.hide_flyout()
 	_design_right.visible = not on
 	_markers.visible = not on   # the open-end markers are for building
 	for k in _mode_btns.keys():
@@ -294,7 +300,12 @@ func _build_left() -> void:
 	_design_left.name = "design_left"
 	_design_left.add_theme_constant_override("separation", 4)
 	_shell.left.add_child(_design_left)
-	var box := _design_left
+	# Adding parts is a mode: the size chips and the palette open from the
+	# strip's "Add part" button; this column is the designs.
+	var palette := VBoxContainer.new()
+	palette.name = "palette"
+	palette.add_theme_constant_override("separation", 4)
+	var box := palette
 	box.add_child(SectionHeader.make("Clamp size", "ruler"))
 	var flow := HFlowContainer.new()
 	flow.add_theme_constant_override("h_separation", 3)
@@ -328,12 +339,14 @@ func _build_left() -> void:
 			b.pressed.connect(_on_tool_pressed.bind(t))
 			col.add_child(b)
 			_tool_btns[t] = b
+	_add_btn = _shell.add_flyout_button("add", "Add part", "plus", palette, {"search": true,
+		"placeholder": "Search parts (elbow, valve, 2 in…)", "close_on_pick": "tool_", "width": 300.0,
+		"tip": "Pick a clamp size and a part, then click an open end (or the floor)"})
+	box = _design_left
 	box.add_child(SectionHeader.make("Designs", "layout-grid"))
-	_design_list = ItemList.new()
+	_design_list = DesignGallery.make("tclab")
+	_design_list.set_thumbnailer(_thumb_for)
 	_design_list.name = "designs"
-	_design_list.auto_height = true
-	_design_list.custom_minimum_size = Vector2(0, 120)
-	_design_list.item_activated.connect(_on_design_picked)
 	_design_list.item_selected.connect(_on_design_picked)
 	box.add_child(_design_list)
 	var lib := HBoxContainer.new()
@@ -450,6 +463,7 @@ func _build_right() -> void:
 	_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_status.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 	box.add_child(_status)
+	_col = DesignerColumn.setup(box, "tclab", {"fold": ["In the world", "Summary", "Parts list"], "finder": false})
 
 
 # ---------------------------------------------------------------------------
@@ -1650,6 +1664,7 @@ func _refresh_world() -> void:
 
 
 func _refresh_summary() -> void:
+	_refresh_tiles()
 	_refresh_world()
 	var st: Dictionary = _design["stats"]
 	var bb: AABB = st["bounds_mm"]
@@ -1782,12 +1797,25 @@ func _input(e: InputEvent) -> void:
 # Designs, files
 # ---------------------------------------------------------------------------
 
+## One design's picture for the gallery: its key and how to build it.
+func _thumb_for(i: int) -> Dictionary:
+	if i < 0 or i >= _design_entries.size():
+		return {}
+	var e: Dictionary = _design_entries[i]
+	var spec: Dictionary = TcPresets.builtin(str(e["builtin"])) if e.has("builtin") else (e["spec"] as Dictionary).duplicate(true)
+	if spec.is_empty():
+		return {}
+	return {"key": TcSpec.key_of(spec), "build": func() -> Node3D:
+		return TcBuilder.build_node(spec, "Thumb")}
+
+
 func _refresh_design_list() -> void:
 	_design_list.clear()
 	_design_entries.clear()
 	for b in TcPresets.builtins():
 		_design_list.add_item(str(b["name"]))
 		_design_list.set_item_tooltip(_design_list.item_count - 1, str(b["blurb"]))
+		_design_list.set_item_subtitle(_design_list.item_count - 1, str(b["blurb"]))
 		_design_entries.append({"builtin": str(b["id"])})
 	for e in _library:
 		_design_list.add_item("★ " + str(e["name"]))
@@ -1898,3 +1926,24 @@ func _on_export() -> void:
 			ProjectSettings.globalize_path(str(out["dir"]))])
 	else:
 		_set_status("Export failed: %s" % str(out["error"]))
+
+
+## The headline numbers and what each folded section holds.
+func _refresh_tiles() -> void:
+	if _col == null or _design.is_empty():
+		return
+	var st: Dictionary = _design["stats"]
+	var bb: AABB = st["bounds_mm"]
+	var bom: Dictionary = _design["bom"]
+	var open_n := int(st["open_ports"])
+	_col.set_tiles([
+		{"caption": "Parts", "value": str(int(st["parts"])), "tip": "Fittings and vessels in the assembly"},
+		{"caption": "Clamp joints", "value": str(int(bom["clamps"])), "tip": "One clamp and one gasket each"},
+		{"caption": "Open ends", "value": str(open_n), "level": "" if open_n == 0 else "warn",
+			"tip": "Ends with nothing on them: cap them, or label what they carry"},
+		{"caption": "Weight", "value": "%.1f kg" % float(st["mass_kg"]), "tip": "Empty"},
+		{"caption": "Holds", "value": "%.1f L" % float(st["volume_l"]), "tip": "Bore volume of every part"},
+		{"caption": "Longest side", "value": "%.0f mm" % maxf(bb.size.x, maxf(bb.size.y, bb.size.z)),
+			"tip": "%.0f × %.0f × %.0f mm" % [bb.size.x, bb.size.y, bb.size.z]}])
+	_col.set_summary("Parts list", UiText.count(int(st["parts"]), "part"))
+	_col.set_summary("In the world", str(_spec.get("binds", "")) if not str(_spec.get("binds", "")).is_empty() else "just the assembly")

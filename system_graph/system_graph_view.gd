@@ -691,15 +691,41 @@ func _on_habitat_starved(item_id: String, kinds: Array) -> void:
 		SettlementLog.ALERT, item_id, {"title": "%s is out" % name, "detail": what})
 
 
+## Real-time gates for the "blocked" toast: a machine that flips between
+## running and blocked every step (its output store topping up) used to toast,
+## and play the toast sound, on every flip — thousands of times in a fast
+## run, which also slowed every flow step down as the run went on.
+const BLOCKED_TOAST_PER_ITEM_MS := 60000
+const BLOCKED_TOAST_ANY_MS := 5000
+var _blocked_toast_at: Dictionary = {}
+var _blocked_toast_last := -1000000
+
+
 func _on_processor_blocked(item_id: String, missing_kinds: Array) -> void:
-	var item := model.get_item(item_id) if model != null else {}
+	if model == null or not visible:
+		return
+	var now := Time.get_ticks_msec()
+	if now - _blocked_toast_last < BLOCKED_TOAST_ANY_MS \
+			or now - int(_blocked_toast_at.get(item_id, -1000000)) < BLOCKED_TOAST_PER_ITEM_MS:
+		return
+	_blocked_toast_at[item_id] = now
+	_blocked_toast_last = now
+	var item := model.get_item(item_id)
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	var p_name := str(specs.get("name", "Processor"))
 	var k_names: PackedStringArray = []
 	for k: Variant in missing_kinds:
 		k_names.append(ResourceKinds.display_name(str(k)))
 	var k_str := ", ".join(k_names)
-	_show_toast("⚠ %s blocked — waiting for %s" % [p_name, k_str])
+	match str(specs.get("node_state_reason", "")):
+		GraphNodeState.REASON_OUTPUT_FULL:
+			_show_toast("⚠ %s paused — the %s store is full" % [p_name, k_str])
+		GraphNodeState.REASON_OUTPUT_UNWIRED:
+			_show_toast("⚠ %s blocked — nothing takes its %s" % [p_name, k_str])
+		GraphNodeState.REASON_NO_POWER:
+			_show_toast("⚠ %s blocked — no power" % p_name)
+		_:
+			_show_toast("⚠ %s blocked — waiting for %s" % [p_name, k_str])
 
 
 func _sync_chore_ledger_to_flow() -> void:
@@ -4427,6 +4453,37 @@ func apply_csp_design(item_id: String, spec: Dictionary) -> void:
 	model.update_item(item_id, {"specs": specs})
 
 
+## Place a new FarmBot bed built to a design, with its food node.
+func place_designed_farmbot(spec: Dictionary) -> bool:
+	var preset := ComponentPresets.designed_farmbot_preset(spec)
+	if preset.is_empty():
+		return false
+	# The bed is sown when it is placed: it comes up over its establishment.
+	var main := get_tree().current_scene if get_tree() != null else null
+	if main != null and main.has_method("get_absolute_hours"):
+		(preset["specs"] as Dictionary)["planted_abs_h"] = float(main.call("get_absolute_hours"))
+	_on_lib_place_model_requested(preset)
+	return true
+
+
+## Write a FarmBot design onto its placed bed's graph node (area, price, name).
+func apply_farmbot_design(item_id: String, spec: Dictionary) -> void:
+	if model == null:
+		return
+	var item := model.get_item(item_id)
+	if item.is_empty():
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var d := FarmBotDesign.solve(spec)
+	var gs := FarmBotDesign.graph_specs(d)
+	for k in gs:
+		specs[k] = gs[k]
+	specs["farmbot_spec"] = FarmBotSpec.to_json_safe(d["spec"])
+	specs["cost"] = FarmBotSpec.kit_price_usd(d["spec"])
+	specs["name"] = str(spec.get("name", specs.get("name", "")))
+	model.update_item(item_id, {"specs": specs})
+
+
 ## Place a new turbine built to a design, with its graph node.
 func place_designed_wind(spec: Dictionary) -> bool:
 	var preset := ComponentPresets.designed_wind_preset(spec)
@@ -6227,7 +6284,7 @@ func _on_lib_place_model_requested(preset: Dictionary, existing_item_id: String 
 	}
 	if kind == "grow_bed":
 		record_extra["plant_abs_h"] = plant_abs_h
-		record_extra["grow_bed_spec"] = {"plant_abs_h": plant_abs_h}
+		record_extra["grow_bed_spec"] = GrowBed.spec_for_plant(specs, plant_abs_h)
 	if kind == "csp_trough":
 		record_extra["csp_specs"] = specs
 		record_extra["csp_base_node"] = str(specs.get("csp_base_node", "Component#452"))
@@ -6257,6 +6314,13 @@ func _on_lib_place_model_requested(preset: Dictionary, existing_item_id: String 
 		# (WindLabRuntime) spins it, not the GLB turbines' spin / tracker.
 		record_extra["kind"] = "windlab"
 		record_extra["windlab_spec"] = WindLabSpec.to_json_safe(specs.get("windlab_spec", {}) as Dictionary)
+	if model_id == FarmBotBuilder.MODEL_ID:
+		# A FarmBot bed carries its design and the hour it was planted (its
+		# crops and the robot's days count from it).
+		record_extra["kind"] = "farmbot"
+		record_extra["farmbot_spec"] = FarmBotSpec.to_json_safe(specs.get("farmbot_spec", {}) as Dictionary)
+		if main.has_method("get_absolute_hours"):
+			record_extra["plant_abs_h"] = float(main.call("get_absolute_hours"))
 	if model_id == CspLabBuilder.MODEL_ID:
 		# A designed concentrator carries its design; CspLabRuntime turns it
 		# to the sun.
@@ -7557,8 +7621,17 @@ func set_item_packed_3d(item_id: String, packed: bool) -> bool:
 		return true
 	if packed:
 		specs["packed_3d"] = true
+		# A growing machine packed up loses its crop: it is planted again
+		# when it is next built.
+		if float(specs.get("establish_days", 0.0)) > 0.0:
+			specs.erase("planted_abs_h")
+			specs.erase("established_pct")
 	else:
 		specs.erase("packed_3d")
+		if float(specs.get("establish_days", 0.0)) > 0.0 and not specs.has("planted_abs_h"):
+			var mn: Node = _get_scene_main_node()
+			if mn != null and mn.has_method("get_absolute_hours"):
+				specs["planted_abs_h"] = float(mn.call("get_absolute_hours"))
 	model.update_item(item_id, {"specs": specs})
 	GraphSolarArrays.propagate_state(model, item_id)
 	_sync_solar_ui_from_graph()
@@ -7892,6 +7965,78 @@ func _auto_wire_imported_array(array_id: String) -> void:
 		return
 	_apply_array_controller_choice(array_id, str(choice.get("id", "")),
 			int(choice.get("preset_idx", -1)))
+
+## A placed structure's roof water: a rain catchment of its roof area wired
+## into a cistern (both bound to the prop, so deleting the prop removes them).
+## Idempotent per prop; a re-sync keeps the cistern's level and its canvas
+## spot. `cistern_l` 0 = the catchment alone (wire it yourself).
+## Returns the cistern's id ("" without one).
+func sync_structure_water(prop_id: String, label: String, roof_m2: float,
+		cistern_l: float, world_xz: Vector2) -> String:
+	if model == null or prop_id.is_empty():
+		return ""
+	var tag := "struct_roof_%s" % prop_id
+	var old_catch := {}
+	var old_tank := {}
+	for it: Dictionary in model.items:
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		if str(sp.get("structure_water", "")) != tag:
+			continue
+		if str(it.get("type", "")) == "catchment":
+			old_catch = it
+		elif str(it.get("type", "")) == "resource":
+			old_tank = it
+	var soi := get_node_or_null("/root/SoiService")
+	var site := Vector2.ZERO
+	if soi != null and soi.has_method("world_center"):
+		site = GraphSiteLayout.world_xz_to_site(world_xz, soi.call("world_center") as Vector3)
+	var spot := Vector2(float(old_catch.get("x", 0.0)), float(old_catch.get("y", 0.0)))
+	if old_catch.is_empty():
+		spot = _free_system_card_pos(site, Vector2(270.0, 110.0))
+	var cx := spot.x
+	var cy := spot.y
+	var level := float((old_tank.get("specs", {}) as Dictionary).get("level", 0.25)) if not old_tank.is_empty() else 0.25
+	var was_suppress := _history_suppress
+	_history_suppress = true
+	if not old_catch.is_empty():
+		model.remove_item(str(old_catch["id"]))
+	if not old_tank.is_empty():
+		model.remove_item(str(old_tank["id"]))
+	var catch_id := model.generate_item_id()
+	model.add_item({
+		"id": catch_id, "type": "catchment",
+		"x": cx, "y": cy, "width": 110.0, "height": 90.0, "scope_id": "root",
+		"site_x_m": site.x, "site_z_m": site.y,
+		"specs": {"name": "%s roof" % label, "catchment_kind": "rain", "use_soi_area": false,
+			"area_m2": maxf(roof_m2, 1.0), "runoff_coeff": 0.85, "cost": 0.0,
+			"structure_water": tag, "bound_prop_id": prop_id},
+		"is_virtual": false,
+	})
+	var tank_id := ""
+	if cistern_l > 1.0:
+		tank_id = model.generate_item_id()
+		model.add_item({
+			"id": tank_id, "type": "resource",
+			"x": cx + 150.0, "y": cy, "width": 90.0, "height": 100.0, "scope_id": "root",
+			"site_x_m": site.x + 2.0, "site_z_m": site.y,
+			"specs": {"name": "%s cistern" % label, "resource_kind": "water",
+				"capacity": "%.0f L" % cistern_l, "capacity_qty": cistern_l, "capacity_unit": "L",
+				"level": clampf(level, 0.0, 1.0), "cost": 0.0,
+				"structure_water": tag, "bound_prop_id": prop_id},
+			"is_virtual": false,
+		})
+		model.add_connection({
+			"scope_id": "root", "polarity": "resource", "resource_type": "water",
+			"source_item_id": catch_id, "source_handle_id": "output",
+			"target_item_id": tank_id, "target_handle_id": "input",
+			"waypoints": [], "line_style": "bezier", "curve_tension": 1.0, "corner_radius": 28.0,
+		})
+	_history_suppress = was_suppress
+	_schedule_graph_autosave()
+	if _graph_canvas != null:
+		_graph_canvas.call("queue_redraw")
+	return tank_id
+
 
 ## Import an OSM roof as a rain catchment. Idempotent per `osm_tag`.
 func add_imported_catchment(payload: Dictionary) -> bool:

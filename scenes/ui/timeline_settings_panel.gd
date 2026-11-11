@@ -18,6 +18,13 @@ const C_TEXT_S := UITheme.C_TEXT_S
 ## Wanted modal size; UiFit shrinks it to the area above the timeline.
 const PANEL_DESIRED_SIZE := Vector2(1180.0, 880.0)
 const NAV_WIDTH := 220.0
+## Width of a page's column of rows, and the caps of its controls.
+const PAGE_COL_W := 760.0
+const ROW_LABEL_W := 200.0
+const SLIDER_W := 300.0
+const OPTION_W := 320.0
+## A page with this many sections opens on its first one, the rest folded.
+const FOLD_FROM_SECTIONS := 4
 const PREFS_PATH := "user://ui_prefs.cfg"
 
 ## The pages the LAUNCH HUB shows (`hub_mode`, no world running): every one
@@ -234,6 +241,7 @@ func _layout_center_panel() -> void:
 		return
 	# The HUD claim is made by open()/close() under its own owner id.
 	UiFit.keep_fitted(_center_panel, PANEL_DESIRED_SIZE, UiFit.MARGIN, false)
+	UiFit.set_content_column(_center_panel, 1100.0)  # full screen: a centred column, not edge to edge
 	_center_panel.set_meta("ui_modal", true)  # UiAudit.MODAL_META (the HUD claim is made by hand below)
 
 
@@ -260,6 +268,7 @@ func open() -> void:
 	_refresh_extreme_weather_tab()
 	_refresh_window_wall_tab()
 	_request_center_layout()
+	_snapshot_rows.call_deferred()
 	if _tabs != null and _nav_search != null and _nav_search.text.is_empty():
 		var last := _load_last_page()
 		if not last.is_empty():
@@ -464,6 +473,7 @@ func _build_ui() -> void:
 		_build_location_tab(tabs)
 		_build_live_tab(tabs)
 		_build_keys_tab(tabs)
+	_tame_pages()
 	_populate_nav()
 	tabs.tab_changed.connect(_on_page_changed)
 	_on_page_changed(tabs.current_tab)
@@ -720,7 +730,9 @@ func _reveal_match(words: PackedStringArray) -> void:
 	var hit := _first_match(page, words)
 	if hit == null:
 		return
-	(page as ScrollContainer).ensure_control_visible(hit)
+	await reveal_control(hit)
+	if not is_instance_valid(hit):
+		return
 	hit.modulate = Color(1.6, 1.4, 0.7)
 	var tw := hit.create_tween()
 	tw.tween_property(hit, "modulate", Color.WHITE, 0.9)
@@ -732,7 +744,7 @@ func _first_match(n: Node, words: PackedStringArray) -> Control:
 		txt = (n as Label).text
 	elif n is Button:
 		txt = (n as Button).text
-	if not txt.is_empty() and (n as Control).is_visible_in_tree():
+	if not txt.is_empty() and _shown_ignoring_folds(n as Control):
 		var low := txt.to_lower()
 		var ok := true
 		for w in words:
@@ -782,6 +794,10 @@ func _make_tab(tabs: TabContainer, title: String) -> VBoxContainer:
 	vbox.add_theme_constant_override("separation", 8)
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	m.add_child(vbox)
+	# A reading column: controls stop at PAGE_COL_W instead of stretching
+	# across a full-screen panel.
+	scroll.resized.connect(func() -> void:
+		m.add_theme_constant_override("margin_right", int(maxf(16.0, scroll.size.x - PAGE_COL_W - 16.0))))
 	return vbox
 
 
@@ -1474,30 +1490,21 @@ func _add_key_row(parent: Control, label_text: String, placeholder: String,
 
 func _build_gameplay_tab(tabs: TabContainer) -> void:
 	var v := _make_tab(tabs, "Gameplay")
+	_add_section_lbl(v, "Simulation rules")
 	_survival        = _add_check(v, "Survival mechanics active", _on_survival)
 	_survival_status = _add_status_label(v, "")
-	var survival_hint := Label.new()
-	survival_hint.text = "Random fires and survival rules run only while time is at or below realtime speed."
-	survival_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	survival_hint.custom_minimum_size = Vector2(420, 0)
-	survival_hint.add_theme_color_override("font_color", C_TEXT_S)
-	survival_hint.add_theme_font_size_override("font_size", 10)
-	v.add_child(survival_hint)
+	_add_hint(v, "Random fires and survival rules run only while time is at or below realtime speed.")
 	_plant_growth    = _add_check(v, "Plant growth (vegetation aging)", _on_plant_growth)
+	_add_hint(v, "Trees grow year on year with the calendar and live out a life cycle. Off = every plant draws at full size.")
 	_connector_losses = _add_check(v, "Connector losses (wire/pipe loss + burnout)", _on_connector_losses)
-	var loss_hint := Label.new()
-	loss_hint.text = "Simulates I²R voltage-drop losses in wires/cords and friction losses in hoses/pipes based on their routed 3D length. Sustained overload can burn out a connector."
-	loss_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	loss_hint.custom_minimum_size = Vector2(520, 0)
-	loss_hint.add_theme_color_override("font_color", C_TEXT_S)
-	loss_hint.add_theme_font_size_override("font_size", 10)
-	v.add_child(loss_hint)
-	_conduits_3d_visible = _add_check(v, "Show 3D wires (world)", _on_conduits_3d_visible)
-	_conduit_flow_glow = _add_check(v, "Flow glow on 3D wires", _on_conduit_flow_glow)
+	_add_hint(v, "Simulates I²R voltage-drop losses in wires/cords and friction losses in hoses/pipes based on their routed 3D length. Sustained overload can burn out a connector.")
 	var lights_chk := _add_check(v, "New lights join the graph as loads", func(on: bool) -> void:
 		PlacedLightService.set_lights_join_graph(on))
 	lights_chk.set_pressed_no_signal(PlacedLightService.lights_join_graph())
 	lights_chk.tooltip_text = "A light placed in the Light Studio (J) becomes an AC load on the graph when the site has a controller or battery; off, it is lit for free until you add it yourself."
+	_add_section_lbl(v, "3D wires in the world")
+	_conduits_3d_visible = _add_check(v, "Show 3D wires (world)", _on_conduits_3d_visible)
+	_conduit_flow_glow = _add_check(v, "Flow glow on 3D wires", _on_conduit_flow_glow)
 	var len_chk := _add_check(v, "Show run lengths on 3D wires", func(on: bool) -> void:
 		RunLengthLabels.set_enabled(on)
 		var mn := SimSettingsController.main_node if is_instance_valid(SimSettingsController) else null
@@ -1520,23 +1527,11 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	reset_routes.focus_mode = Control.FOCUS_NONE
 	reset_routes.pressed.connect(_on_reset_all_autoroutes)
 	v.add_child(reset_routes)
-	_force_rainbow = _add_check(v, "Force rainbow (debug)", _on_force_rainbow)
-	var rainbow_hint := Label.new()
-	rainbow_hint.text = "Shows the antisolar rainbow regardless of rain, for testing. It still only appears when the sun is low (below ~44°) and you look opposite the sun, low above the horizon."
-	rainbow_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	rainbow_hint.custom_minimum_size = Vector2(520, 0)
-	rainbow_hint.add_theme_color_override("font_color", C_TEXT_S)
-	rainbow_hint.add_theme_font_size_override("font_size", 10)
-	v.add_child(rainbow_hint)
-	var growth_hint := Label.new()
-	growth_hint.text = "Trees grow year on year with the calendar and live out a life cycle. Off = every plant draws at full size."
-	growth_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	growth_hint.custom_minimum_size = Vector2(520, 0)
-	growth_hint.add_theme_color_override("font_color", C_TEXT_S)
-	growth_hint.add_theme_font_size_override("font_size", 10)
-	v.add_child(growth_hint)
-	v.add_child(HSeparator.new())
-	_add_section_lbl(v, "UI sounds")
+
+
+## Sound: on the Interface page (it used to sit in the middle of Gameplay).
+func _build_sound_section(v: VBoxContainer) -> void:
+	_add_section_lbl(v, "Sound")
 	# Backend lives on the UiSound autoload (mute + volume already persist to
 	# user://audio_prefs.cfg) — this is just the missing control surface.
 	# Resolve by path, never bare identifier (CLAUDE.md autoload trap).
@@ -1565,8 +1560,11 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	sfx_hint.add_theme_color_override("font_color", C_TEXT_S)
 	sfx_hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(sfx_hint)
-	v.add_child(HSeparator.new())
-	_add_section_lbl(v, "∞ / Analemma")
+
+
+## Sun, moon and planet paths: on the Stars & Planets page.
+func _build_sky_paths_section(v: VBoxContainer) -> void:
+	_add_section_lbl(v, "Sky paths (∞ analemma)")
 	_analemma_type = OptionButton.new()
 	_analemma_type.add_item("Solar Analemma (Mean Solar Noon)", 0)
 	_analemma_type.add_item("Lunar Analemma (Mean Lunar Noon)", 1)
@@ -1596,6 +1594,13 @@ func _build_gameplay_tab(tabs: TabContainer) -> void:
 	_analemma_thickness = _add_slider(v, "Path thickness", 0.1, 20.0, 0.1, _on_analemma_thickness)
 	_analemma_solar_col = _add_color_picker(v, "Solar path color", _on_analemma_solar_col)
 	_analemma_lunar_col = _add_color_picker(v, "Lunar path color", _on_analemma_lunar_col)
+
+
+## Testing switches: at the end of the Environment page.
+func _build_sky_debug_section(v: VBoxContainer) -> void:
+	_add_section_lbl(v, "Testing")
+	_force_rainbow = _add_check(v, "Force rainbow (debug)", _on_force_rainbow)
+	_add_hint(v, "Shows the antisolar rainbow regardless of rain, for testing. It still only appears when the sun is low (below ~44°) and you look opposite the sun, low above the horizon.")
 
 
 ## Interface: the UI scale (UiThemeBuilder). Auto boosts small windows, where
@@ -1639,6 +1644,8 @@ func _build_interface_tab(tabs: TabContainer) -> void:
 	hint.add_theme_color_override("font_color", C_TEXT_S)
 	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	v.add_child(hint)
+	_build_sound_section(v)
+
 
 
 func _build_drone_tab(tabs: TabContainer) -> void:
@@ -1709,6 +1716,8 @@ func _build_environment_tab(tabs: TabContainer) -> void:
 	hint2.add_theme_color_override("font_color", C_TEXT_S)
 	hint2.add_theme_font_size_override("font_size", 10)
 	v.add_child(hint2)
+	_build_sky_debug_section(v)
+
 
 
 ## Settings → Environment → Horizon + Atmospheric haze. Every control is a Main
@@ -2026,6 +2035,9 @@ func _build_stars_planets_tab(tabs: TabContainer) -> void:
 		["jupiter", "Jupiter"], ["saturn", "Saturn"],
 	]:
 		_build_planet_section(v, spec[0], spec[1])
+	if not hub_mode:
+		_build_sky_paths_section(v)
+
 
 
 func _build_location_tab(tabs: TabContainer) -> void:
@@ -2070,11 +2082,16 @@ func _build_live_tab(tabs: TabContainer) -> void:
 func _add_section_lbl(parent: Control, text: String) -> void:
 	# "Title  (aside)" puts the aside in the header's right-hand note.
 	var cut := text.find("  (")
+	var h: SectionHeader
 	if cut > 0 and text.ends_with(")"):
-		parent.add_child(SectionHeader.make(text.substr(0, cut), "",
-			text.substr(cut + 3, text.length() - cut - 4)))
+		h = SectionHeader.make(text.substr(0, cut), "",
+			text.substr(cut + 3, text.length() - cut - 4))
+		h.set_meta("title", text.substr(0, cut))
+		h.set_meta("note", text.substr(cut + 3, text.length() - cut - 4))
 	else:
-		parent.add_child(SectionHeader.make(text))
+		h = SectionHeader.make(text)
+		h.set_meta("title", text)
+	parent.add_child(h)
 
 
 func _add_slider(parent: Control, label: String, min_v: float, max_v: float,
@@ -2083,14 +2100,14 @@ func _add_slider(parent: Control, label: String, min_v: float, max_v: float,
 	row.add_theme_constant_override("separation", 8)
 	var hdr := Label.new()
 	hdr.text = label
-	hdr.custom_minimum_size = Vector2(110, 0)
-	hdr.add_theme_color_override("font_color", C_TEXT_S)
+	_row_label(hdr)
 	row.add_child(hdr)
 	var sl := HSlider.new()
 	sl.min_value = min_v
 	sl.max_value = max_v
 	sl.step = step
-	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sl.custom_minimum_size.x = SLIDER_W
+	sl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var val_spin := SpinBox.new()
 	val_spin.custom_minimum_size = Vector2(70, 0)
 	val_spin.min_value = min_v
@@ -2112,8 +2129,181 @@ func _add_slider(parent: Control, label: String, min_v: float, max_v: float,
 	val_spin.value = sl.value
 	
 	row.add_child(sl)
+	var back := _revert_button(func() -> void: sl.value = float(sl.get_meta("opened_at", sl.value)))
+	row.add_child(back)
+	sl.value_changed.connect(func(v: float) -> void:
+		back.visible = sl.has_meta("opened_at") and not is_equal_approx(v, float(sl.get_meta("opened_at"))))
+	_revert_rows.append([sl, back])
 	parent.add_child(row)
 	return sl
+
+
+## Rows that can go back to the value they had when Settings opened:
+## [control, its ↺ button]. The button shows only while the row differs.
+var _revert_rows: Array = []
+
+
+func _revert_button(cb: Callable) -> Button:
+	var b := IconButton.make("rotate-ccw", "Changed. Click to put back the value it had when you opened Settings", cb)
+	b.name = "revert"
+	b.visible = false
+	b.modulate = UITheme.C_WARN
+	return b
+
+
+## Called when Settings opens (after the controls took the live values).
+func _snapshot_rows() -> void:
+	for pair in _revert_rows:
+		var c: Control = pair[0]
+		if not is_instance_valid(c):
+			continue
+		if c is HSlider:
+			c.set_meta("opened_at", (c as HSlider).value)
+		elif c is OptionButton:
+			c.set_meta("opened_at", (c as OptionButton).selected)
+		(pair[1] as Button).visible = false
+
+
+## How many rows differ from when Settings opened (harness).
+func changed_row_count() -> int:
+	var n := 0
+	for pair in _revert_rows:
+		if is_instance_valid(pair[1]) and (pair[1] as Button).visible:
+			n += 1
+	return n
+
+
+## Opens every folded section above `c` and scrolls its page to it.
+func reveal_control(c: Control) -> void:
+	if c == null:
+		return
+	var p: Node = c.get_parent()
+	var scroll: ScrollContainer = null
+	while p != null and p != _tabs:
+		if p is FoldableContainer:
+			(p as FoldableContainer).folded = false
+		if p is ScrollContainer and scroll == null:
+			scroll = p as ScrollContainer
+		p = p.get_parent()
+	if scroll != null:
+		await get_tree().process_frame
+		await get_tree().process_frame
+		if is_instance_valid(c):
+			scroll.ensure_control_visible(c)
+
+
+## Shown, if the folds above it were open.
+func _shown_ignoring_folds(c: Control) -> bool:
+	var p: Node = c
+	while p != null and p != _tabs:
+		if p is CanvasItem and not (p as CanvasItem).visible and not (p.get_parent() is TabContainer):
+			return false
+		p = p.get_parent()
+	return true
+
+
+## A long page shows its first section; the others fold (remembered per
+## section). Titles and their asides come from the headers.
+func _fold_long_pages() -> void:
+	for i in _tabs.get_tab_count():
+		var page := _tabs.get_tab_control(i)
+		var box: Node = null
+		for hv in page.find_children("*", "SectionHeader", true, false):
+			box = (hv as Node).get_parent()
+			break
+		if box == null:
+			continue
+		var heads: Array = []
+		for c in box.get_children():
+			if c is SectionHeader:
+				heads.append(c)
+		if heads.size() < FOLD_FROM_SECTIONS:
+			continue
+		var page_id := str(page.name).to_lower().replace(" ", "_").replace("&", "and")
+		for k in heads.size():
+			var h := heads[k] as SectionHeader
+			var title := str(h.get_meta("title", h._label.text.capitalize() if h._label != null else "Section"))
+			var sec := Collapsible.make(title, k == 0)
+			var moved: Array = []
+			var kids := box.get_children()
+			for j in range(h.get_index() + 1, kids.size()):
+				var n: Node = kids[j]
+				if n is SectionHeader or n is FoldableContainer:
+					break
+				moved.append(n)
+			box.add_child(sec)
+			box.move_child(sec, h.get_index())
+			for n in moved:
+				box.remove_child(n)
+				if n is HSeparator:
+					n.queue_free()   # the fold's own title row separates
+				else:
+					sec.body.add_child(n)
+			if h.has_meta("note"):
+				sec.set_summary(str(h.get_meta("note")))
+			box.remove_child(h)
+			h.queue_free()
+			sec.persist("settings", "%s/%s" % [page_id, DesignerColumn._slug(title.to_lower())])
+
+
+## A row's label: one fixed column, cut with an ellipsis (the whole text on hover).
+func _row_label(hdr: Label) -> void:
+	hdr.custom_minimum_size = Vector2(ROW_LABEL_W, 0)
+	hdr.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	hdr.tooltip_text = hdr.text
+	hdr.mouse_filter = Control.MOUSE_FILTER_STOP
+	hdr.add_theme_color_override("font_color", C_TEXT_S)
+
+
+## Help text takes ONE line; the whole of it is the tooltip (and the row
+## above it gets the same tooltip when it has none).
+func _one_line_help(hint: Label) -> void:
+	hint.autowrap_mode = TextServer.AUTOWRAP_OFF
+	hint.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	hint.custom_minimum_size = Vector2.ZERO
+	hint.tooltip_text = hint.text
+	hint.mouse_filter = Control.MOUSE_FILTER_STOP
+	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	hint.set_meta("help_line", true)
+	var par := hint.get_parent()
+	if par != null and hint.get_index() > 0:
+		var prev := par.get_child(hint.get_index() - 1)
+		if prev is Control and (prev as Control).tooltip_text.is_empty() and not (prev is Label):
+			(prev as Control).tooltip_text = hint.text
+
+
+## After the pages are built: every grey paragraph becomes a help line, and
+## nothing is drawn under 11 px.
+func _tame_pages() -> void:
+	if _tabs == null:
+		return
+	# Dropdowns and plain buttons keep their own width instead of the page's.
+	for ob_v in _tabs.find_children("*", "OptionButton", true, false):
+		var ob := ob_v as OptionButton
+		if ob.size_flags_horizontal & Control.SIZE_EXPAND or ob.get_parent() is VBoxContainer:
+			ob.fit_to_longest_item = false
+			ob.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			ob.custom_minimum_size.x = maxf(ob.custom_minimum_size.x, OPTION_W)
+			ob.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	for b_v in _tabs.find_children("*", "Button", true, false):
+		var b := b_v as Button
+		if b.get_class() == "Button" and b.get_parent() is VBoxContainer 				and b.size_flags_horizontal == Control.SIZE_FILL:
+			b.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	for sl_v in _tabs.find_children("*", "HSlider", true, false):
+		var hs := sl_v as HSlider
+		if hs.size_flags_horizontal & Control.SIZE_EXPAND:
+			hs.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+			hs.custom_minimum_size.x = maxf(hs.custom_minimum_size.x, SLIDER_W)
+	_fold_long_pages()
+	for lbl_v in _tabs.find_children("*", "Label", true, false):
+		var lbl := lbl_v as Label
+		if lbl.has_theme_font_size_override("font_size") and lbl.get_theme_font_size("font_size") < UITheme.FONT_XS:
+			lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		if lbl.has_meta("help_line") or lbl.has_meta("keep_wrap"):
+			continue
+		var small := lbl.has_theme_font_size_override("font_size") and lbl.get_theme_font_size("font_size") <= UITheme.FONT_SM
+		if small and lbl.autowrap_mode != TextServer.AUTOWRAP_OFF and lbl.text.length() > 90:
+			_one_line_help(lbl)
 
 
 func _add_check(parent: Control, text: String, cb: Callable) -> CheckBox:
@@ -2129,11 +2319,10 @@ func _add_color_picker(parent: Control, label: String, cb: Callable) -> ColorPic
 	row.add_theme_constant_override("separation", 8)
 	var hdr := Label.new()
 	hdr.text = label
-	hdr.custom_minimum_size = Vector2(110, 0)
-	hdr.add_theme_color_override("font_color", C_TEXT_S)
+	_row_label(hdr)
 	row.add_child(hdr)
 	var cpb := ColorPickerButton.new()
-	cpb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cpb.custom_minimum_size = Vector2(72, 24)
 	cpb.color_changed.connect(cb)
 	row.add_child(cpb)
 	parent.add_child(row)
@@ -2145,15 +2334,25 @@ func _add_option(parent: Control, label: String, items: Array, cb: Callable) -> 
 	row.add_theme_constant_override("separation", 8)
 	var hdr := Label.new()
 	hdr.text = label
-	hdr.custom_minimum_size = Vector2(110, 0)
-	hdr.add_theme_color_override("font_color", C_TEXT_S)
+	_row_label(hdr)
 	row.add_child(hdr)
 	var opt := OptionButton.new()
-	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	opt.fit_to_longest_item = false
+	opt.custom_minimum_size.x = OPTION_W
+	opt.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	for i in items.size():
 		opt.add_item(str(items[i]), i)
 	opt.item_selected.connect(cb)
 	row.add_child(opt)
+	var back := _revert_button(func() -> void:
+		var was := int(opt.get_meta("opened_at", opt.selected))
+		if was >= 0 and was < opt.item_count and was != opt.selected:
+			opt.select(was)
+			opt.item_selected.emit(was))
+	row.add_child(back)
+	opt.item_selected.connect(func(i: int) -> void:
+		back.visible = opt.has_meta("opened_at") and i != int(opt.get_meta("opened_at")))
+	_revert_rows.append([opt, back])
 	parent.add_child(row)
 	return opt
 
@@ -2163,8 +2362,7 @@ func _add_color_row(parent: Control, label: String, start: Color, cb: Callable) 
 	row.add_theme_constant_override("separation", 6)
 	var hdr := Label.new()
 	hdr.text = label
-	hdr.custom_minimum_size = Vector2(110, 0)
-	hdr.add_theme_color_override("font_color", C_TEXT_S)
+	_row_label(hdr)
 	row.add_child(hdr)
 	var cp := ColorPickerButton.new()
 	cp.color = start
@@ -3567,8 +3765,9 @@ func _add_hint(parent: Control, text: String) -> Label:
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size = Vector2(420, 0)
 	hint.add_theme_color_override("font_color", C_TEXT_S)
-	hint.add_theme_font_size_override("font_size", 10)
+	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	parent.add_child(hint)
+	_one_line_help(hint)
 	return hint
 
 

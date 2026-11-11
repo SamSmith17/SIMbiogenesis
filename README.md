@@ -159,8 +159,17 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 </tr>
 <tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#pvlab"><img src="docs/tour/pvlab.jpg" width="260" alt="Solar designer"></a><br><b>Solar designer</b><br><sub>Solar designer…</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#peltonlab"><img src="docs/tour/peltonlab.jpg" width="260" alt="Pelton wheel designer"></a><br><b>Pelton wheel designer</b><br><sub>Pelton wheel designer…</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#windlab"><img src="docs/tour/windlab.jpg" width="260" alt="Wind turbine designer"></a><br><b>Wind turbine designer</b><br><sub>Wind turbine designer…</sub></td>
+</tr>
+<tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#vehiclelab"><img src="docs/tour/vehiclelab.jpg" width="260" alt="Vehicle designer"></a><br><b>Vehicle designer</b><br><sub>Vehicle designer…</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#tclab"><img src="docs/tour/tclab.jpg" width="260" alt="Tri-clamp designer"></a><br><b>Tri-clamp designer</b><br><sub>Tri-clamp designer…</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#tc_process"><img src="docs/tour/tc_process.jpg" width="260" alt="TC Process Lab"></a><br><b>TC Process Lab</b><br><sub>Process</sub></td>
+</tr>
+<tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#esplab"><img src="docs/tour/esplab.jpg" width="260" alt="ESP board designer"></a><br><b>ESP board designer</b><br><sub>ESP board designer (ESPHome)…</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#earthship"><img src="docs/tour/earthship.jpg" width="260" alt="Earthships and rooms in the ground"></a><br><b>Earthships and rooms in the ground</b><br><sub>Earthship designer…</sub></td>
 </tr>
 </table>
 
@@ -173,23 +182,26 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#render_sim"><img src="docs/tour/render_sim.jpg" width="260" alt="Render the simulation ahead"></a><br><b>Render the simulation ahead</b><br><sub>📈</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#graph_ring_3d"><img src="docs/tour/graph_ring_3d.jpg" width="260" alt="The ring in 3D: a cell, or a torus"></a><br><b>The ring in 3D: a cell, or a torus</b><br><sub>G</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#site_plan"><img src="docs/tour/site_plan.jpg" width="260" alt="Site Plan lens"></a><br><b>Site Plan lens</b><br><sub>G</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#elevation"><img src="docs/tour/elevation.jpg" width="260" alt="Elevation lens"></a><br><b>Elevation lens</b><br><sub>G</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#globe"><img src="docs/tour/globe.jpg" width="260" alt="Globe lens"></a><br><b>Globe lens</b><br><sub>G</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#globe"><img src="docs/tour/globe.jpg" width="260" alt="Globe lens"></a><br><b>Globe lens</b><br><sub>G</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#snowglobe"><img src="docs/tour/snowglobe.jpg" width="260" alt="Full-screen globe"></a><br><b>Full-screen globe</b><br><sub>SoI marker / full globe</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#hydro_lab"><img src="docs/tour/hydro_lab.jpg" width="260" alt="Hydro Lab"></a><br><b>Hydro Lab</b><br><sub>Inspector → Open Hydro Lab</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#site_report"><img src="docs/tour/site_report.jpg" width="260" alt="Site Report"></a><br><b>Site Report</b><br><sub>K</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#site_report"><img src="docs/tour/site_report.jpg" width="260" alt="Site Report"></a><br><b>Site Report</b><br><sub>K</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#bootcamp"><img src="docs/tour/bootcamp.jpg" width="260" alt="Solar Bootcamp"></a><br><b>Solar Bootcamp</b><br><sub>🎓 Bootcamp</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#challenges"><img src="docs/tour/challenges.jpg" width="260" alt="Challenges"></a><br><b>Challenges</b><br><sub>🎯</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#conduit_routing"><img src="docs/tour/conduit_routing.jpg" width="260" alt="3D wire and pipe routing"></a><br><b>3D wire and pipe routing</b><br><sub>a device's port (press and drag)</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#conduit_routing"><img src="docs/tour/conduit_routing.jpg" width="260" alt="3D wire and pipe routing"></a><br><b>3D wire and pipe routing</b><br><sub>a device's port (press and drag)</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#wind_turbines"><img src="docs/tour/wind_turbines.jpg" width="260" alt="Wind turbines"></a><br><b>Wind turbines</b><br><sub>U</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#csp_heliostats"><img src="docs/tour/csp_heliostats.jpg" width="260" alt="Concentrated solar: troughs and heliostats"></a><br><b>Concentrated solar: troughs and heliostats</b><br><sub>U</sub></td>
+</tr>
+<tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#home_assistant"><img src="docs/tour/home_assistant.jpg" width="260" alt="Home Assistant live links"></a><br><b>Home Assistant live links</b><br><sub>HA</sub></td>
 </tr>
 </table>
@@ -215,6 +227,9 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 <tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#linkage_lab"><img src="docs/tour/linkage_lab.jpg" width="260" alt="Linkage Lab"></a><br><b>Linkage Lab</b><br><sub>N</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#packing_lab"><img src="docs/tour/packing_lab.jpg" width="260" alt="Packing Lab"></a><br><b>Packing Lab</b><br><sub>Q</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#intermodal_units"><img src="docs/tour/intermodal_units.jpg" width="260" alt="Intermodal units"></a><br><b>Intermodal units</b><br><sub>Library → Structures → Intermodal unit designer…</sub></td>
+</tr>
+<tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#multiplayer"><img src="docs/tour/multiplayer.jpg" width="260" alt="Play together"></a><br><b>Play together</b><br><sub>Multiplayer</sub></td>
 </tr>
 </table>

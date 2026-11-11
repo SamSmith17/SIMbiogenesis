@@ -62,6 +62,8 @@ var _shadow_option: OptionButton
 var _space_row: NpcSpaceTagRow
 var _firepit_section: VBoxContainer = null
 var _pv_section: VBoxContainer = null
+const EARTHWORKS_SECTION := preload("res://scenes/ui/earthworks_editor_section.gd")
+var _ew_section: VBoxContainer = null
 var _pv_tilt: SpinBox = null
 var _pv_info: Label = null
 var _firepit_mode: OptionButton = null
@@ -233,6 +235,7 @@ func _build_ui() -> void:
 	_build_fire_section()
 	_build_firepit_section()
 	_build_pv_section()
+	_build_earthworks_section()
 	_model_section = _section("Model")
 	_model_btns = VBoxContainer.new()
 	_model_btns.add_theme_constant_override("separation", UITheme.SPACE_XS)
@@ -281,7 +284,7 @@ func _section(title: String) -> VBoxContainer:
 
 const SECTION_ICONS := {
 	"Placement": "move", "Display": "eye", "Fire": "flame", "Firepit": "flame",
-	"Solar array": "sun", "Model": "box",
+	"Solar array": "sun", "Model": "box", "Earthworks": "mountain",
 }
 
 
@@ -541,6 +544,76 @@ func _on_firepit_mode(i: int) -> void:
 
 func _on_firepit_below(v: float) -> void:
 	_patch_firepit({"firepit_below_c": v})
+
+
+## EARTHWORKS (core/earthworks/): sink this model into the ground, open the
+## terrain over its footprint, berm its sides, a daylight cut and a ramp.
+func _build_earthworks_section() -> void:
+	var box := _section("Earthworks")
+	_ew_section = EARTHWORKS_SECTION.new()
+	_ew_section.set("patch_fn", _patch_earthworks)
+	_ew_section.set("fit_fn", _earthworks_model_rect)
+	_ew_section.set("status_fn", _earthworks_status)
+	box.add_child(_ew_section)
+	_button("Roof water to the graph", "A rain catchment the size of its roof, wired into a 5,000 L cistern (an Earthship's own cisterns)",
+		box, func() -> void:
+			_resolve_main()
+			if not StructureEarthworks.is_on(_rec):
+				_say("Turn on its earthworks first: the roof is the opening's footprint")
+			elif PlacedPropService.add_structure_roof_water(_main, _prop_id):
+				_say("Its roof now fills a cistern on the graph")
+			else:
+				_say("No system graph here"))
+
+
+func _patch_earthworks(patch: Dictionary) -> void:
+	if _syncing or _prop_id.is_empty():
+		return
+	_resolve_main()
+	# The seat moves with the sink: rebuild this one prop.
+	PlacedPropService.update_prop_record(_main, _prop_id, patch, true)
+	for k in patch:
+		if patch[k] == null:
+			_rec.erase(k)
+		else:
+			_rec[k] = patch[k]
+
+
+func _say(text: String) -> void:
+	if _main != null and _main.has_method("show_toast"):
+		_main.call("show_toast", text)
+
+
+## The model's outline in its own frame (metres, yaw applied), for "Fit".
+func _earthworks_model_rect() -> Array:
+	var node := _find_prop_node()
+	if node == null:
+		return []
+	var bb := LightHosts.local_bounds(node)
+	if bb.size == Vector3.ZERO:
+		return []
+	var ws := ModelCatalog.resolved_scale(str(_rec.get("model_id", "")), float(_rec.get("scale", 1.0)))
+	return [bb.position.x * ws, bb.position.z * ws, bb.end.x * ws, bb.end.z * ws]
+
+
+func _earthworks_status() -> String:
+	if _loader == null or not _loader.has_method("structure_earthworks"):
+		return ""
+	if not StructureEarthworks.is_on(_rec):
+		return "The ground is left as it is."
+	var x := float(_rec.get("x", 0.0))
+	var z := float(_rec.get("z", 0.0))
+	var grade := float(_loader.call("ground_without_structures", x, z))
+	var sm := StructureEarthworks.simple_of(_rec.get(StructureEarthworks.KEY, {}))
+	var floor_y := grade - float(sm["sink_m"]) + float(_rec.get("y_offset", 0.0)) + float(sm["floor_y"])
+	var line := "Ground here %s · floor %s below it" % [UiText.num(grade, "m", 3),
+		UiText.num(grade - floor_y, "m", 2)]
+	if _loader.has_method("structure_temperature_c"):
+		var t: Array = _loader.call("structure_temperature_c", _rec)
+		if t.size() == 2 and is_finite(float(t[0])):
+			line += "\nInside about %.0f °C, outside %.0f °C (from the soil at that depth; an estimate)" % [
+				float(t[0]), float(t[1])]
+	return line
 
 
 ## SOLAR ARRAY (PvArrayBuilder, a ground-mount rack bound to a graph array):
@@ -823,6 +896,8 @@ func _sync_widgets() -> void:
 	_sync_fire()
 	_sync_firepit()
 	_sync_pv()
+	if _ew_section != null:
+		_ew_section.call("load_record", _rec)
 	_syncing = false
 
 
@@ -852,6 +927,9 @@ func _rebuild_dynamic_sections() -> void:
 			_on_flatpack)
 	if mid == DomeLabBuilder.MODEL_ID:
 		_button("Edit dome…", "The dome & zome designer, bound to this structure", _model_btns, _on_domelab)
+	if mid == EarthshipBuilder.MODEL_ID:
+		_button("Edit Earthship…", "The Earthship designer, bound to this one (its earthworks follow the design)",
+			_model_btns, _on_earthship)
 	if VehicleBuilder.handles(mid):
 		_button("Edit vehicle…", "The vehicle designer, bound to this vehicle", _model_btns, _on_vehiclelab)
 		var pv := prop.get_node_or_null("PlacedVehicle") if prop != null else null
@@ -895,6 +973,9 @@ func _rebuild_dynamic_sections() -> void:
 	if TcBuilder.handles(mid):
 		_button("Edit tri-clamp assembly…", "The tri-clamp designer, bound to this assembly: vessels, fittings, ports",
 			_model_btns, _on_tclab)
+	if mid == FarmBotBuilder.MODEL_ID:
+		_button("Edit FarmBot…", "The FarmBot designer, bound to this bed: size, crops, packing, schedule, cost",
+			_model_btns, _on_farmbotlab)
 	if mid == CspLabBuilder.MODEL_ID:
 		_button("Design concentrator…", "The solar concentrator designer, bound to this concentrator: optic, receiver, tracking, structure",
 			_model_btns, _on_csplab)
@@ -1705,6 +1786,15 @@ func _on_unhitch() -> void:
 		_rec = PlacedPropService.get_prop_record(main, _prop_id)
 
 
+func _on_earthship() -> void:
+	var pid := _prop_id
+	var spec: Variant = _rec.get(EarthshipSpec.KEY, {})
+	var tree := get_tree()
+	close()
+	load("res://scenes/ui/earthshiplab_modal.gd").call("open", tree,
+		{"spec": spec if spec is Dictionary else {}, "prop_id": pid})
+
+
 func _on_domelab() -> void:
 	var pid := _prop_id
 	if _loader != null and _loader.has_method("open_domelab_for_prop"):
@@ -1783,6 +1873,16 @@ func _on_tclab() -> void:
 		return
 	close()
 	main.call("open_tclab", {"prop_id": pid})
+
+
+func _on_farmbotlab() -> void:
+	var pid := _prop_id
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	if main == null or not main.has_method("open_farmbotlab"):
+		return
+	close()
+	main.call("open_farmbotlab", {"prop_id": pid})
 
 
 func _on_csplab() -> void:

@@ -67,6 +67,7 @@ func is_open() -> bool:
 func _build() -> void:
 	_frame = ModalFrame.create("Live links", "Link a Home Assistant sensor to any value the simulation tracks. Linked values follow your real system at 1× (Live) and are recorded for comparison at any speed.",
 		Vector2(1240, 800), "ha_links")
+	_frame.content_max_w = 1400.0
 	add_child(_frame)
 	_banner = AlertBanner.new()
 	_frame.body.add_child(_banner)

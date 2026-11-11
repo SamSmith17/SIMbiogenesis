@@ -100,6 +100,49 @@ The builder puts the graph on the world, places a 3D twin for each node the
 living vehicles the people arrive in, a gate, the spaces, the standing
 chores, and an ARRIVE then DEPLOY schedule.
 
+To change a world that is already built (and maybe already played) without
+starting it over, edit the design and sync it:
+
+```
+$env:SYSDESIGN = "bombay_ten"
+tools\harness.ps1 -World <id> -RunScript res://tools/fixes/closed_loop_sync.gd            # dry run
+tools\harness.ps1 -World <id> -RunScript res://tools/fixes/closed_loop_sync.gd -Persist   # keep it
+```
+
+It keeps the clock, the people, the props, node positions and every store's
+stock (unless the node says `"sync_reset_level": true`), adds the nodes the
+design gained next to what they are wired to, removes the ones it lost,
+applies `set` and recipes, and rebuilds the design's wires. A `"@start"` value
+(a greenhouse's planting hour) becomes the schedule's DEPLOY hour there.
+
+Run year checks on the base map world (`w6ad922917357` for Bombay Beach), not
+on the built world: its own deploy schedule makes the people sim several
+times slower.
+
+## What bombay_ten models (2026-11-09 revision)
+
+- Water: raw rain cistern -> sand filter + UV -> drinking day tank (people,
+  kitchen). Greywater -> filters -> reclaimed water (irrigation only: four
+  greenhouse beds, the plots, the digester's water), never the drinking tank.
+- Sanitation: urine-diverting flush toilets. Urine -> storage -> nutrient
+  recovery (nitrify, distil, desalt) -> nutrients + reclaimed water + brine to
+  a salt pan. Brownwater -> digester (biogas) -> digestate filter -> nutrients
+  + reclaimed water. Kitchen scraps -> HomeBiogas -> the same digestate filter.
+  Plot biomass and plate scraps -> hot compost -> nutrients.
+- Nutrients are kg of N + P + K; a bed takes about 1 % of its food's weight.
+  A starter 15 kg covers the gap while the loop comes up.
+- Food: 1500 kg of packaged supplies, opened when the pantry runs low, each
+  kilo leaving plastic and card / tin. Twelve 20 m polycarbonate domes, each
+  with 192.5 m² of keyhole ring beds (2,310 m² in all: by the plant model a
+  m² under polycarbonate here makes 2.9 kg of food a year, so ten people
+  need about 1,900 m²). Beds are sown when the crew builds them and come up
+  over two months; the summer surplus fills the pantry for the winter dip.
+  What is not eaten goes to the biomass store and on to compost. A plastic
+  collection run fetches waste plastic once the bin is empty and the site
+  feeds itself.
+- Chores: one per dome and per plot (`"each": true`), hours from the area.
+- Pyrolysis condensers run on a closed radiator loop (no cooling water out).
+
 ## Engine rules a design has to respect
 
 - A proportional processor moves `min(port rates) × efficiency` in total;

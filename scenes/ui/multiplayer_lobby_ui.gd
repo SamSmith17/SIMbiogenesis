@@ -182,6 +182,7 @@ func _build_ui() -> void:
 	# Above the timeline and inside the screen at any size (a 720 x 700 panel
 	# centred on the window sat on the timeline at 720p); the tabs scroll.
 	UiFit.keep_fitted(panel, Vector2(720, 700))
+	UiFit.set_content_column(panel, 720.0)  # full screen: a centred column, not edge to edge
 
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 10)
@@ -317,7 +318,9 @@ func _build_ui() -> void:
 	discord_row.add_theme_constant_override("separation", 8)
 	root.add_child(discord_row)
 	var discord_lbl := Label.new()
-	discord_lbl.text = "Discord"
+	discord_lbl.text = "Voice invite"
+	discord_lbl.tooltip_text = "A Discord invite link for voice chat (optional)"
+	discord_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
 	discord_lbl.custom_minimum_size.x = 110
 	discord_row.add_child(discord_lbl)
 	_discord_edit = LineEdit.new()

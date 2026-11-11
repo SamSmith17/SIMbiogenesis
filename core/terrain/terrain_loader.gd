@@ -433,6 +433,10 @@ var _edit_tiles: TerrainEditTiles = null
 ## (`_edit_tile_delta`), so they are exact even before a recompose.
 var _channel_tiles: TerrainEditTiles = null
 var _composed_tiles: TerrainEditTiles = null
+## Earthworks round placed structures (core/earthworks/): berms, cuts, ramps
+## and the hidden interior of a sunken room. Re-derived from prop records by
+## the Earthworks child; never in player undo, never saved.
+var _structure_tiles: TerrainEditTiles = null
 var _height_field: TerrainHeightField = null
 ## Signature of the sink currently baked into the DetailGround mesh/collider —
 ## skips the (relatively) heavy detail-patch rebuild when nothing changed.
@@ -474,6 +478,7 @@ var _phase_ok := false
 
 
 func _ready() -> void:
+	PlacedPropRuntime.earthworks_grade_fn = Callable(self, "ground_without_structures")
 	ServiceLocator.provide(ServiceLocator.TERRAIN_LOADER, self)
 	add_to_group(WorldSession.PERSIST_GROUP)
 	_main = get_parent()
@@ -557,6 +562,9 @@ func _tick_season_uniforms() -> void:
 					if msm != null else null
 			if msm != null and (moss_now == null or float(moss_now) != _floor_moss_effective()):
 				_push_floor_moss()
+		var ew2 := _earthworks_or_null()
+		if ew2 != null and not ew2.mask_current_on(mi.material_override as ShaderMaterial):
+			ew2.push_mask()
 	if snow_due:
 		_apply_snow_to_buildings(terrain, snow, depth_m)
 
@@ -6241,6 +6249,20 @@ func shade_footprints() -> Array:
 			var sd: Dictionary = s
 			out.append({"pos": sd["pos"], "yaw": float(sd.get("yaw", 0.0)),
 				"size": sd.get("size", Vector3(3.0, 2.5, 3.0))})
+	# Rooms in the ground (an Earthship, a basement): the coolest place on a
+	# hot day (EarthTemperature), and people walk down onto the floor.
+	var ew := _earthworks_or_null()
+	var earth_ids := {}
+	if ew != null:
+		for h in ew.holes:
+			if float(h.get("grade", 0.0)) - float(h.get("floor", 0.0)) < 0.8:
+				continue
+			var r: Rect2 = h.get("rect", Rect2())
+			if r.size.x < 1.5 or r.size.y < 1.5:
+				continue
+			earth_ids[str(h.get("id", ""))] = true
+			out.append({"pos": SolarArrayBuilder.centroid(h["poly"]), "yaw": 0.0,
+				"size": Vector3(r.size.x, 2.4, r.size.y), "earth": true})
 	var terrain := _main.get_node_or_null("Terrain") if _main != null else null
 	var root := terrain.get_node_or_null("PlacedProps") if terrain != null else null
 	if root == null:
@@ -6249,6 +6271,8 @@ func shade_footprints() -> Array:
 		if not (child is PlacedProp):
 			continue
 		var prop := child as PlacedProp
+		if earth_ids.has(str(prop.prop_id)):
+			continue
 		var mid := str(prop.model_id)
 		var shade := ModelCatalog.is_starshade_model(mid) or mid == "ez_up" or mid == "carport" \
 			or mid == LinkageStructureBuilder.MODEL_ID or mid == DomeLabBuilder.MODEL_ID \
@@ -6293,6 +6317,15 @@ func nav_solid_footprints(enterable: Dictionary = {}) -> Array:
 				continue
 			var rec := get_prop_record(prop.prop_id)
 			if bool(rec.get("packed", false)):
+				continue
+			# A structure people walk into (a greenhouse dome, the keyhole beds
+			# inside it) is not a wall to walk round.
+			if bool(rec.get("walk_in", false)):
+				continue
+			# A structure with an opening in the ground: its walls and door
+			# come from earthworks_nav_entries instead.
+			if StructureEarthworks.is_on(rec) and bool(StructureEarthworks.resolve(
+					StructureEarthworks.spec_for_record(rec)).get("hole", false)):
 				continue
 			var bb: AABB = prop.get_world_pick_aabb()
 			if bb.size.x < 1.0 or bb.size.z < 1.0 or bb.size.x > 60.0 or bb.size.z > 60.0:
@@ -7299,7 +7332,64 @@ func _detail_footing_grid() -> PackedFloat32Array:
 	return PackedFloat32Array()
 
 
+## The ground at (x, z): the FLOOR inside a structure's opening (a sunken
+## room, a basement), else the edited terrain surface. Every system that
+## seats something reads this, so props, vegetation, people and the player's
+## reseat all land on the floor of a basement rather than on the soil that
+## used to fill it.
 func _ground_height_at(x: float, z: float) -> float:
+	var ew := _earthworks_or_null()
+	if ew != null and not ew.holes.is_empty():
+		var h := StructureEarthworks.hole_at(ew.holes, Vector2(x, z))
+		if not h.is_empty():
+			return float(h["floor"])
+	return _surface_height_raw(x, z, true)
+
+
+## What water sees: the drawn surface, but a structure's ROOF inside its
+## opening (rain runs off a basement / Earthship, never ponds in it).
+func water_height_at(x: float, z: float) -> float:
+	var ew := _earthworks_or_null()
+	if ew != null and not ew.holes.is_empty():
+		var h := StructureEarthworks.hole_at(ew.holes, Vector2(x, z))
+		if not h.is_empty():
+			return maxf(float(h.get("roof", h["floor"])), _surface_height_raw(x, z, true))
+	return _surface_height_raw(x, z, true)
+
+
+## Inside vs outside (°C) for a structure with earthworks, right now:
+## [inside, outside], or [] without weather data (EarthTemperature).
+func structure_temperature_c(rec: Dictionary) -> Array:
+	var ws := get_node_or_null("/root/WeatherService")
+	if ws == null or _main == null or not ws.has_method("monthly_mean_temp_c"):
+		return []
+	var monthly: Array = ws.call("monthly_mean_temp_c")
+	var wave := EarthTemperature.annual_wave(monthly)
+	if wave.is_empty():
+		return []
+	var month := int(_main.get("month"))
+	var day := int(_main.get("day"))
+	var air := float(ws.call("temperature_c", month, day, float(_main.get("day_time"))))
+	if not is_finite(air):
+		return []
+	var doy := float(ws.call("day_of_year0", month, day, false))
+	var inside := EarthTemperature.for_spec(StructureEarthworks.spec_for_record(rec), wave, doy,
+		air, float(monthly[clampi(month - 1, 0, 11)]))
+	return [inside, air]
+
+
+## The drawn terrain surface (all three tile layers), ignoring openings.
+func surface_height_at(x: float, z: float) -> float:
+	return _surface_height_raw(x, z, true)
+
+
+## The ground with no structure earthworks on it: what a structure's absolute
+## targets (floor, berm top) are measured against, and its grade.
+func ground_without_structures(x: float, z: float) -> float:
+	return _surface_height_raw(x, z, false)
+
+
+func _surface_height_raw(x: float, z: float, with_structures: bool) -> float:
 	var detail := _detail_footing_grid()
 	var in_detail := absf(x) <= _detail_half_extent and absf(z) <= _detail_half_extent
 	var fallback := PackedFloat32Array()
@@ -7310,17 +7400,120 @@ func _ground_height_at(x: float, z: float) -> float:
 		detail, _detail_elev_cols, _detail_elev_rows, _detail_extent_m(),
 		fallback)
 	if _built_grid.is_empty() and detail.is_empty():
-		return _spawn_ground_y + _edit_tile_delta(x, z)
+		return _spawn_ground_y + _edit_tile_delta(x, z, with_structures)
 	# High-resolution edit layer sits on top of the composed DEM footing (this is
 	# the EXACT edited surface at 1.5 m resolution — the grids stay edit-free).
-	return y + _edit_tile_delta(x, z)
+	return y + _edit_tile_delta(x, z, with_structures)
 
 
-func _edit_tile_delta(x: float, z: float) -> float:
+func _edit_tile_delta(x: float, z: float, with_structures: bool = true) -> float:
 	var d := 0.0 if _edit_tiles == null else _edit_tiles.sample_delta(x, z)
 	if _channel_tiles != null:
 		d += _channel_tiles.sample_delta(x, z)
+	if with_structures and _structure_tiles != null:
+		d += _structure_tiles.sample_delta(x, z)
 	return d
+
+
+## The Earthworks child (created on first use).
+func _structure_works() -> EarthworksRuntime:
+	var ew := get_node_or_null("Earthworks") as EarthworksRuntime
+	if ew == null:
+		ew = EarthworksRuntime.new()
+		ew.name = "Earthworks"
+		ew.loader = self
+		add_child(ew)
+	return ew
+
+
+func _earthworks_or_null() -> EarthworksRuntime:
+	return get_node_or_null("Earthworks") as EarthworksRuntime
+
+
+## Public: the earthworks runtime (probes, the prop editor's readout).
+func structure_earthworks() -> EarthworksRuntime:
+	return _structure_works()
+
+
+## The structure tile layer the Earthworks child writes into.
+func structure_tile_layer() -> TerrainEditTiles:
+	_ensure_tile_stack()
+	return _structure_tiles
+
+
+## Openings for water: {poly, roof} — rain on a roof runs off it, never into
+## the room below.
+## Walls + doors of every structure's opening, for the people's nav grid.
+func earthworks_nav_entries() -> Array:
+	var ew := _earthworks_or_null()
+	return [] if ew == null else ew.nav_entries()
+
+
+func earthworks_roofs() -> Array:
+	var ew := _earthworks_or_null()
+	return [] if ew == null else ew.holes.duplicate()
+
+
+## Push the structure layer into the rendered terrain, then everything that
+## sits on or flows over the ground follows (as a channel carve does), plus
+## what a carve never needed: the water's own re-derive and the people's nav.
+func commit_structure_tiles(touched_keys: Array) -> void:
+	commit_channel_tiles(touched_keys)
+	# Props standing on the touched tiles follow the ground, one by one (the
+	# channel path's light reground rebuilds EVERY prop when one moves: ~5 s
+	# on Bombay Beach). A structure seats on its own grade and is skipped.
+	if _placed_prop_layer != null and _main != null:
+		var gfn := Callable(self, "_ground_height_at")
+		for item in _placed_prop_layer.props:
+			if not (item is Dictionary):
+				continue
+			var d: Dictionary = item
+			if StructureEarthworks.is_on(d):
+				continue
+			var xz := Vector2(float(d.get("x", 0.0)), float(d.get("z", 0.0)))
+			if not _xz_in_touched_tiles(xz, touched_keys):
+				continue
+			var gy := _ground_height_at(xz.x, xz.y)
+			if absf(gy - float(d.get("ground_y", gy))) <= 0.01:
+				continue
+			d["ground_y"] = gy
+			var node := PlacedPropRuntime.find_by_prop_id(_main, str(d.get("id", "")))
+			if node != null:
+				PlacedPropRuntime.apply_record_to_prop(node, d, gfn)
+	_on_terrain_tiles_changed(touched_keys)
+	if not is_inside_tree():
+		return
+	var bridge := get_tree().root.find_child("NpcPopulationBridge", true, false)
+	if bridge != null and bridge.has_method("notify_world_changed"):
+		bridge.call("notify_world_changed")
+
+
+## HeightField collider hook: inside an opening (grown by one cell, since a
+## collider quad is 1.5 m and the drawn cut is exact) the collider drops
+## under the floor, so nothing invisible stands in the room. The Earthworks
+## collar collider carries the ground outside the wall instead.
+func _structure_collider_hook(key: Vector2i, hm: PackedFloat32Array) -> PackedFloat32Array:
+	var ew := _earthworks_or_null()
+	if ew == null or ew.holes.is_empty() or _composed_tiles == null:
+		return hm
+	var rect := _composed_tiles.tile_world_rect(key)
+	var cell := _composed_tiles.cell_m
+	var e := _composed_tiles.tile_cells + 1
+	for h in ew.holes:
+		var hr: Rect2 = h["rect"]
+		if not hr.grow(cell * 2.0).intersects(rect):
+			continue
+		var poly: PackedVector2Array = h["poly"]
+		var low := float(h["floor"]) - StructureEarthworks.INTERIOR_SINK_M
+		for lj in e:
+			for li in e:
+				var p := rect.position + Vector2(float(li) * cell, float(lj) * cell)
+				if not hr.grow(cell * 1.6).has_point(p):
+					continue
+				if Geometry2D.is_point_in_polygon(p, poly) or StructureEarthworks.poly_edge_dist(p, poly) <= cell * 1.5:
+					var i := lj * e + li
+					hm[i] = minf(hm[i], low)
+	return hm
 
 
 ## Ensure the channel + composed stores exist (same grid as the player layer).
@@ -7331,6 +7524,8 @@ func _ensure_tile_stack() -> void:
 		_channel_tiles = TerrainEditTiles.new()
 	if _composed_tiles == null:
 		_composed_tiles = TerrainEditTiles.new()
+	if _structure_tiles == null:
+		_structure_tiles = TerrainEditTiles.new()
 
 
 ## Fold every tile either layer dirtied since the last call into the composed
@@ -7343,16 +7538,26 @@ func _sync_composed_tiles() -> void:
 		keys[k] = true
 	for k in _channel_tiles.consume_dirty():
 		keys[k] = true
+	# Ground under a structure changed (a sculpt, a channel re-carve): its
+	# floor and berm tops are absolute, so its deltas are measured again.
+	var ew := _earthworks_or_null()
+	if ew != null:
+		for k in keys.keys():
+			if ew.covers_tile(k):
+				ew.ground_rev += 1
+				break
+	for k in _structure_tiles.consume_dirty():
+		keys[k] = true
 	if keys.is_empty():
 		return
-	_composed_tiles.compose_from([_channel_tiles, _edit_tiles], keys.keys())
+	_composed_tiles.compose_from([_channel_tiles, _edit_tiles, _structure_tiles], keys.keys())
 
 
 ## Deep copies of the player + channel layers for a worker thread (drainage
 ## analysis samples the EDITED surface off the main thread).
 func tile_layers_snapshot() -> Array:
 	_ensure_tile_stack()
-	return [_edit_tiles.clone(), _channel_tiles.clone()]
+	return [_edit_tiles.clone(), _channel_tiles.clone(), _structure_tiles.clone()]
 
 
 ## The procedural channel layer the WaterNetwork carves into.
@@ -7433,6 +7638,11 @@ func _load_edit_tiles() -> void:
 	# one) and is then re-carved incrementally once OSM water is known.
 	_channel_tiles = TerrainEditTiles.new()
 	_composed_tiles = TerrainEditTiles.new()
+	# The structure layer is re-derived from the prop records once the map is
+	# built (the Earthworks child polls them).
+	_structure_tiles = TerrainEditTiles.new()
+	var ew := _structure_works()
+	ew.ground_rev += 1
 	var wn := _water_network()
 	if wn != null:
 		wn.bind_map(_lat, _lon)
@@ -7493,6 +7703,7 @@ func make_water_ground_sampler() -> WaterGroundSampler:
 	if detail.is_empty() and _detail_elev_resolved:
 		s.fallback = _compose_base_footing_grid(true)
 	s.flat_y = _spawn_ground_y
+	s.roofs = earthworks_roofs()
 	return s
 
 
@@ -7635,6 +7846,7 @@ func _ensure_height_field(terrain: Node3D) -> void:
 		terrain.add_child(hf)
 	_height_field = hf
 	hf.pre_consume = Callable(self, "_sync_composed_tiles")
+	hf.collider_fn = Callable(self, "_structure_collider_hook")
 	hf.configure(_composed_tiles, Callable(self, "_height_field_base"),
 		_detail_extent_m(), _detail_ground_material(terrain))
 	_sync_height_field_shadows(terrain)
@@ -7677,6 +7889,12 @@ func _sink_signature() -> String:
 	var parts := PackedStringArray()
 	for k in keys:
 		parts.append(str(k))
+	# The DetailGround's boundary-ring samples follow the composed delta, so
+	# a structure dug into tiles that were already edited (most of a lived-in
+	# site) must still re-sink it: fold the structure layer's shape in.
+	var ew := _earthworks_or_null()
+	if ew != null:
+		parts.append("ew%d" % ew.sink_rev)
 	return ";".join(parts)
 
 
@@ -7707,9 +7925,22 @@ func _detail_mesh_grid_with_sink(grid: PackedFloat32Array, res: int) -> PackedFl
 	var ext := _detail_extent_m()
 	var half := ext * 0.5
 	var cell := ext / float(maxi(res - 1, 1))
-	for r in res:
+	# Only samples inside the tiles' bounding box can sink: walk that range
+	# (the whole grid was ~9 M key lookups on a large patch, seconds a commit).
+	var kmin := Vector2i(1 << 30, 1 << 30)
+	var kmax := Vector2i(-(1 << 30), -(1 << 30))
+	for kv in keyset.keys():
+		var kk: Vector2i = kv
+		kmin = Vector2i(mini(kmin.x, kk.x), mini(kmin.y, kk.y))
+		kmax = Vector2i(maxi(kmax.x, kk.x), maxi(kmax.y, kk.y))
+	var step := ext / float(maxi(res - 1, 1))
+	var c0 := clampi(floori((float(kmin.x) * span + half) / step) - 1, 0, res - 1)
+	var c1 := clampi(ceili((float(kmax.x + 1) * span + half) / step) + 1, 0, res - 1)
+	var r0 := clampi(floori((float(kmin.y) * span + half) / step) - 1, 0, res - 1)
+	var r1 := clampi(ceili((float(kmax.y + 1) * span + half) / step) + 1, 0, res - 1)
+	for r in range(r0, r1 + 1):
 		var z := float(r) / float(maxi(res - 1, 1)) * ext - half
-		for c in res:
+		for c in range(c0, c1 + 1):
 			var x := float(c) / float(maxi(res - 1, 1)) * ext - half
 			var p := Vector2(x, z)
 			if not _in_tile_keyset(keyset, span, p):
@@ -12752,7 +12983,8 @@ func fill_selection_depressions(poly: PackedVector2Array, fill_frac: float = 0.8
 		return 0
 	# Cell size scales with selection so large circles stay interactive.
 	var cell := clampf(sqrt(area) / 48.0, 1.25, 4.0)
-	var height_at := Callable(self, "ground_height_at")
+	# Water sees a structure's roof, so a basement is never a "depression".
+	var height_at := Callable(self, "water_height_at")
 	var bodies: Array = Watershed.fill_depressions_in_polygon(
 		poly, height_at, fill_frac, cell, 0.10, WaterBuilder.MIN_AREA_M2)
 	if bodies.is_empty():
@@ -15491,6 +15723,12 @@ func save_prop_from_node(prop: PlacedProp) -> void:
 	if _placed_prop_layer == null or prop == null:
 		return
 	var patch := prop.get_record_patch_from_node(Callable(self, "_ground_height_at"))
+	var cur := _placed_prop_layer.find_by_id(prop.prop_id)
+	if StructureEarthworks.is_on(cur):
+		# A structure that shapes the ground seats at its own grade (minus its
+		# sink) wherever it is dragged: a drag moves it, never re-heights it
+		# off the floor of its own opening.
+		patch["y_offset"] = float(cur.get("y_offset", 0.0))
 	var light_from := _placed_prop_layer.find_by_id(prop.prop_id).duplicate(true)
 	_placed_prop_layer.update_prop(prop.prop_id, patch)
 	if _main != null:

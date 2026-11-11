@@ -318,13 +318,14 @@ func _activities(site: PalletRackBuildSite) -> Array:
 
 
 func _press(ui: Control, text: String) -> bool:
-	var btn := HarnessInput.find_button(ui, text, false)
+	var btn := HarnessInput.find_button_revealing(ui, text, false)
 	if btn == null:
 		return false
 	var p: Node = btn.get_parent()
 	while p != null and not (p is ScrollContainer):
 		p = p.get_parent()
 	if p is ScrollContainer:
+		await _settle(2)   # a section the finder just opened lays out first
 		(p as ScrollContainer).ensure_control_visible(btn)
 		await _settle(3)
 	await HarnessInput.click(_main.get_viewport(), HarnessInput.center_of(btn))

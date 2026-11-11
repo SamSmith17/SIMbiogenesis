@@ -155,6 +155,7 @@ func _build() -> void:
 	_frame = ModalFrame.create("Compare sim with reality",
 		"Simulate this world over a past span and lay it over what really happened.",
 		Vector2(1180, 900), "experiment_compare")
+	_frame.content_max_w = 0.0
 	add_child(_frame)
 	_frame.closed.connect(_on_closed)
 	var b := _frame.body

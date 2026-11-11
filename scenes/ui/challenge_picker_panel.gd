@@ -133,7 +133,8 @@ func _build_ui() -> void:
 	_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_panel.add_theme_stylebox_override("panel", UITheme.panel_style(0.98))
 	add_child(_panel)
-	UiScreenLayout.clamped_center(_panel, PANEL_SIZE)
+	UiFit.keep_fitted(_panel, PANEL_SIZE)
+	UiFit.set_content_column(_panel, 1040.0)  # full screen: a centred column, not edge to edge
 
 	var outer := MarginContainer.new()
 	outer.add_theme_constant_override("margin_left", UITheme.SPACE_LG)
@@ -409,7 +410,7 @@ func _set_picker_visible(on: bool) -> void:
 	if _panel != null:
 		_panel.visible = on
 	if on:
-		UiScreenLayout.clamped_center(_panel, PANEL_SIZE)
+		UiFit.keep_fitted(_panel, PANEL_SIZE)
 
 
 func _runner() -> Node:

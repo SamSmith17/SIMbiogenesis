@@ -986,6 +986,18 @@ Godot.exe.exe --headless --path . --script core/domelab/domelab_selftest.gd
 # (height, collision, counted as shade), packed to the strut bundle and
 # unpacked, the designer reopened bound to the dome and Apply growing it:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/domelab_designer_check.gd -Label domelab
+# Structure earthworks (offline — StructureEarthworks targets, holes, the
+# simple form, the basement spec, the hole mask; EXPECTED_CHECKS) and the
+# Earthship designer (solve, presets, earthworks emission):
+Godot.exe.exe --headless --path . --script core/earthworks/earthworks_selftest.gd
+Godot.exe.exe --headless --path . --script core/earthshiplab/earthship_selftest.gd
+# The same on Bombay Beach (sandbox, REAL Forward walks): a pit structure
+# moved / deleted restores the ground; the designer's Earthship walked into
+# down its ramp, through the door, greenhouse and a room; a walkout and an
+# areaway basement:
+tools\harness.ps1 -World w6ad922917357 -RunScript res://tools/checks/earthworks_check.gd -Label earthworks -Timeout 900
+tools\harness.ps1 -World w6ad922917357 -RunScript res://tools/checks/earthship_check.gd -Label earthship -Timeout 1200
+tools\harness.ps1 -World w6ad922917357 -RunScript res://tools/checks/basement_check.gd -Label basement -Timeout 900
 # CNC gantry designer (offline — core/gantrylab/): the parts tables, the
 # spec (7 kinematics, applications, shared-belt coupling, key stability
 # through JSON), steps/mm against the community reference values (GT2 20T
@@ -1242,6 +1254,15 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/esplab_world_che
 # Calibrate: offset writes "- offset: -0.8" into the YAML, the corrected
 # history then compares at bias 0; UiAudit clean (run at 720 too):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/esplab_compare_probe.gd -Label esplab_compare -Timeout 900
+# FarmBot designer (offline — core/farmbotlab/: per-axis trapezoids by hand,
+# axes finishing apart, hex vs square packing, nothing under the tool bay,
+# layouts, a day's jobs (water = mm/day × area, contiguous continuous
+# segments, tools mounted for the work and put back, Z inside its travel),
+# the cost sums, checks, presets, graph preset, the builder's pose.
+# EXPECTED_CHECKS; --import first):
+Godot.exe.exe --headless --path . --script core/farmbotlab/farmbotlab_selftest.gd
+# The designer + a placed robot working its schedule (sandbox, REAL clicks):
+tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/farmbotlab_designer_check.gd -Label farmbotlab
 # Tri-clamp designer (offline — core/tclab/): the size table against its
 # sources and the reference GLB (1½" 50.5 mm, 2" 64 mm faces), every part
 # type × size built with every triangle on Godot's front face and a clamp
@@ -2757,6 +2778,116 @@ UX streamlining; user's choices: Inter, Lucide, HUD auto-tucks into pills,
     it hung 12 px off the right edge. `--capture=poi` caught it; that capture
     now turns pins ON for its own checks, since the player's `show_pois` pref
     may hide them.
+- **Modal UX plan, Phase 1 (2026-11-09, `plans/MODAL_UX_PLAN.md`).** The
+  audit passing says nothing about crowding, so:
+  - **`UiDensity`** (`core/terrain/harness/ui_density.gd`) measures every
+    modal the modal capture opens: controls on open, worst scroll length in
+    screens, smallest font, widest slider / dropdown / field, empty share,
+    whether a `DesignerShell` is folded, and how much of a studio's subject
+    is in view. It prints `modaldensity <id>: …` and writes `density` into
+    `modal_audit.json`. Reported, not gated; baseline in
+    `plans/MODAL_DENSITY_BASELINE.md`.
+  - **The fold is about the screen.** `DesignerShell` sets
+    `ui_fit_min_logical` on its panel and `UiFit.zoom_for` never zooms the
+    panel's logical size under it where the screen has that much. Without it
+    every designer wanting less than 1600 × 900 folded its left column at
+    1080p.
+  - **Full-screen dialogs lay out in a centred column**:
+    `UiFit.set_content_column(panel, max_w)` for a fitted PanelContainer,
+    `ModalFrame.content_max_w` (default 1040, 0 = whole width).
+  - **`StudioViewport`**: `frame_subject()` / `subject_aabb()` work from
+    LOCAL transforms (right before the studio is in the tree); nodes with
+    meta `studio_no_frame` (gizmos, wire previews) are left out. The
+    showroom backdrop is the default. A harness clicks at
+    `studio.screen_pos(container_pos)`, never container corner + offset (a
+    full-screen modal is zoomed).
+  - **`EmptyState`** (`scenes/ui/kit/empty_state.gd`): `make(icon, text,
+    button, cb)` fills a blank panel, `row(icon, text)` a blank card.
+- **Modal UX plan, Phase 2 (2026-11-09): the designer pattern is kit.**
+  - **`DesignerColumn.setup(box, "<modal id>", {"open": [titles], "fold":
+    [header titles]})`**, called at the END of a designer's right-column
+    build, gives it "Find a setting" (`SettingFinder`), headline tiles
+    (`StatTiles`, `_col.set_tiles([...])`), the fold policy (sections named
+    in `open` open, the rest folded, the player's folds saved in
+    ui_prefs.cfg `[folds]`) and turns each named SectionHeader + what follows
+    into a folded section. `_col.set_summary(title, text)` puts one line on a
+    folded section's title row. Works with or without `DesignerShell`.
+  - **`DesignGallery`** replaces the designers' ItemList of designs: same
+    calls (`clear / add_item / set_item_tooltip / get_selected_items /
+    item_selected`), plus `set_item_subtitle`, `add_caption` and
+    `set_thumbnailer(func(i) -> {key, build})`. "★ name" is the player's.
+    Thumbnails render one a frame and are cached under
+    `user://thumb_cache/v1/<id>/` (bump `CACHE_VERSION` when a builder's look
+    changes).
+  - **`DesignerShell`**: `set_hint` text opens from the header's "?" (no hint
+    line any more); `add_flyout_button(id, text, icon, content, opts)` puts a
+    button in the strip that opens `content` in a searchable flyout
+    (`show_flyout / hide_flyout / flyout_shown`). Tri-clamp and ESP keep
+    their palettes there ("Add part"): a check must open it first
+    (`flyout_add`), as `tclab_designer_check` / `esplab_designer_check` do.
+  - The harness sets `Collapsible.ignore_saved` so every run sees the
+    default folds. A real click on a row in a folded section needs the
+    section opened first.
+  - Toroid, Pelton, wind and flat-pack are still NOT on `DesignerShell`.
+- **Modal UX plan, Phase 3 (2026-11-09): gantry, solar, rack, Linkage Lab,
+  TC Process** got the designer pattern inside their own chrome.
+  - Gantry: the parts bin and "Selected part" show only while **Edit parts**
+    (`edit_parts` button; `_set_edit_parts`) is on. Rack: tools live in the
+    "Add to the structure" flyout (`tool_<id>` buttons), every right-column
+    header is a folded section. TC Process: view controls are in the "View"
+    flyout (`proc_view`). Linkage Lab: groups fold by `GROUPS_OPEN`.
+  - **A check that clicks a button the pattern put away uses
+    `HarnessInput.find_button_revealing`** (opens the folds above it and the
+    shell flyout it is in), then settles a frame before scrolling to it.
+  - **A check places studio clicks through the container's transform**
+    (`cont.get_global_transform() * local`), never global rect corner +
+    offset: full-screen modals are zoomed. Gantry, solar and TC process
+    checks failed on exactly this until fixed here.
+  - Seven designers are still off `DesignerShell`: gantry, solar, Linkage
+    Lab, toroid, Pelton, wind, flat-pack.
+- **Modal UX plan, Phase 4 (2026-11-09): Library, Settings, Help.**
+  - **The Library is a card gallery** (`unified_library_modal.gd`): section
+    chips, a card per entry with its verb, search across all sections. A new
+    entry is a dict in `_populate` (`kind`, `label`, `detail`, `verb`,
+    `icon`, optional `pic_model` = a ModelCatalog id for the picture, `group`
+    for a sub-heading); `_activate` holds the routing. Checks use
+    `card_for(label)` and click its `verb` / `place` button.
+  - **`ThumbRenderer`** (`scenes/ui/kit/thumb_renderer.gd`): pictures of 3D
+    models for any card. `request(key, build, texture_rect)`; cached under
+    `user://thumb_cache/v1/<id>/`. The harness sandbox starts with no cache.
+  - **Settings pages**: build rows with `_add_slider / _add_option /
+    _add_check / _add_hint`; `_tame_pages()` runs after the pages are built
+    and turns any small wrapped paragraph over 90 characters into a one-line
+    help with a tooltip (set meta `keep_wrap` on a label to opt out), caps
+    dropdowns and un-stretches plain buttons. Sound is on Interface, sky
+    paths on Stars & Planets, Force rainbow on Environment.
+  - A Settings page with four or more `_add_section_lbl` sections opens on
+    the first and folds the rest (`_fold_long_pages`, remembered in
+    ui_prefs.cfg `[folds]` as `settings/<page>/<section>`). A check that
+    clicks a row on such a page calls `panel.reveal_control(ctl)` first.
+  - `_add_slider` / `_add_option` rows carry a `revert` button: back to the
+    value the row had when Settings opened (`_snapshot_rows`).
+  - Gate: `tools\harness.ps1 -World mtvernon -RunScript
+    res://tools/checks/library_settings_check.gd -Label library_settings`.
+  - Not done: a marker against factory defaults, the Window Wall page, the
+    record book. See `plans/MODAL_UX_PLAN.md`.
+- **Modal UX plan, Phase 5 (2026-11-09).** A shell designer's footer is
+  ordered on open by `DesignerShell.order_verbs` (Save · Export · Apply ·
+  Place · Build with a crew · Close): add footer buttons in any order, name
+  them with those verbs. The modal capture flags icon or one-glyph buttons
+  with no tooltip (`density.no_tip` in `modal_audit.json`).
+- **Modals are FULL SCREEN (2026-11-08, the user's call: a modal blocks the
+  other UIs anyway).** `UiFit.fill` (from `fit`, and `ModalFrame._fit`): a
+  modal with a size fills the screen edge to edge and its contents are ZOOMED
+  with `Control.scale` by how much room the screen has over its `want`,
+  1.0 to `UiFit.ZOOM_MAX` 1.25, never so far that the content minimum
+  overflows. Text stays crisp (Godot re-rasterizes fonts for the scale).
+  Kept as before: content-sized panels (`want` 0 on an axis), `keep_timeline`
+  panels (video export), cards placed with `clamped_center` (fault cards, the
+  challenge result, the bootcamp intro), docks and drawers. DesignerShell's
+  720 fold reads the LOGICAL width (`UiFit.fill_logical_size`). A modal's
+  picking must use LOCAL positions (`gui_input` / `make_input_local`), never
+  `mouse - global_position`. `FULLSCREEN` const turns it off.
 - **Modals (`UiFit`, `scenes/ui/kit/ui_fit.gd`).** Every modal panel is
   centred on the screen and COVERS the timeline bar (2026-10-29, the user's
   call: most modals have nothing to do with time, and stopping above a
@@ -4971,6 +5102,120 @@ entry, no CAD export yet.
     - An inbound HA link (a real tracker's angle driving the sim) is not
       built.
 
+## FarmBot designer (core/farmbotlab/, 2026-11-10)
+
+Library → Structures → "Garden robots (FarmBot)" (`Main.open_farmbotlab({spec,
+prop_id})`, layer `FarmBotLabLayer`), or a placed bed's "Edit FarmBot…". A
+FarmBot-style gantry robot on a raised bed of ANY size (FarmBot sells 3 × 1.5 m
+Genesis and 6 × 3 m Genesis XL kits), the crops it grows, its day move by move,
+and its cost against the hand work it saves. Model id `farmbot`, record key
+`farmbot_spec` (record `kind` "farmbot", `plant_abs_h` = when it was planted),
+graph preset "FarmBot bed (designed)" (a food `plant` of the bed's area,
+`planted_abs_h` stamped so it establishes), library
+`user://farmbotlab_library.json`.
+- **`FarmBotSpec`**: bed (length, width, wall concrete / galvanized / timber,
+  wall height), gantry (clearance over the soil, Z travel, soil Z), motion,
+  tools, crops (mix of GardenCrops ids with shares, packing hex | square,
+  layout rows | blocks | interleave, spacing scale, sowing section length),
+  care (water mm/day + clock times, nozzle flow, weed / photo / soil every N
+  days, hours), cost. Kit price = $2,500 + $250/m length + $167/m width
+  (fitted to the docs' ~$3,500 Genesis / ~$4,500 XL; `kit_usd` ≥ 0 wins).
+- **Motion is the firmware's, not a printer's** (`FarmBotMotion`): each axis
+  runs its own trapezoid from a start speed to a top speed over a ramp
+  distance (a = (vmax² − vmin²)/2·ramp), all three start together and finish
+  apart (dog-leg paths), and it stops at every target. Defaults from FarmBot
+  OS's hardware parameters (400 steps/s top, 50 start, 300-step ramp; 5
+  steps/mm X/Y, 25 Z): 80 / 10 mm/s and 60 mm on X/Y, 16 / 2 mm/s and 12 mm on
+  Z. Not GantryLabMotion (coordinated lines, junction speeds).
+- **`FarmBotLayout`**: the bed is cut into sowing SECTIONS (rows across the
+  bed, lanes along it, or alternating strips), each one crop packed at its
+  GardenCrops spacing × scale, half a spacing in from the edges, nothing
+  under the tool bay (`toolbay_rect`). Hex = offset rows 0.866 sp apart in
+  whichever orientation and phase fits most, never fewer than square: a strip
+  too narrow for an extra row only loses plants to the offset, and a grower
+  keeps it square (over open ground hex is +15.5 %, in a 6 × 3 m bed ~6 %).
+  Sections are sown in succession over a crop's first cycle (GrowBed's rule)
+  and resown each cycle (`sections_sown_on`).
+- **`FarmBotJobs.day_plan(spec, layout, day, detail)`** is a day as jobs
+  (watering at each time, seeding the due sections, weeding every N days =
+  a camera grid then a plunge per weed, a photo survey, soil readings), each
+  a list of move / dwell segments; a job starts at its hour or when the last
+  ends. Tools hang in a bay along the -Z wall at the -X end (picked up by
+  lowering onto them and sliding out along Y, put back the other way); the
+  seeder takes one seed at a time from a trough that rides the gantry;
+  watering lowers once to the canopy and dwells per plant for its share of
+  the day's water at the nozzle's flow. `sample_day` / `sample_job` are pure:
+  the placed robot (`FarmBotRuntime`, gameplay/) reads its pose from the
+  clock every frame (day rolls at local midnight: absolute hours count from
+  it), so it scrubs and skips at speed. Estimates said so: camera footprint
+  400 × 300 mm, 0.4 weeds/m²/day, dwell times.
+- **`FarmBotEconomics`** (all hand rates are ESTIMATES, in the file): the
+  robot's side averaged over 28 steady days from day 120; the same work by
+  hand (8 s a seed, 12 L/min + 3 min setup a watering, 0.5 min/m²/week
+  weeding, 4 min a day looking; soil readings not counted); what it still
+  needs a person for (seed refills, 30 % of the weeding = the ones in the
+  crowns, upkeep h/yr); power 12 W idle + 55 W working; payback = (kit +
+  assembly h × rate) / (saved h × rate − running). The bed's own cost is shown
+  but left out of the payback (needed either way). Harvest is in neither.
+- `FarmBotDesign.solve` (cached by key) → spec, layout, robot, money, checks
+  (gantry over 3 m wide, track over 12 m, crops taller than the clearance, a
+  busiest day over 16 h / 24 h, unprofitable).
+- **Radial arm for the keyhole beds** (spec `kind` "radial", `keyhole` = GrowBed's
+  keyhole keys + `sweep` slot | full + `arms` 1–4; Robot row in the modal). A
+  pivot post in the compost basket carries a light aluminium truss arm out to
+  a curved rail on the outer ring's wall, driven at its outer wheel; the
+  carriage runs along the arm, Z drops to the plants. `FarmBotGeom` is the
+  one machine ↔ bed mapping for both kinds: radial X = mm of ARC along the
+  rail (so the outer wheel's speed is X's speed and FarmBotMotion is
+  unchanged; the arm turns at v / R), Y = mm out from the post; "slot" stops
+  the rail either side of the keyhole's path in (X = 0 just past it), "full"
+  bridges it. The ring beds are GrowBed's exactly (`_keyhole_rings`, angles
+  from +Z), so the area matches the greenhouse keyhole (192.5 m²). Layout:
+  ring sectors (rows = rings by area, blocks = wedges, interleave =
+  sectors dealt in turn), plants on arcs stepped by CHORD (an arc step puts
+  neighbours closer than the spacing) and offset rows placed plant by plant
+  clear of the row before (rows on circles of different radius do not stay
+  in step). Tools hang on a ring round the post in the path inside the first
+  bed; the seed trough rides the arm over the path nearest its middle.
+  **Several arms** share the post and rail, each with its own tools and its
+  own schedule in its sector (`FarmBotJobs.arm_range`; `day_plan` returns
+  `arms` [a plan each], `windows` (each job across the arms), `busy_s` = the
+  longest arm's day, `arm_s` = the arms' hours; `sample_arms`;
+  `FarmBotBuilder.set_arm(i, …)` / `set_arms`). Measured: one arm on the 20 m
+  keyhole (~2,500 plants) needs ~28 h a day and is flagged; the preset
+  "Keyhole greenhouse (20 m dome)" uses three (9.3 h a day, 14.3 h busiest,
+  photos every 2 days, weeding every 3). Arms meeting at a sector boundary
+  are not simulated (the later one would wait). Price (estimates): base +
+  $450 pivot + $180/m truss per arm + $35/m rail + $1,800 per extra arm.
+- Perf: plants carry their machine X/Y (`mx`, `my`, set once in
+  `FarmBotLayout.solve`), the serpentine sorts natively on Vector3 keys (a
+  comparator lambda cost seconds), the photo grid / weeds / watering order
+  are built once per day and shared by the arms, `FarmBotMotion.axis_time`
+  allocates nothing. The 20 m keyhole solves in ~0.7 s (was 5.7 s).
+- `FarmBotBuilder`: bed + soil, the crops as one MultiMesh per crop on the
+  garden crop shader (`set_days`), tracks on the wall tops, Gantry (X) →
+  CrossSlide (Y) → ZAxis, NEMA 17s from GantryLabDetail, the tool bay and
+  tools, seed trough, electronics box, a spray column. `set_machine(mm, tool,
+  spray)` is the one pose call; tip height = soil + (z − soil_z)/1000.
+- Modal `scenes/ui/farmbotlab_modal.gd` (DesignerShell): designs gallery;
+  3D / Plan tabs (the plan draws sections, plants, the bay, the gantry and the
+  job's path, done in yellow); day, job (or the whole day), Play (Space),
+  speed, scrub, a live line (time, act, tool, X/Y/Z); KPI tiles, checks,
+  Labour and cost, the crop mix editor (crop, share, plants), every setting.
+- Gates: `core/farmbotlab/farmbotlab_selftest.gd` (offline, 119),
+  `tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/farmbotlab_designer_check.gd -Label farmbotlab`
+  (48, real clicks on the gallery, Add a crop and Play; a placed bed watering
+  at 07:05 on day 130 where its schedule says, scrub back, Apply; the Robot
+  row to Radial, the 20 m keyhole by a click, all three arms turning on Play,
+  a placed keyhole robot's three arms watering where their schedules say),
+  diags
+  `tools/diag/farmbot_probe.gd -- --preset=<id>` and
+  `tools/diag/farmbot_look_diag.gd` (windowed, APPDATA at a scratch folder).
+- Not built: harvesting, a tour stop, rows the player draws by hand, the
+  robot's water taken from a graph tank (the graph's plant model bills the
+  crop's water), the rotary tool's job, a modal-audit run (the entry is in
+  the list).
+
 ## Tri-clamp designer (core/tclab/, 2026-11-06)
 
 Library → Structures → "Tri-clamp designer…" (Main hosts it, every map:
@@ -6081,6 +6326,195 @@ figshare bot check and its tiles are an undocumented staging server).
     (the 10–11 May 2024 storm from the GFZ archive: overhead, shots north,
     up and south; a quiet night not seen; Settings off).
 
+## Whole-system design harness + the closed-loop world (tools/sysdesign/, 2026-11-09)
+
+Design a site as data, build it from library presets, run it a year on the
+game's own simulation, read a verdict. Full notes: `tools/sysdesign/README.md`.
+- **Loop:** `designs/<name>.json` -> `$env:SYSDESIGN="<name>"; $env:SYSDESIGN_DAYS="366";
+  tools\harness.ps1 -World <id> -RunScript res://tools/sysdesign/run_design.gd -Label <dir> -Timeout 3400`
+  -> `screenshots/<dir>/report.md` (+ report.json, daily.csv). A year with ten
+  people at 6-min steps is ~27 min. `SYSDESIGN_PEOPLE=0` skips the people.
+- `SysdesignBuilder` (nodes by library LABEL, `count`, `set`, recipes,
+  automations, wires by kind, `"a>b"` cross-kind), `sysdesign_year.gd` (the
+  stepper: SolarUI's pure evaluator, `EnergyTimeline.step_soc` + hysteresis,
+  `NpcPopulationBridge.tick_at`, `AutomationSim` switching through the
+  GraphSimLoad proxy, `ResourceFlowEngine.render_step`, the view's machine
+  ticks), `sysdesign_report.gd` (the eight SUSTAINED checks).
+- The run resets `PopTestPrefs` in memory and sets the chore ledger to finite
+  labour with a ZERO abstract pool, so recipe crew steps wait for a person.
+- **`bombay_ten`** (10 people, Bombay Beach): 15.2 kWp, 62.4 kWh, a 12,000 m2
+  rain apron into a 400 m3 cistern, 9 greenhouse beds, kitchen recipe with
+  crew steps, reed beds on blackwater, compost + HomeBiogas, biomass plots ->
+  Biochar Reactor as a solar dump load -> woodgas genset, shredder ->
+  Plastic-to-Fuel Retort + injection molder. 366 days from 2024-01-01:
+  SUSTAINED, 0 h AC off, lowest battery 28 %, 10 of 10 stayed.
+- **World** `w6af22bac295d` "Bombay Beach - Closed Loop Ten": built by
+  `tools/fixes/closed_loop_world.gd` (graph, 3D twins as packed kits, 18
+  stowed in a cargo container, three living vehicles, gate, spaces, standing
+  chores, ARRIVE then DEPLOY). Sandbox gate:
+  `tools/checks/closed_loop_world_check.gd`. New world from a map:
+  `tools/sysdesign/create_world.gd` (headless).
+- **Game fixes that came out of it:**
+  - `AutomationEngine` looked for SystemGraphView two levels deep; it is
+    three. No `tank.<id>.level` / node-state key ever reached a live rule,
+    so tank-level automations never fired in play. Cached recursive lookup.
+  - `ResourceFlowEngine` batch start gates compared a 0-1 level with an
+    absolute quantity (two sites); now level x capacity.
+  - New library preset **Plastic-to-Fuel Retort** (catalog
+    `tclab_plastic_retort`, the TC lab's `plastic_retort` binds it).
+- Engine rules a design must respect are listed in the README (proportional
+  processors, batches pushing into full stores, unwired-port fallback, the
+  0.1 % "has supply" rule, rain needs the Rain source wired).
+- **Nutrients, plastic and water realism pass (later 2026-11-09).** The
+  user's review of the world: the nutrient store had no real sources,
+  nothing made plastic, and a review asked for every unrealistic link.
+  - **"nutrients" is now kg of N + P + K** (ResourceKinds comment). The
+    Greenhouse Grow Bed took 0.05 kg/h per 0.1 kg/h of food (half the
+    crop's weight); it is 0.001 now (~1 %, Marschner), the same basis as a
+    plot's `nutrient_kg_per_kg` 0.02. ⚠ The old Compost Digester (2 kg
+    biomass + 1 L blackwater -> 1.5 kg) and the Soil Blender (4.5 kg
+    "nutrients" + char -> soil) still use the old compost-mass meaning;
+    they are left for other worlds, this design no longer uses them.
+  - Four nutrient routes, new presets: **Population (urine-diverting
+    toilets)** (a 4th `urine` output; `ResourceFlowEngine.HABITAT_URINE_YIELD`
+    0.0284 of water x `_DIVERSION` 0.8 taken out of the blackwater, so the
+    NPC water accounting is unchanged), **Urine Storage Tank**, **Urine
+    Nutrient Recovery** (nitrify + distil + desalt: 1 L -> 8.5 g NPK +
+    0.95 L reclaimed + 0.04 L brine, the salt step an estimate), **Salt
+    Pan (brine)**, **Brownwater Digester (3 m³)**, **Digestate
+    Nitrification Filter** (digestate -> 0.6 g/L NPK + reclaimed water),
+    **Hot Compost Bays** (biomass -> NPK at 1.6 % x 70 %).
+  - New kinds: `urine`, `brine`, `irrigation_water` (Reclaimed Water — a
+    separate kind so a wire into a drinking tank reads as wrong),
+    `packaged_food`. GraphDomainFilter knows them.
+  - **Supplies come packed**: Supply Stores (packaged food) -> **Unpack &
+    Sort Supplies** (4 % plastic, 8 % card and tin, an estimate) -> the
+    pantry, switched on below 20 % pantry. As the greenhouses come up the
+    pantry stays full and the plastic stops. The kitchen recipe no longer
+    makes packaging. **Plastic Collection Run** (`material_import`) fetches
+    plastic only once the bin is empty AND the pantry is above 45 %; the
+    year report lists material imports without failing "nothing imported".
+  - **Growing machines are planted**: processor specs `establish_days` +
+    `planted_abs_h` (`ResourceFlowEngine.establish_factor`, pure in the
+    clock, -1 before planting): outputs ramp 0 -> 1, inputs from 25 %.
+    `set_item_packed_3d` stamps `planted_abs_h` when a bed's kit is built
+    and erases it when packed. A bed with no stamp is established (old
+    worlds unchanged). `established_pct` on the item.
+  - Review fixes in the design: greywater filters fed the DRINKING cistern
+    (now -> reclaimed tank -> greenhouse beds, plots, digester water);
+    ground-apron rain went straight to drinking (now Sand Filter + UV ->
+    a 2000 L day tank); raw blackwater spread on "reed bed" plots and into
+    compost (now -> digester -> filter); the pyrolysis recipes made 480 /
+    954 L/h of condenser "hot water" from nothing into a 302 L tank
+    (closed radiator loop now: `fit_tc_recipes.gd` drops `hot_water`);
+    sorted card and tin no longer go into a PP shredder.
+  - The "blocked" toast fired (with a sound) on every running/blocked
+    flip; now once a minute per machine, every 5 s at most, only with the
+    graph open, worded by reason ("the X store is full").
+  - Year runs belong on the base Bombay Beach world `w6ad922917357`: on the
+    Closed Loop world its own deploy schedule makes the people sim ~6x
+    slower and growing.
+  - **`tools/fixes/closed_loop_sync.gd`** updates a built world IN PLACE
+    from its design (clock, people, props, positions, stocks kept; nodes
+    added / dropped / re-set; design wires rebuilt; a node with
+    `sync_reset_level` gets the design's level). Greenhouses already up are
+    taken as planted at the DEPLOY event. Gate, LIVE on the Closed Loop Ten
+    world (graph closed, people drawn): `tools\harness.ps1 -World
+    w6af22bac295d -RunScript res://tools/checks/closed_loop_sync_check.gd
+    -Label closed_loop_sync_check -Timeout 1600` (sync, then CLSC_DAYS sim
+    days at CLSC_SPEED; per-day stores / machine states / people / AC-off
+    log; `CLSC_NOSYNC=1` is the baseline). That world already drops to its
+    10 % battery floor on its 2nd night after the Jan 31 save (3.3 h AC off
+    without the update); the new AC machines shed on low battery so the
+    update does not lengthen it (3.6 h).
+- **Greenhouse farming pass (2026-11-10).** The user's review: bed plants
+  read as cacti, the crew tended only the first of 13 beds and 9 greenhouses,
+  beds stood in the open, and 13 small beds could never feed ten people.
+  - **Grow beds are drawn at their real size with real crops**
+    (`vegetation/grow_bed.gd` rewritten, `garden_crops.gd`,
+    `grow_bed_shell.gd`, `garden_crop.gdshader`). `grow_bed_spec` on the
+    record (or the plant node's specs, via `GrowBed.spec_for_plant`):
+    `layout` "bed" (1.2 m raised beds sized from `area_m2`), "plot" (an
+    in-ground square of `area_m2`), "keyhole" (concentric galvanised ring
+    beds round a compost basket, a slot from the edge to the middle facing
+    local +Z); `crops` "garden", one crop id, or a list. 18 procedural crops
+    (lettuce, romaine, kale, chard, tomato on a stake, peppers, zucchini,
+    winter squash, pole-bean teepees, carrots, onions, potato, sweet potato,
+    basil, willow coppice, sorghum-sudan grass) at their intensive-bed
+    spacing; one MultiMesh per crop. Every plant grows from its own sowing
+    day: `INSTANCE_CUSTOM` = (sow day, cycle, mature share, seed) and the
+    bed pushes ONE uniform, `now_d` (days since `plant_abs_h`), twice a
+    second; fruit shows from a per-vertex share of the cycle (UV2.x) and
+    ripens; the bed is cleared and resown each cycle (`fallow`). Sections
+    are sown in succession over the first cycle. Look only: yield is the
+    plant node's. Colours are authored sRGB (`srgb_to_linear` in the kit,
+    `vertex_color_is_srgb` on the shell). Low crops draw to 45 m, tall ones
+    to 75 m, then a green canopy band. A keyhole dome is ~1760 plants,
+    ~360k triangles fully grown. Look check:
+    `tools/diag/garden_bed_look_diag.gd` (WINDOWED, APPDATA at a scratch
+    folder, `--out=`). ⚠ a GrowBed resets `now_d` to its clock every 0.5 s:
+    a studio that sets the day must `set_process(false)` first.
+  - **Plant nodes** (`ResourceFlowEngine._process_plant`): a packed bed
+    grows nothing (`packed_3d`); `establish_days` + `planted_abs_h` ramp it
+    like a processor; `protected_season` (0..1) replaces the temperate
+    season curve (`PlantGrowth.season_for_specs`); a food crop's water and
+    nutrients are for the WHOLE plant it grows (they were for the eaten
+    share only), and the rest of it leaves on a new `residue_out` port as
+    biomass when a biomass store is wired (`GraphPortService` adds the port
+    to food plants; the sysdesign builder wires a biomass wire from a food
+    plant there). Preset **Greenhouse Keyhole Beds (20 m dome)**: 192.5 m²,
+    sunlight 0.8 (twin-wall polycarbonate), protected season 0.9, 40 L/kg
+    (net of a closed dome's recovered condensate), 1.5 % N+P+K, food 0.6,
+    establish 60 days. Dome preset **greenhouse_20m** (6V, 1" EMT, 2.1 x
+    6 m polycarbonate sheets; 3V/4V faces do not fit a sheet).
+  - **Sizing** (`tools/diag/greenhouse_yield_probe.gd`, RunScript): by the
+    plant model a m² of bed under polycarbonate at Bombay Beach makes
+    2.9 kg of food a year (0.14 kg/month in winter, 0.34 in summer), so
+    15 kg a day needs ~1,900 m². bombay_ten has twelve 20 m domes (2,310 m²,
+    ~18 kg/day average; winter ~11, the pantry carries it), in two blocks
+    either side of the gate road (z 40 / 64, x ±22 / ±46 / ±70), each keyhole
+    slot facing the camp. The 13 outdoor plots stay (willow coppice and
+    sorghum on reclaimed water, the biomass the reactor and compost use), now
+    7 m squares at their true 50 m².
+  - **Chores per module**: a design chore with `"each": true` becomes one
+    per expanded node id, `{n}` its number, targeting that module's twin
+    (`closed_loop_world.standing_chores`); greenhouse chores are `sheltered`.
+    Tend greenhouse N (0.4 h daily, 7-12) + harvest and resow (1 h weekly):
+    ~1 person-hour per m² a year. The sync swaps the board's standing chores
+    by label pattern (`chore_label_pattern`, `RETIRED_CHORES`).
+  - **World builder / sync**: twin entries take `positions`, `bed` (a
+    grow_bed_spec patch), `with_dome` (a dome prop over each bed, its own
+    kit, record `greenhouse_for` / `greenhouse_beds`), `walk_in` and
+    `face_centre`. Record `walk_in` keeps a prop off the NPC nav grid's
+    solid footprints (`TerrainLoader.nav_solid_footprints`). The sync puts
+    twins for NEW nodes up at once by default (packed, then unpacked, which
+    stamps a bed's planting hour); `CLS_CREW_BUILD=1` leaves them as kits
+    queued for the crew in work hours (`queue_item(..., {"all_hands":
+    false})`, a module's standing chores `depends_on` its build's last
+    task). It moves a `bed` twin the design moved by more than 3 m and erases
+    "@start" values on new nodes. Measured on Closed Loop Ten: built at once,
+    all ten stay at morale 0.91 for six days and every dome is tended daily;
+    crew-built (~950 person-hours on the board) the camp lost people within
+    the week even with the rules below. The check: `CLSC_BUILD_NOW=1`
+    (finish queued builds), `CLSC_GROW_DAYS=n` (shoot a dome n days on, at
+    noon), per-module chore report and 6-hourly people lines.
+  - **NPC work rules this exposed** (`core/population/npc_agent.gd`):
+    `ALL_HANDS_REST_BAR` 0.7 — ALL HANDS takes leisure for the board only
+    while the person's enrichment need is under it, and the same rule holds
+    in ordinary free time (`rest_first`: out of a WORK block, enrichment
+    ≥ 0.7 goes to gathering before chores); `CREW_BREAK_BAR` 0.85 — a worker
+    in a crew at quorum steps out for a critical need there (was URGENT
+    0.95, past morale's 0.75 pain threshold, so long builds kept crews
+    working parched). `SiteDeployDirector.queue_item` takes `opts.all_hands`.
+  - **Dome glazing** (`DomeLabBuilder`): clear sheets (look "glazing", and
+    `face.glazing`) go in a separate "Glazing" MeshInstance3D that casts no
+    shadow and has `skip_prop_collision` (Godot shadows ignore
+    transparency: a polycarbonate greenhouse was black inside; no door is
+    modelled, so the frame alone collides).
+  - `EnergyTimeline._steps_to_cover` guards a vanishing per-step energy (the
+    ratio overflowed and `int()` gave a -9e18 index: the "Out of bounds set
+    index" script error after the sync).
+
 ## Maps and scene shell
 
 Two playable maps, both rooted on `main.gd` (Node3D "Main"):
@@ -6191,46 +6625,6 @@ the same state. Plan: `~/.claude/plans/the-github-version-of-starry-lighthouse.m
   - `simpack.json` (the manifest, in part 1) plus `simpack.hashes.json` at
     the end of every part.
 - **Hard rules, enforced by BOTH writer and reader** (`entry_allowed`):
-## Whole-system design harness + the closed-loop world (tools/sysdesign/, 2026-11-09)
-
-Design a site as data, build it from library presets, run it a year on the
-game's own simulation, read a verdict. Full notes: `tools/sysdesign/README.md`.
-- **Loop:** `designs/<name>.json` -> `$env:SYSDESIGN="<name>"; $env:SYSDESIGN_DAYS="366";
-  tools\harness.ps1 -World <id> -RunScript res://tools/sysdesign/run_design.gd -Label <dir> -Timeout 3400`
-  -> `screenshots/<dir>/report.md` (+ report.json, daily.csv). A year with ten
-  people at 6-min steps is ~27 min. `SYSDESIGN_PEOPLE=0` skips the people.
-- `SysdesignBuilder` (nodes by library LABEL, `count`, `set`, recipes,
-  automations, wires by kind, `"a>b"` cross-kind), `sysdesign_year.gd` (the
-  stepper: SolarUI's pure evaluator, `EnergyTimeline.step_soc` + hysteresis,
-  `NpcPopulationBridge.tick_at`, `AutomationSim` switching through the
-  GraphSimLoad proxy, `ResourceFlowEngine.render_step`, the view's machine
-  ticks), `sysdesign_report.gd` (the eight SUSTAINED checks).
-- The run resets `PopTestPrefs` in memory and sets the chore ledger to finite
-  labour with a ZERO abstract pool, so recipe crew steps wait for a person.
-- **`bombay_ten`** (10 people, Bombay Beach): 15.2 kWp, 62.4 kWh, a 12,000 m2
-  rain apron into a 400 m3 cistern, 9 greenhouse beds, kitchen recipe with
-  crew steps, reed beds on blackwater, compost + HomeBiogas, biomass plots ->
-  Biochar Reactor as a solar dump load -> woodgas genset, shredder ->
-  Plastic-to-Fuel Retort + injection molder. 366 days from 2024-01-01:
-  SUSTAINED, 0 h AC off, lowest battery 28 %, 10 of 10 stayed.
-- **World** `w6af22bac295d` "Bombay Beach - Closed Loop Ten": built by
-  `tools/fixes/closed_loop_world.gd` (graph, 3D twins as packed kits, 18
-  stowed in a cargo container, three living vehicles, gate, spaces, standing
-  chores, ARRIVE then DEPLOY). Sandbox gate:
-  `tools/checks/closed_loop_world_check.gd`. New world from a map:
-  `tools/sysdesign/create_world.gd` (headless).
-- **Game fixes that came out of it:**
-  - `AutomationEngine` looked for SystemGraphView two levels deep; it is
-    three. No `tank.<id>.level` / node-state key ever reached a live rule,
-    so tank-level automations never fired in play. Cached recursive lookup.
-  - `ResourceFlowEngine` batch start gates compared a 0-1 level with an
-    absolute quantity (two sites); now level x capacity.
-  - New library preset **Plastic-to-Fuel Retort** (catalog
-    `tclab_plastic_retort`, the TC lab's `plastic_retort` binds it).
-- Engine rules a design must respect are listed in the README (proportional
-  processors, batches pushing into full stores, unwired-port fallback, the
-  0.1 % "has supply" rule, rain needs the Rain source wired).
-
   - Secrets never travel: `SECRET_FILES` / `SECRET_DIRS`.
   - Code never travels: `CODE_EXTENSIONS`.
   - A `.tres` / `.tscn` never travels as user data. The map's
@@ -15204,6 +15598,109 @@ placemark's exact coordinates so nothing has to be guessed at in the world.
   any new row wider than ~250 px does it again). Verify with
   `core/poi/poi_selftest.gd` and `--capture=poi` on mtvernon (Validation
   list), which asserts the panel and the block are inside the viewport.
+
+## Earth-sheltered structures: earthworks, Earthships, basements (2026-11-10)
+
+Plan: `~/.claude/plans/c-users-notsa-documents-earthship-glb-c-compressed-salamander.md`.
+A placed thing can sit below the terrain and be walked into. User's choices:
+the GLBs are presets, the earthworks rules work on ANY placed model (prop
+editor), first version = Earthships + houses with basements.
+- **The terrain is a 1.5 m heightfield and cannot draw a wall**, so a
+  structure's earthworks are two things:
+  - **The opening (hole).** Inside the footprint the terrain is DISCARDED
+    per pixel (`TerrainHoleMask`: a Texture2DArray, ≤ 16 layers, 256 px, pushed
+    to `terrain_detail.gdshader` as `hole_count` / `hole_tex` / `hole_rects`;
+    re-pushed by the loader's tick after a drape swap). The HeightField
+    collider is sunk 3 m below the floor inside, grown one cell
+    (`TerrainHeightField.collider_fn`), and an edge COLLAR
+    (`ConcavePolygonShape3D` on the drawn ground, `Earthworks/Collar_<id>`) is
+    what you stand on beside the walls. The structure supplies its own floor,
+    walls and roof collision.
+  - **Earth shaping** (berms, daylight cuts, ramps): a third tile layer
+    `_structure_tiles`, composed after channel + player. Re-derived from prop
+    records by `EarthworksRuntime` (TerrainLoader child "Earthworks", polls a
+    signature at 4 Hz), never in player undo, never saved. Deltas are measured
+    as target − (base + player + channel), so a floor or berm top is an
+    ABSOLUTE height. The 8 neighbour tiles get a 1.5 mm delta so the coarse
+    DetailGround collider sinks round the structure (`PAD_LIFT_M`).
+- **One height rule.** `_ground_height_at` returns the FLOOR inside an opening
+  (player reseat, props inside, nav, vegetation); `water_height_at` and
+  `WaterGroundSampler.roofs` return the ROOF (drainage, Rain-tool fill,
+  `ShorelineHistory.wet_at`): rain runs round a building and never ponds in it.
+  `surface_height_at` = drawn surface ignoring openings;
+  `ground_without_structures` = the grade a structure is measured against.
+- **Spec** (`StructureEarthworks`, record key `earthworks`; the simple form
+  `from_simple` / `simple_of` is what the UIs edit): `sink_m`, `rect` / `poly`,
+  `hole`, `floor_y`, `roof_y`, `slab`, `walls`, `berm {side: h, -1 = to roof}`,
+  `berm_run`, `daylight` side + `cut_w`, `ramp_len` / `ramp_w` / `ramp_at`.
+  Sides: `-z` back, `+z` front (south at yaw 0), `-x` left, `+x` right.
+  `spec_for_record` derives a parametric building's basement itself.
+- **Seating:** an earthworks prop stands at `ground_without_structures` −
+  sink + y_offset (`PlacedPropRuntime.earthworks_grade_fn` / `earthworks_y0`):
+  its own cut must not pull it down.
+- **Commit** (`commit_structure_tiles`): the channel commit, then props on the
+  touched tiles re-seated one by one (the full reground rebuilt every prop:
+  ~5 s a placement on Bombay Beach; now ~0.3 s incl. the detail sink),
+  `_on_terrain_tiles_changed`, `NpcPopulationBridge.notify_world_changed`.
+- **Prop editor → Earthworks** (`scenes/ui/earthworks_editor_section.gd`) on
+  every prop: sink, opening, floor, berms per side, daylight cut, ramp, Fit to
+  model. Catalog entries can carry default earthworks (`fit`, `roof_fit`).
+- **Earthship designer** (`core/earthshiplab/`, `scenes/ui/earthshiplab_modal.gd`,
+  Library → Designers; model `earthshiplab_structure`, record key
+  `earthship_spec`, library `user://earthshiplab_library.json`): tyre-wall U
+  rooms, greenhouse corridor (glazing angle "Best for this site" from the
+  latitude), door alcove, berms to the roof; `EarthshipDesign.earthworks`
+  emits the spec. Presets `simple_survival`, `global_model`, `muro_di_gomme`,
+  `phoenix`. The user's GLBs are catalog `earthship_phoenix` /
+  `earthship_detail` (`Imported Models/Earthship/`, gitignored, scale figure
+  stripped). `PlacedPropService.sync_earthship` on placement and Apply.
+- **Basements** (`BasementBuilder`, building spec key `basement` {depth_m,
+  wall_t, entry areaway | walkout | none, edge, door_at}): foundation walls with
+  a door, a slab; Building Builder → Basement section.
+  ⚠ `PlacedPropRuntime.model_extras` never passed `building_spec`, so EVERY
+  placed parametric building drew the default cottage (and no basement had
+  walls or a floor to stand on); fixed here, the ghost too.
+- **Around it (second pass, same day):**
+  - **Lights:** each opening whose floor is ≥ 0.8 m below grade gets a grid of
+    warm shadowless OmniLights 2.0 m over the floor (`EarthworksRuntime
+    .light_points`, ≤ 8, distance-faded; spec key `lights`, the Earthworks
+    section's "Lights" box). The basement has a ceiling under the house's
+    foundation skirt (`BasementBuilder.CEILING_Y` −0.38; the house floor
+    covered a higher one from below), and the door head stops at it.
+  - **Roof water:** `SystemGraphView.sync_structure_water(prop, label, roof_m2,
+    cistern_l, xz)` = a rain catchment wired into a cistern, both bound to the
+    prop (`structure_water` tag), re-synced in place keeping the level.
+    Automatic for an Earthship (its roof area and cisterns, in
+    `sync_earthship`); the prop editor's "Roof water to the graph" for any
+    earthworks structure (`PlacedPropService.add_structure_roof_water`, 5 m³).
+  - **Streams:** carving needed nothing (the structure layer's targets are
+    absolute and re-measured over a channel). The stream's water SURFACE is
+    masked inside openings (`WaterNetwork._open_mask`; caches dropped when the
+    hole signature changes in `on_terrain_tiles_changed`).
+  - **Temperature:** `EarthTemperature` (pure): the soil wave by Kusuda &
+    Achenbach 1965 from the year's monthly means (`WeatherService
+    .monthly_mean_temp_c`, α 0.045 m²/day), the room an ESTIMATE blending
+    that soil (at half the floor depth + 0.5 m, + 2 m when bermed to the roof)
+    with the damped air by an earth share. The prop editor's Earthworks status
+    shows "Inside about … °C, outside … °C" (`TerrainLoader
+    .structure_temperature_c`). Sunken openings are cool SHADE spots for
+    NPCs' heat response (`shade_footprints`, entry `earth: true`).
+  - **NPC nav:** every opening is a walled room with a door where its
+    daylight side meets the ramp (`EarthworksRuntime.nav_entries` /
+    `door_point`, NpcBuildingNav's shape, collected by the bridge's
+    `_collect_nav_obstacles` through `TerrainLoader.earthworks_nav_entries`);
+    its prop is left out of `nav_solid_footprints`. No daylight side = a
+    closed block. Not done: walking onto a house's ground floor above its
+    basement (no stairs yet).
+  - Tour stop `18n_earthship` (burningman).
+- ⚠ The uncommitted modal-UX changes to `harness_input.gd` named
+  `DesignerShell`, which drags the `CursorController` autoload into every
+  `--script` selftest that loads it (`tour_selftest` printed compile errors
+  before its PASS); it is duck-typed now.
+- Gates: `core/earthworks/earthworks_selftest.gd` (77),
+  `core/earthshiplab/earthship_selftest.gd` (38), and on Bombay Beach
+  `tools/checks/earthworks_check.gd` (19), `earthship_check.gd` (17, incl. a nav path through the door),
+  `basement_check.gd` (9) — real Forward walks down the ramps and in.
 
 ## Shoreline over time — archived drape + gauged lake level (core/terrain/shoreline/, 2026-10-23)
 

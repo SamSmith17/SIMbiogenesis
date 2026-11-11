@@ -82,13 +82,14 @@ func _drag(a: Vector3, b: Vector3) -> void:
 
 ## Click a sidebar button, scrolled into view first.
 func _press(text: String, partial: bool = false) -> bool:
-	var btn := HarnessInput.find_button(_ui, text, partial)
+	var btn := HarnessInput.find_button_revealing(_ui, text, partial)
 	if btn == null:
 		return false
 	var p: Node = btn.get_parent()
 	while p != null and not (p is ScrollContainer):
 		p = p.get_parent()
 	if p is ScrollContainer:
+		await _settle(2)   # a section the finder just opened lays out first
 		(p as ScrollContainer).ensure_control_visible(btn)
 		await _settle(3)
 	await HarnessInput.click(_win, HarnessInput.center_of(btn))

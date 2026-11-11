@@ -90,8 +90,9 @@ static func apply(main: Node, sgv: Node, design: Dictionary) -> Dictionary:
 	clear_graph(model)
 	# People live where the site marker is.
 	var c: Vector2 = SiteCentre.xz(main)
+	design["_start_abs"] = start_abs
 	for n: Dictionary in (design.get("nodes", []) as Array):
-		if str(n.get("preset", "")) == "Population":
+		if str(n.get("preset", "")).begins_with("Population"):
 			var st: Dictionary = n.get("set", {})
 			st["home_x"] = c.x
 			st["home_z"] = c.y

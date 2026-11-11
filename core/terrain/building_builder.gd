@@ -950,6 +950,11 @@ static func build_node(spec: Dictionary, node_name: String = "ParametricBuilding
 	if mi != null:
 		mi.name = "Mesh"
 		root.add_child(mi)
+	# A basement (core/earthworks/basement_builder.gd): foundation walls, slab
+	# and the entry door under the house; the placed record's earthworks open
+	# the terrain over it.
+	if BasementBuilder.has_basement(use):
+		root.add_child(BasementBuilder.build(BuildingFeatures.footprint_of(use), use[BasementBuilder.KEY]))
 	return root
 
 

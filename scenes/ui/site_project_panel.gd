@@ -143,6 +143,7 @@ func _build_ui() -> void:
 	_panel.offset_bottom = 330
 	add_child(_panel)
 	UiFit.adopt(_panel)  # above the timeline, inside the screen at any size
+	UiFit.set_content_column(_panel, 820.0)  # full screen: a centred column, not edge to edge
 
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 8)
@@ -358,8 +359,16 @@ func _rebuild_row(rec: Dictionary) -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	var lbl := Label.new()
-	lbl.text = "📦 Packed structure at %d, %d" % [
+	# Its own name first: three rows of "Packed structure" told nobody which.
+	var spec: Dictionary = rec.get("linkage_spec", {}) if rec.get("linkage_spec") is Dictionary else {}
+	var pname := str(spec.get("name", spec.get("designName", ""))).strip_edges()
+	if pname.is_empty():
+		pname = str(ModelCatalog.find(str(rec.get("model_id", ""))).get("label", "Structure"))
+	lbl.text = "%s, packed" % pname
+	lbl.tooltip_text = "Stands at %d m east, %d m south of the map's middle" % [
 		int(rec.get("x", 0.0)), int(rec.get("z", 0.0))]
+	lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+	lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL

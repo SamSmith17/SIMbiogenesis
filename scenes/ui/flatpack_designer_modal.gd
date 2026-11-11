@@ -54,7 +54,8 @@ var _subtitle: Label
 var _undo_btn: Button
 var _redo_btn: Button
 var _type_box: VBoxContainer
-var _design_list: ItemList
+var _design_list: DesignGallery
+var _col: DesignerColumn
 var _design_entries: Array = []
 var _tabs: TabBar
 var _view_stack: Control
@@ -294,10 +295,8 @@ func _build_left() -> Control:
 		b.pressed.connect(_on_type_pressed.bind(t))
 		_type_box.add_child(b)
 	box.add_child(SectionHeader.make("Designs", "layout-grid"))
-	_design_list = ItemList.new()
-	_design_list.custom_minimum_size = Vector2(0, 200)
-	_design_list.auto_height = true
-	_design_list.item_activated.connect(_on_design_activated)
+	_design_list = DesignGallery.make("flatpack")
+	_design_list.set_thumbnailer(_thumb_for)
 	_design_list.item_selected.connect(_on_design_activated)
 	box.add_child(_design_list)
 	var lib := HBoxContainer.new()
@@ -409,7 +408,12 @@ func _build_studio_world() -> void:
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
 	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.035, 0.043, 0.063)
+	# The kit studios' backdrop (StudioViewport): soft grey haze, not a void.
+	e.background_color = StudioViewport.BACKDROP_HAZE
+	e.fog_enabled = true
+	e.fog_light_color = StudioViewport.BACKDROP_HAZE
+	e.fog_density = 0.004
+	e.fog_sky_affect = 0.0
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	e.ambient_light_color = Color(0.55, 0.58, 0.64)
 	e.ambient_light_energy = 0.6
@@ -496,6 +500,7 @@ func _build_right() -> Control:
 	_export_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_export_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_export_status)
+	_col = DesignerColumn.setup(box, "flatpack", {"open": ["Size"], "fold": ["Cut list", "CNC files"]})
 	return col[0]
 
 
@@ -627,6 +632,7 @@ func _rebuild_now() -> void:
 
 
 func _refresh_header() -> void:
+	_refresh_tiles()
 	if not _name_edit.has_focus():
 		_name_edit.text = str(_spec["name"])
 	var bom: Dictionary = _design.get("bom", {})
@@ -1185,12 +1191,22 @@ func _select_part(id: String) -> void:
 # Designs
 # ---------------------------------------------------------------------------
 
+## One design's picture for the gallery: its key and how to build it.
+func _thumb_for(i: int) -> Dictionary:
+	if i < 0 or i >= _design_entries.size():
+		return {}
+	var spec: Dictionary = FlatpackSpec.resolve((_design_entries[i]["spec"] as Dictionary).duplicate(true))
+	return {"key": JSON.stringify(spec), "build": func() -> Node3D:
+		return FlatpackBuilder.build_node(spec, "Thumb")}
+
+
 func _refresh_design_list() -> void:
 	_design_list.clear()
 	_design_entries.clear()
 	for p in FlatpackPresets.builtins():
 		var i := _design_list.add_item(str(p["name"]))
 		_design_list.set_item_tooltip(i, str(p.get("blurb", "")))
+		_design_list.set_item_subtitle(i, str(p.get("blurb", "")))
 		_design_entries.append({"kind": "builtin", "id": str(p["id"]), "spec": p["spec"]})
 	for d in _library:
 		var i2 := _design_list.add_item("★ " + str(d["name"]))
@@ -1740,3 +1756,21 @@ class ProfileCanvas extends Control:
 			var mm := e as InputEventMouseMotion
 			var delta := (mm.position - _drag_start) / _scale
 			owner_modal.call("set_profile_offset", _drag, _offset_start + Vector2(delta.x, -delta.y), false)
+
+
+## The headline numbers and what each folded section holds.
+func _refresh_tiles() -> void:
+	if _col == null or _design.is_empty():
+		return
+	var bom: Dictionary = _design.get("bom", {})
+	var size: Vector3 = _design.get("size", Vector3.ZERO)
+	_col.set_tiles([
+		{"caption": "Wide", "value": FlatpackSpec.fmt_in(size.x, 8), "tip": "Overall width"},
+		{"caption": "Deep", "value": FlatpackSpec.fmt_in(size.z, 8), "tip": "Overall depth"},
+		{"caption": "High", "value": FlatpackSpec.fmt_in(size.y, 8), "tip": "Overall height"},
+		{"caption": "Parts", "value": str(int(bom.get("parts", 0))), "tip": "Pieces to cut"},
+		{"caption": "Sheets", "value": str(int(bom.get("sheets", 0))), "tip": "Plywood sheets the parts nest onto"},
+		{"caption": "Weight", "value": "%.0f kg" % float(bom.get("mass_kg", 0.0)), "tip": "All the parts"}])
+	_col.set_summary("Size", _fmt_size3(size))
+	_col.set_summary("Cut list", "%s on %s" % [UiText.count(int(bom.get("parts", 0)), "part"),
+		UiText.count(int(bom.get("sheets", 0)), "sheet")])

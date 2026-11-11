@@ -55,7 +55,8 @@ var _name_edit: LineEdit
 var _subtitle: Label
 var _undo_btn: Button
 var _redo_btn: Button
-var _design_list: ItemList
+var _design_list: DesignGallery
+var _col: DesignerColumn
 var _design_entries: Array = []
 var _tabs: TabBar
 var _view_stack: Control
@@ -288,9 +289,8 @@ func _build_left() -> Control:
 	var col := _scroll_column(250)
 	var box: VBoxContainer = col[1]
 	box.add_child(SectionHeader.make("Turbines", "layout-grid"))
-	_design_list = ItemList.new()
-	_design_list.custom_minimum_size = Vector2(0, 260)
-	_design_list.auto_height = true
+	_design_list = DesignGallery.make("windlab")
+	_design_list.set_thumbnailer(_thumb_for)
 	_design_list.item_selected.connect(_on_design_activated)
 	box.add_child(_design_list)
 	var lib := HBoxContainer.new()
@@ -498,6 +498,7 @@ func _build_right() -> Control:
 	_status_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_status_lbl)
 	_build_settings_rows()
+	_col = DesignerColumn.setup(box, "windlab", {"open": ["Rotor"], "fold": ["At the design wind", "Bill of materials", "Files and making it"]})
 	return col[0]
 
 
@@ -932,6 +933,7 @@ func _rebuild_now() -> void:
 
 
 func _refresh_header() -> void:
+	_refresh_tiles()
 	if not _name_edit.has_focus():
 		_name_edit.text = str(_spec["name"])
 	var dp: Dictionary = _design["design"]
@@ -1229,12 +1231,22 @@ func use_world_wind() -> void:
 # Library
 # ---------------------------------------------------------------------------
 
+## One design's picture for the gallery: its key and how to build it.
+func _thumb_for(i: int) -> Dictionary:
+	if i < 0 or i >= _design_entries.size():
+		return {}
+	var spec: Dictionary = WindLabSpec.resolve((_design_entries[i] as Dictionary).duplicate(true))
+	return {"key": JSON.stringify(spec), "build": func() -> Node3D:
+		return WindLabBuilder.build_node(spec, "Thumb")}
+
+
 func _refresh_design_list() -> void:
 	_design_list.clear()
 	_design_entries.clear()
 	for b in WindLabPresets.builtins():
 		_design_list.add_item(str(b["label"]))
 		_design_list.set_item_tooltip(_design_list.item_count - 1, str(b["blurb"]))
+		_design_list.set_item_subtitle(_design_list.item_count - 1, str(b["blurb"]))
 		_design_entries.append(b["spec"])
 	for e in _library:
 		_design_list.add_item("★ " + str((e as Dictionary).get("name", "Saved turbine")))
@@ -1885,3 +1897,24 @@ class MatchCanvas extends Control:
 				if (row["rect"] as Rect2).has_point((ev as InputEventMouseButton).position):
 					owner_modal.call("use_generator", str(row["gen"]), float(row["ratio"]))
 					return
+
+
+## The headline numbers and what each folded section holds.
+func _refresh_tiles() -> void:
+	if _col == null or _design.is_empty():
+		return
+	var dp: Dictionary = _design["design"]
+	var start := float(_design["start_ms"])
+	var wind := float(_spec["site"]["design_wind_ms"])
+	_col.set_tiles([
+		{"caption": "At %.0f m/s" % wind, "value": UiText.num(float(dp["p_elec"]), "W"), "tip": "Into the load at the design wind"},
+		{"caption": "A year", "value": _fmt_kwh(float(_design["aep_kwh"])), "tip": "%.1f W on average at this site" % float(_design["mean_w"])},
+		{"caption": "Rotor speed", "value": "%d rpm" % int(round(float(dp["rpm"]))), "tip": "At the design wind"},
+		{"caption": "Starts at", "value": ("%.1f m/s" % start) if is_finite(start) else "Never",
+			"level": "" if is_finite(start) else "error", "tip": "The wind that turns it from rest"},
+		{"caption": "Swept area", "value": "%.2f m²" % float(_design["area_m2"]), "tip": "What the rotor catches"},
+		{"caption": "Weight", "value": WindLabSpec.fmt_kg(float(_design["mass"]["total"])),
+			"tip": "Rotor %s" % WindLabSpec.fmt_kg(float(_design["mass"]["rotor"]))}])
+	_col.set_summary("Rotor", "%.2f m²" % float(_design["area_m2"]))
+	_col.set_summary("Site wind", "%.1f m/s design" % wind)
+	_col.set_summary("At the design wind", "%d rpm, %s" % [int(round(float(dp["rpm"]))), UiText.num(float(dp["p_elec"]), "W")])

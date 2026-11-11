@@ -69,6 +69,8 @@ var _prerun_btn: Button
 var _progress: Label
 var view: Node3D = null              # what is inside (tclab_process_view.gd)
 var view_bar: HBoxContainer
+var _view_btn: Button
+var _col: DesignerColumn
 var _view_btns := {}
 var _cut_opt: OptionButton
 var _cut_slider: HSlider
@@ -109,12 +111,22 @@ func setup(m: Control, left_parent: Control, right_parent: Control, centre_paren
 	view_bar = HBoxContainer.new()
 	view_bar.name = "process_view_bar"
 	view_bar.add_theme_constant_override("separation", 6)
-	view_bar.visible = false
-	centre_parent.add_child(view_bar)
 	_build_left()
 	_build_right()
 	_build_transport()
 	_build_view_bar()
+	# One strip under the studio: Look / cut / contents open from "View".
+	_view_btn = IconButton.make("eye", "How the assembly is drawn: solid, cut open or see-through; where the cut is; contents; the molecule lens", Callable(), "View")
+	_view_btn.name = "proc_view"
+	_view_btn.flat = false
+	UITheme.style_button(_view_btn)
+	transport.add_child(_view_btn)
+	var shell: Variant = modal.get("_shell")
+	if shell is DesignerShell:
+		(shell as DesignerShell).add_flyout("view", view_bar, _view_btn, {"width": 760.0})
+		_view_btn.pressed.connect(func() -> void: (shell as DesignerShell).toggle_flyout("view"))
+	else:
+		centre_parent.add_child(view_bar)
 	set_process(false)
 
 
@@ -127,7 +139,6 @@ func enter(d: Dictionary) -> void:
 	left_box.visible = true
 	right_box.visible = true
 	transport.visible = true
-	view_bar.visible = true
 	if view == null:
 		view = ViewScript.new()
 		view.name = "ProcessView"
@@ -145,7 +156,9 @@ func exit() -> void:
 	left_box.visible = false
 	right_box.visible = false
 	transport.visible = false
-	view_bar.visible = false
+	var sh: Variant = modal.get("_shell")
+	if sh is DesignerShell and (sh as DesignerShell).flyout_shown() == "view":
+		(sh as DesignerShell).hide_flyout()
 	set_process(false)
 	_clear_tint()
 	set_lens(false)
@@ -649,6 +662,8 @@ func _build_right() -> void:
 	_use_note = _muted("")
 	_use_note.name = "use_note"
 	rb.add_child(_use_note)
+	_col = DesignerColumn.setup(rb, "tc_process", {"fold": ["Right now", "What happened", "Where the heat went"],
+		"tiles": false, "finder": false})
 
 
 # ---------------------------------------------------------------------------

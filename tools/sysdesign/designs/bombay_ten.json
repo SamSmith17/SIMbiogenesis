@@ -14,7 +14,7 @@
  "nodes": [
   {
    "id": "hab",
-   "preset": "Population",
+   "preset": "Population (urine-diverting toilets)",
    "set": {
     "name": "The Ten",
     "occupants": 10,
@@ -69,10 +69,105 @@
    "id": "cistern",
    "preset": "Water Tank (250 gal)",
    "set": {
-    "name": "Rain Cistern",
+    "name": "Rain Cistern (raw)",
     "capacity": "400 m³",
     "capacity_qty": 400000.0,
     "level": 0.05
+   }
+  },
+  {
+   "id": "sandfilter",
+   "preset": "Sand Filter + UV",
+   "state": "off",
+   "set": {
+    "name": "Sand Filter + UV"
+   },
+   "automations": [
+    {
+     "alias": "Treat rainwater when the day tank runs down",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.potable.level",
+       "below": 70.0
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "above": 20.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ],
+     "conditions": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.potable.level",
+       "below": 70.0
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "above": 20.0
+      }
+     ]
+    },
+    {
+     "alias": "Stop when the day tank is full",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.potable.level",
+       "above": 95.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    },
+    {
+     "alias": "Stop treating when the battery is nearly flat",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "below": 15.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "potable",
+   "preset": "Water Tank (250 gal)",
+   "set": {
+    "name": "Drinking Water Day Tank",
+    "capacity": "2000 L",
+    "capacity_qty": 2000.0,
+    "level": 0.6
+   }
+  },
+  {
+   "id": "reclaim",
+   "preset": "Reclaimed Water Tank",
+   "set": {
+    "name": "Reclaimed Water (irrigation only)",
+    "capacity": "5000 L",
+    "capacity_qty": 5000.0,
+    "level": 0.2
    }
   },
   {
@@ -90,8 +185,96 @@
    "set": {
     "capacity": "6000 L",
     "capacity_qty": 6000.0,
+    "level": 0.0,
+    "name": "Brownwater Tank"
+   }
+  },
+  {
+   "id": "bwdig",
+   "preset": "Brownwater Digester (3 m³)"
+  },
+  {
+   "id": "urine",
+   "preset": "Urine Storage Tank (1000 L)",
+   "set": {
     "level": 0.0
    }
+  },
+  {
+   "id": "unr",
+   "preset": "Urine Nutrient Recovery",
+   "state": "off",
+   "automations": [
+    {
+     "alias": "Process urine once a batch has collected",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.urine.level",
+       "above": 8.0
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "above": 45.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ],
+     "conditions": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.urine.level",
+       "above": 8.0
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "above": 45.0
+      }
+     ]
+    },
+    {
+     "alias": "Stop when the tank is nearly empty",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.urine.level",
+       "below": 2.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    },
+    {
+     "alias": "Stop when the battery is low",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "below": 30.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "saltpan",
+   "preset": "Salt Pan (brine)"
   },
   {
    "id": "gfilter",
@@ -145,8 +328,57 @@
     "name": "Pantry",
     "capacity": "1000 kg",
     "capacity_qty": 1000.0,
-    "level": 0.3
+    "level": 0.15
    }
+  },
+  {
+   "id": "supplies",
+   "preset": "Supply Stores (packaged food)",
+   "set": {
+    "name": "Supply Stores (packaged food)",
+    "capacity": "1500 kg",
+    "capacity_qty": 1500.0,
+    "level": 1.0
+   }
+  },
+  {
+   "id": "unpack",
+   "preset": "Unpack & Sort Supplies",
+   "state": "off",
+   "automations": [
+    {
+     "alias": "Open supplies when the pantry runs low",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.food.level",
+       "below": 20.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "Stop once the pantry has enough",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.food.level",
+       "above": 30.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
   },
   {
    "id": "meals",
@@ -229,11 +461,6 @@
       "kind": "food_waste",
       "qty": 3.2,
       "mode": "end_batch"
-     },
-     {
-      "kind": "packaging_waste",
-      "qty": 1.2,
-      "mode": "end_batch"
      }
     ],
     "steps": [
@@ -256,7 +483,7 @@
       "chore_hours": 0.5
      }
     ],
-    "note": "meal_prep scaled four times: one cooked round feeds the camp for a day."
+    "note": "meal_prep scaled four times: one cooked round feeds the camp for a day. Packaging comes off when supplies are unpacked, not at the stove."
    }
   },
   {
@@ -270,26 +497,49 @@
    "id": "pack",
    "preset": "Packaging Waste Bin",
    "set": {
+    "name": "Card & Tin Bin",
+    "capacity": "400 kg",
+    "capacity_qty": 400.0,
     "level": 0.0
    }
   },
   {
-   "id": "gh",
-   "preset": "Greenhouse Grow Bed",
-   "count": 4
+   "id": "plasticbin",
+   "preset": "Waste Plastic Bin",
+   "set": {
+    "name": "Waste Plastic Bin",
+    "level": 0.0
+   }
   },
   {
-   "id": "gh_flex",
-   "preset": "Greenhouse Grow Bed",
-   "count": 5,
+   "id": "plastic_in",
+   "preset": "Plastic Collection Run",
+   "state": "off",
    "automations": [
     {
-     "alias": "Run while there is power to spare",
+     "alias": "Fetch plastic once the site makes none of its own",
      "triggers": [
       {
        "kind": "numeric",
-       "entity_id": "sensor.battery_level",
-       "above": 55.0
+       "entity_id": "tank.plasticbin.level",
+       "below": 1.0
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "tank.food.level",
+       "above": 45.0
+      }
+     ],
+     "conditions": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.plasticbin.level",
+       "below": 1.0
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "tank.food.level",
+       "above": 45.0
       }
      ],
      "actions": [
@@ -300,7 +550,89 @@
      ]
     },
     {
-     "alias": "Rest the pumps when the battery is low",
+     "alias": "Back once the bin has a load",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.plasticbin.level",
+       "above": 10.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "ghb",
+   "preset": "Greenhouse Keyhole Beds (20 m dome)",
+   "count": 12,
+   "set": {
+    "planted_abs_h": "@start"
+   }
+  },
+  {
+   "id": "nutr",
+   "preset": "Nutrient Store",
+   "set": {
+    "name": "Nutrient Store (N+P+K)",
+    "capacity": "100 kg",
+    "capacity_qty": 100.0,
+    "capacity_unit": "kg",
+    "level": 0.15
+   },
+   "sync_reset_level": true
+  },
+  {
+   "id": "compost_bays",
+   "preset": "Hot Compost Bays",
+   "state": "off",
+   "automations": [
+    {
+     "alias": "Compost while the biomass store has plenty",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.biomass.level",
+       "above": 10.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "Leave the rest for the fires and the reactor",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.biomass.level",
+       "below": 6.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "digfilter",
+   "preset": "Digestate Nitrification Filter",
+   "state": "on",
+   "automations": [
+    {
+     "alias": "Rest the aerator when the battery is low",
      "triggers": [
       {
        "kind": "numeric",
@@ -314,33 +646,38 @@
        "command": "turn_off"
       }
      ]
+    },
+    {
+     "alias": "Back on once the battery recovers",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "above": 45.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
     }
    ]
-  },
-  {
-   "id": "nutr",
-   "preset": "Nutrient Store",
-   "set": {
-    "level": 0.6
-   }
-  },
-  {
-   "id": "compost",
-   "preset": "Compost Digester"
   },
   {
    "id": "plot_black",
    "preset": "Garden Plot (50 m²)",
    "count": 4,
    "set": {
-    "name": "Reed Bed (blackwater)"
+    "name": "Willow Bed (reclaimed water)"
    }
   },
   {
    "id": "plot_fert",
    "preset": "Garden Plot (50 m²)",
    "set": {
-    "name": "Coppice Plot (digestate)"
+    "name": "Coppice Plot (reclaimed water)"
    }
   },
   {
@@ -443,15 +780,6 @@
    }
   },
   {
-   "id": "coolant",
-   "preset": "Thermal Storage",
-   "set": {
-    "name": "Condenser Cooling Loop",
-    "resource_kind": "hot_water",
-    "level": 0.0
-   }
-  },
-  {
    "id": "vinegar",
    "preset": "Liquid Fertilizer Tank",
    "set": {
@@ -528,6 +856,7 @@
    "id": "fert",
    "preset": "Liquid Fertilizer Tank",
    "set": {
+    "name": "Digestate Tank",
     "capacity": "1000 L",
     "capacity_qty": 1000.0,
     "level": 0.0
@@ -734,11 +1063,12 @@
  ],
  "ac": {
   "ctl_a": [
-   "gh",
-   "gh_flex",
    "gfilter",
    "kitchen",
-   "awg"
+   "awg",
+   "sandfilter",
+   "unr",
+   "digfilter"
   ],
   "ctl_b": [
    "reactor",
@@ -759,12 +1089,22 @@
    "water"
   ],
   [
-   "awg",
    "cistern",
+   "sandfilter",
    "water"
   ],
   [
-   "cistern",
+   "sandfilter",
+   "potable",
+   "water"
+  ],
+  [
+   "awg",
+   "potable",
+   "water"
+  ],
+  [
+   "potable",
    "hab",
    "water"
   ],
@@ -795,6 +1135,11 @@
   ],
   [
    "hab",
+   "urine",
+   "urine"
+  ],
+  [
+   "hab",
    "biomass",
    "biomass"
   ],
@@ -805,8 +1150,28 @@
   ],
   [
    "gfilter",
-   "cistern",
+   "reclaim",
    "water"
+  ],
+  [
+   "supplies",
+   "unpack",
+   "packaged_food"
+  ],
+  [
+   "unpack",
+   "food",
+   "food"
+  ],
+  [
+   "unpack",
+   "plasticbin",
+   "plastic_waste"
+  ],
+  [
+   "unpack",
+   "pack",
+   "packaging_waste"
   ],
   [
    "food",
@@ -814,7 +1179,7 @@
    "food"
   ],
   [
-   "cistern",
+   "potable",
    "kitchen",
    "water"
   ],
@@ -829,79 +1194,129 @@
    "food_waste"
   ],
   [
-   "kitchen",
-   "pack",
-   "packaging_waste"
+   "urine",
+   "unr",
+   "urine"
   ],
   [
-   "cistern",
-   "gh",
-   "water"
-  ],
-  [
-   "cistern",
-   "gh_flex",
-   "water"
-  ],
-  [
+   "unr",
    "nutr",
-   "gh",
    "nutrients"
   ],
   [
-   "nutr",
-   "gh_flex",
-   "nutrients"
+   "unr",
+   "reclaim",
+   "irrigation_water"
   ],
   [
-   "gh",
-   "food",
-   "food"
-  ],
-  [
-   "gh_flex",
-   "food",
-   "food"
-  ],
-  [
-   "biomass",
-   "compost",
-   "biomass"
+   "unr",
+   "saltpan",
+   "brine"
   ],
   [
    "black",
-   "compost",
+   "bwdig",
    "blackwater"
   ],
   [
-   "compost",
+   "bwdig",
+   "fert",
+   "liquid_fertilizer"
+  ],
+  [
+   "bwdig",
+   "gas",
+   "biogas"
+  ],
+  [
+   "fwaste",
+   "biogas",
+   "food_waste"
+  ],
+  [
+   "reclaim",
+   "biogas",
+   "irrigation_water>water"
+  ],
+  [
+   "biogas",
+   "gas",
+   "biogas"
+  ],
+  [
+   "biogas",
+   "fert",
+   "liquid_fertilizer"
+  ],
+  [
+   "fert",
+   "digfilter",
+   "liquid_fertilizer"
+  ],
+  [
+   "digfilter",
    "nutr",
    "nutrients"
   ],
   [
-   "black",
-   "plot_black",
-   "blackwater>water"
+   "digfilter",
+   "reclaim",
+   "irrigation_water"
   ],
   [
-   "plot_black",
    "biomass",
+   "compost_bays",
    "biomass"
   ],
   [
-   "fert",
-   "plot_fert",
-   "liquid_fertilizer>water"
-  ],
-  [
-   "plot_fert",
-   "biomass",
-   "biomass"
+   "compost_bays",
+   "nutr",
+   "nutrients"
   ],
   [
    "cistern",
-   "plot_water",
+   "ghb",
    "water"
+  ],
+  [
+   "nutr",
+   "ghb",
+   "nutrients"
+  ],
+  [
+   "ghb",
+   "food",
+   "food"
+  ],
+  [
+   "ghb",
+   "biomass",
+   "biomass"
+  ],
+  [
+   "reclaim",
+   "plot_black",
+   "irrigation_water>water"
+  ],
+  [
+   "reclaim",
+   "plot_fert",
+   "irrigation_water>water"
+  ],
+  [
+   "reclaim",
+   "plot_water",
+   "irrigation_water>water"
+  ],
+  [
+   "plot_black",
+   "biomass",
+   "biomass"
+  ],
+  [
+   "plot_fert",
+   "biomass",
+   "biomass"
   ],
   [
    "plot_water",
@@ -920,11 +1335,6 @@
   ],
   [
    "reactor",
-   "coolant",
-   "hot_water"
-  ],
-  [
-   "reactor",
    "gas",
    "woodgas"
   ],
@@ -939,29 +1349,14 @@
    "tar"
   ],
   [
-   "fwaste",
-   "biogas",
-   "food_waste"
+   "plastic_in",
+   "plasticbin",
+   "plastic_waste"
   ],
   [
-   "cistern",
-   "biogas",
-   "water"
-  ],
-  [
-   "biogas",
-   "gas",
-   "biogas"
-  ],
-  [
-   "biogas",
-   "fert",
-   "liquid_fertilizer"
-  ],
-  [
-   "pack",
+   "plasticbin",
    "shredder",
-   "packaging_waste>plastic_waste"
+   "plastic_waste"
   ],
   [
    "shredder",
@@ -982,11 +1377,6 @@
    "retort",
    "gas",
    "woodgas"
-  ],
-  [
-   "retort",
-   "coolant",
-   "hot_water"
   ],
   [
    "flake",
@@ -1174,68 +1564,110 @@
   },
   "twins": [
    {
-    "node": "gh",
-    "model": "domelab_structure",
-    "dome": "covered_3v",
-    "at": [
-     -40,
-     34
+    "node": "ghb",
+    "model": "grow_bed",
+    "positions": [
+     [
+      -70,
+      40
+     ],
+     [
+      -46,
+      40
+     ],
+     [
+      -22,
+      40
+     ],
+     [
+      22,
+      40
+     ],
+     [
+      46,
+      40
+     ],
+     [
+      70,
+      40
+     ],
+     [
+      -70,
+      64
+     ],
+     [
+      -46,
+      64
+     ],
+     [
+      -22,
+      64
+     ],
+     [
+      22,
+      64
+     ],
+     [
+      46,
+      64
+     ],
+     [
+      70,
+      64
+     ]
     ],
-    "step": [
-     10,
-     11
-    ],
-    "cols": 4,
-    "untag": true
-   },
-   {
-    "node": "gh_flex",
-    "model": "domelab_structure",
-    "dome": "covered_3v",
-    "at": [
-     -40,
-     45
-    ],
-    "step": [
-     10,
-     11
-    ],
-    "cols": 5,
-    "untag": true
+    "face_centre": true,
+    "walk_in": true,
+    "with_dome": "greenhouse_20m"
    },
    {
     "node": "plot_black",
     "at": [
-     34,
-     6
+     30,
+     2
     ],
     "step": [
-     5,
-     6
+     8.5,
+     8.5
     ],
     "cols": 4,
-    "stow": true
+    "stow": true,
+    "bed": {
+     "layout": "plot",
+     "area_m2": 50.0,
+     "crops": "willow"
+    }
    },
    {
     "node": "plot_fert",
     "at": [
-     54,
-     6
+     64,
+     2
     ],
-    "stow": true
+    "stow": true,
+    "bed": {
+     "layout": "plot",
+     "area_m2": 50.0,
+     "crops": "willow"
+    }
    },
    {
     "node": "plot_water",
     "at": [
-     34,
-     12
+     30,
+     11
     ],
     "step": [
-     5,
-     6
+     8.5,
+     8.5
     ],
     "cols": 4,
-    "stow": true
+    "stow": true,
+    "bed": {
+     "layout": "plot",
+     "area_m2": 50.0,
+     "crops": "sorghum"
+    }
    },
    {
     "node": "reactor",
@@ -1328,22 +1760,54 @@
   ],
   "chores": [
    {
-    "label": "Tend the greenhouse beds",
-    "hours": 1.5,
-    "node": "gh",
-    "start_h": 9.0,
-    "end_h": 13.0,
+    "label": "Tend greenhouse {n}",
+    "node": "ghb",
+    "each": true,
+    "hours": 0.4,
+    "start_h": 7.0,
+    "end_h": 12.0,
     "min_workers": 1,
-    "max_workers": 3
+    "max_workers": 2,
+    "exposure": "sheltered"
    },
    {
-    "label": "Weed and check the plots",
+    "label": "Harvest and resow greenhouse {n}",
+    "node": "ghb",
+    "each": true,
     "hours": 1.0,
-    "node": "plot_water",
-    "start_h": 14.0,
-    "end_h": 18.0,
+    "repeat": "weekly",
+    "start_h": 7.0,
+    "end_h": 16.0,
     "min_workers": 1,
-    "max_workers": 2
+    "max_workers": 2,
+    "exposure": "sheltered"
+   },
+   {
+    "label": "Check willow bed {n}",
+    "node": "plot_black",
+    "each": true,
+    "hours": 0.25,
+    "repeat": "weekly",
+    "start_h": 14.0,
+    "end_h": 18.0
+   },
+   {
+    "label": "Check the coppice plot",
+    "node": "plot_fert",
+    "each": true,
+    "hours": 0.25,
+    "repeat": "weekly",
+    "start_h": 14.0,
+    "end_h": 18.0
+   },
+   {
+    "label": "Weed and water sorghum plot {n}",
+    "node": "plot_water",
+    "each": true,
+    "hours": 0.3,
+    "repeat": "weekly",
+    "start_h": 14.0,
+    "end_h": 18.0
    },
    {
     "label": "Carry the scraps to the digester",

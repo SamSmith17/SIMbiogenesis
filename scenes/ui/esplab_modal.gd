@@ -49,6 +49,7 @@ var _designs_box: VBoxContainer
 var _card: VBoxContainer
 var _checks_box: VBoxContainer
 var _power_lbl: Label
+var _col: DesignerColumn
 var _ents_box: VBoxContainer
 var _bom_box: VBoxContainer
 var _status: Label
@@ -268,7 +269,11 @@ func _build_left() -> void:
 	box.add_child(_board_opt)
 	_board_note = _caption("")
 	box.add_child(_board_note)
-	box.add_child(SectionHeader.make("Add a part", "plus"))
+	# Adding parts is a mode: the 60 parts open from the strip's "Add part"
+	# button; this column is the board, what is on it and the designs.
+	var adder := VBoxContainer.new()
+	adder.name = "adder"
+	adder.add_theme_constant_override("separation", 4)
 	var search := LineEdit.new()
 	search.name = "part_search"
 	search.placeholder_text = "Search parts (BME280, CO2, relay…)"
@@ -276,11 +281,13 @@ func _build_left() -> void:
 	search.text_changed.connect(func(t: String) -> void:
 		_part_filter = t.strip_edges().to_lower()
 		_refresh_palette())
-	box.add_child(search)
+	adder.add_child(search)
 	_palette = VBoxContainer.new()
 	_palette.name = "palette"
 	_palette.add_theme_constant_override("separation", 2)
-	box.add_child(_palette)
+	adder.add_child(_palette)
+	_shell.add_flyout_button("add", "Add part", "plus", adder, {"width": 320.0,
+		"tip": "Sensors, relays, screens… click one to put it on the board"})
 	box.add_child(SectionHeader.make("On this board", "list"))
 	_in_use = VBoxContainer.new()
 	_in_use.name = "in_use"
@@ -399,6 +406,7 @@ func _build_right() -> void:
 	_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	box.add_child(_status)
+	_col = DesignerColumn.setup(box, "esplab", {"fold": ["In Home Assistant", "Parts list"], "finder": false})
 
 
 # ---------------------------------------------------------------------------
@@ -917,6 +925,14 @@ func _refresh_checks() -> void:
 
 func _refresh_power() -> void:
 	var p: Dictionary = _design["power"]
+	if _col != null:
+		var over := float(p["ma_5v"]) > float(p["usb_ma"])
+		_col.set_tiles([
+			{"caption": "Parts", "value": str((_spec.get("parts", []) as Array).size()), "tip": "Parts wired to the board"},
+			{"caption": "3.3 V rail", "value": "%d mA" % int(p["ma_3v3"]), "tip": "Of the regulator's %d mA" % int(p["reg_ma"]),
+				"level": "warn" if float(p["ma_3v3"]) > float(p["reg_ma"]) else ""},
+			{"caption": "5 V in", "value": "%d mA" % int(p["ma_5v"]), "level": "warn" if over else "",
+				"tip": "More than a USB port gives" if over else "Fine on USB"}])
 	_power_lbl.text = "3.3 V rail: %d of %d mA (board + 3.3 V parts)\n5 V in: %d mA total%s" % [
 		int(p["ma_3v3"]), int(p["reg_ma"]), int(p["ma_5v"]),
 		" — more than a USB port gives" if float(p["ma_5v"]) > float(p["usb_ma"]) else ", fine on USB"]

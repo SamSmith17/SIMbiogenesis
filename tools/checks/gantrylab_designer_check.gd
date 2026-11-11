@@ -275,12 +275,13 @@ func _screen(ui: Control, local_pt: Vector3) -> Vector2:
 	var cont: SubViewportContainer = ui.get("_vp_container")
 	var svp: SubViewport = ui.get("_viewport")
 	var p := cam.unproject_position(m.global_transform * local_pt)
-	return cont.get_global_rect().position + p * (cont.size / Vector2(svp.size))
+	# Through the container's transform: a full-screen modal is zoomed.
+	return cont.get_global_transform() * (p * (cont.size / Vector2(svp.size)))
 
 
 func _local_of(ui: Control, screen: Vector2) -> Vector2:
 	var cont: SubViewportContainer = ui.get("_vp_container")
-	return screen - cont.get_global_rect().position
+	return cont.get_global_transform().affine_inverse() * screen
 
 
 ## The first part (of `ids`) that the pointer really picks at its centre.
@@ -354,6 +355,13 @@ func _parts_editor(ui: Control, tree: SceneTree, vp: SubViewport, dir: String) -
 	_ok((res2["parts"][id]["world"] as Transform3D).origin.distance_to(w0.origin) < 1e-5, "Ctrl+Z puts it back")
 	# The palette: a NEMA 17 L mount onto a slot, a motor onto it.
 	var tnuts_before := _count_label(res2, "M5 drop-in T-nut")
+	# The parts bin shows while "Edit parts" is on (a part picked on the
+	# machine turns it on; else a real click on the button).
+	var eb := ui.find_child("edit_parts", true, false) as Button
+	if eb != null and not eb.button_pressed:
+		await HarnessInput.click(root, HarnessInput.center_of(eb))
+		await _settle(tree, 3)
+	_ok(eb != null and eb.button_pressed, "Edit parts is on")
 	var btn := HarnessInput.find_button(ui, "NEMA17 L")
 	_ok(btn != null, "the palette has a NEMA 17 L mount")
 	if btn == null:

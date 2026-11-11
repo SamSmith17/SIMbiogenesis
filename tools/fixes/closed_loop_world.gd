@@ -153,15 +153,9 @@ func run(p_main: Node, _harness: Node) -> Dictionary:
 		bridge.call("tick_at", model, sgv.get("_resource_flow"), main, t0)
 		var board: Object = bridge.call("chore_board_for", hab_id)
 		if board != null:
-			for ch: Dictionary in (world.get("chores", []) as Array):
-				var opts := {"repeat": str(ch.get("repeat", "daily")),
-					"window": {"start_h": float(ch.get("start_h", 9.0)), "end_h": float(ch.get("end_h", 17.0))},
-					"min_workers": int(ch.get("min_workers", 1)), "max_workers": int(ch.get("max_workers", 1)),
-					"priority": 60}
-				var target := _chore_target(ch)
-				if not target.is_empty():
-					opts["target"] = target
-				if not str(board.call("add_chore", str(ch.get("label", "Chore")), float(ch.get("hours", 0.5)), opts)).is_empty():
+			for row in standing_chores(world):
+				var r: Array = row
+				if not str(board.call("add_chore", str(r[0]), float(r[1]), r[2])).is_empty():
 					n_chores += 1
 		else:
 			notes.append("no chore board yet: the standing chores were not added")
@@ -229,20 +223,28 @@ func _prop_of_item(iid: String) -> String:
 	return ""
 
 
-## One twin per expanded node id, laid out on a grid from `at`.
-func _place_twins(tw: Dictionary) -> void:
+## One twin per expanded node id, laid out on a grid from `at` (or at the
+## entry's `positions`, one [east, south] per id). Options:
+##   bed         a grow_bed_spec patch (layout, area, crops) for the bed twin
+##   with_dome   a DomeLabPresets id: a dome stands over each twin (the beds
+##               inside it), placed as its own kit
+##   walk_in     people walk into it (the nav grid leaves it open)
+##   face_centre turn it so its local +Z (a keyhole's slot) faces the camp
+## `only` limits it to those graph ids (an in-place update of a built world).
+func _place_twins(tw: Dictionary, only: Array = []) -> void:
 	var list: Array = ids.get(str(tw.get("node", "")), [])
-	var step: Array = tw.get("step", [6, 6])
-	var cols := maxi(int(tw.get("cols", 1)), 1)
-	var origin: Array = tw.get("at", [0, 0])
 	for i in list.size():
 		var iid := str(list[i])
+		if not only.is_empty() and not only.has(iid):
+			continue
 		var it := model.get_item(iid)
 		if it.is_empty():
 			continue
-		var dx := float(origin[0]) + float(i % cols) * float(step[0])
-		var dz := float(origin[1]) + floorf(float(i) / float(cols)) * float(step[1])
-		var p := _at([dx, dz])
+		var p := _at(twin_offset(tw, i))
+		var yaw := float(tw.get("yaw", 0.0))
+		if bool(tw.get("face_centre", false)):
+			var to := centre - p
+			yaw = rad_to_deg(atan2(to.x, to.y))
 		var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
 		if tw.has("model"):
 			specs["model_id"] = str(tw["model"])
@@ -255,14 +257,61 @@ func _place_twins(tw: Dictionary) -> void:
 		if pid.is_empty():
 			notes.append("no twin for %s" % iid)
 			continue
-		var patch := {"yaw": float(tw.get("yaw", 0.0)), TAG: true}
-		if tw.has("dome"):
+		var patch := {"yaw": yaw, TAG: true}
+		if tw.has("dome") and not tw.has("with_dome"):
 			patch["domelab_spec"] = (DomeLabPresets.builtin(str(tw["dome"])).get("spec", {}) as Dictionary).duplicate(true)
+		if tw.has("bed"):
+			patch["grow_bed_spec"] = bed_spec_patch(PlacedPropService.get_prop_record(main, pid), tw["bed"])
+		if bool(tw.get("walk_in", false)):
+			patch["walk_in"] = true
 		PlacedPropService.update_prop_record(main, pid, patch, true)
 		if bool(tw.get("untag", false)):
 			_untag(pid)
-		kits.append({"pid": pid, "x": p.x, "z": p.y, "yaw": float(tw.get("yaw", 0.0)), "stow": bool(tw.get("stow", false))})
+		kits.append({"pid": pid, "x": p.x, "z": p.y, "yaw": yaw, "stow": bool(tw.get("stow", false))})
+		if tw.has("with_dome"):
+			await _place_dome_over(pid, iid, str(tw["with_dome"]), p, yaw)
 	await _frames(3)
+
+
+## Where twin `i` of an entry stands, metres east / south of the marker.
+static func twin_offset(tw: Dictionary, i: int) -> Array:
+	var positions: Array = tw.get("positions", [])
+	if i < positions.size():
+		return positions[i]
+	var step: Array = tw.get("step", [6, 6])
+	var cols := maxi(int(tw.get("cols", 1)), 1)
+	var origin: Array = tw.get("at", [0, 0])
+	return [float(origin[0]) + float(i % cols) * float(step[0]),
+		float(origin[1]) + floorf(float(i) / float(cols)) * float(step[1])]
+
+
+## The record's grow_bed_spec with the design's patch over it (its planting
+## hour and seed kept).
+static func bed_spec_patch(rec: Dictionary, bed: Variant) -> Dictionary:
+	var out: Dictionary = (rec.get("grow_bed_spec", {}) as Dictionary).duplicate(true) \
+			if rec.get("grow_bed_spec") is Dictionary else {}
+	if bed is Dictionary:
+		for k in (bed as Dictionary).keys():
+			out[k] = (bed as Dictionary)[k]
+	return out
+
+
+## A greenhouse dome over a bed twin: its own kit, not bound to the graph
+## (the beds are the node), the dome's sleeping space untagged (people work
+## in it, they do not sleep in it), walk-in for the nav grid.
+func _place_dome_over(bed_pid: String, iid: String, dome: String, p: Vector2, yaw: float) -> void:
+	var spec: Dictionary = (DomeLabPresets.builtin(dome).get("spec", {}) as Dictionary).duplicate(true)
+	var r := PlacedPropService.place_model_at_xz(main, DomeLabBuilder.MODEL_ID, p.x, p.y,
+		{"yaw": yaw, TAG: true, "walk_in": true, "domelab_spec": spec, "greenhouse_for": iid,
+			"greenhouse_beds": bed_pid})
+	await _frames(3)
+	if not bool(r.get("ok", false)):
+		notes.append("no dome over %s" % iid)
+		return
+	var dpid := str(r["prop_id"])
+	PlacedPropService.update_prop_record(main, dpid, {"domelab_spec": spec}, true)
+	_untag(dpid)
+	kits.append({"pid": dpid, "x": p.x, "z": p.y, "yaw": yaw, "stow": false})
 
 
 ## A ground rack bound to the design's array (its yaw is the array's azimuth).
@@ -315,6 +364,45 @@ func _untag(pid: String) -> void:
 	var s: Dictionary = reg.call("space_for_target", {"kind": "prop", "prop_id": pid})
 	if not s.is_empty():
 		reg.call("remove_space", str(s.get("id", "")))
+
+
+## The design's standing chores as [label, hours, opts] rows: a chore with
+## `each` becomes one per expanded node id ("{n}" in its label is the
+## module's number), its target that module's twin.
+func standing_chores(world: Dictionary) -> Array:
+	var out: Array = []
+	for ch: Dictionary in (world.get("chores", []) as Array):
+		var opts := {"repeat": str(ch.get("repeat", "daily")),
+			"window": {"start_h": float(ch.get("start_h", 9.0)), "end_h": float(ch.get("end_h", 17.0))},
+			"min_workers": int(ch.get("min_workers", 1)), "max_workers": int(ch.get("max_workers", 1)),
+			"priority": 60}
+		if ch.has("exposure"):
+			opts["exposure"] = str(ch["exposure"])
+		var label := str(ch.get("label", "Chore"))
+		if bool(ch.get("each", false)) and not ch.has("at"):
+			var list: Array = ids.get(str(ch.get("node", "")), [])
+			for k in list.size():
+				var o: Dictionary = opts.duplicate(true)
+				var pid := _prop_of_item(str(list[k]))
+				if not pid.is_empty():
+					o["target"] = {"kind": "prop", "id": pid}
+				out.append([label.replace("{n}", str(k + 1)), float(ch.get("hours", 0.5)), o])
+			continue
+		var target := _chore_target(ch)
+		if not target.is_empty():
+			opts["target"] = target
+		out.append([label.replace("{n}", "1"), float(ch.get("hours", 0.5)), opts])
+	return out
+
+
+## Every label the design's chores can take (to find them on a board again).
+static func chore_label_pattern(label: String) -> RegEx:
+	var re := RegEx.new()
+	var esc := label
+	for c in ["\\", ".", "(", ")", "[", "]", "+", "*", "?", "^", "$", "|"]:
+		esc = esc.replace(c, "\\" + c)
+	re.compile("^" + esc.replace("{n}", "\\d+") + "$")
+	return re
 
 
 func _chore_target(ch: Dictionary) -> Dictionary:

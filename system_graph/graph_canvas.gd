@@ -9757,7 +9757,7 @@ const _PRIMARY_HANDLES := {
 	"spiderbox":   ["ac_in", "circuit_0", "circuit_1", "circuit_2", "circuit_3", "circuit_4", "circuit_5"],
 	"breaker_panel": ["ac_in", "circuit_0", "circuit_1", "circuit_2", "circuit_3"],
 	"panel":       ["positive", "negative", "sunlight_in"],
-	"plant":       ["sunlight_in", "water_in", "nutrients_in", "biomass_out"],
+	"plant":       ["sunlight_in", "water_in", "nutrients_in", "biomass_out", "residue_out"],
 	"wind":        ["positive", "negative", "wind_in"],
 }
 

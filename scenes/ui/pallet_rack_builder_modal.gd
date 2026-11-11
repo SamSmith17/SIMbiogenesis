@@ -143,6 +143,7 @@ var _insp_fields: Dictionary = {}
 var _insp_suppress := false
 var _last_field_undo_ms := 0
 var _el_list_box: VBoxContainer = null
+var _col: DesignerColumn = null
 var _el_list_sig := ""
 var _design_opt: OptionButton = null
 var _design_name: LineEdit = null
@@ -416,6 +417,13 @@ func _build_ui() -> void:
 	var side := _shell.right
 	_build_element_ui(_shell.left, side)
 	_build_right(side)
+	# The rack's own settings lead; everything else is a folded section with
+	# a one-line summary ("In this design" used to be 20 rows on top).
+	_col = DesignerColumn.setup(side, "pallet_rack", {"open": ["Rack system", "Layout"],
+		"fold": ["In this design", "Rack system", "Layout", "Levels", "Decking", "Variants",
+			"Sections (joined racks)", "Placement", "Walls (plywood)", "Build it with a crew",
+			"Bill of materials"], "tile_cols": 3})
+	side.move_child(_insp_frame, 2)
 
 	_shell.set_hint("Right-drag orbits · click selects · drag moves · Alt-drag raises · " +
 		"double-click opens · Shift adds · Del removes · Esc")
@@ -540,6 +548,15 @@ func _build_right(side: VBoxContainer) -> void:
 
 
 
+
+
+## The Add flyout's groups: [title, [TOOL_PRESETS ids]].
+const TOOL_GROUPS := [
+	["Openings", ["door", "barn_door", "window"]],
+	["Access", ["stairs", "stairs_inside", "ladder", "railing"]],
+	["Roof and slopes", ["solar_slope", "greenhouse"]],
+	["Inside", ["bench", "stepped", "courtyard", "open_bay"]],
+]
 
 
 func _card_style() -> StyleBoxFlat:
@@ -1719,15 +1736,16 @@ func _build_studio_world() -> void:
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
 	e.background_mode = Environment.BG_COLOR
-	# Deep near-black studio backdrop, matching the Linkage Lab viewport.
-	e.background_color = Color(0.035, 0.043, 0.063)
+	# The kit studios' backdrop (StudioViewport.BACKDROP_HAZE): a soft grey
+	# that the floor fades into, not a black void.
+	e.background_color = StudioViewport.BACKDROP_HAZE
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	e.ambient_light_color = Color(0.52, 0.56, 0.62)
 	e.ambient_light_energy = 0.55
 	e.fog_enabled = true
-	e.fog_light_color = Color(0.035, 0.043, 0.063)
+	e.fog_light_color = StudioViewport.BACKDROP_HAZE
 	e.fog_light_energy = 1.0
-	e.fog_density = 0.0016
+	e.fog_density = 0.004
 	env.environment = e
 	_studio.add_child(env)
 	var key := DirectionalLight3D.new()
@@ -1744,7 +1762,7 @@ func _build_studio_world() -> void:
 	plane.size = Vector2(300, 300)
 	ground.mesh = plane
 	var gmat := StandardMaterial3D.new()
-	gmat.albedo_color = Color(0.09, 0.10, 0.13)
+	gmat.albedo_color = Color(0.36, 0.37, 0.39)
 	gmat.roughness = 0.95
 	ground.material_override = gmat
 	_studio.add_child(ground)
@@ -1974,6 +1992,19 @@ func _update_bom(node: Node3D) -> void:
 		"%s   %s" % [UiText.count(int(b.get("lumber", 0)), "piece", "pieces") + " of lumber",
 			UiText.count(int(b.get("plywood", 0)), "plywood sheet")]]
 	var n_pv := int(b.get("solar_panels", 0))
+	if _col != null:
+		_col.set_tiles([
+			{"caption": "Uprights", "value": str(int(b.get("uprights", 0))), "tip": "Pallet rack frames' posts"},
+			{"caption": "Beams", "value": str(int(b.get("beams", 0))), "tip": "Step beams"},
+			{"caption": "Plywood", "value": UiText.count(int(b.get("plywood", 0)), "sheet"), "tip": "4 × 8 sheets for decks and walls"},
+			{"caption": "Lumber", "value": UiText.count(int(b.get("lumber", 0)), "piece", "pieces"), "tip": "2 × 4 joists and framing"},
+			{"caption": "Solar", "value": UiText.num(float(b.get("solar_watts", 0.0)), "W") if n_pv > 0 else "None",
+				"level": "" if n_pv > 0 else "muted", "tip": UiText.count(n_pv, "panel")},
+			{"caption": "Added", "value": str((_spec.get("elements", []) as Array).size()),
+				"tip": "Doors, stairs, slopes and the rest: see In this design"}])
+		_col.set_summary("Bill of materials", "%s, %s" % [UiText.count(int(b.get("uprights", 0)), "upright"),
+			UiText.count(int(b.get("beams", 0)), "beam")])
+		_col.set_summary("Levels", UiText.count(int(_spec.get("deck_levels", 1)), "deck"))
 	if n_pv > 0:
 		lines.append("%s · %s" % [UiText.count(n_pv, "solar panel"),
 			UiText.num(float(b.get("solar_watts", 0.0)), "W")])
@@ -2106,26 +2137,48 @@ func _build_element_ui(left: VBoxContainer, side: VBoxContainer) -> void:
 	side.add_child(_el_list_box)
 
 	# The left column: what you add, and the saved designs.
-	side = left
-	_section(side, "Add to the structure")
-	side.add_child(_small_label("Pick one, then click the preview where it goes."))
-	var grid := GridContainer.new()
-	grid.columns = 2
-	grid.add_theme_constant_override("h_separation", 4)
-	grid.add_theme_constant_override("v_separation", 4)
+	# Adding things is a mode: the tools open from the strip's "Add to the
+	# structure" button, grouped; the left column is the designs.
+	side = VBoxContainer.new()
+	side.name = "adder"
+	side.add_theme_constant_override("separation", 4)
+	var by_id := {}
 	for tp in PalletRackBuilder.TOOL_PRESETS:
+		by_id[str(tp["id"])] = tp
+	var grouped := {}
+	for grp in TOOL_GROUPS:
+		_section(side, str(grp[0]))
+		var grid := GridContainer.new()
+		grid.columns = 2
+		grid.add_theme_constant_override("h_separation", 4)
+		grid.add_theme_constant_override("v_separation", 4)
+		side.add_child(grid)
+		for tid0 in grp[1]:
+			grouped[str(tid0)] = grid
+	var other: GridContainer = null
+	for tp in PalletRackBuilder.TOOL_PRESETS:
+		var tid := str(tp["id"])
+		var grid: GridContainer = grouped.get(tid, null)
+		if grid == null:
+			# A tool nobody filed: it still gets a button.
+			if other == null:
+				_section(side, "More")
+				other = GridContainer.new()
+				other.columns = 2
+				side.add_child(other)
+			grid = other
 		var b := Button.new()
+		b.name = "tool_%s" % tid
 		b.text = str(tp["label"])
 		b.tooltip_text = str(tp["tip"])
 		b.toggle_mode = true
 		b.focus_mode = Control.FOCUS_NONE
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		UITheme.style_button(b)
-		var tid := str(tp["id"])
 		b.toggled.connect(func(on: bool) -> void: _set_tool(tid if on else ""))
 		grid.add_child(b)
 		_tool_btns[tid] = b
-	side.add_child(grid)
+	_section(side, "Your saved elements")
 	var prow := HBoxContainer.new()
 	prow.add_theme_constant_override("separation", 4)
 	_el_preset_opt = OptionButton.new()
@@ -2134,10 +2187,16 @@ func _build_element_ui(left: VBoxContainer, side: VBoxContainer) -> void:
 	_el_preset_opt.clip_text = true
 	_el_preset_opt.tooltip_text = "Elements you saved with \"Save preset\" — on any rack"
 	prow.add_child(_el_preset_opt)
-	prow.add_child(_small_button("Place", "Place the saved element (click where it goes)",
-		_arm_element_preset))
+	var place_saved := _small_button("Place", "Place the saved element (click where it goes)",
+		_arm_element_preset)
+	place_saved.name = "tool_place_saved"
+	prow.add_child(place_saved)
 	side.add_child(prow)
+	_shell.add_flyout_button("add", "Add to the structure", "plus", side, {"search": true,
+		"placeholder": "Search (door, stairs, solar…)", "close_on_pick": "tool_", "width": 340.0,
+		"tip": "Doors, windows, stairs, slopes, benches: pick one, then click the preview where it goes"})
 
+	side = left
 	_section(side, "Designs")
 	_design_opt = OptionButton.new()
 	_design_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2695,11 +2754,31 @@ func _refresh_element_list() -> void:
 	for c in _el_list_box.get_children():
 		_el_list_box.remove_child(c)
 		c.queue_free()
+	if _col != null:
+		_col.set_summary("In this design", UiText.count(els.size(), "thing") if not els.is_empty() else "a bare rack")
 	if els.is_empty():
 		_el_list_box.add_child(_small_label("Nothing added yet — a bare rack."))
 		return
+	# Three or more of one kind share a folded group ("Door ×8").
+	var per_type := {}
+	for e in els:
+		var t0 := str(e.get("type", ""))
+		per_type[t0] = int(per_type.get(t0, 0)) + 1
+	var groups := {}
 	for e in els:
 		var eid := str(e.get("id", ""))
+		var etype := str(e.get("type", ""))
+		var into: Container = _el_list_box
+		if int(per_type[etype]) >= 3:
+			if not groups.has(etype):
+				var g := Collapsible.make("%s ×%d" % [str(PalletRackBuilder.ELEMENT_LABELS.get(etype, etype.capitalize())),
+					int(per_type[etype])], false)
+				_el_list_box.add_child(g)
+				groups[etype] = g
+			var grp := groups[etype] as Collapsible
+			if eid == sel:
+				grp.folded = false
+			into = grp.body
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 2)
 		var b := Button.new()
@@ -2715,7 +2794,7 @@ func _refresh_element_list() -> void:
 		b.pressed.connect(func() -> void: _select_element(eid))
 		row.add_child(b)
 		row.add_child(IconButton.make("trash-2", "Remove", func() -> void: _remove_element(eid)))
-		_el_list_box.add_child(row)
+		into.add_child(row)
 
 
 # ---- The inspector card ----

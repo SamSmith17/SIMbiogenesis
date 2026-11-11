@@ -113,7 +113,7 @@ func run(main: Node, harness: Node) -> Dictionary:
 	var root_vp := main.get_viewport()
 	for idx in [0, 1, 2]:
 		var sp: Vector2 = ui.call("module_screen_pos", idx)
-		await HarnessInput.click(root_vp, cont.get_global_rect().position + sp)
+		await HarnessInput.click(root_vp, cont.get_global_transform() * sp)
 		await _settle(tree, 4)
 	await _settle(tree, 6)
 	var dp: Dictionary = ui.call("design")
@@ -407,7 +407,7 @@ func _check_search(ui: Control, tree: SceneTree) -> void:
 	se.text = "jinko neo"
 	se.text_changed.emit(se.text)
 	await _settle(tree, 4)
-	var lst := ui.get("_list") as ItemList
+	var lst := ui.get("_list") as DesignGallery
 	var hits: Array = []
 	for i in lst.item_count:
 		if not lst.is_item_disabled(i):
@@ -450,7 +450,7 @@ func _check_parts(ui: Control, main: Node, tree: SceneTree, dir: String, vp: Sub
 	await _settle(tree, 8)
 	var cont := ui.call("studio_container") as Control
 	var sp: Vector2 = ui.call("part_screen_pos", mi)
-	await HarnessInput.click(main.get_viewport(), cont.get_global_rect().position + sp)
+	await HarnessInput.click(main.get_viewport(), cont.get_global_transform() * sp)
 	await _settle(tree, 8)
 	var sel: Dictionary = ui.call("selection")
 	var card := str(ui.call("part_card_text"))

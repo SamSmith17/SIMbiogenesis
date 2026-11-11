@@ -42,6 +42,10 @@ var _collision_mask: int = 0
 ## every existing queue/reconcile call site picks up edits to EITHER layer
 ## without knowing the stack exists.
 var pre_consume: Callable = Callable()
+## Optional hook (key, heightmap) -> heightmap run on each tile's COLLIDER
+## data before it is installed (the drawn mesh is untouched): the loader pulls
+## the collider down inside a structure's opening.
+var collider_fn: Callable = Callable()
 
 var _rebuild_queue: Array = []       ## tile keys awaiting mesh/collider reconcile
 var _queued: Dictionary = {}         ## dedup set for _rebuild_queue
@@ -196,6 +200,8 @@ func _reconcile_tile(key: Vector2i) -> void:
 	_append_skirt(arrays)
 	var mesh := TerrainBuilder.make_array_mesh(arrays)
 	var hm_data: PackedFloat32Array = md["heightmap"]
+	if collider_fn.is_valid():
+		hm_data = collider_fn.call(key, hm_data)
 	var rect := tiles.tile_world_rect(key)
 	var cx := rect.position.x + rect.size.x * 0.5
 	var cz := rect.position.y + rect.size.y * 0.5

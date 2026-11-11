@@ -123,6 +123,7 @@ var _bank_refs: Dictionary = {}
 ## drape_refs) — outside the carved patch, so an erosion re-carve keeps it.
 var _drape_refs: Dictionary = {}
 var _surf_masks: Dictionary = {}
+var _hole_sig := ""
 var _buried_sig := 0
 ## The flow re-mesh the poll asks for runs on a worker: {task, box, rev}.
 var _remesh_task := -1
@@ -1470,8 +1471,7 @@ func _rebuild_surfaces_inner(only: Dictionary = {}) -> void:
 				if not _drape_refs.has(fid):
 					_drape_refs[fid] = StreamMeshBuilder.drape_refs(f, prof, it["carved"], ground)
 				if not _surf_masks.has(fid):
-					_surf_masks[fid] = StreamNetwork.surface_mask(f, prof.get("s", PackedFloat32Array()),
-						prof.get("varc", PackedFloat32Array()))
+					_surf_masks[fid] = _open_mask(f, prof)
 				_surf_arrays[fid] = StreamMeshBuilder.feature_arrays(it, ground, _bank_refs[fid],
 					_drape_refs[fid], _surf_masks[fid])
 				PerfSpan.end("water_mesh_build")
@@ -1533,7 +1533,7 @@ func _start_async_remesh(ids: Dictionary) -> void:
 		if not _drape_refs.has(fid):
 			_drape_refs[fid] = StreamMeshBuilder.drape_refs(f, prof, carved, ground)
 		if not _surf_masks.has(fid):
-			_surf_masks[fid] = StreamNetwork.surface_mask(f, s, prof.get("varc", PackedFloat32Array()))
+			_surf_masks[fid] = _open_mask(f, prof)
 		jobs.append({"fid": fid, "f": f.duplicate(true), "prof": prof.duplicate(true),
 			"qs": _feature_q_now(f, s.size()), "carved": carved, "bank": _bank_refs[fid],
 			"drape": _drape_refs[fid], "mask": _surf_masks[fid],
@@ -1943,7 +1943,43 @@ func links() -> Dictionary:
 ## relative to the BASE ground, so the carve itself does not move; derived
 ## drainage (Phase 5) goes stale and the stream surfaces re-drape.
 func on_terrain_tiles_changed(_keys: Array) -> void:
+	# A structure's opening appeared, moved or went: the open spans change.
+	var hs := _holes_sig()
+	if hs != _hole_sig:
+		_hole_sig = hs
+		_surf_masks = {}
+		_surf_arrays = {}
 	request_rebuild()
+
+
+## Where a stream's water surface is drawn: its open spans, less every
+## station inside a structure's opening (an Earthship or a basement built
+## over a creek holds no stream water inside; the ground under it is the
+## structure's floor).
+func _open_mask(f: Dictionary, prof: Dictionary) -> PackedByteArray:
+	var s: PackedFloat32Array = prof.get("s", PackedFloat32Array())
+	var m := StreamNetwork.surface_mask(f, s, prof.get("varc", PackedFloat32Array()))
+	var holes: Array = _structure_holes()
+	if holes.is_empty():
+		return m
+	var pts: PackedVector2Array = prof.get("points", PackedVector2Array())
+	for i in mini(m.size(), pts.size()):
+		if m[i] == 1 and not StructureEarthworks.hole_at(holes, pts[i]).is_empty():
+			m[i] = 0
+	return m
+
+
+func _structure_holes() -> Array:
+	if loader == null or not is_instance_valid(loader) or not loader.has_method("earthworks_roofs"):
+		return []
+	return loader.call("earthworks_roofs")
+
+
+func _holes_sig() -> String:
+	var parts := PackedStringArray()
+	for h in _structure_holes():
+		parts.append("%s|%s" % [str(h.get("id", "")), str(h.get("poly", []))])
+	return ";".join(parts)
 	request_drainage()
 
 

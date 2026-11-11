@@ -838,9 +838,11 @@ func _rebuild_studio() -> void:
 	_studio_view.holder.add_child(_model_inst)
 	_gizmo_root = Node3D.new()
 	_gizmo_root.name = "PortGizmos"
+	_gizmo_root.set_meta("studio_no_frame", true)
 	_studio_view.holder.add_child(_gizmo_root)
 	_wire_root = Node3D.new()
 	_wire_root.name = "WirePreviews"
+	_wire_root.set_meta("studio_no_frame", true)
 	_studio_view.holder.add_child(_wire_root)
 	_fit_camera_to_model()
 	_rebuild_gizmos()
@@ -850,29 +852,11 @@ func _rebuild_studio() -> void:
 func _fit_camera_to_model() -> void:
 	if _model_inst == null or _studio_view == null:
 		return
-	var aabb := AABB()
-	var any := false
-	for node in _model_inst.find_children("*", "MeshInstance3D", true, false):
-		var mi := node as MeshInstance3D
-		if mi == null or mi.mesh == null:
-			continue
-		var local := mi.get_aabb()
-		var xf: Transform3D = _model_inst.global_transform.affine_inverse() * mi.global_transform
-		var box := xf * local
-		if not any:
-			aabb = box
-			any = true
-		else:
-			aabb = aabb.merge(box)
-	if not any:
+	# The kit's framing: bounds from local transforms (this runs before the
+	# studio is in the tree, where global_transform is not valid: the camera
+	# used to open inside the model), the whole model in view.
+	if not _studio_view.frame_subject(_model_inst):
 		_studio_view.set_orbit(_studio_view.yaw, _studio_view.pitch, 2.5)
-		return
-	var radius := aabb.size.length() * 0.5
-	_studio_view.target = aabb.get_center()
-	_studio_view.set_orbit(_studio_view.yaw, _studio_view.pitch, clampf(radius * 2.4, ZOOM_MIN, ZOOM_MAX))
-
-
-
 
 
 func _to_viewport_pos(local_pos: Vector2) -> Vector2:

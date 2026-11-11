@@ -32,6 +32,7 @@ signal view_changed
 const HOVER_EVERY := 4
 const DIST_MIN := 0.3
 const DIST_MAX := 400.0
+const BACKDROP_HAZE := Color(0.60, 0.63, 0.67)
 
 var viewport: SubViewport = null
 var container: SubViewportContainer = null
@@ -60,6 +61,7 @@ var input_hook: Callable = Callable()
 ## The orbit can be switched off (a 2D plan view) without losing the signals.
 var orbit_enabled := true
 
+var _showroom := true
 var _home_yaw := 0.8
 var _home_pitch := 0.35
 var _dragging := false
@@ -109,13 +111,28 @@ func _build_world(opts: Dictionary) -> void:
 	viewport.add_child(world)
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
-	e.background_mode = Environment.BG_COLOR
+	# ONE backdrop for every studio (opts.backdrop "showroom", the default): a
+	# soft grey sky that meets the floor in haze. The old default was a
+	# near-black void over a dark floor, which half the studios still showed
+	# while the newer ones had dressed their own. "dark" keeps the void.
+	_showroom = str(opts.get("backdrop", "showroom")) != "dark"
+	e.background_mode = Environment.BG_SKY if _showroom else Environment.BG_COLOR
 	e.background_color = Color(0.035, 0.043, 0.063)
 	var skymat := ProceduralSkyMaterial.new()
-	skymat.sky_top_color = Color(0.62, 0.68, 0.78)
-	skymat.sky_horizon_color = Color(0.42, 0.42, 0.44)
-	skymat.ground_horizon_color = Color(0.22, 0.21, 0.20)
-	skymat.ground_bottom_color = Color(0.08, 0.08, 0.08)
+	if _showroom:
+		skymat.sky_top_color = Color(0.30, 0.34, 0.41)
+		skymat.sky_horizon_color = BACKDROP_HAZE
+		skymat.sky_curve = 0.25
+		skymat.ground_horizon_color = BACKDROP_HAZE
+		skymat.ground_bottom_color = Color(0.42, 0.44, 0.47)
+		e.fog_enabled = true
+		e.fog_light_color = BACKDROP_HAZE
+		e.fog_sky_affect = 0.0
+	else:
+		skymat.sky_top_color = Color(0.62, 0.68, 0.78)
+		skymat.sky_horizon_color = Color(0.42, 0.42, 0.44)
+		skymat.ground_horizon_color = Color(0.22, 0.21, 0.20)
+		skymat.ground_bottom_color = Color(0.08, 0.08, 0.08)
 	skymat.sun_angle_max = 10.0
 	skymat.sun_curve = 0.2
 	var sky := Sky.new()
@@ -155,7 +172,7 @@ func _build_world(opts: Dictionary) -> void:
 		plane.size = Vector2(200, 200)
 		ground.mesh = plane
 		var gmat := StandardMaterial3D.new()
-		gmat.albedo_color = Color(0.13, 0.125, 0.12)
+		gmat.albedo_color = Color(0.36, 0.37, 0.39) if _showroom else Color(0.13, 0.125, 0.12)
 		gmat.roughness = 0.95
 		ground.material_override = gmat
 		world.add_child(ground)
@@ -227,6 +244,103 @@ func frame_aabb(bb: AABB, up: float = 0.45, pad: float = 1.6) -> void:
 	frame_sphere(c, r, pad)
 
 
+## The bounds of everything drawn under `node` (default: the holder), in the
+## studio's own space. Built from LOCAL transforms up the parent chain, so it
+## is right before the studio is in the tree (global_transform is not) and
+## whatever scale an imported model's inner nodes carry. Hidden nodes and
+## nodes with meta "studio_no_frame" (gizmos, ghosts) are left out. An empty
+## AABB (size 0) when nothing is drawn.
+func subject_aabb(node: Node3D = null) -> AABB:
+	var root := node if node != null else holder
+	var out := AABB()
+	if root == null:
+		return out
+	var any := false
+	var stack: Array = [[root, _xf_to_world(root)]]
+	while not stack.is_empty():
+		var top: Array = stack.pop_back()
+		var n := top[0] as Node
+		var xf := top[1] as Transform3D
+		if n.has_meta("studio_no_frame") or (n is Node3D and not (n as Node3D).visible):
+			continue
+		var bb := AABB()
+		var has := false
+		if n is MeshInstance3D:
+			if (n as MeshInstance3D).mesh != null:
+				bb = (n as MeshInstance3D).mesh.get_aabb()
+				has = true
+		elif n is MultiMeshInstance3D:
+			if (n as MultiMeshInstance3D).multimesh != null:
+				bb = (n as MultiMeshInstance3D).multimesh.get_aabb()
+				has = true
+		elif n is GeometryInstance3D:
+			bb = (n as GeometryInstance3D).get_aabb()
+			has = true
+		if has and bb.size.length() > 0.0:
+			var w := xf * bb
+			out = w if not any else out.merge(w)
+			any = true
+		# A plain Node between two Node3Ds passes the frame straight through.
+		for c in n.get_children():
+			stack.append([c, xf * (c as Node3D).transform if c is Node3D else xf])
+	return out
+
+
+func _xf_to_world(n: Node3D) -> Transform3D:
+	var xf := Transform3D.IDENTITY
+	var cur: Node = n
+	while cur != null and cur != world:
+		if cur is Node3D:
+			xf = (cur as Node3D).transform * xf
+		cur = cur.get_parent()
+	return xf
+
+
+## Frame whatever is in the holder (or under `node`): the whole subject in
+## view from the current angle, with air round it. False when nothing is
+## drawn (the view is left alone). Call after building or rebuilding the
+## subject, so a studio never opens on the wrong picture.
+func frame_subject(node: Node3D = null, pad: float = 1.25) -> bool:
+	var bb := subject_aabb(node)
+	if bb.size.length() < 0.001:
+		return false
+	target = bb.get_center()
+	dist = clampf(fit_distance(bb, pad), DIST_MIN, dist_max)
+	update_camera()
+	return true
+
+
+## How far back the camera stands to show a box whole at the current pitch
+## and any yaw: its height and plan diagonal against the view's two half
+## angles, plus half the plan diagonal so the near side stays in front.
+func fit_distance(bb: AABB, pad: float = 1.25) -> float:
+	var ty := tan(deg_to_rad(camera.fov if camera != null else 45.0) * 0.5)
+	var size := Vector2(viewport.size) if viewport != null else Vector2(4, 3)
+	var tx := ty * size.x / maxf(size.y, 1.0)
+	var half_w := Vector2(bb.size.x, bb.size.z).length() * 0.5
+	var half_v := bb.size.y * 0.5 * cos(pitch) + half_w * absf(sin(pitch))
+	return maxf(half_v / ty, half_w / tx) * pad + half_w * 0.5
+
+
+## How much of the subject's box is inside the view, 0..1 (its eight corners
+## projected); -1 with no subject. The modal audit reads it: a studio that
+## opens with the camera inside the model, or on empty floor, scores low.
+func subject_in_view(node: Node3D = null) -> float:
+	var bb := subject_aabb(node)
+	if camera == null or viewport == null or bb.size.length() < 0.001:
+		return -1.0
+	var size := Vector2(viewport.size)
+	var inv := camera.transform.affine_inverse()
+	var ty := tan(deg_to_rad(camera.fov) * 0.5)
+	var tx := ty * size.x / maxf(size.y, 1.0)
+	var inside := 0
+	for i in 8:
+		var p := inv * bb.get_endpoint(i)
+		if p.z < -camera.near and absf(p.x) <= -p.z * tx and absf(p.y) <= -p.z * ty:
+			inside += 1
+	return float(inside) / 8.0
+
+
 ## The orbit the view returns to on "frame": set it once after creating.
 func set_home(y: float, p: float) -> void:
 	_home_yaw = y
@@ -254,6 +368,9 @@ func update_camera() -> void:
 		return
 	var cp := Vector3(dist * cos(pitch) * sin(yaw), dist * sin(pitch), dist * cos(pitch) * cos(yaw))
 	camera.look_at_from_position(target + cp, target, Vector3.UP)
+	# The haze sits well behind the subject at any zoom (0.007 at 12 m).
+	if _showroom and environment != null and environment.fog_enabled:
+		environment.fog_density = clampf(0.085 / maxf(dist, 1.0), 0.0003, 0.02)
 	view_changed.emit()
 
 
@@ -270,6 +387,13 @@ func to_viewport(pos: Vector2) -> Vector2:
 	var vp_size := Vector2(viewport.size)
 	var cs := container.size
 	return pos * (vp_size / cs) if cs.x > 0.0 and cs.y > 0.0 else pos
+
+
+## Where a container position is on the SCREEN (what a harness clicks). A
+## full-screen modal draws zoomed (UiFit), so this is not the container's
+## corner plus the offset: it goes through the container's own transform.
+func screen_pos(pos: Vector2) -> Vector2:
+	return container.get_global_transform() * pos
 
 
 ## The ray in a subject node's LOCAL frame: {origin, dir}.

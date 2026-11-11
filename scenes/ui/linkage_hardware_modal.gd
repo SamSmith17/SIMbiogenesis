@@ -528,12 +528,8 @@ func _rebuild_inspector() -> void:
 	var asm := _active()
 	var part := LinkageHardware.find_part(asm, _selected) if _selected != "" else {}
 	if part.is_empty():
-		var idle := Label.new()
-		idle.text = "Select a part to edit it."
-		idle.add_theme_color_override("font_color", C_TEXT_M)
-		idle.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-		idle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		_inspector_box.add_child(idle)
+		_inspector_box.add_child(EmptyState.row("mouse-pointer-2",
+			"Click a part in the view or in the list on the left to edit it here."))
 		_build_assembly_section()
 		return
 
@@ -998,6 +994,7 @@ func _add_part_row(part: Dictionary, axis: String) -> void:
 	for spec in [["↑", -1], ["↓", 1]]:
 		var mv := Button.new()
 		mv.text = str(spec[0])
+		mv.tooltip_text = "Move this part earlier in the stack" if int(spec[1]) < 0 else "Move this part later in the stack"
 		mv.flat = true
 		mv.focus_mode = Control.FOCUS_NONE
 		mv.custom_minimum_size.x = 18

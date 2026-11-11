@@ -14,7 +14,8 @@ const WANT := Vector2(1500, 920)
 
 var _shell: DesignerShell = null
 var _studio: StudioViewport = null
-var _list: ItemList = null
+var _list: DesignGallery = null
+var _col: DesignerColumn = null
 var _ids: Array = []          # parallel to the list rows ("" = header)
 var _fields_box: VBoxContainer = null
 var _summary_box: VBoxContainer = null
@@ -124,11 +125,9 @@ func _build_left() -> void:
 	_shell.left.add_child(box)
 	box.add_child(SectionHeader.make("Templates and your units", "",
 		"Real ISO, GMA, UN and RMI sizes; saved units keep your edits"))
-	_list = ItemList.new()
+	_list = DesignGallery.make("intermodal")
 	_list.name = "unit_list"
-	_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_list.custom_minimum_size = Vector2(0, 320)
-	_list.focus_mode = Control.FOCUS_NONE
+	_list.set_thumbnailer(_thumb_for)
 	_list.item_selected.connect(_on_list_selected)
 	box.add_child(_list)
 
@@ -174,6 +173,7 @@ func _build_right() -> void:
 	_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_status)
+	_col = DesignerColumn.setup(box, "intermodal", {"fold": ["What the solver sees"], "finder": false, "tile_cols": 2})
 
 
 func _refresh_list() -> void:
@@ -183,22 +183,31 @@ func _refresh_list() -> void:
 		var ts: Array = IntermodalUnits.templates_of(str(fam))
 		if ts.is_empty():
 			continue
-		var hi := _list.add_item(str(IntermodalUnits.FAMILY_LABELS.get(fam, fam)))
-		_list.set_item_selectable(hi, false)
-		_list.set_item_custom_fg_color(hi, UITheme.C_TEXT_M)
-		_ids.append("")
+		_list.add_caption(str(IntermodalUnits.FAMILY_LABELS.get(fam, fam)))
 		for t in ts:
-			_list.add_item("   " + str(t.get("label", "")))
+			_list.add_item(str(t.get("label", "")))
 			_ids.append(str(t.get("id", "")))
 	var users: Array = IntermodalUnits.load_library()
 	if not users.is_empty():
-		var uh := _list.add_item("My units")
-		_list.set_item_selectable(uh, false)
-		_list.set_item_custom_fg_color(uh, UITheme.C_TEXT_M)
-		_ids.append("")
 		for u in users:
-			_list.add_item("   " + str(u.get("label", "")))
+			_list.add_item(DesignGallery.MINE_PREFIX + str(u.get("label", "")))
 			_ids.append(str(u.get("id", "")))
+
+
+## One unit's picture for the gallery: its key and how to build it.
+func _thumb_for(i: int) -> Dictionary:
+	if i < 0 or i >= _ids.size():
+		return {}
+	var uid := str(_ids[i])
+	var spec := {"template": uid, "params": IntermodalUnits.defaults(uid), "label": "", "unit_id": ""}
+	if IntermodalUnits.template(uid).is_empty():
+		for u in IntermodalUnits.load_library():
+			if str(u.get("id", "")) == uid:
+				var tid := str(u.get("template", ""))
+				spec = {"template": tid, "params": IntermodalUnits.merged_params(tid, u.get("params", {})),
+					"label": "", "unit_id": uid}
+	return {"key": JSON.stringify(spec), "build": func() -> Node3D:
+		return IntermodalUnitBuilder.build_node(spec, "Thumb")}
 
 
 func _select_id(uid: String) -> void:
@@ -329,6 +338,14 @@ func _refresh_summary() -> void:
 	var e := IntermodalUnits.resolve(_template_id, _params, _unit_id, _shell.name_edit.text)
 	var ext: Dictionary = e.get("exterior", {})
 	var inn: Dictionary = e.get("interior", {})
+	if _col != null:
+		var vol := float(inn.get("l_m", 0.0)) * float(inn.get("w_m", 0.0)) * float(inn.get("h_m", 0.0))
+		_col.set_tiles([
+			{"caption": "Outside", "value": _dims(ext), "tip": "Length × width × height"},
+			{"caption": "Load space", "value": UiText.num(vol, "m³", 3) if not inn.is_empty() else "Open",
+				"tip": _dims(inn) if not inn.is_empty() else "Nothing encloses the load"},
+			{"caption": "Payload", "value": UiText.num(float(e.get("payload_kg", 0.0)), "kg", 3), "tip": "What it may carry"},
+			{"caption": "Empty", "value": UiText.num(float(e.get("tare_kg", 0.0)), "kg", 3), "tip": "Tare weight"}])
 	_add_kv("Outside", _dims(ext), "Length × width × height")
 	if not inn.is_empty():
 		var vol := float(inn.get("l_m", 0.0)) * float(inn.get("w_m", 0.0)) * float(inn.get("h_m", 0.0))

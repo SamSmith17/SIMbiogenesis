@@ -5,7 +5,7 @@ extends RefCounted
 ## readable sheet; `csv(...)` one row per sim day.
 
 const WASTE_KINDS := ["greywater", "blackwater", "food_waste", "packaging_waste",
-	"plastic_waste", "manure"]
+	"plastic_waste", "manure", "urine", "brine"]
 const SUPPLY_KINDS := ["water", "food", "meal"]
 
 
@@ -38,23 +38,31 @@ static func assess(y: Object, design: Dictionary) -> Dictionary:
 			NpcMorale.label(mean_morale), float(p["min_morale"])])
 
 	# Nothing from outside: no import node ran, no ideal-supply top-ups.
+	# A MATERIAL import (waste plastic to make things with) is reported, not
+	# failed: nobody lives on it.
 	var import_h := 0.0
 	var imp_names: Array = []
+	var material: Array = []
 	for iid in y.acc:
 		var a: Dictionary = y.acc[iid]
 		if a["type"] != "processor":
 			continue
 		var it: Dictionary = y.model.get_item(iid)
-		if bool((it.get("specs", {}) as Dictionary).get("counts_as_import", false)) \
-				and float(a["running_h"]) > 0.0:
-			import_h += float(a["running_h"])
-			imp_names.append(str(a["name"]))
+		var isp: Dictionary = it.get("specs", {})
+		if not bool(isp.get("counts_as_import", false)) or float(a["running_h"]) <= 0.0:
+			continue
+		if bool(isp.get("material_import", false)):
+			material.append("%s %.0f h" % [str(a["name"]), float(a["running_h"])])
+			continue
+		import_h += float(a["running_h"])
+		imp_names.append(str(a["name"]))
 	var ideal := 0.0
 	for k2 in (p["ideal_import"] as Dictionary).keys():
 		ideal += float((p["ideal_import"] as Dictionary)[k2])
 	_chk(checks, "Nothing was brought in from outside",
 		import_h <= 0.0 and ideal <= 0.01,
-		"import nodes ran %.0f h %s; ideal-supply top-ups %.1f" % [import_h, str(imp_names), ideal])
+		"import nodes ran %.0f h %s; ideal-supply top-ups %.1f%s" % [import_h, str(imp_names), ideal,
+			("; material imports (not counted): " + ", ".join(material)) if not material.is_empty() else ""])
 
 	# Nothing dumped: no waste tank overflowed.
 	var dumped := {}

@@ -1757,6 +1757,10 @@ func _collect_nav_obstacles(main: Node, registry: SpaceRegistry) -> Array:
 					enterable[str(t2.get("prop_id", ""))] = true
 		for poly3 in loader.call("nav_solid_footprints", enterable):
 			out.append({"poly": poly3, "flags": NpcNavGrid.F_BLOCKED | NpcNavGrid.F_STRUCTURE})
+	# Rooms in the ground (Earthships, basements): walled, entered at the door
+	# on their daylight side, the floor read from the ground below the opening.
+	if loader.has_method("earthworks_nav_entries"):
+		out.append_array(loader.call("earthworks_nav_entries"))
 	return out
 
 

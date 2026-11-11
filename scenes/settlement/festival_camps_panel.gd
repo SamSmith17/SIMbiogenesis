@@ -45,6 +45,7 @@ func _build() -> void:
 	_frame = ModalFrame.create("Camps & calculator",
 		"What each camp takes in and puts out — then close the loops inside the camp",
 		Vector2(980, 760), "festival_camps")
+	_frame.content_max_w = 1500.0
 	add_child(_frame)
 	_frame.closed.connect(func() -> void: set_process(false))
 	_totals = Label.new()
