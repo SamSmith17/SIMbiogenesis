@@ -345,6 +345,12 @@ func _spin(key: String, step: float, min_v: float, max_v: float, suffix: String,
 	return sb
 
 
+func _on_parts_pack() -> void:
+	var gv := ServiceLocator.graph()
+	if gv != null and gv.has_method("open_parts_pack"):
+		gv.call("open_parts_pack", _rec.duplicate(true))
+
+
 func _button(text: String, tip: String, parent: Control, cb: Callable) -> Button:
 	var b := Button.new()
 	b.text = text
@@ -1020,6 +1026,10 @@ func _rebuild_dynamic_sections() -> void:
 		_build_dip_tube_toggle()
 	_build_material_fix_row(mid)
 	_button("Connection ports…", "Where pipes and wires plug into this prop", _model_btns, _on_edit_ports)
+	if bool(BuiltStock.of_record(_rec).get("known", false)):
+		var mb := _button("What it is made of…", "Its parts by material as circles inside circles, sized by mass",
+			_model_btns, _on_parts_pack)
+		mb.name = "parts_circles"
 	if not str(_rec.get("graph_item_id", "")).is_empty():
 		_button("Open node in graph", "Select this prop's node in the systems graph", _model_btns, _on_open_in_graph)
 	var spec := PlacedPropRuntime.packed_spec_for_record(_rec)

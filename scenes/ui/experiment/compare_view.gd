@@ -104,6 +104,12 @@ var _flows_header: SectionHeader = null
 var _flows_row: HBoxContainer = null
 var _flow_views: Array = []
 var _flow_caps: Array = []
+## "Show B − A": one Sankey of what changed (FlowCompare.difference).
+var _flows_diff_btn: CheckButton = null
+var _flows_diff_col: VBoxContainer = null
+var _flows_diff_view: Control = null
+var _flows_diff_cap: Label = null
+var _flows_sims: Array = []
 
 
 ## `selection`: [start, end] absolute hours (PackedFloat64Array or Array; a
@@ -262,6 +268,28 @@ func _build() -> void:
 		"each version's wires as a loop Sankey: what cycles back runs up the sides")
 	_flows_header.visible = false
 	b.add_child(_flows_header)
+	_flows_diff_btn = CheckButton.new()
+	_flows_diff_btn.name = "flows_diff"
+	_flows_diff_btn.text = "Show B − A (what changed)"
+	_flows_diff_btn.tooltip_text = ("One picture of the difference: a ribbon as wide as how much more " +
+		"(green) or less (red) the second version moved along that wire")
+	_flows_diff_btn.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_flows_diff_btn.visible = false
+	_flows_diff_btn.toggled.connect(func(_on: bool) -> void: _show_flow_mode())
+	b.add_child(_flows_diff_btn)
+	_flows_diff_col = VBoxContainer.new()
+	_flows_diff_col.visible = false
+	b.add_child(_flows_diff_col)
+	_flows_diff_cap = Label.new()
+	_flows_diff_cap.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	_flows_diff_cap.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_flows_diff_cap.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_flows_diff_col.add_child(_flows_diff_cap)
+	_flows_diff_view = (load("res://scenes/ui/loop_sankey_view.gd") as GDScript).new()
+	_flows_diff_view.name = "flows_diff_view"
+	_flows_diff_view.custom_minimum_size = Vector2(0, 460)
+	_flows_diff_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_flows_diff_col.add_child(_flows_diff_view)
 	_flows_row = HBoxContainer.new()
 	_flows_row.add_theme_constant_override("separation", 12)
 	_flows_row.visible = false
@@ -1225,8 +1253,12 @@ func _fill_ab_days(sims: Array) -> void:
 ## with how much of each resource cycled back (Finn's cycling index).
 func _fill_ab_flows(sims: Array) -> void:
 	var any := false
+	_flows_sims = sims
+	# One width scale per resource across both versions: a wire twice as wide
+	# in B carries twice as much.
+	var refs := FlowCompare.shared_refs(sims[0].get("flows", {}), sims[1].get("flows", {}))
 	for k in 2:
-		var inp: Dictionary = sims[k].get("flows", {})
+		var inp: Dictionary = FlowCompare.with_refs(sims[k].get("flows", {}), refs)
 		var lv: Control = _flow_views[k]
 		lv.call("set_input", inp,
 			func(key: String, v: float) -> String:
@@ -1245,7 +1277,32 @@ func _fill_ab_flows(sims: Array) -> void:
 			("cycled back: " + ", ".join(parts)) if not parts.is_empty() else "nothing cycled back"]
 		any = any or not (inp.get("edges", []) as Array).is_empty()
 	_flows_header.visible = any
-	_flows_row.visible = any
+	_flows_diff_btn.visible = any
+	var diff := FlowCompare.difference(sims[0].get("flows", {}), sims[1].get("flows", {}))
+	_flows_diff_view.call("set_input", diff,
+		func(key: String, v: float) -> String:
+			var bk := FlowCompare.base_key(key)
+			return "%s%s/h" % ["+" if FlowCompare.is_more(key) else "−",
+				UiText.num(v, ResourceKinds.default_unit(bk))],
+		func(key: String) -> Color:
+			return ResourceKinds.wire_color(FlowCompare.base_key(key)).lerp(
+				UITheme.C_OK if FlowCompare.is_more(key) else UITheme.C_ERROR, 0.55),
+		func(key: String) -> String:
+			return "%s %s" % ["More" if FlowCompare.is_more(key) else "Less",
+				ResourceKinds.display_name(FlowCompare.base_key(key)).to_lower()])
+	var n_diff := (diff.get("edges", []) as Array).size()
+	_flows_diff_cap.text = ("%s against %s: green ribbons moved more, red less, each as wide as " +
+		"the change. %s") % [str(sims[1]["label"]), str(sims[0]["label"]),
+		UiText.count(n_diff, "wire changed", "wires changed") if n_diff > 0 else "The flows are the same."]
+	_show_flow_mode()
+
+
+## Side by side, or the one difference picture.
+func _show_flow_mode() -> void:
+	var any := _flows_header != null and _flows_header.visible
+	var diff_on := any and _flows_diff_btn.button_pressed
+	_flows_row.visible = any and not diff_on
+	_flows_diff_col.visible = diff_on
 
 
 ## Every tank and machine side by side: fill start → end and the lowest,

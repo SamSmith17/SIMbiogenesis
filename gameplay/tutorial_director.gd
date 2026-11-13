@@ -441,7 +441,7 @@ func _on_run_succeeded(bake_result: Dictionary) -> void:
 		_complete_level({
 			"useful_utilization_pct": float(bake_result.get("useful_utilization_pct", 0.0)),
 			"attempts": int(bake_result.get("attempts", 1)),
-		})
+		}, bake_result.get("energy_flows", {}) as Dictionary)
 	else:
 		# Clean run but under the utilization bar: explain, invite another run.
 		_gv.call("show_tutorial_card", {
@@ -454,10 +454,11 @@ func _on_run_succeeded(bake_result: Dictionary) -> void:
 				"surplus — then ▶ Run the same day again.") % [
 					float(bake_result.get("useful_utilization_pct", 0.0)),
 					float(_level.goal.get("min_useful_utilization_pct", 0.0))],
+			"energy_flows": bake_result.get("energy_flows", {}),
 		})
 
 
-func _complete_level(stats: Dictionary = {}) -> void:
+func _complete_level(stats: Dictionary = {}, energy_flows: Dictionary = {}) -> void:
 	_state = State.DEBRIEF
 	ProgressStore.mark_level_complete(_level.id, stats)
 	if not _level.unlocks.is_empty():
@@ -495,6 +496,7 @@ func _complete_level(stats: Dictionary = {}) -> void:
 		"body": _level.debrief_bbcode,
 		"body_suffix": suffix,
 		"actions": actions,
+		"energy_flows": energy_flows,
 		# Docked to the side so the finished circuit stays in view.
 		"placement": "corner",
 	})

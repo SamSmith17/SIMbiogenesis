@@ -144,8 +144,48 @@ func run(main: Node, harness: Node) -> Dictionary:
 			await _wait(tree, 0.4)
 			_ok(str((canvas.get("flow_style") as Dictionary).get("preset", "")) == "bold",
 				"a real click on Bold restyles the graph")
+		var nb := pop.find_child("preset_neon", true, false) as Button
+		_ok(nb != null, "the panel has the Neon look in its Looks row")
+		if nb != null:
+			await HarnessInput.click(vp, Vector2(pop.position) + nb.get_global_rect().get_center())
+			await _wait(tree, 0.4)
+			_ok(str((canvas.get("flow_style") as Dictionary).get("preset", "")) == "neon",
+				"a real click on Neon restyles the graph")
+		var pv: Control = pop.call("preview")
+		_ok(pv != null and pv.is_visible_in_tree() and pv.size.x > 200.0, "the panel shows a live preview ribbon")
 		_shot(vp, dir, "04_panel")
+		# Every look knob reaches the canvas: colour mode + accent, glow width,
+		# taper, streak length; a changed row shows its revert.
+		pop.call("set_knob", "colour", GraphFlowStyle.COLOUR_MONO)
+		pop.call("set_knob", "accent", "ff4fa0")
+		pop.call("set_knob", "glow_w", 4.2)
+		pop.call("set_knob", "taper", 0.8)
+		pop.call("set_knob", "duty", 0.9)
+		await _wait(tree, 0.5)
+		var fs: Dictionary = canvas.get("flow_style")
+		var lk: Dictionary = canvas.get("_flow_look")
+		_ok(str(fs.get("colour", "")) == "mono" and str(fs.get("accent", "")) == "ff4fa0"
+			and is_equal_approx(float(lk.get("glow_w", 0.0)), 4.2) and is_equal_approx(float(lk.get("taper", 0.0)), 0.8),
+			"look knobs reach the canvas (colour, accent, glow width, taper)")
+		var rows: Dictionary = pop.get("_rows")
+		var gr: FormRow = rows.get("glow_w")
+		_ok(gr != null and gr.revert_btn != null and gr.revert_btn.visible, "a changed row offers its revert")
+		_shot(vp, dir, "04b_custom_look")
+		if gr != null and gr.revert_btn != null:
+			await HarnessInput.click(vp, Vector2(pop.position) + gr.revert_btn.get_global_rect().get_center())
+			await _wait(tree, 0.4)
+			var g0 := float(GraphFlowStyle.resolve({"preset": "neon"})["glow_w"])
+			_ok(is_equal_approx(float((canvas.get("flow_style") as Dictionary).get("glow_w", 0.0)), g0),
+				"a real click on the revert puts glow width back to the preset's")
 		pop.hide()
+	# Close-ups of every look preset.
+	for lp in GraphFlowStyle.LOOK_PRESETS + [GraphFlowStyle.PRESET_SANKEY, GraphFlowStyle.PRESET_BOLD]:
+		sgv.call("set_flow_style", {"preset": lp})
+		canvas.set("_zoom", 1.6)
+		canvas.call("queue_redraw")
+		await _wait(tree, 0.8)
+		_shot(vp, dir, "05_closeup_%s" % lp)
+	canvas.call("fit_items_to_view", ids, 0.06)
 	sgv.call("set_flow_style", {"preset": GraphFlowStyle.PRESET_SANKEY})
 
 	# A day of flow history for the lens's windows (7200x for ~12 s).

@@ -166,6 +166,97 @@ static func _connection_delivered_watts(model: GraphModel, conn: Dictionary,
 	return minf(float(side_a.get("watts", 0.0)), float(side_b.get("watts", 0.0)))
 
 
+## Many delivered-watts questions in a row (the graph canvas asks for every
+## visible wire each refresh): the AC adjacency built once and each item's
+## draw remembered, so a question is one BFS over adjacency lists. The plain
+## form scans every connection at every node it visits and deep-copies each
+## load's specs, which was ~130 µs a wire on a 227-wire graph.
+## Returns an index for `delivered_watts_indexed`; same answers as
+## `connection_delivered_watts`.
+static func delivered_index(model: GraphModel, tree: SceneTree, sim_host: Node = null) -> Dictionary:
+	if sim_host == null and tree != null:
+		sim_host = _find_sim_load_host(tree)
+	var adj := {}
+	if model != null:
+		for c: Dictionary in GraphNesting.flat_connections_cached(model):
+			if not _is_ac_power_connection(c) or bool(c.get("severed", false)):
+				continue
+			var cid := str(c.get("id", ""))
+			var sid := str(c.get("source_item_id", ""))
+			var tid := str(c.get("target_item_id", ""))
+			if not adj.has(sid):
+				adj[sid] = []
+			if not adj.has(tid):
+				adj[tid] = []
+			(adj[sid] as Array).append([cid, tid])
+			(adj[tid] as Array).append([cid, sid])
+	return {"adj": adj, "w": {}, "ctrl": {}, "tree": tree, "host": sim_host}
+
+
+static func delivered_watts_indexed(model: GraphModel, ix: Dictionary, conn: Dictionary) -> float:
+	if model == null or conn.is_empty() or ix.is_empty():
+		return 0.0
+	var cid := str(conn.get("id", ""))
+	var src_res := GraphNesting.resolve_port(model, str(conn.get("source_item_id", "")),
+			str(conn.get("source_handle_id", "")))
+	var tgt_res := GraphNesting.resolve_port(model, str(conn.get("target_item_id", "")),
+			str(conn.get("target_handle_id", "")))
+	var side_a := _side_summary_ix(model, ix, str(src_res["item_id"]), cid)
+	var side_b := _side_summary_ix(model, ix, str(tgt_res["item_id"]), cid)
+	if side_a.y > 0.0 and side_b.y <= 0.0:
+		return side_b.x
+	if side_b.y > 0.0 and side_a.y <= 0.0:
+		return side_a.x
+	if side_a.y <= 0.0 and side_b.y <= 0.0:
+		return 0.0
+	return minf(side_a.x, side_b.x)
+
+
+## _side_summary over the index: Vector2(watts, 1 if a controller is reached).
+static func _side_summary_ix(model: GraphModel, ix: Dictionary, start_id: String, cut_conn_id: String) -> Vector2:
+	if start_id.is_empty():
+		return Vector2.ZERO
+	var adj: Dictionary = ix["adj"]
+	var memo_w: Dictionary = ix["w"]
+	var memo_c: Dictionary = ix["ctrl"]
+	var watts := 0.0
+	var has_controller := false
+	var visited: Dictionary = {}
+	var queue: Array[String] = [start_id]
+	var head := 0
+	while head < queue.size():
+		var nid: String = queue[head]
+		head += 1
+		if visited.has(nid):
+			continue
+		visited[nid] = true
+		if not memo_w.has(nid):
+			var item: Dictionary = model.get_item(nid)
+			var w := 0.0
+			var ctl := false
+			if not item.is_empty() and not bool(item.get("is_ghost", false)):
+				var ty := str(item.get("type", ""))
+				ctl = ty == "controller"
+				if ty == "compound":
+					var sp: Dictionary = item.get("specs", {}) as Dictionary
+					if str(sp.get("compound_kind", "")) == "load_group":
+						w = sum_load_group_watts(model, item, ix["tree"], ix["host"])
+				elif ty in LOAD_TYPES:
+					w = _item_draw_watts(nid, item, ix["tree"], ix["host"], model)
+			memo_w[nid] = w
+			memo_c[nid] = ctl
+		watts += float(memo_w[nid])
+		if bool(memo_c[nid]):
+			has_controller = true
+		for e in (adj.get(nid, []) as Array):
+			if str(e[0]) == cut_conn_id:
+				continue
+			var other := str(e[1])
+			if not visited.has(other):
+				queue.append(other)
+	return Vector2(watts, 1.0 if has_controller else 0.0)
+
+
 ## BFS from `start_id` across AC connections, never crossing `cut_conn_id`.
 ## Returns {watts, has_controller} for that side of the cut.
 static func _side_summary(model: GraphModel, start_id: String, cut_conn_id: String,

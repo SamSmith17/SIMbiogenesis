@@ -422,6 +422,18 @@ func _report_bake_cost() -> void:
 		_stepper.report_line("steps", _end_abs - _start_abs)])
 
 
+## Where the run's energy went so far (EnergyRunSankey): from the segment
+## start to the cursor, or to the failure. {} before a bake has run.
+func energy_flows() -> Dictionary:
+	if _series == null:
+		return {}
+	var t1 := minf(_cursor, _end_abs)
+	if not _failure.is_empty():
+		t1 = minf(t1, float(_failure.get("abs_h", t1)))
+	var pot := _stepper.pot_solar_kwh if _stepper != null else -1.0
+	return EnergyRunSankey.flows_from_timeline(_series, _start_abs, t1, pot)
+
+
 func _finish_success() -> void:
 	var delivered_kwh := 0.0
 	var load_kwh := 0.0
@@ -446,6 +458,7 @@ func _finish_success() -> void:
 	var useful_util := 100.0
 	if _pot_solar_kwh > 1e-6:
 		useful_util = clampf(useful_kwh / _pot_solar_kwh * 100.0, 0.0, 100.0)
+	var flows := energy_flows()
 	# Commit the run: the world continues from the segment end.
 	if _solar_ui.has_method("reanchor_live_battery"):
 		_solar_ui.call("reanchor_live_battery", end_soc)
@@ -464,6 +477,7 @@ func _finish_success() -> void:
 		"attempts": _attempts,
 		"elapsed_h": _end_abs - _start_abs,
 		"span": _def.span,
+		"energy_flows": flows,
 	})
 	state_changed.emit()
 

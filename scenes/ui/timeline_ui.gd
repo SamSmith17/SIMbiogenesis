@@ -440,6 +440,7 @@ var _last_viewport_size: Vector2 = Vector2.ZERO
 ## Record Book Modal — lazy-init on first press.
 var _record_book_panel: Control = null
 var _site_report_panel: Control = null
+var _patterns_modal: Node = null
 ## 🌫 Microclimate drawer (scenes/ui/microclimate_drawer.gd), lazy.
 var _microclimate_drawer: CanvasLayer = null
 
@@ -4092,6 +4093,9 @@ func _build_right_cluster() -> Control:
 	right.add_child(record_btn)
 	var report_btn := _mk_icon_btn("📊", _on_site_report_pressed, "Site Report — year-round & month-by-month solar/wind/rain/PV analysis for this site")
 	right.add_child(report_btn)
+	var patterns_btn := _mk_icon_btn("🗓", _on_patterns_pressed,
+		"Patterns — the recorded days hour by hour, the battery against a store, and where the energy went")
+	right.add_child(patterns_btn)
 	var mc_btn := _mk_icon_btn("🌫", _on_microclimate_pressed,
 		"Microclimate — calibrate how this site's fog, haze, cloud and wind look against the weather data")
 	right.add_child(mc_btn)
@@ -4127,7 +4131,7 @@ func _build_right_cluster() -> Control:
 	for pair in [[csv_btn, "Open datastream CSV"], [_linkagelab_btn, "Import LinkageLab bundle"],
 			[_shading_btn, "Solar shading"], [mc_btn, "Microclimate"],
 			[record_btn, "Climate Record Book"], [_challenge_chip, "Challenges"],
-			[report_btn, "Site Report"], [map_btn, "Map select"],
+			[report_btn, "Site Report"], [patterns_btn, "Patterns"], [map_btn, "Map select"],
 			[_mp_chip, "Multiplayer"], [_conduits_chip, "3D wires"],
 			[_festival_chip, "Festival mode"], [_deploy_chip, "Site deployment"],
 			[_settlement_chip, "Settlement view"],
@@ -4366,6 +4370,25 @@ func _on_site_report_pressed() -> void:
 			_site_report_panel.bind_timeline(self)
 	if _site_report_panel.has_method("toggle"):
 		_site_report_panel.toggle()
+
+
+## Patterns: the recorded days as a carpet plot, a phase orbit and an energy
+## budget (scenes/ui/patterns_modal.gd).
+func _on_patterns_pressed() -> void:
+	open_patterns()
+
+
+func open_patterns() -> Node:
+	if _patterns_modal == null or not is_instance_valid(_patterns_modal):
+		var script := load("res://scenes/ui/patterns_modal.gd") as Script
+		if script == null:
+			return null
+		_patterns_modal = Node.new()
+		_patterns_modal.set_script(script)
+		_patterns_modal.name = "PatternsModal"
+		add_child(_patterns_modal)
+	_patterns_modal.call("open")
+	return _patterns_modal
 
 
 func _on_microclimate_pressed() -> void:

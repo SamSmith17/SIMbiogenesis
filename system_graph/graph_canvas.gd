@@ -878,6 +878,7 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 ## still queue_redraw() directly.
 func request_sim_redraw() -> void:
 	_sim_redraw_pending = true
+	invalidate_flow_estimates()
 
 
 func get_view_pan() -> Vector2:
@@ -4424,9 +4425,15 @@ func _v3_draw_backdrop() -> void:
 func _v3_draw_connectors() -> void:
 	var solar_w: float = _solar_array_output_w() + _renewable_output_w()
 	var load_w: float = _sum_all_load_w()
+	# The 3D view's connectors take the same Sankey width rule as the flat
+	# ribbons (GraphFlowStyle): a wire as wide as its share of the biggest
+	# flow of its resource on screen.
+	var vis_conns := _visible_connections()
+	_prepare_flow_values(vis_conns, solar_w, load_w)
+	var sankey := _ribbons_on() and not element_lens_on()
 	var info := func(conn: Dictionary) -> Dictionary:
 		var pol := str(conn.get("polarity", "positive"))
-		var est := _estimate_connection_flow(conn, solar_w, load_w)
+		var est := _flow_est_for(conn, solar_w, load_w)
 		var active := bool(est.get("active", true))
 		var col := _wire_color_for_connection(conn, pol)
 		if pol == "resource":
@@ -4438,6 +4445,10 @@ func _v3_draw_connectors() -> void:
 		if bool(est.get("shed", false)):
 			active = false
 		var w := (WIRE_BASE_W + _wire_glow_scale_from_watts(float(est.get("watts", 100.0))) * 2.0) * _zoom
+		var w_max := 9.0
+		if sankey:
+			w = _ribbon_width(conn, est, false)
+			w_max = 48.0
 		if element_lens_on():
 			var rk := ResourceKinds.normalize_kind(str(est.get("resource_kind", conn.get("resource_type", ""))))
 			var flux := ElementLens.amount_of(rk, float(est.get("rate", 0.0)), element_lens) \
@@ -4454,9 +4465,9 @@ func _v3_draw_connectors() -> void:
 			w *= 1.6
 		if not _path_conns.is_empty() and not _path_conns.has(str(conn.get("id", ""))):
 			col = Color(col.r, col.g, col.b, col.a * 0.18)
-		return {"color": col, "width": clampf(w, 1.0, 9.0),
+		return {"color": col, "width": clampf(w, 1.0, w_max),
 			"flowing": _flow_live and active, "reverse": bool(est.get("reverse", false))}
-	if _v3.draw_connectors(self, _visible_connections(), size * 0.5 + _pan, _zoom, info, _flow_phase):
+	if _v3.draw_connectors(self, vis_conns, size * 0.5 + _pan, _zoom, info, _flow_phase):
 		_flowing_drawn = true
 
 
@@ -5327,6 +5338,23 @@ func _load_item_is_active(it: Dictionary) -> bool:
 
 
 func _sum_all_load_w() -> float:
+	return _flow_sums().z
+
+
+## Solar, wind / hydro and load watts for the wire pass, kept like the
+## estimates (they walk every item and the AC bus).
+func _flow_sums() -> Vector3:
+	var now := Time.get_ticks_msec()
+	var key := _flow_cache_key()
+	if now - _sums_ms <= EST_TTL_MS and key == _sums_key:
+		return _sums_cache
+	_sums_ms = now
+	_sums_key = key
+	_sums_cache = Vector3(_solar_array_output_w_now(), _renewable_output_w_now(), _sum_all_load_w_now())
+	return _sums_cache
+
+
+func _sum_all_load_w_now() -> float:
 	if model == null:
 		return 0.0
 	var tree := get_tree()
@@ -5370,6 +5398,10 @@ func _connection_is_ac_power(
 
 ## Combined live output (W) of all wind/hydro generator items on the canvas.
 func _renewable_output_w() -> float:
+	return _flow_sums().y
+
+
+func _renewable_output_w_now() -> float:
 	if model == null:
 		return 0.0
 	var total := 0.0
@@ -5384,6 +5416,10 @@ func _renewable_output_w() -> float:
 
 ## Live PV output in watts — sum every panel / virtual array node.
 func _solar_array_output_w() -> float:
+	return _flow_sums().x
+
+
+func _solar_array_output_w_now() -> float:
 	if model == null:
 		return 0.0
 	var total := 0.0
@@ -5397,9 +5433,59 @@ func _solar_array_output_w() -> float:
 	return total if found else 0.0
 
 
+## Flow estimates only change when the sim stamps telemetry, but the wires
+## redraw ~20 times a second for the animation alone. Each estimate (an AC
+## wire walks the bus with GraphAcLoad) is kept for EST_TTL_MS, or until the
+## graph changes or new telemetry arrives (request_sim_redraw). Measured on
+## the Closed Loop Ten world (227 wires): 29 ms of every redraw.
+const EST_TTL_MS := 150
+var _est_all: Dictionary = {}
+var _est_key: Array = []
+var _est_ms := -100000
+var _sums_cache := Vector3.ZERO     # solar, renewables, load (W)
+## GraphAcLoad.delivered_index for this refresh (built on first use).
+var _ac_index: Dictionary = {}
+var _sums_ms := -100000
+var _sums_key: Array = []
+
+
+func _flow_cache_key() -> Array:
+	if model == null:
+		return []
+	return [model.struct_rev, model.user_rev, _ac_shed_active, active_scope_id]
+
+
+## Forget every cached estimate and sum (new telemetry, a state change the
+## revision counters do not see).
+func invalidate_flow_estimates() -> void:
+	_est_all.clear()
+	_ac_index = {}
+	_est_ms = -100000
+	_sums_ms = -100000
+
+
 ## Estimated power (W), flow direction, and whether the wire is actively carrying power.
 ## Returns {watts: float, reverse: bool, active: bool, shed: bool}.
 func _estimate_connection_flow(
+		conn: Dictionary, solar_w: float, load_w: float) -> Dictionary:
+	var cid := str(conn.get("id", ""))
+	if model == null or cid == "":
+		return _estimate_connection_flow_now(conn, solar_w, load_w)
+	var now := Time.get_ticks_msec()
+	var key := _flow_cache_key()
+	if now - _est_ms > EST_TTL_MS or key != _est_key:
+		_est_all.clear()
+		_est_ms = now
+		_est_key = key
+		_ac_index = {}
+	var e: Variant = _est_all.get(cid)
+	if e == null:
+		e = _estimate_connection_flow_now(conn, solar_w, load_w)
+		_est_all[cid] = e
+	return e as Dictionary
+
+
+func _estimate_connection_flow_now(
 		conn: Dictionary, solar_w: float, load_w: float) -> Dictionary:
 	if model == null:
 		return {"watts": 80.0, "reverse": false, "active": false, "shed": false}
@@ -5432,8 +5518,9 @@ func _estimate_connection_flow(
 		var tree := get_tree()
 		var actual_w := 0.0
 		if tree != null:
-			actual_w = GraphAcLoad.connection_delivered_watts(
-					model, conn, tree, _find_sim_load_host())
+			if _ac_index.is_empty():
+				_ac_index = GraphAcLoad.delivered_index(model, tree, _find_sim_load_host())
+			actual_w = GraphAcLoad.delivered_watts_indexed(model, _ac_index, conn)
 		# Fallback when delivered-side BFS can't see a controller (island / hostless):
 		# use the sink item's live draw if one endpoint is a load.
 		if actual_w <= WIRE_DEAD_W:
@@ -5675,23 +5762,62 @@ func _draw_connections() -> void:
 		return
 	var center  := size * 0.5
 	# Generation feeding the DC bus: solar array plus wind/hydro items.
+	PerfSpan.begin("gv_w_sums")
 	var solar_w: float  = _solar_array_output_w() + _renewable_output_w()
 	var load_w: float   = _sum_all_load_w()
 	var visible := _visible_connections()
+	PerfSpan.end("gv_w_sums")
 	_wire_lod_simplify = visible.size() > WIRE_LOD_HIGH_COUNT \
 			or _zoom < WIRE_LOD_ZOOM_CUTOFF \
 			or _zoom > WIRE_LOD_ZOOM_HIGH \
 			or (view_mode == GraphSiteLayout.VIEW_ELEVATION and visible.size() > 24) \
 			or _high_speed_lod
-	_bundle_plan = _build_bundle_plan(visible, center)
+	PerfSpan.begin("gv_w_bundle")
+	var bkey := _bundle_cache_key(visible)
+	if bkey != _bundle_key:
+		_bundle_plan = _build_bundle_plan(visible, center)
+		_bundle_key = bkey
+	PerfSpan.end("gv_w_bundle")
 	_flowing_drawn = false
+	PerfSpan.begin("gv_w_prep")
 	_prepare_flow_values(visible, solar_w, load_w)
+	PerfSpan.end("gv_w_prep")
+	PerfSpan.begin("gv_w_trunk")
 	var trunked := _plan_trunks(visible, center, solar_w, load_w)
+	PerfSpan.end("gv_w_trunk")
+	PerfSpan.begin("gv_w_render")
 	for conn: Dictionary in visible:
 		if trunked.has(str(conn.get("id", ""))):
 			continue
 		_render_connection(conn, center, solar_w, load_w)
+	PerfSpan.end("gv_w_render")
 	_draw_trunks()
+
+
+## The bundle plan only depends on where the wires' ends are on screen: the
+## view, the graph and the cards' positions (a drag or a live layout moves
+## cards without a revision, so their positions are summed in). A redraw
+## for the animation alone keeps the plan (5 ms on 227 wires).
+var _bundle_key: Array = []
+var _geom_key: Array = []
+
+
+func _bundle_cache_key(visible: Array) -> Array:
+	return _geom_key + [visible.size(), wire_bundling]
+
+
+## Where every card is on screen: the view, the scope, the graph's revisions
+## and a sum of the cards' positions and sizes (a drag or a live layout moves
+## cards without a revision).
+func _geometry_cache_key() -> Array:
+	var ps := 0.0
+	for it: Dictionary in _cached_visible_items:
+		ps += float(it.get("x", 0.0)) * 1.618 + float(it.get("y", 0.0)) * 2.414 \
+			+ float(it.get("width", 0.0)) * 0.7 + float(it.get("height", 0.0)) * 0.3 \
+			+ (0.5 if bool(it.get("collapsed", false)) else 0.0)
+	return [_zoom, _pan, size, ps, _cached_visible_items.size(), view_mode, active_scope_id,
+		model.struct_rev if model != null else -1, model.user_rev if model != null else -1,
+		_v3_on(), soi_live_preview, Time.get_ticks_msec() / 1000]
 
 
 ## Festival trunks (Phase 5, V2 canvas): wires the canvas draws as one
@@ -5720,6 +5846,9 @@ func _prepare_flow_values(visible: Array, solar_w: float, load_w: float) -> void
 	_flow_est_cache.clear()
 	_ribbon_w_cache.clear()
 	_flow_legend_rows.clear()
+	_flow_look = GraphFlowStyle.look(flow_style)
+	if _ribbon_geo.size() > maxi(visible.size() * 3, 300):
+		_ribbon_geo.clear()
 	var now_ms := Time.get_ticks_msec()
 	var dt_s := clampf(float(now_ms - _flow_last_draw_ms) / 1000.0, 0.0, 1.0) \
 			if _flow_last_draw_ms > 0 else 1.0
@@ -6082,8 +6211,10 @@ func _flows_input() -> Array:
 		else:
 			bout.append({"node": nid, "key": key2, "value": -d, "label": "into store" if store else "used"})
 	sig_parts.sort()
-	var sig := "%s|%s|%s|%s|%d" % [active_scope_id, flows_channel, flows_window,
-		",".join(sig_parts), int(round(float(flow_style.get("thickness", 22.0))))]
+	var sig := "%s|%s|%s|%s|%d|%d|%d|%d" % [active_scope_id, flows_channel, flows_window,
+		",".join(sig_parts), int(round(float(flow_style.get("thickness", 22.0)))),
+		int(round(float(flow_style.get("lens_gap", 74.0)))), int(round(float(flow_style.get("lens_node_w", 170.0)))),
+		int(round(float(flow_style.get("lens_return_gap", 46.0))))]
 	var kl: Array = keys.keys()
 	kl.sort_custom(func(x, y) -> bool:
 		if str(x) == "electricity":
@@ -6094,7 +6225,9 @@ func _flows_input() -> Array:
 	return [sig, {"nodes": nodes, "edges": edges, "bin": bin, "bout": bout, "idle": idle,
 		"labels": labels, "types": types, "keys": kl,
 		"opts": {"style": flow_style, "thickness": float(flow_style.get("thickness", 22.0)) * FLOWS_THICK_MULT,
-			"layer_gap": 74.0, "node_h": 40.0, "min_node_w": 170.0}}]
+			"layer_gap": float(flow_style.get("lens_gap", 74.0)), "node_h": 40.0,
+			"min_node_w": float(flow_style.get("lens_node_w", 170.0)),
+			"return_gap": float(flow_style.get("lens_return_gap", 46.0))}}]
 
 
 func _draw_flows_lens() -> void:
@@ -6141,6 +6274,7 @@ func _flows_draw_opts() -> Dictionary:
 		"name_of": Callable(self, "_flow_key_name"),
 		"fmt": Callable(self, "_flow_fmt"),
 		"node_color": Callable(self, "_flows_node_color"),
+		"label_scale": float(flow_style.get("lens_label", 1.0)),
 	}
 
 
@@ -6277,23 +6411,46 @@ func _draw_flow_ribbon(path: PackedVector2Array, col: Color, width: float,
 		# Zoomed far out a moving stripe is a shimmer; a slow luminance wave
 		# still says "this one is live" without strobing.
 		anim = GraphFlowStyle.ANIM_PULSE
-	var col_end := col
-	if bool(flow_style.get("gradient", true)) and flowing:
-		col_end = col.lightened(0.18)
 	GraphFlowRibbons.draw(get_canvas_item(), path, {
 		"width": width,
 		"color": col,
-		"color_end": col_end,
+		"color_end": col.lightened(0.18),
 		"active": flowing,
 		"anim": anim,
 		"t": _flow_clock,
 		"speed": GraphFlowStyle.anim_speed_px(flow_style, v, ref),
 		"reverse": reverse,
 		"blur": _high_speed_lod,
-		"glow": float(flow_style.get("glow", 0.6)),
+		"look": _flow_look,
+		"heat": clampf(GraphFlowStyle.norm(v, ref, GraphFlowStyle.SCALE_LINEAR), 0.0, 1.0),
 		"intensity": clampf(GraphFlowStyle.norm(v, ref, GraphFlowStyle.SCALE_SQRT), 0.25, 1.0),
 		"far": far,
+		"geo": _ribbon_geometry(path, far),
 	})
+
+
+## ConduitKinds.is_direct_intake_connection, remembered with the wire's
+## flow estimate (the same refresh).
+func _is_direct_intake_cached(conn: Dictionary, est: Dictionary) -> bool:
+	if not est.has("_direct_intake"):
+		est["_direct_intake"] = ConduitKinds.is_direct_intake_connection(conn, model)
+	return bool(est["_direct_intake"])
+
+
+## Ribbon geometry per path, kept while the path does not move: an
+## animation frame only recolours (GraphFlowRibbons.geometry).
+var _ribbon_geo: Dictionary = {}
+var _flow_look: Dictionary = GraphFlowStyle.look(GraphFlowStyle.resolve({}))
+
+
+func _ribbon_geometry(path: PackedVector2Array, far: bool) -> Dictionary:
+	var step := GraphFlowRibbons.STEP_PX_FAR if far else GraphFlowRibbons.STEP_PX
+	var k := GraphFlowRibbons.geo_key(path, step)
+	var g: Variant = _ribbon_geo.get(k)
+	if g == null:
+		g = GraphFlowRibbons.geometry(path, step)
+		_ribbon_geo[k] = g
+	return g as Dictionary
 
 
 ## GraphWireBundles input for the visible wires (bezier style, freeform only —
@@ -6557,7 +6714,7 @@ func _render_connection(
 			_draw_bundle_stub(bundle["tgt"], col, width)
 			tgt_pos = (bundle["tgt"] as Dictionary)["tooth"]
 
-	if ribbon and not (is_resource_wire and (res_kind == "sunlight" or res_kind == "wind")) and not (is_resource_wire and ConduitKinds.is_direct_intake_connection(conn, model)):
+	if ribbon and not (is_resource_wire and (res_kind == "sunlight" or res_kind == "wind")) and not (is_resource_wire and _is_direct_intake_cached(conn, flow_est)):
 		var path := _wire_polyline(style, src_pos, src_t, tgt_pos, tgt_tang_out, wps, curve_t, conn)
 		_draw_flow_ribbon(path, col, width, flow_est, flowing, reverse)
 		var mid := path[path.size() / 2] if path.size() > 0 else Vector2.INF
@@ -8860,8 +9017,16 @@ func _draw() -> void:
 	_cached_visible_connections = _compute_visible_connections()
 	_twin_hidden_cache.clear()
 	_conn_anchor_cache.clear()
-	_handles_cache.clear()
-	_hinfo_cache.clear()
+	# Wire ends (resolved handles, their screen positions) only move when the
+	# view, the graph or a card does: kept across draws on the same geometry
+	# key (5 ms of every redraw on a 227-wire graph), and at most a second
+	# (a card resized by what it shows). The 3D view's camera orbits, so it
+	# never keeps them.
+	var gk := _geometry_cache_key()
+	if gk != _geom_key or _v3_on():
+		_geom_key = gk
+		_handles_cache.clear()
+		_hinfo_cache.clear()
 	_wired_cache.clear()
 	_wired_cache_ready = false
 	_array_draw_cache.clear()

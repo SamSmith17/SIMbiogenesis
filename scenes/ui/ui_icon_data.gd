@@ -9,6 +9,7 @@ extends RefCounted
 const ICONS := {
 	"arrow-left": "<path d='m12 19-7-7 7-7'/> <path d='M19 12H5'/>",
 	"arrow-right": "<path d='M5 12h14'/> <path d='m12 5 7 7-7 7'/>",
+	"arrow-up": "<path d='m5 12 7-7 7 7'/> <path d='M12 19V5'/>",
 	"battery": "<rect width='16' height='10' x='2' y='7' rx='2' ry='2'/> <line x1='22' x2='22' y1='11' y2='13'/>",
 	"battery-low": "<rect width='16' height='10' x='2' y='7' rx='2' ry='2'/> <line x1='22' x2='22' y1='11' y2='13'/> <line x1='6' x2='6' y1='11' y2='13'/>",
 	"box": "<path d='M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z'/> <path d='m3.3 7 8.7 5 8.7-5'/> <path d='M12 22V12'/>",
@@ -23,7 +24,9 @@ const ICONS := {
 	"chevrons-up-down": "<path d='m7 15 5 5 5-5'/> <path d='m7 9 5-5 5 5'/>",
 	"circle-alert": "<circle cx='12' cy='12' r='10'/> <line x1='12' x2='12' y1='8' y2='12'/> <line x1='12' x2='12.01' y1='16' y2='16'/>",
 	"circle-check": "<circle cx='12' cy='12' r='10'/> <path d='m9 12 2 2 4-4'/>",
+	"circle-dot": "<circle cx='12' cy='12' r='10'/> <circle cx='12' cy='12' r='1'/>",
 	"circle-help": "<circle cx='12' cy='12' r='10'/> <path d='M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3'/> <path d='M12 17h.01'/>",
+	"circle-pack": "<circle cx='12' cy='12' r='10'/> <circle cx='9' cy='10' r='3.5'/> <circle cx='15.5' cy='14' r='3'/> <circle cx='11' cy='17' r='1.5'/>",
 	"clock": "<circle cx='12' cy='12' r='10'/> <polyline points='12 6 12 12 16 14'/>",
 	"cloud": "<path d='M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z'/>",
 	"cloud-rain": "<path d='M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242'/> <path d='M16 14v6'/> <path d='M8 14v6'/> <path d='M12 16v6'/>",

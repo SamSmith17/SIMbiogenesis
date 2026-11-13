@@ -15,6 +15,9 @@ var _backdrop: ColorRect = null
 var _panel: PanelContainer = null
 var _title_lbl: Label = null
 var _body_lbl: RichTextLabel = null
+## A card may carry "energy_flows" (EnergyRunSankey): drawn under the body.
+var _flows_box: VBoxContainer = null
+const FLOWS_H := 240.0
 var _actions_row: HBoxContainer = null
 var _queue: Array[Dictionary] = []
 var _showing: bool = false
@@ -73,11 +76,25 @@ func _present(card: Dictionary) -> void:
 	_current_card = card
 	# Fault cards dock to a corner with a light backdrop so the wreck they are
 	# explaining stays visible; briefs/debriefs keep the centered treatment.
+	var size := PANEL_SIZE
+	# The Sankey takes the room left above the timeline (a corner card is
+	# anchored over the bar, which can be tall); with too little room the
+	# card keeps just the one-line split.
+	var bar := HudLayout.timeline_height() + 4.0
+	var room := get_viewport_rect().size.y - bar \
+			- UiScreenLayout.SIDE_MARGIN * 2.0 - PANEL_SIZE.y - 50.0
+	var fh := minf(FLOWS_H, room)
+	var flows := card.get("energy_flows", {}) as Dictionary
+	var has_flows := _fill_flows(flows, fh if fh >= 110.0 else 0.0)
+	_body_lbl.size_flags_vertical = Control.SIZE_SHRINK_BEGIN if has_flows else Control.SIZE_EXPAND_FILL
+	_flows_box.size_flags_vertical = Control.SIZE_EXPAND_FILL if has_flows else Control.SIZE_FILL
+	if has_flows:
+		size += Vector2(60.0, (fh if fh >= 110.0 else 0.0) + 40.0)
 	if str(card.get("placement", "center")) == "corner":
-		UiScreenLayout.clamped_corner_card(_panel, PANEL_SIZE)
+		UiScreenLayout.clamped_corner_card(_panel, size, bar)
 		_backdrop.color = Color(0.0, 0.0, 0.0, 0.25)
 	else:
-		UiScreenLayout.clamped_center(_panel, PANEL_SIZE)
+		UiScreenLayout.clamped_center(_panel, size)
 		_backdrop.color = Color(0.0, 0.0, 0.0, 0.55)
 	_title_lbl.text = str(card.get("title", ""))
 	var tcol: Variant = card.get("title_color")
@@ -88,6 +105,29 @@ func _present(card: Dictionary) -> void:
 	visible = true
 	move_to_front()
 	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+
+
+## The run's energy split as a small loop Sankey under the body; false when
+## the card carries none.
+func _fill_flows(flows: Dictionary, h: float = FLOWS_H) -> bool:
+	for c in _flows_box.get_children():
+		_flows_box.remove_child(c)
+		c.queue_free()
+	_flows_box.visible = not EnergyRunSankey.loop_input(flows).is_empty()
+	if not _flows_box.visible:
+		return false
+	var view := EnergyRunSankey.make_view(flows, h) if h > 0.0 else null
+	var line := Label.new()
+	line.text = "Where the energy went · " + EnergyRunSankey.summary(flows)
+	line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	line.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	line.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_flows_box.add_child(line)
+	if view != null:
+		# The picture takes the card's spare height, not the body text.
+		view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		_flows_box.add_child(view)
+	return true
 
 
 ## Body text + optional non-editable suffix (e.g. the debrief's unlock list —
@@ -164,6 +204,12 @@ func _build_ui() -> void:
 	_body_lbl.custom_minimum_size = Vector2(PANEL_SIZE.x - UITheme.SPACE_LG * 2.0, 0.0)
 	_body_lbl.add_theme_color_override("default_color", UITheme.C_TEXT)
 	root.add_child(_body_lbl)
+
+	_flows_box = VBoxContainer.new()
+	_flows_box.name = "CardFlows"
+	_flows_box.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	_flows_box.visible = false
+	root.add_child(_flows_box)
 
 	_actions_row = HBoxContainer.new()
 	_actions_row.alignment = BoxContainer.ALIGNMENT_END

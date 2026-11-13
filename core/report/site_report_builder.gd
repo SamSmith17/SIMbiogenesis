@@ -313,6 +313,11 @@ func _finalize() -> void:
 	_data.temp_annual_min_c = _safe_min(_data.temp_monthly_min_c)
 	_data.temp_annual_max_c = _safe_max(_data.temp_monthly_max_c)
 
+	# Hour by hour for the carpet plots (365 × 24; a leap year's last day is
+	# left out so every column is one calendar day of a common year).
+	_data.hourly_pv_kw = _pv.slice(0, 8760)
+	_data.hourly_temp_c = _temp.slice(0, 8760)
+
 	save_to_cache(_data)
 	# Free the large hourly buffers now that everything is aggregated.
 	_ghi = PackedFloat32Array()

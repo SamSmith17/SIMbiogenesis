@@ -17,12 +17,25 @@ const PRESET_SUBTLE := "subtle"
 const PRESET_SANKEY := "sankey"
 const PRESET_BOLD := "bold"
 const PRESET_CUSTOM := "custom"
-const PRESETS := [PRESET_CLASSIC, PRESET_SUBTLE, PRESET_SANKEY, PRESET_BOLD]
+## Looks: the same width rule, dressed differently.
+const PRESET_NEON := "neon"
+const PRESET_AURORA := "aurora"
+const PRESET_INK := "ink"
+const PRESET_EMBER := "ember"
+const PRESETS := [PRESET_CLASSIC, PRESET_SUBTLE, PRESET_SANKEY, PRESET_BOLD,
+	PRESET_NEON, PRESET_AURORA, PRESET_INK, PRESET_EMBER]
+## The width presets and the look presets, for two rows of buttons.
+const WIDTH_PRESETS := [PRESET_CLASSIC, PRESET_SUBTLE, PRESET_SANKEY, PRESET_BOLD]
+const LOOK_PRESETS := [PRESET_NEON, PRESET_AURORA, PRESET_INK, PRESET_EMBER]
 const PRESET_LABELS := {
 	PRESET_CLASSIC: "Classic",
 	PRESET_SUBTLE: "Subtle",
 	PRESET_SANKEY: "Sankey",
 	PRESET_BOLD: "Bold",
+	PRESET_NEON: "Neon",
+	PRESET_AURORA: "Aurora",
+	PRESET_INK: "Ink",
+	PRESET_EMBER: "Ember",
 	PRESET_CUSTOM: "Custom",
 }
 const PRESET_TIPS := {
@@ -30,6 +43,26 @@ const PRESET_TIPS := {
 	PRESET_SUBTLE: "Width follows flow gently (square root), slow beads",
 	PRESET_SANKEY: "Width proportional to flow in each resource, moving streaks",
 	PRESET_BOLD: "Thick ribbons that stay bold when zoomed out, bright comets",
+	PRESET_NEON: "Glowing tubes with a white-hot core and fast comets",
+	PRESET_AURORA: "Soft, wide light that shimmers along the wires, tapered ends",
+	PRESET_INK: "Flat, printed ribbons with dark edges, no glow",
+	PRESET_EMBER: "Coloured by how much flows: deep red trickles to white-hot rivers",
+}
+
+## Colour modes: the resource's colour, the same lightening toward the
+## destination, a heat ramp by how much flows, an aurora shimmer, one accent.
+const COLOUR_KIND := "kind"
+const COLOUR_GRADIENT := "gradient"
+const COLOUR_HEAT := "heat"
+const COLOUR_AURORA := "aurora"
+const COLOUR_MONO := "mono"
+const COLOURS := [COLOUR_GRADIENT, COLOUR_KIND, COLOUR_HEAT, COLOUR_AURORA, COLOUR_MONO]
+const COLOUR_LABELS := {
+	COLOUR_GRADIENT: "Resource, toward the end",
+	COLOUR_KIND: "Resource colour",
+	COLOUR_HEAT: "Heat (by how much)",
+	COLOUR_AURORA: "Aurora shimmer",
+	COLOUR_MONO: "One accent colour",
 }
 
 const SCALE_LINEAR := "linear"
@@ -85,8 +118,41 @@ const DEFAULTS := {
 	"anim": ANIM_STREAKS,
 	"speed": 1.0,
 	"glow": 0.6,
-	"gradient": true,
 	"legend": true,
+	# The look (GraphFlowRibbons): glow width (× the ribbon's half width), the
+	# white-hot core (strength, share of the width), the darkened rim, how
+	# much a streak swells the ribbon, how much the ends taper, saturation,
+	# brightness, the colour mode and its accent, how faint an idle wire is,
+	# the pattern's spacing (× its natural period) and length (0..1).
+	"glow_w": 1.6,
+	"core": 0.35,
+	"core_w": 0.3,
+	"rim": 0.45,
+	"swell": 0.15,
+	"taper": 0.0,
+	"sat": 1.0,
+	"bright": 1.0,
+	"colour": COLOUR_GRADIENT,
+	"accent": "8cd9ff",
+	"idle_alpha": 0.65,
+	"period": 1.0,
+	"duty": 0.5,
+	# The Flows lens: space between layers, node width, how far the returns
+	# stand off the column, their opacity, the label size.
+	"lens_gap": 74.0,
+	"lens_node_w": 170.0,
+	"lens_return_gap": 46.0,
+	"lens_return_alpha": 0.86,
+	"lens_label": 1.0,
+}
+
+## Ranges of the look keys (UI sliders and clamping).
+const LOOK_RANGES := {
+	"glow_w": [0.3, 5.0], "core": [0.0, 1.0], "core_w": [0.05, 0.9], "rim": [0.0, 1.0],
+	"swell": [0.0, 1.0], "taper": [0.0, 1.0], "sat": [0.0, 2.0], "bright": [0.4, 2.0],
+	"idle_alpha": [0.0, 1.0], "period": [0.3, 4.0], "duty": [0.05, 1.0],
+	"lens_gap": [36.0, 220.0], "lens_node_w": [80.0, 320.0], "lens_return_gap": [16.0, 140.0],
+	"lens_return_alpha": [0.1, 1.0], "lens_label": [0.6, 1.8],
 }
 
 const PRESET_VALUES := {
@@ -96,7 +162,26 @@ const PRESET_VALUES := {
 	PRESET_SANKEY: {"scale": SCALE_LINEAR, "thickness": 22.0, "min_px": 2.5,
 		"anim": ANIM_STREAKS, "speed": 1.0, "glow": 0.6, "screen_space": false, "zoom_floor": 0.55},
 	PRESET_BOLD: {"scale": SCALE_LINEAR, "thickness": 34.0, "min_px": 3.5,
-		"anim": ANIM_COMETS, "speed": 1.15, "glow": 0.9, "screen_space": true},
+		"anim": ANIM_COMETS, "speed": 1.15, "glow": 0.9, "screen_space": true,
+		"core": 0.5, "swell": 0.25},
+	PRESET_NEON: {"scale": SCALE_LINEAR, "thickness": 24.0, "min_px": 2.5,
+		"anim": ANIM_COMETS, "speed": 1.25, "glow": 1.0, "glow_w": 2.9, "core": 0.9,
+		"core_w": 0.2, "rim": 0.15, "swell": 0.3, "sat": 1.4, "bright": 1.15,
+		"colour": COLOUR_GRADIENT, "period": 1.25, "duty": 0.35, "idle_alpha": 0.45,
+		"zoom_floor": 0.6},
+	PRESET_AURORA: {"scale": SCALE_SQRT, "thickness": 30.0, "min_px": 3.0,
+		"anim": ANIM_STREAKS, "speed": 0.7, "glow": 0.9, "glow_w": 3.4, "core": 0.25,
+		"core_w": 0.45, "rim": 0.05, "swell": 0.12, "taper": 0.55, "sat": 1.2,
+		"bright": 1.05, "colour": COLOUR_AURORA, "period": 2.2, "duty": 0.85,
+		"idle_alpha": 0.5, "zoom_floor": 0.6},
+	PRESET_INK: {"scale": SCALE_LINEAR, "thickness": 20.0, "min_px": 2.0,
+		"anim": ANIM_BEADS, "speed": 0.8, "glow": 0.0, "core": 0.0, "rim": 0.9,
+		"swell": 0.0, "sat": 0.7, "bright": 0.95, "colour": COLOUR_KIND, "period": 0.9,
+		"duty": 0.3, "idle_alpha": 0.4},
+	PRESET_EMBER: {"scale": SCALE_LINEAR, "thickness": 26.0, "min_px": 2.5,
+		"anim": ANIM_COMETS, "speed": 1.05, "glow": 0.8, "glow_w": 2.2, "core": 0.6,
+		"core_w": 0.28, "rim": 0.35, "swell": 0.25, "taper": 0.3, "colour": COLOUR_HEAT,
+		"period": 1.0, "duty": 0.45},
 }
 
 ## Ranges for the UI and for clamping saved values.
@@ -139,6 +224,9 @@ static func resolve(d: Variant) -> Dictionary:
 		if k == "preset" or not DEFAULTS.has(k):
 			continue
 		out[k] = src[k]
+	# The old bool: "brighter toward the destination" off = one flat colour.
+	if src.has("gradient") and not src.has("colour") and not bool(src["gradient"]):
+		out["colour"] = COLOUR_KIND
 	out["scale"] = str(out["scale"]) if SCALES.has(str(out["scale"])) else SCALE_LINEAR
 	out["anim"] = str(out["anim"]) if ANIMS.has(str(out["anim"])) else ANIM_STREAKS
 	out["ref"] = str(out["ref"]) if REFS.has(str(out["ref"])) else REF_SCREEN
@@ -150,9 +238,27 @@ static func resolve(d: Variant) -> Dictionary:
 	out["smoothing_h"] = maxf(0.0, float(out["smoothing_h"]))
 	out["screen_space"] = bool(out["screen_space"])
 	out["zoom_floor"] = clampf(float(out["zoom_floor"]), 0.0, 1.0)
-	out["gradient"] = bool(out["gradient"])
 	out["legend"] = bool(out["legend"])
+	out["colour"] = str(out["colour"]) if COLOURS.has(str(out["colour"])) else COLOUR_GRADIENT
+	out["accent"] = str(out["accent"]).trim_prefix("#")
+	if not Color.html_is_valid(str(out["accent"])):
+		out["accent"] = "8cd9ff"
+	for k in LOOK_RANGES:
+		var rg: Array = LOOK_RANGES[k]
+		out[k] = clampf(float(out[k]), float(rg[0]), float(rg[1]))
 	return out
+
+
+## The keys GraphFlowRibbons draws with, from a style.
+static func look(style: Dictionary) -> Dictionary:
+	return {"glow": float(style.get("glow", 0.6)), "glow_w": float(style.get("glow_w", 1.6)),
+		"core": float(style.get("core", 0.35)), "core_w": float(style.get("core_w", 0.3)),
+		"rim": float(style.get("rim", 0.45)), "swell": float(style.get("swell", 0.15)),
+		"taper": float(style.get("taper", 0.0)), "sat": float(style.get("sat", 1.0)),
+		"bright": float(style.get("bright", 1.0)), "colour": str(style.get("colour", COLOUR_GRADIENT)),
+		"accent": Color.html(str(style.get("accent", "8cd9ff"))),
+		"idle_alpha": float(style.get("idle_alpha", 0.65)), "period": float(style.get("period", 1.0)),
+		"duty": float(style.get("duty", 0.5))}
 
 
 ## The sparse form saved with the graph: only what differs from the preset
@@ -238,30 +344,40 @@ static func anim_speed_px(style: Dictionary, value: float, ref: float) -> float:
 ## selftest checks it moves the right way.
 static func pattern(anim: String, s_px: float, t: float, speed: float,
 		reverse: bool, blur: bool = false) -> float:
+	return pattern_ex(anim, s_px, t, speed, reverse, blur, 1.0, 0.5)
+
+
+## The pattern with the style's spacing (`period` × the natural one) and
+## length (`duty` 0..1: 0.5 is the natural shape, toward 1 the streaks and
+## tails grow long and soft, toward 0 they shrink to sparks).
+static func pattern_ex(anim: String, s_px: float, t: float, speed: float,
+		reverse: bool, blur: bool, period: float, duty: float) -> float:
 	if anim == ANIM_NONE:
 		return 0.0
 	var p := s_px - t * speed if not reverse else s_px + t * speed
+	var pm := maxf(period, 0.05)
+	var dk := pow(2.0, (0.5 - clampf(duty, 0.0, 1.0)) * 3.0)
 	match anim:
 		ANIM_PULSE:
-			return 0.5 + 0.5 * sin(TAU * p / 160.0)
+			return 0.5 + 0.5 * sin(TAU * p / (160.0 * pm))
 		ANIM_BEADS:
-			var per_b := 26.0
+			var per_b := 26.0 * pm
 			var xb := fposmod(p, per_b) / per_b
 			var d := absf(xb - 0.5) * 2.0
-			return clampf(1.0 - d * 1.6, 0.0, 1.0)
+			return clampf(1.0 - d * 1.6 * pow(2.0, (0.5 - duty) * 2.0), 0.0, 1.0)
 		ANIM_COMETS:
-			var per_c := 96.0 if not blur else 150.0
+			var per_c := (96.0 if not blur else 150.0) * pm
 			var xc := fposmod(p, per_c) / per_c
 			# Bright head at the front (x near 1 when moving forward), a long tail.
 			var head := xc if not reverse else 1.0 - xc
-			return pow(head, 5.0 if not blur else 2.4)
+			return pow(head, (5.0 if not blur else 2.4) * pow(dk, 0.85))
 	# Streaks (default)
-	var per := 44.0 if not blur else 110.0
+	var per := (44.0 if not blur else 110.0) * pm
 	var x := fposmod(p, per) / per
 	var h := x if not reverse else 1.0 - x
 	if blur:
 		return pow(h, 1.6) * 0.8
-	return pow(h, 3.0)
+	return pow(h, 3.0 * dk)
 
 
 ## Display smoothing: ease `prev` toward `now` over `dt_h` sim hours with

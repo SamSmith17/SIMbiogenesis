@@ -428,6 +428,8 @@ const VIEW_MODE_DISPLAY_SETTINGS := 190
 ## Flow style (GraphFlowStyle): the panel, and one radio item per preset.
 const VIEW_MODE_FLOW_STYLE := 191
 const VIEW_MODE_FLOW_PRESET_BASE := 192
+## 192..199 are the flow presets.
+const VIEW_MODE_CIRCLE_PACK := 200
 const DESIGNATE_OFF := 200
 const DESIGNATE_CATCHMENT := 201
 const DESIGNATE_CROP := 202
@@ -1896,8 +1898,8 @@ func _build_layout() -> void:
 	add_child(gc)
 	_graph_canvas = gc
 	_apply_display_prefs()
-	_apply_pv_snap_prefs()
 	_apply_flow_style()
+	_apply_pv_snap_prefs()
 	gc.set("resource_flow_engine", _resource_flow)
 	_build_lens_strip()
 	_init_spatial_edit()
@@ -2674,11 +2676,11 @@ func _build_topbar() -> Control:
 		["globe", "Globe",
 				"Globe — orbit the Sphere of Influence as a snowglobe "
 				+ "(drag to orbit, wheel to zoom, double-click to re-fit)."],
-	]:
 		["flows", "Flows",
 				"Flows — the graph as a loop Sankey: sources on top, flow runs "
 				+ "down, and what cycles back returns up the sides. Hover a "
 				+ "return to light its whole loop; double-click a group to go in."],
+	]:
 		var b := _make_mode_chip(str(pair[0]), str(pair[1]))
 		b.tooltip_text = str(pair[2]) + "\nTime keeps running in every lens — use the timeline."
 		_mode_chip_row.add_child(b)
@@ -2718,7 +2720,6 @@ func _build_topbar() -> Control:
 	var vmp := _view_mode_menu.get_popup()
 	_view_mode_subpopups.clear()
 	vmp.add_item("Display settings…", VIEW_MODE_DISPLAY_SETTINGS)
-	vmp.add_separator()
 	vmp.add_item("Flow style…", VIEW_MODE_FLOW_STYLE)
 	for fpi in GraphFlowStyle.PRESETS.size():
 		var fp := str(GraphFlowStyle.PRESETS[fpi])
@@ -2726,6 +2727,10 @@ func _build_topbar() -> Control:
 			VIEW_MODE_FLOW_PRESET_BASE + fpi)
 		vmp.set_item_tooltip(vmp.get_item_index(VIEW_MODE_FLOW_PRESET_BASE + fpi),
 			str(GraphFlowStyle.PRESET_TIPS.get(fp, "")))
+	vmp.add_item("Nesting as circles…", VIEW_MODE_CIRCLE_PACK)
+	vmp.set_item_tooltip(vmp.get_item_index(VIEW_MODE_CIRCLE_PACK),
+		"Every group, camp, vehicle and array as circles inside circles, sized by count, power or mass; also what the stores hold and what the site is built from")
+	vmp.add_separator()
 	vmp.add_check_item("SoI bubble (freeform)", VIEW_MODE_SOI_BUBBLE)
 	vmp.add_check_item("Node cards (no 3D previews)", VIEW_MODE_NODE_CARDS)
 	vmp.add_check_item("Preview node labels", VIEW_MODE_PREVIEW_LABELS)
@@ -3378,13 +3383,16 @@ func _on_view_mode_menu_id(id: int) -> void:
 	if id == VIEW_MODE_DISPLAY_SETTINGS:
 		_open_display_settings()
 		return
-	match id:
 	if id == VIEW_MODE_FLOW_STYLE:
 		open_flow_style_panel()
+		return
+	if id == VIEW_MODE_CIRCLE_PACK:
+		open_circle_pack("systems", "")
 		return
 	if id >= VIEW_MODE_FLOW_PRESET_BASE and id < VIEW_MODE_FLOW_PRESET_BASE + GraphFlowStyle.PRESETS.size():
 		set_flow_style({"preset": str(GraphFlowStyle.PRESETS[id - VIEW_MODE_FLOW_PRESET_BASE])})
 		return
+	match id:
 		VIEW_MODE_FREEFORM:
 			_apply_graph_view_mode(GraphSiteLayout.VIEW_FREEFORM)
 		VIEW_MODE_SITE:
@@ -3569,9 +3577,9 @@ func _on_mode_chip_pressed(mode_id: String) -> void:
 			_apply_graph_view_mode(GraphSiteLayout.VIEW_ELEVATION)
 		"globe", "snowglobe":
 			_apply_graph_view_mode(GraphSiteLayout.VIEW_GLOBE)
-
 		"flows":
 			_apply_graph_view_mode(GraphSiteLayout.VIEW_FLOWS)
+
 
 ## Full-screen globe (the map pin's view). It renders through the ROOT viewport,
 ## so SoiService.enter_snowglobe closes the graph first and reopens it on exit.
@@ -4950,9 +4958,9 @@ func _sync_view_mode_menu_checks() -> void:
 				on = _graph_view_mode == GraphSiteLayout.VIEW_SITE
 			"elevation":
 				on = _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION
-			"globe":
 			"flows":
 				on = _graph_view_mode == GraphSiteLayout.VIEW_FLOWS
+			"globe":
 				on = _graph_view_mode == GraphSiteLayout.VIEW_GLOBE
 		btn.set_pressed_no_signal(on)
 
@@ -12421,7 +12429,6 @@ func _open_display_settings() -> void:
 	pop.popup(Rect2i(Vector2i(int(anchor.position.x), int(anchor.end.y) + 4), Vector2i(340, 10)))
 
 
-func _display_check(box: VBoxContainer, key: String, text: String, tip: String) -> void:
 # ---------------------------------------------------------------------------
 # Flow style (View options ▾ → Flow style…, GraphFlowStyle): how flow shows
 # on every wire. Saved with the graph ("flow_style", sparse over its preset)
@@ -12481,10 +12488,11 @@ func open_flow_style_panel() -> PopupPanel:
 	_flow_style_panel = pop
 	var anchor := _view_mode_menu.get_global_rect() if _view_mode_menu != null \
 		else Rect2(Vector2(600, 60), Vector2.ZERO)
-	pop.popup(Rect2i(Vector2i(int(anchor.position.x), int(anchor.end.y) + 4), Vector2i(400, 10)))
+	pop.popup(Rect2i(Vector2i(int(anchor.position.x), int(anchor.end.y) + 4), Vector2i(440, 10)))
 	return pop
 
 
+func _display_check(box: VBoxContainer, key: String, text: String, tip: String) -> void:
 	var cb := CheckBox.new()
 	cb.text = text
 	cb.tooltip_text = tip
@@ -17648,10 +17656,10 @@ func collect_save_state() -> Dictionary:
 		"graph_3d": (_graph_canvas.call("view_3d_state") as Dictionary) if _graph_canvas != null else {},
 		"view_filter": GraphDomainFilter.to_array(_domain_shown),
 		"view_filter_unwired": _domain_unwired,
-		"element_lens": _element_lens,
 		"flow_style": _flow_style.duplicate(),
 		"flows_channel": str(_graph_canvas.get("flows_channel")) if _graph_canvas != null else "",
 		"flows_window": str(_graph_canvas.get("flows_window")) if _graph_canvas != null else "now",
+		"element_lens": _element_lens,
 		"elevation_3d_section": _elevation_3d_section,
 		"elevation_heading_rad": float(_graph_canvas.get("elevation_heading_rad")) if _graph_canvas != null else 0.0,
 		"elevation_section_offset_m": float(_graph_canvas.get("elevation_section_offset_m")) if _graph_canvas != null else 0.0,
@@ -17867,7 +17875,6 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 		_sync_3d_menu_checks()
 	set_domain_filter(GraphDomainFilter.from_array(data.get("view_filter", [])),
 		bool(data.get("view_filter_unwired", true)))
-	var lens_id := str(data.get("element_lens", ""))
 	var fsv: Variant = data.get("flow_style", {})
 	_flow_style = GraphFlowStyle.to_sparse(GraphFlowStyle.resolve(fsv)) \
 		if fsv is Dictionary and not (fsv as Dictionary).is_empty() else {}
@@ -17875,6 +17882,7 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 	if _graph_canvas != null:
 		_graph_canvas.set("flows_channel", str(data.get("flows_channel", "")))
 		_graph_canvas.set("flows_window", str(data.get("flows_window", "now")))
+	var lens_id := str(data.get("element_lens", ""))
 	set_element_lens(lens_id if ElementLens.is_lens(lens_id) else "", false)
 	_elevation_3d_section = bool(data.get("elevation_3d_section", true))
 	_sync_elev_slice_row()
@@ -22778,12 +22786,11 @@ func _tick_elements(delta: float) -> void:
 	_element_leds.clear()
 	var led := element_ledger("root")
 	_element_history.record(_closure_abs_hours(), led)
-	if not _element_lens.is_empty() and visible:
 	_record_flow_history()
+	if not _element_lens.is_empty() and visible:
 		_push_element_lens()
 
 
-## The lens, the air each node trades and the biggest wire flux in the scope
 ## Record what every wire carries now (FlowHistory) and hand the history to
 ## the canvas for the Flows lens's windows.
 func _record_flow_history() -> void:
@@ -22799,6 +22806,7 @@ func flow_history() -> FlowHistory:
 	return _flow_history
 
 
+## The lens, the air each node trades and the biggest wire flux in the scope
 ## on screen, handed to the canvas.
 func _push_element_lens() -> void:
 	if _graph_canvas == null or not _graph_canvas.has_method("set_element_lens"):
@@ -22918,6 +22926,91 @@ func place_preset_by_label(label: String) -> bool:
 
 ## Show ▾ → Where it goes…: the cycle Sankey over the site (or the system
 ## the player is in).
+# ---------------------------------------------------------------------------
+# Circle packing (CirclePackWindow): the nested things of the site as
+# zoomable circles inside circles.
+# ---------------------------------------------------------------------------
+
+## The tank's level now (its timeline's; the specs may lag).
+func tank_level_now(tid: String) -> float:
+	var h := 0.0
+	var main := _get_scene_main_node()
+	if main != null and main.has_method("get_absolute_hours"):
+		h = float(main.call("get_absolute_hours"))
+	var tl: ResourceTimeline = _resource_flow.get_timeline(tid) if _resource_flow != null else null
+	if tl != null:
+		return tl.level_at(h)
+	return float((model.get_item(tid).get("specs", {}) as Dictionary).get("level", 0.0)) if model != null else 0.0
+
+
+## Open the circle pack on `source` ("systems", "stores", "built"), opened on
+## node `focus_id` when given (a graph item id for "systems").
+func open_circle_pack(source: String = "systems", focus_id: String = "") -> CirclePackWindow:
+	var scope := "root"
+	var graph_actions := func(n: Dictionary) -> Array:
+		var iid := str((n.get("data", {}) as Dictionary).get("item_id", ""))
+		if iid.is_empty():
+			return []
+		var acts: Array = [["Show on the graph", func() -> void:
+			var w := CirclePackWindow.current()
+			if w != null:
+				w.close()
+			if not visible:
+				open_graph_view()
+			focus_graph_item(iid)]]
+		var it := model.get_item(iid) if model != null else {}
+		if not it.is_empty() and _item_world_xz_for_handoff(it) != Vector2.INF:
+			acts.append(["Look at it in 3D", func() -> void:
+				var w2 := CirclePackWindow.current()
+				if w2 != null:
+					w2.close()
+				locate_item_in_world(iid)])
+		return acts
+	var loader := _find_terrain_loader(_get_scene_main_node())
+	var recs_fn := func() -> Array:
+		return loader.call("placed_prop_records") if loader != null and loader.has_method("placed_prop_records") else []
+	var built_actions := func(n: Dictionary) -> Array:
+		var pid := str((n.get("data", {}) as Dictionary).get("prop_id", ""))
+		if pid.is_empty():
+			return []
+		return [["Its parts", func() -> void:
+			for r in (recs_fn.call() as Array):
+				if str((r as Dictionary).get("id", "")) == pid:
+					open_parts_pack(r as Dictionary)
+					return]]
+	var sources: Array = [
+		{"id": "systems", "label": "Systems", "sizes": CirclePackSources.SIZES, "size": CirclePackSources.SIZE_COUNT,
+			"live_s": 2.0, "actions": graph_actions,
+			"build": func(size_by: String) -> Dictionary: return CirclePackSources.graph(model, scope, size_by)},
+		{"id": "stores", "label": "What the stores hold", "live_s": 2.0, "actions": graph_actions,
+			"build": func(_s: String) -> Dictionary: return CirclePackSources.stores(model, scope, tank_level_now)},
+		{"id": "built", "label": "What it is built from",
+			"sizes": [["structure", "By structure"], ["material", "By material"]], "size": "structure",
+			"actions": built_actions,
+			"build": func(by: String) -> Dictionary: return CirclePackSources.built(recs_fn.call(), by)},
+	]
+	return CirclePackWindow.open_for(get_tree(), {"title": "Inside the site",
+		"subtitle": "Circles inside circles: click one to go in, right-click to come out.",
+		"sources": sources, "source": source, "focus_id": focus_id})
+
+
+## What one kind is made of (a store's contents at `qty_kg`).
+func open_composition_pack(kind: String, qty_kg: float = 1.0) -> CirclePackWindow:
+	var q := qty_kg if qty_kg > 0.0 else 1.0
+	return CirclePackWindow.open_for(get_tree(), {"title": "What %s is made of" % ResourceKinds.display_name(kind).to_lower(),
+		"subtitle": "Its components, each split into its elements (%s)." % ElementLedger.fmt_kg(q),
+		"sources": [{"id": "kind", "label": "Make-up",
+			"build": func(_s: String) -> Dictionary: return CirclePackSources.composition(kind, q)}]})
+
+
+## One placed structure's parts by material.
+func open_parts_pack(rec: Dictionary) -> CirclePackWindow:
+	return CirclePackWindow.open_for(get_tree(), {"title": CirclePackSources.parts(rec).get("name", "Parts"),
+		"subtitle": "Its parts by material, sized by mass.",
+		"sources": [{"id": "parts", "label": "Parts",
+			"build": func(_s: String) -> Dictionary: return CirclePackSources.parts(rec)}]})
+
+
 func open_element_sankey(lens: String = "N") -> void:
 	var scr: Script = load("res://scenes/ui/element_sankey_modal.gd")
 	if scr == null:

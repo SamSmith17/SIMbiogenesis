@@ -31,6 +31,8 @@ var _result_backdrop: ColorRect = null
 var _result_panel: PanelContainer = null
 var _result_title: Label = null
 var _result_body: RichTextLabel = null
+## "Where the energy went" (EnergyRunSankey) under the result text.
+var _result_flows: VBoxContainer = null
 var _result_retry_btn: Button = null
 var _result_close_btn: Button = null
 var _last_result_id: String = ""
@@ -225,6 +227,12 @@ func _build_ui() -> void:
 	_result_body.add_theme_font_size_override("normal_font_size", UITheme.FONT_SM)
 	r_root.add_child(_result_body)
 
+	_result_flows = VBoxContainer.new()
+	_result_flows.name = "ResultFlows"
+	_result_flows.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	_result_flows.visible = false
+	r_root.add_child(_result_flows)
+
 	var r_btns := HBoxContainer.new()
 	r_btns.alignment = BoxContainer.ALIGNMENT_CENTER
 	r_btns.add_theme_constant_override("separation", UITheme.SPACE_SM)
@@ -374,6 +382,37 @@ func _build_result_content(challenge_id: String, won: bool, payload: Dictionary)
 
 	_result_body.text = "\n".join(lines)
 	_result_retry_btn.visible = true
+	var flows: Dictionary = payload.get("energy_flows", {}) as Dictionary
+	if flows.is_empty():
+		var rn := _runner()
+		if rn != null and rn.has_method("last_energy_flows"):
+			flows = rn.call("last_energy_flows") as Dictionary
+	_fill_result_flows(flows, won)
+
+
+## The run's energy as a loop Sankey: sunlight into the panels at the top,
+## what did work, what was kept and what was never used leaving below. On a
+## failed prebake it covers the run up to the breakpoint.
+func _fill_result_flows(flows: Dictionary, won: bool) -> void:
+	for c in _result_flows.get_children():
+		_result_flows.remove_child(c)
+		c.queue_free()
+	var view := EnergyRunSankey.make_view(flows, 270.0)
+	_result_flows.visible = view != null
+	if view == null:
+		UiScreenLayout.clamped_center(_result_panel, Vector2(440.0, 280.0))
+		return
+	var head := SectionHeader.make("Where the energy went", "zap",
+		"" if won else "up to the breakpoint")
+	_result_flows.add_child(head)
+	_result_flows.add_child(view)
+	var line := Label.new()
+	line.text = EnergyRunSankey.summary(flows)
+	line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	line.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	line.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	_result_flows.add_child(line)
+	UiScreenLayout.clamped_center(_result_panel, Vector2(600.0, 640.0))
 
 
 func _on_start_pressed(challenge_id: String) -> void:

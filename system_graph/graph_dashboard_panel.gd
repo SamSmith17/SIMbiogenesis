@@ -238,6 +238,16 @@ func _build_ui() -> void:
 			var lens := str(_graph_view.call("element_lens")) if _graph_view.has_method("element_lens") else ""
 			_graph_view.call("open_element_sankey", lens if not lens.is_empty() else "N"))
 	made_body.add_child(where_btn)
+	var pack_btn := Button.new()
+	pack_btn.name = "built_circles"
+	pack_btn.text = "What it is made of…"
+	pack_btn.tooltip_text = "The site as circles inside circles: its systems, what the stores hold, what the structures are built from."
+	pack_btn.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(pack_btn)
+	pack_btn.pressed.connect(func() -> void:
+		if _graph_view != null and _graph_view.has_method("open_circle_pack"):
+			_graph_view.call("open_circle_pack", "stores", ""))
+	made_body.add_child(pack_btn)
 
 	add_child(_card_section("🔁 NEEDS & CLOSURE"))
 	var closure_wrap := _card_body()

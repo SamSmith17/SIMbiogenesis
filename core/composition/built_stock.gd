@@ -134,37 +134,9 @@ static func _resolve(rec: Dictionary, mid: String) -> Dictionary:
 		var s := LinkageStructureBuilder.packed_spec_for(p)
 		if s.get("materials") is Dictionary:
 			return _done(_scaled(s["materials"], float(s.get("count", 1))), "Linkage frame", false)
-	if rec.get("flatpack_spec") is Dictionary:
-		return _from_parts(FlatpackDesign.parts_for_packing(FlatpackDesign.solve(rec["flatpack_spec"])),
-			func(_pt: Dictionary) -> String: return "plywood", "flat-pack parts")
-	if rec.get("domelab_spec") is Dictionary:
-		var dd := DomeLabDesign.solve(rec["domelab_spec"])
-		var ds: Dictionary = dd.get("spec", rec["domelab_spec"])
-		return _from_parts(DomeLabDesign.parts_for_packing(dd), func(pt: Dictionary) -> String:
-			return _dome_part(pt, ds), "dome parts")
-	if rec.get("pvlab_spec") is Dictionary:
-		return _from_parts(PvLabDesign.parts_for_packing(PvLabDesign.solve(rec["pvlab_spec"])),
-			_pv_part, "solar array parts")
-	if rec.get("toroid_spec") is Dictionary:
-		return _from_parts(ToroidLabDesign.parts_for_packing(ToroidLabDesign.solve(rec["toroid_spec"])),
-			_toroid_part, "toroid parts")
-	if rec.get("pelton_spec") is Dictionary:
-		return _from_parts(PeltonLabDesign.parts_for_packing(PeltonLabDesign.solve(rec["pelton_spec"])),
-			func(_pt: Dictionary) -> String: return "steel", "turbine parts")
-	if rec.get("windlab_spec") is Dictionary:
-		return _from_parts(WindLabDesign.parts_for_packing(WindLabDesign.solve(rec["windlab_spec"])),
-			func(pt: Dictionary) -> String: return "pp" if str(pt.get("kind", "")) == "sheet" else "steel",
-			"turbine parts")
-	if rec.get("gantry_spec") is Dictionary:
-		return _from_parts(GantryLabDesign.parts_for_packing(GantryLabDesign.solve(rec["gantry_spec"])),
-			_gantry_part, "machine parts")
-	if rec.get("tc_spec") is Dictionary or TcBuilder.handles(mid):
-		var tsp: Dictionary = rec.get("tc_spec", {}) if rec.get("tc_spec") is Dictionary else TcBuilder.spec_for_model(mid)
-		if not tsp.is_empty():
-			return _from_parts(TcDesign.parts_for_packing(TcDesign.solve(tsp)),
-				func(_pt: Dictionary) -> String: return "steel", "tri-clamp parts")
-	if rec.get("rack_spec") is Dictionary:
-		return _from_parts(PalletRackBuilder.parts_for_packing(rec["rack_spec"]), _rack_part, "rack parts")
+	var ps := _part_source(rec, mid)
+	if not ps.is_empty():
+		return _from_parts(ps["parts"], ps["cls"], str(ps["source"]))
 	if rec.get("container_spec") is Dictionary:
 		var c := ContainerCatalog.packed_spec_for(str((rec["container_spec"] as Dictionary).get("container_id", "")))
 		if PackedSpec.has_mass(c):
@@ -179,6 +151,67 @@ static func _resolve(rec: Dictionary, mid: String) -> Dictionary:
 	if MODEL_MATERIALS.has(mid) and kg > 0.0:
 		return _done(_shares(kg, MODEL_MATERIALS[mid]), "model table", true)
 	return {"known": false, "skip": false, "kg": kg, "materials": {}, "est": true, "source": "unknown"}
+
+
+## The designer's own part list for one record and how each part maps to a
+## material: {parts, cls (Callable(part) -> material), source}, or {} for a
+## record with no part list (the Linkage frame carries a material split
+## instead; shipped models go by MODEL_MATERIALS).
+static func _part_source(rec: Dictionary, mid: String) -> Dictionary:
+	if rec.get("flatpack_spec") is Dictionary:
+		return _src(FlatpackDesign.parts_for_packing(FlatpackDesign.solve(rec["flatpack_spec"])),
+			func(_pt: Dictionary) -> String: return "plywood", "flat-pack parts")
+	if rec.get("domelab_spec") is Dictionary:
+		var dd := DomeLabDesign.solve(rec["domelab_spec"])
+		var ds: Dictionary = dd.get("spec", rec["domelab_spec"])
+		return _src(DomeLabDesign.parts_for_packing(dd), func(pt: Dictionary) -> String:
+			return _dome_part(pt, ds), "dome parts")
+	if rec.get("pvlab_spec") is Dictionary:
+		return _src(PvLabDesign.parts_for_packing(PvLabDesign.solve(rec["pvlab_spec"])),
+			_pv_part, "solar array parts")
+	if rec.get("toroid_spec") is Dictionary:
+		return _src(ToroidLabDesign.parts_for_packing(ToroidLabDesign.solve(rec["toroid_spec"])),
+			_toroid_part, "toroid parts")
+	if rec.get("pelton_spec") is Dictionary:
+		return _src(PeltonLabDesign.parts_for_packing(PeltonLabDesign.solve(rec["pelton_spec"])),
+			func(_pt: Dictionary) -> String: return "steel", "turbine parts")
+	if rec.get("windlab_spec") is Dictionary:
+		return _src(WindLabDesign.parts_for_packing(WindLabDesign.solve(rec["windlab_spec"])),
+			func(pt: Dictionary) -> String: return "pp" if str(pt.get("kind", "")) == "sheet" else "steel",
+			"turbine parts")
+	if rec.get("gantry_spec") is Dictionary:
+		return _src(GantryLabDesign.parts_for_packing(GantryLabDesign.solve(rec["gantry_spec"])),
+			_gantry_part, "machine parts")
+	if rec.get("tc_spec") is Dictionary or TcBuilder.handles(mid):
+		var tsp: Dictionary = rec.get("tc_spec", {}) if rec.get("tc_spec") is Dictionary else TcBuilder.spec_for_model(mid)
+		if not tsp.is_empty():
+			return _src(TcDesign.parts_for_packing(TcDesign.solve(tsp)),
+				func(_pt: Dictionary) -> String: return "steel", "tri-clamp parts")
+	if rec.get("rack_spec") is Dictionary:
+		return _src(PalletRackBuilder.parts_for_packing(rec["rack_spec"]), _rack_part, "rack parts")
+	return {}
+
+
+static func _src(parts: Array, cls: Callable, source: String) -> Dictionary:
+	return {"parts": parts, "cls": cls, "source": source}
+
+
+## One record's parts with their materials, for the parts circle pack:
+## [{label, qty, kg (each), material}]. [] when the record has no part list.
+static func parts_of_record(rec: Dictionary) -> Array:
+	var ps := _part_source(rec, str(rec.get("model_id", "")))
+	if ps.is_empty():
+		return []
+	var cls: Callable = ps["cls"]
+	var out: Array = []
+	for pt in (ps["parts"] as Array):
+		var d: Dictionary = pt
+		var kg := float(d.get("mass_kg", 0.0))
+		if kg <= 0.0:
+			continue
+		out.append({"label": str(d.get("label", d.get("kind", "part"))), "qty": maxi(1, int(d.get("qty", 1))),
+			"kg": kg, "material": str(cls.call(d))})
+	return out
 
 
 static func _done(mats: Dictionary, source: String, est: bool) -> Dictionary:

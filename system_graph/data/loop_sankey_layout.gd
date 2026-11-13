@@ -67,6 +67,7 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 	var layer_gap := float(opts.get("layer_gap", DEF_LAYER_GAP))
 	var node_gap := float(opts.get("node_gap", DEF_NODE_GAP))
 	var min_w := float(opts.get("min_node_w", DEF_MIN_NODE_W))
+	var ret_gap := float(opts.get("return_gap", RETURN_MARGIN))
 
 	# --- Nodes and edges, sorted for determinism ------------------------
 	var ids: Array = []
@@ -476,7 +477,7 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 		var yt := float(y_top_of.call(ub4))
 		var lane := float(r["lane"])
 		var s2 := int(r["side"])
-		var xl := (col_lo - RETURN_MARGIN - lane) if s2 < 0 else (col_hi + RETURN_MARGIN + lane)
+		var xl := (col_lo - ret_gap - lane) if s2 < 0 else (col_hi + ret_gap + lane)
 		var dip := 22.0 + lane * 0.55
 		var path2 := _return_path(Vector2(xs, ys), Vector2(xt, yt), xl, dip)
 		ribbons.append({"id": str(e2["id"]), "conn_ids": e2["conn_ids"], "a": str(e2["a"]), "b": str(e2["b"]),
@@ -528,8 +529,8 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 				cnt += 1
 		(metrics[key] as Dictionary)["loops"] = cnt
 	var lane_max := maxf(float(lane_off[-1]), float(lane_off[1]))
-	var bounds := Rect2(Vector2(col_lo - RETURN_MARGIN - lane_max - 20.0, 0.0),
-		Vector2((col_hi - col_lo) + 2.0 * (RETURN_MARGIN + lane_max + 20.0), bottom_y))
+	var bounds := Rect2(Vector2(col_lo - ret_gap - lane_max - 20.0, 0.0),
+		Vector2((col_hi - col_lo) + 2.0 * (ret_gap + lane_max + 20.0), bottom_y))
 	return {"nodes": out_nodes, "ribbons": ribbons, "loops": loops, "metrics": metrics,
 		"bounds": bounds, "center_x": 0.0, "refs": refs, "layers": max_layer + 1,
 		"returns": rets.size()}

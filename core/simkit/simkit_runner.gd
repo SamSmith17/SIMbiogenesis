@@ -226,6 +226,16 @@ func _do_run(validate_only: bool) -> int:
 	_write(_out.path_join("daily.csv"), Report.csv(y))
 	_write(_out.path_join("monthly.csv"), Compact.monthly_csv(y))
 	_write(_out.path_join("daily_ids.csv"), Compact.daily_csv(y, built.get("ids", {})))
+	var did: Dictionary = built.get("ids", {})
+	var flow_labels := {}
+	for gid in did:
+		var it := model.get_item(str(gid))
+		if not it.is_empty():
+			flow_labels[str(did[gid])] = str((it.get("specs", {}) as Dictionary).get("name", did[gid]))
+	var svg := Compact.flows_svg(y, did, days, flow_labels,
+		"Where it flowed: %s" % str((design as Dictionary).get("name", "")))
+	if svg != "":
+		_write(_out.path_join("flows.svg"), svg)
 	_write(_out.path_join("report.json"), JSON.stringify({"design": (design as Dictionary).get("name", ""),
 		"result": res, "energy": y.energy, "people": y.people, "acc": y.acc, "events": y.events}))
 	_status("done", 1.0, {"verdict": summary.get("verdict", ""), "wall_s": meta["wall_s"]})

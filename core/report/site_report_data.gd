@@ -43,6 +43,11 @@ var pv_panel_azimuth_deg: float = 180.0
 var pv_monthly_kwh: PackedFloat32Array = PackedFloat32Array()
 var pv_annual_kwh: float = 0.0
 var pv_capacity_factor: float = 0.0
+## The year hour by hour (365 days × 24 h, day-major) for the carpet plots:
+## PV output in kW and air temperature in °C. Empty in reports cached before
+## they were kept (Recompute fills them).
+var hourly_pv_kw: PackedFloat32Array = PackedFloat32Array()
+var hourly_temp_c: PackedFloat32Array = PackedFloat32Array()
 
 # --- Wind resource + potential ---
 var wind_turbine_count: int = 0
@@ -167,6 +172,8 @@ func to_dict() -> Dictionary:
 		"temp_annual_mean_c": temp_annual_mean_c,
 		"temp_annual_min_c": temp_annual_min_c,
 		"temp_annual_max_c": temp_annual_max_c,
+		"hourly_pv_kw": Marshalls.raw_to_base64(hourly_pv_kw.to_byte_array()),
+		"hourly_temp_c": Marshalls.raw_to_base64(hourly_temp_c.to_byte_array()),
 	}
 
 
@@ -221,7 +228,15 @@ static func from_dict(d: Dictionary) -> SiteReportData:
 	r.temp_annual_mean_c = float(d.get("temp_annual_mean_c", 0.0))
 	r.temp_annual_min_c = float(d.get("temp_annual_min_c", 0.0))
 	r.temp_annual_max_c = float(d.get("temp_annual_max_c", 0.0))
+	r.hourly_pv_kw = _b64_f32(d.get("hourly_pv_kw", ""))
+	r.hourly_temp_c = _b64_f32(d.get("hourly_temp_c", ""))
 	return r
+
+
+static func _b64_f32(v: Variant) -> PackedFloat32Array:
+	if not (v is String) or str(v).is_empty():
+		return PackedFloat32Array()
+	return Marshalls.base64_to_raw(str(v)).to_float32_array()
 
 
 static func _to_f32(v: Variant) -> PackedFloat32Array:

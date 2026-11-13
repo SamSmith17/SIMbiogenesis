@@ -139,6 +139,14 @@ func start_challenge(def: ChallengeDef) -> bool:
 	return true
 
 
+## The last baked run's energy split (EnergyRunSankey), up to its end or its
+## failure, for the result card. {} for a real-time challenge.
+func last_energy_flows() -> Dictionary:
+	if _bake_engine == null or not is_instance_valid(_bake_engine):
+		return {}
+	return _bake_engine.energy_flows()
+
+
 func _ensure_bake_engine() -> void:
 	if _bake_engine != null and is_instance_valid(_bake_engine):
 		return
@@ -179,6 +187,7 @@ func _on_bake_succeeded(bake_result: Dictionary) -> void:
 		"elapsed_h": float(bake_result.get("elapsed_h", 0.0)),
 		"metrics": metrics,
 		"reason": "",
+		"energy_flows": bake_result.get("energy_flows", {}),
 	}
 	# PV-utilization win gate (0 = ignore).
 	var util := float(bake_result.get("utilization_pct", 100.0))

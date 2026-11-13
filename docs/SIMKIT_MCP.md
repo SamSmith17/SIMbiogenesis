@@ -176,6 +176,12 @@ Rules that keep it short and diffable: three significant figures everywhere,
 tables as `{cols, rows}`, rows keyed by design node id, the bottlenecks ranked.
 It never contains the site's coordinates or name.
 
+The summary also has a `flows` block: the biggest wires by total and how much
+of each resource cycled back (Finn's cycling index). For people, each run
+folder (`runs/<run id>/`) holds `flows.svg`, the year's loop Sankey: the main
+stream runs down, what cycles back returns up the sides. Hovering a ribbon in a
+browser shows its value.
+
 ## In the game: reviewing a submitted design
 
 A submitted design lands in the game's `user://simkit/inbox/`. When a world

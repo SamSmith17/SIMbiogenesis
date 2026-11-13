@@ -1,0 +1,18 @@
+<!-- drawn for SIMbiogenesis in the Lucide style (24 px grid, 2 px stroke) -->
+<svg
+  class="lucide lucide-circle-pack"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <circle cx="12" cy="12" r="10" />
+  <circle cx="9" cy="10" r="3.5" />
+  <circle cx="15.5" cy="14" r="3" />
+  <circle cx="11" cy="17" r="1.5" />
+</svg>

@@ -782,6 +782,22 @@ func _build_composition_section(item: Dictionary) -> void:
 		for tc in CompositionCatalog.top_components(kind, 4):
 			if float(tc[1]) >= 0.0005:
 				_readonly_field(CompositionCatalog.component_name(str(tc[0])).capitalize(), _comp_pct(float(tc[1])))
+		var mk := Button.new()
+		mk.name = "makeup_circles"
+		mk.text = "See its make-up as circles"
+		mk.tooltip_text = "What this store holds: its components, each split into its elements, sized by mass."
+		mk.focus_mode = Control.FOCUS_NONE
+		var mk_id := str(item.get("id", ""))
+		mk.pressed.connect(func() -> void:
+			var gv := ServiceLocator.graph()
+			if gv == null or not gv.has_method("open_composition_pack"):
+				return
+			var cap := float(specs.get("capacity_qty", 0.0))
+			var lv := float(gv.call("tank_level_now", mk_id)) if gv.has_method("tank_level_now") else float(specs.get("level", 0.0))
+			var kpu := CompositionCatalog.kg_per_unit(kind)
+			var kg := cap * lv * (kpu if not is_nan(kpu) and kpu > 0.0 else 1.0)
+			gv.call("open_composition_pack", kind, kg if kg > 0.0 else 1.0))
+		_form_vbox.add_child(mk)
 		var g := CompositionCatalog.grade_of(kind)
 		if g >= 0:
 			_readonly_field("Water grade", "%s (%d of 6)" % [str(CompositionData.GRADES.get(g, "")), g])
@@ -4942,6 +4958,19 @@ func _build_compound_section(item: Dictionary) -> void:
 				_compound_ungroup_cb.call(item.get("id", "") as String)
 		)
 		hbox.add_child(ungroup_btn)
+	var pack_btn := Button.new()
+	pack_btn.name = "see_inside_circles"
+	pack_btn.text = "See inside as circles"
+	pack_btn.tooltip_text = "Everything inside this group, nested, as circles inside circles you can zoom through."
+	pack_btn.focus_mode = Control.FOCUS_NONE
+	pack_btn.flat = true
+	pack_btn.add_theme_color_override("font_color", C_PRIMARY)
+	var pack_id := str(item.get("id", ""))
+	pack_btn.pressed.connect(func() -> void:
+		var gv := ServiceLocator.graph()
+		if gv != null and gv.has_method("open_circle_pack"):
+			gv.call("open_circle_pack", "systems", pack_id))
+	_form_vbox.add_child(pack_btn)
 	if kind == "":
 		var cid := str(item.get("id", ""))
 		var is_instance := not str((item.get("specs", {}) as Dictionary).get("definition_id", "")).is_empty()

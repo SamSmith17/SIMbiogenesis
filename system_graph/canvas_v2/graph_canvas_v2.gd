@@ -624,7 +624,7 @@ func _draw_trunks_ribbon() -> void:
 		GraphFlowRibbons.draw(get_canvas_item(), PackedVector2Array([src, hub]), {
 			"width": w_t, "color": col, "active": live, "anim": anim, "t": _flow_clock,
 			"speed": GraphFlowStyle.anim_speed_px(flow_style, total, ref_t),
-			"glow": float(flow_style.get("glow", 0.6)), "blur": _high_speed_lod})
+			"look": _flow_look, "blur": _high_speed_lod})
 		var tiles: Array = t["tiles"]
 		for i in tiles.size():
 			var v := float(vals[i]) if i < vals.size() else 0.0
@@ -632,7 +632,7 @@ func _draw_trunks_ribbon() -> void:
 			GraphFlowRibbons.draw(get_canvas_item(), PackedVector2Array([hub, tiles[i] as Vector2]), {
 				"width": w_b, "color": col, "active": _flow_live and v > 0.0, "anim": anim,
 				"t": _flow_clock, "speed": GraphFlowStyle.anim_speed_px(flow_style, v, ref_t),
-				"glow": 0.0, "far": true})
+				"look": _flow_look, "glow": 0.0, "far": true})
 		GraphFastDraw.disc(self, hub, maxf(3.0, w_t * 0.6), Color(col, 0.95))
 
 

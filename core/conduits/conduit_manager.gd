@@ -24,6 +24,13 @@ const DENSE_ROUTE_MIGRATE_MIN := 5  ## unlocked metro samples → clear as stale
 const REMESH_BUDGET_PER_FRAME := 3
 
 var _model: GraphModel = null
+## The graph's flow style (GraphFlowStyle) reaches the 3D runs too: their
+## glow and scroll speed follow each wire's share of the biggest flow of its
+## kind, the same reference the 2D ribbons use. Classic keeps the old rule.
+var _flow_refs := {}          # scale key -> eased reference
+var _flow_frame_max := {}     # scale key -> biggest value seen this frame
+var _flow_style_cache := {}
+var _flow_style_ms := -100000
 var _main: Node = null
 var _instances: Dictionary = {}  ## conn_id -> MeshInstance3D
 var _fittings: Dictionary = {}  ## conn_id -> Array[MeshInstance3D]
@@ -540,7 +547,42 @@ func _process(delta: float) -> void:
 			_tick_flow_params(cid, conn)
 		_update_discharge_vfx(delta, cid, conn)
 		_update_outlet_marker(cid, conn)
+	for k in _flow_frame_max:
+		_flow_refs[k] = GraphFlowStyle.ease_ref(float(_flow_refs.get(k, 0.0)), float(_flow_frame_max[k]), delta)
+	_flow_frame_max.clear()
 	_perf_end("conduits_3d")
+
+
+## The graph's flow style, re-read twice a second.
+func _flow_style() -> Dictionary:
+	var now := Time.get_ticks_msec()
+	if now - _flow_style_ms > 500:
+		_flow_style_ms = now
+		var gv := ServiceLocator.graph()
+		_flow_style_cache = gv.call("flow_style") as Dictionary \
+			if gv != null and gv.has_method("flow_style") else {}
+	return _flow_style_cache
+
+
+## What a run carries in its own measure and the key its width scale is
+## kept under: amps for electricity, L/h for a resource.
+static func flow_measure(conn: Dictionary) -> Array:
+	var amps: float = absf(float(conn.get("carried_amps", 0.0)))
+	if amps > 0.0:
+		return ["electricity", amps]
+	var rate_lph: float = maxf(absf(float(conn.get("flow_rate", 0.0))),
+		absf(float(conn.get("live_q_lps", 0.0))) * 3600.0)
+	return [GraphFlowStyle.scale_key(true, str(conn.get("kind", conn.get("resource_kind", "")))), rate_lph]
+
+
+## Glow strength and scroll speed for a run carrying `value` against `ref`
+## (GraphFlowStyle.norm in the style's scale): brighter and faster where more
+## flows, a quiet floor for a trickle. Pure, for the selftest.
+static func flow_glow_for(style: Dictionary, value: float, ref: float) -> Vector2:
+	var n := GraphFlowStyle.norm(value, ref, str(style.get("scale", "linear")))
+	var strength := 0.35 + clampf(n, 0.0, 1.0) * 0.75
+	var speed := 0.35 + clampf(log(1.0 + 9.0 * clampf(n, 0.0, 1.5)) / log(10.0), 0.0, 1.2) * 1.9
+	return Vector2(strength, speed * float(style.get("speed", 1.0)))
 
 
 func _perf_node() -> Node:
@@ -954,6 +996,16 @@ func _tick_flow_params(cid: String, conn: Dictionary) -> void:
 		if live_q > 0.02:
 			strength = maxf(strength, 0.7)
 	var speed: float = 0.5 + clampf(activity, 0.0, 1.5) * 1.6
+	var style := _flow_style()
+	if not style.is_empty() and not GraphFlowStyle.is_classic(style) and glow_on:
+		var fm := flow_measure(conn)
+		var fk := str(fm[0])
+		var fv := float(fm[1])
+		_flow_frame_max[fk] = maxf(float(_flow_frame_max.get(fk, 0.0)), fv)
+		var gs := flow_glow_for(style, fv, float(_flow_refs.get(fk, fv)))
+		strength = maxf(gs.x, 0.5) if ConduitKinds.is_conceptual_type(type_id) else gs.x
+		speed = gs.y
+		activity = GraphFlowStyle.norm(fv, float(_flow_refs.get(fk, fv)), str(style.get("scale", "linear")))
 	# Pulse emission on PE culvert rings (StandardMaterial — survives SoI CT clip).
 	var pulse := 0.9 + 0.55 * sin(Time.get_ticks_msec() * 0.001 * (2.0 + speed * 3.0))
 	var emit_e := (1.2 + strength * 3.5) * pulse if glow_on else 0.0

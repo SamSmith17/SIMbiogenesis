@@ -40,6 +40,11 @@ var chips: Array = []
 var show_header := true
 ## Keys present in the last input (for the channel chips).
 var keys_present: Array = []
+## Screen paths and ribbon geometry per layout ribbon, kept while the view
+## does not move (an animation frame only recolours). Keyed by the layout
+## dict's identity, centre, pan and zoom.
+var _geo_view: Array = []
+var _geo: Dictionary = {}
 
 
 ## Hand the lens this frame's input. Relayouts at most every RELAYOUT_MIN_S,
@@ -184,6 +189,12 @@ func _draw_layout(cv: Control, lay: Dictionary, center: Vector2, pan: Vector2, z
 	var hl_loop := hover_loop if live else -1
 	var hl_node := hover_node if live else ""
 	var sel := str(o.get("selected", ""))
+	var look := GraphFlowStyle.look(style)
+	var gv := [center, pan, zoom, far]
+	if gv != _geo_view or _geo.size() > 4000:
+		_geo_view = gv
+		_geo.clear()
+	var lay_id := "%s|%d" % [str(lay.get("bounds", Rect2())), rs.size()]
 	# The column guide: a faint spine down the middle of the main stream.
 	var b: Rect2 = lay["bounds"]
 	# Returns first (behind), then boundary flows, then the main stream.
@@ -206,12 +217,19 @@ func _draw_layout(cv: Control, lay: Dictionary, center: Vector2, pan: Vector2, z
 			if not lit:
 				a *= 0.16
 			elif pass_kind == LoopSankeyLayout.KIND_RETURN:
-				a *= 0.86
+				a *= float(style.get("lens_return_alpha", 0.86))
 			if live and i == hover_ribbon:
 				col = col.lightened(0.25)
-			var path := PackedVector2Array()
-			for p in (rb["path"] as PackedVector2Array):
-				path.append(to_screen(p, center, pan, zoom))
+			var gk := "%s|%d" % [lay_id, i]
+			var cached: Variant = _geo.get(gk)
+			if cached == null:
+				var sp := PackedVector2Array()
+				for p in (rb["path"] as PackedVector2Array):
+					sp.append(to_screen(p, center, pan, zoom))
+				cached = [sp, GraphFlowRibbons.geometry(sp,
+					GraphFlowRibbons.STEP_PX_FAR if far else GraphFlowRibbons.STEP_PX)]
+				_geo[gk] = cached
+			var path: PackedVector2Array = (cached as Array)[0]
 			var w := float(rb["width"]) * zoom
 			if bool(style.get("screen_space", false)):
 				w = float(rb["width"])
@@ -220,7 +238,9 @@ func _draw_layout(cv: Control, lay: Dictionary, center: Vector2, pan: Vector2, z
 			var ref := float(refs.get(key, v))
 			GraphFlowRibbons.draw(ci, path, {
 				"width": w, "color": Color(col, col.a * a),
-				"color_end": Color(col.lightened(0.15), col.a * a) if bool(style.get("gradient", true)) else Color(col, col.a * a),
+				"color_end": Color(col.lightened(0.15), col.a * a),
+				"look": look, "geo": (cached as Array)[1],
+				"heat": clampf(GraphFlowStyle.norm(v, ref, GraphFlowStyle.SCALE_LINEAR), 0.0, 1.0),
 				"active": bool(o.get("flowing", true)), "anim": anim, "t": float(o.get("clock", 0.0)),
 				"speed": GraphFlowStyle.anim_speed_px(style, v, ref),
 				"blur": bool(o.get("blur", false)),
@@ -243,7 +263,7 @@ func _draw_layout(cv: Control, lay: Dictionary, center: Vector2, pan: Vector2, z
 	# Nodes.
 	var labels: Dictionary = lay.get("labels", {})
 	var fnt: Font = o.get("font", UITheme.font("semibold"))
-	var fs := clampi(int(round(13.0 * clampf(zoom, 0.6, 1.4))), 9, 18)
+	var fs := clampi(int(round(13.0 * clampf(zoom, 0.6, 1.4) * float(o.get("label_scale", 1.0)))), 8, 26)
 	for id in (lay["nodes"] as Dictionary):
 		var nd: Dictionary = lay["nodes"][id]
 		var r: Rect2 = nd["rect"]
@@ -261,8 +281,9 @@ func _draw_layout(cv: Control, lay: Dictionary, center: Vector2, pan: Vector2, z
 			cv.draw_rect(sr, Color(accent, 0.35 * a2), false, 1.0)
 		var name := str(labels.get(id, nd.get("label", id)))
 		var name_w := fnt.get_string_size(name, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-		if name_w > sr.size.x - 14.0 and zoom >= 0.25:
-			# Too narrow for its name: the name sits beside the node instead.
+		if (name_w > sr.size.x - 14.0 or sr.size.y < 14.0) and zoom >= 0.25:
+			# Too narrow (or, zoomed out, too short) for its name: the name
+			# sits beside the node instead.
 			var at := Vector2(sr.end.x + 6.0, sr.get_center().y)
 			var pr := Rect2(at - Vector2(0.0, fs * 0.75), Vector2(name_w + 10.0, fs * 1.5))
 			GraphFastDraw.rrect(cv, pr, 5.0, Color(0.03, 0.04, 0.08, 0.78 * a2))

@@ -3348,15 +3348,6 @@ the placed `pv_array` rack via `bind_pv_array_prop`, Make array) and
   edit came out as a JOINED line in GDScript (two places this pass). Write
   edit scripts with the Write tool.
 
-## Graph view at speed (perf pass, 2026-10-27)
-
-"The graph view moves very slowly at high speeds." Measured with
-`graph_view_bench` on Mount Vernon (graph open, freeform). The median frame
-was vsync-bound up to 1440× but ~7 % of frames ran 37–48 ms at every speed,
-and at 7200× the median was 27.6 ms with the graph's sections summing to
-32 ms. After the pass: 7200× median 16.7 ms, sections ~9.5 ms. Frames over
-budget are mostly frames a few ms past 16.7 ms that wait a whole vsync, so
-the fix was taking steady cost out. In order of size:
 ## Flow visualization: Sankey wires, the Flows lens (2026-11-12)
 
 Plan + the catalog of further visualizations: `plans/FLOW_VIZ_PLAN.md`.
@@ -3369,8 +3360,17 @@ Plan + the catalog of further visualizations: `plans/FLOW_VIZ_PLAN.md`.
     is the resource kind, or "electricity".
   - `zoom_floor` (Sankey 0.55): a ribbon never shrinks below that share of its
     100 % width. `screen_space` (Bold) ignores the zoom.
-  - Presets: Classic (the OLD renderer, untouched), Subtle, Sankey (default),
-    Bold. Anything else reads as "Custom".
+  - Presets, two rows: width (Classic = the OLD renderer, untouched, Subtle,
+    Sankey = default, Bold) and looks (Neon, Aurora, Ink, Ember). Anything
+    changed on top reads as "Custom" (`to_sparse` keeps only the changes).
+  - The look keys (`GraphFlowStyle.look`, ranges in `LOOK_RANGES`, clamped by
+    `resolve`): glow + glow width, hot core + core width, dark rim, swell (a
+    passing streak widens the ribbon), taper (ends narrow), saturation,
+    brightness, colour mode (`COLOURS`: resource toward the end / resource /
+    heat by flow / aurora shimmer / one accent + `accent`), idle opacity, and
+    the pattern's spacing (`period`) and length (`duty`, `pattern_ex`). An old
+    `gradient: false` save reads as colour "kind". The Flows lens has its own:
+    layer gap, node width, return reach and opacity, label size.
   - Animation speed encodes the MAGNITUDE (log, capped at `MAX_ANIM_PX_S`
     140 px/s). The sim speed only decides whether anything moves. At ≥ 300×
     the pattern turns into long soft streaks (`blur`).
@@ -3378,7 +3378,11 @@ Plan + the catalog of further visualizations: `plans/FLOW_VIZ_PLAN.md`.
   - The graph's style is saved with the graph as `flow_style` (sparse over its
     preset); new graphs default from ui_prefs.cfg `[graph_flow] style`.
   - Set it from View options ▾ → "Flow: <preset>" radios or "Flow style…"
-    (`graph_flow_style_panel.gd`, live).
+    (`graph_flow_style_panel.gd`, live): an animated preview (`FlowPreview`,
+    four flows drawn by GraphFlowRibbons), the two preset rows, folding
+    sections Width / Motion / Light / Colour / Averaging and legend / Flows
+    lens; a row changed from the preset turns amber with a revert;
+    `pick_preset`, `set_knob`, `preview` for checks.
   - `SystemGraphView.set_flow_style / flow_style / open_flow_style_panel`.
   - Per wire: inspector "Flow width" (`conn.flow_width`: "" graph's /
     "plain" / "x2"). The old `sankey_scale: false` reads as plain
@@ -3396,6 +3400,19 @@ Plan + the catalog of further visualizations: `plans/FLOW_VIZ_PLAN.md`.
     scale legend (`_draw_flow_scale_legend`, top-left).
   - Freeform and the Flows lens only. The map lenses keep their own drawing.
   - The hit test widens to the ribbon (`_ribbon_w_cache`).
+  - **Cost** (`tools/bench/flow_style_bench.gd`, 227 wires on the Closed Loop
+    Ten world): ~10 ms for the wires and ~24 ms for the whole draw per redraw
+    (was 44–54 / 58–70), the lens ~12 ms (was 39). What carries it:
+    - flow estimates cached for `EST_TTL_MS` 150 ms on the graph's revisions
+      (`invalidate_flow_estimates` from `request_sim_redraw`);
+    - AC delivered watts through `GraphAcLoad.delivered_index` /
+      `delivered_watts_indexed` (one adjacency, memoised draws; the plain form
+      was ~130 µs a wire), exact to the watt (the bench checks parity);
+    - wire ends kept across draws on one geometry key
+      (`_geometry_cache_key`: view, card positions, revisions, a 1 s bucket);
+    - ribbon geometry cached per path (`_ribbon_geo`, `GraphFlowRibbons
+      .geometry` / `geo_key`), so an animation frame only recolours; the
+      lens caches its paths the same way.
 - **The Flows lens** (`GraphSiteLayout.VIEW_FLOWS`, lens chip "Flows",
   `GraphFlowLens` + `LoopSankeyLayout`):
   - The current scope's REAL nodes laid out as a Sankey that can loop. The lens
@@ -3428,7 +3445,56 @@ Plan + the catalog of further visualizations: `plans/FLOW_VIZ_PLAN.md`.
     FlowHistory (`ExperimentWorld.flow_hist`, `flow_loop_input`).
   - The simkit compact report has a `flows` block: top wires, % cycled per
     resource, loops (`SimkitCompact.flows`, `SimkitYear.conn_tot`).
-  - 3D conduits animate on `fx_time_lights` (paused with the sim).
+  - 3D conduits animate on `fx_time_lights` (paused with the sim), and their
+    glow and scroll speed follow the graph's flow style
+    (`ConduitManager.flow_glow_for` / `flow_measure`: each run against the
+    biggest of its kind, amps for power, L/h for a resource). Classic keeps
+    the old rule. The 3D ring view's connectors take `_ribbon_width`.
+- **Run Sankeys (2026-11-12, second pass):**
+  - `EnergyRunSankey` (`core/flow/`, pure) splits a run's energy series
+    step by step: sun direct to the loads, into and out of the battery
+    (gains read off the recorded charge, so losses are the series' own),
+    the charge it started with or kept, what was never used. It feeds a
+    one-way loop Sankey; boundary flows under 3 % are left out of the
+    picture, but the summary line still lists them.
+  - `ChallengeBakeEngine.energy_flows()` covers the run up to its end or
+    breakpoint. It rides `run_succeeded` as `energy_flows`, and
+    `ChallengeRunner.last_energy_flows()` serves a failed prebake.
+  - The challenge result card shows it under "Where the energy went". So
+    do the tutorial run cards: the card modal takes an `energy_flows` key
+    and sizes the picture to the room above the LIVE bar,
+    `HudLayout.timeline_height()`. ⚠ `UiScreenLayout.timeline_stack_height()`
+    is a stale constant, and a corner card anchored on it ran under a tall
+    timeline.
+  - A/B Compare: both versions share one width scale per resource
+    (`FlowCompare.shared_refs`). "Show B − A" is one Sankey of the
+    difference (`FlowCompare.difference`): keys `more:<kind>` (green) and
+    `less:<kind>` (red), each pair on one scale, wires matched by
+    (from, to, kind).
+  - Simkit runs write `flows.svg` (`LoopSankeySvg.render`, through
+    `SimkitCompact.flows_svg`): the year's loop Sankey on the dark theme,
+    with a legend and a hover title on each ribbon.
+- **Patterns** (timeline 🗓, `TimelineUI.open_patterns`,
+  `scenes/ui/patterns_modal.gd`) reads the recorded days (SolarUI's
+  EnergyTimeline and the tank ResourceTimelines; it changes nothing).
+  Windows: 3 / 7 / 14 days, midnight-aligned. Three views:
+  - a carpet plot (battery, solar, load, net power, any store's fill);
+  - a phase orbit of battery charge against a store or net power, with its
+    day-to-day drift in words;
+  - the window's energy budget as a waterfall beside the energy Sankey.
+- **Kit charts** (`scenes/ui/kit/`):
+  - `CarpetPlot`: a day × hour image built when the data is set (never in
+    `_draw`). One-hue ramps recede into the dark surface; the diverging
+    pair is red / grey / blue. It has a hover cell and a key.
+  - `PhaseOrbit`: zooms to the data inside the given bounds, fades older
+    hours, marks start and now.
+  - `WaterfallChart`: horizontal rows; start and total bars are neutral,
+    additions blue, losses red, all with signed values.
+  - The data side is `PatternData` (pure): `hour_grid`, `orbit_drift` /
+    `drift_words`, `energy_waterfall` / `waterfall_spans`.
+  - The Site Report keeps the year hour by hour (`hourly_pv_kw` /
+    `hourly_temp_c`, base64 in its cache; older caches say "Recompute") and
+    draws PV and temperature carpets.
 - ⚠ **Engine fix found by it:** `_process_plant` stamped flow only on a wire
   whose kind was exactly "water". A bed on reclaimed water
   ("irrigation_water") showed an idle wire while its tank emptied. It now
@@ -3436,14 +3502,96 @@ Plan + the catalog of further visualizations: `plans/FLOW_VIZ_PLAN.md`.
   people → greywater is a change of kind); loops show in the UNION graph over
   a window.
 - Gates:
-  - `system_graph/graph_flow_style_selftest.gd` (42 checks),
+  - `system_graph/graph_flow_style_selftest.gd` (61 checks: every preset,
+    look clamping, the gradient migration, spacing and length, cached
+    geometry, taper, heat),
     `system_graph/loop_sankey_layout_selftest.gd` (31),
-    `core/flow/flow_history_selftest.gd` (9);
+    `core/flow/flow_history_selftest.gd` (9),
+    `core/flow/energy_run_sankey_selftest.gd` (16, incl. the SVG),
+    `core/flow/flow_compare_selftest.gd` (9),
+    `core/flow/pattern_data_selftest.gd` (12);
+  - `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/patterns_check.gd -Label patterns -Timeout 900`
+    (20, real clicks and hovers: renders two days ahead, Patterns, the
+    result and tutorial cards above the bar, Compare's B − A, the Site
+    Report's year carpets);
   - `tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/flow_view_check.gd -Label flow_view -Timeout 900`
-    (31, real clicks);
+    (52, real clicks: every preset, the panel's Neon button, the look knobs
+    reaching the canvas, a revert click, close-ups of each look);
+  - bench `tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/bench/flow_style_bench.gd -Timeout 900`;
   - diagnostic `tools/diag/flow_loops_diag.gd` (what flowed over a day);
   - tour stop `20f_flow_lens`.
 
+## Circle packing: nested things as zoomable circles (2026-11-12)
+
+Anything nested on the site as circles inside circles you can fly through
+(the user's reference: zoomable circle packing, in the dark theme).
+- **`CirclePack`** (`core/viz/circle_pack.gd`, pure, 64-bit floats): a tree
+  {id, name, value | children, color, unit, detail, data} → laid nodes
+  {x, y, r, depth, parent, kids, …} in a frame with the root at (0, 0),
+  radius `RADIUS` 1000. Siblings by the front-chain algorithm (Wang et al.
+  2006), enclosed by Welzl's circle, both ported from d3-hierarchy v3
+  (deterministic LCG shuffle); two passes like d3.pack so the padding is in
+  final units; children sorted largest first. A leaf's AREA is its value.
+  Leaves of 0 and emptied groups are dropped (`hidden`). Colours: a node's
+  own, else its parent's; the root's children take `PALETTE` in order (the
+  dataviz reference's eight dark-surface hues, validated on #0f1628:
+  adjacent CVD ΔE ≥ 8.4, contrast ≥ 3:1). Circles of any two hues can touch,
+  so every group circle carries its name too.
+- **`CirclePackView`** (`scenes/ui/kit/circle_pack_view.gd`): click a
+  group → a van Wijk & Nuij smooth zoom (d3.interpolateZoom's path) into it;
+  click a leaf → selected; double-click → `activated`; right-click /
+  Backspace → up; Home → whole; wheel zooms about the pointer; drag pans
+  (the focus then follows the view). `set_tree` with the same root id
+  GLIDES the circles to new values (live refresh); a new root grows in ring
+  by ring. Drawing: groups a tinted disc + an anti-aliased rim, leaves a
+  solid disc + a sheen; names on dark pills at a group's top, in the middle
+  of a leaf (text colours, never the series colour), largest first, never
+  overlapping. ⚠ Discs come from ONE mipmapped 512 px texture
+  (`TEXTURE_FILTER_LINEAR_WITH_MIPMAPS` on the view) drawn at any size:
+  GraphFastDraw's per-size discs built a new texture every frame of a zoom
+  (one draw was 6 ms for 165 circles; now 1.5). Past 512 px a disc is a
+  polygon. Off-screen and sub-pixel circles skip their subtree. PerfSpan
+  `pack_draw`.
+- **`CirclePackWindow`** (`scenes/ui/circle_pack_window.gd`, a ModalFrame,
+  one instance under the root: `open_for(tree, spec)`, `current()`): source
+  tabs, "Size by", breadcrumb, Home / Up, a side panel (name, value, share
+  of the level above and of the whole, its actions, what is inside: rows
+  that fly there). spec `sources: [{id, label, build(size_by) -> tree,
+  sizes, size, actions(node) -> [[label, Callable]], live_s}]`. Harness:
+  `view()`, `set_source`, `set_size_by`, `source_id`.
+- **`CirclePackSources`** (`core/viz/circle_pack_sources.gd`): `graph`
+  (groups, camps, vehicles; an array's panels in their strings; one each /
+  rated power / shipping mass; leaves in their system's channel colour),
+  `composition(kind, kg)` (components, each split into elements; water
+  stays water), `stores` (by system → store → components),
+  `built(records, by structure | material)` (BuiltStock; structures by their
+  design's own name, numbered when repeated), `parts(rec)` (materials →
+  the designer's parts, from `BuiltStock.parts_of_record`, which shares
+  `_part_source` with `of_record`, so parts and material totals agree).
+- **Where it opens:** graph View options ▾ → "Nesting as circles…"
+  (`SystemGraphView.open_circle_pack(source, focus_id)`: Systems, What the
+  stores hold, What it is built from; actions Show on the graph / Look at
+  it in 3D / Its parts); a group's inspector "See inside as circles"
+  (opens on that group); a store's "See its make-up as circles"
+  (`open_composition_pack`); the dashboard's WATER & NUTRIENTS "What it is
+  made of…"; the prop editor's "What it is made of…" (`open_parts_pack`).
+- Gates: `core/viz/circle_pack_selftest.gd` (26: inside parents, padding,
+  area ∝ value, enclose by hand, 3 equal circles exact, determinism, drops,
+  2,500 nodes in ~150 ms, composition sums, graph nesting + strings, parts
+  = built stock); `tools\harness.ps1 -World w6af22bac295d -RunScript
+  res://tools/checks/circle_pack_check.gd -Label circle_pack -Timeout 900`
+  (23, real clicks: fly in, hover, right-click out, tabs, Its parts, the
+  inspector button; draw cost); tour stop `20g_circle_pack`.
+
+## Graph view at speed (perf pass, 2026-10-27)
+
+"The graph view moves very slowly at high speeds." Measured with
+`graph_view_bench` on Mount Vernon (graph open, freeform). The median frame
+was vsync-bound up to 1440× but ~7 % of frames ran 37–48 ms at every speed,
+and at 7200× the median was 27.6 ms with the graph's sections summing to
+32 ms. After the pass: 7200× median 16.7 ms, sections ~9.5 ms. Frames over
+budget are mostly frames a few ms past 16.7 ms that wait a whole vsync, so
+the fix was taking steady cost out. In order of size:
 - **PV string walk.** `PvElectrical._pv_sources_reachable` rescanned every
   wire for every node it visited. It now builds `pv_adjacency(conns)` once
   per walk. On top of that:

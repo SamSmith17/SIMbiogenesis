@@ -40,6 +40,10 @@ var _precip_canvas: Control = null
 var _temp_canvas: Control = null
 var _hydro_canvas: Control = null
 var _hydro_card: Control = null
+## The year hour by hour: PV output and temperature as carpet plots.
+var _carpet_pv: CarpetPlot = null
+var _carpet_temp: CarpetPlot = null
+var _carpet_note: Label = null
 
 # Summary labels per card.
 var _solar_stat: RichTextLabel = null
@@ -279,6 +283,40 @@ func _build_cards(parent: VBoxContainer) -> void:
 	_hydro_stat = _mk_stat()
 	_hydro_card = _add_card(row4, "💧 Hydro Potential (current graph)", _hydro_canvas, _hydro_stat, _draw_hydro)
 	_hydro_card.visible = false
+
+	# The year hour by hour (carpet plots): a column per day, midnight at the
+	# top, so the seasons read across and the daily rhythm down.
+	var row_c := HBoxContainer.new()
+	row_c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row_c.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	parent.add_child(row_c)
+	for spec in [["🔆 PV output, hour by hour", "pv"], ["🌡 Temperature, hour by hour", "temp"]]:
+		var card := PanelContainer.new()
+		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		card.add_theme_stylebox_override("panel", UITheme.card_style())
+		row_c.add_child(card)
+		var vb := VBoxContainer.new()
+		vb.add_theme_constant_override("separation", UITheme.SPACE_XS)
+		card.add_child(vb)
+		var t := Label.new()
+		t.text = str(spec[0])
+		t.add_theme_color_override("font_color", UITheme.C_TEXT)
+		t.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+		vb.add_child(t)
+		var cp := CarpetPlot.new()
+		cp.name = "carpet_%s" % str(spec[1])
+		cp.custom_minimum_size = Vector2(0, 190)
+		cp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		vb.add_child(cp)
+		if str(spec[1]) == "pv":
+			_carpet_pv = cp
+			_carpet_note = Label.new()
+			_carpet_note.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+			_carpet_note.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+			_carpet_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			vb.add_child(_carpet_note)
+		else:
+			_carpet_temp = cp
 
 	# Packing & logistics (PACKING_PLAN.md Phase 2) — text-only card computed
 	# LIVE at populate time from the current graph + placed props (cheap
@@ -577,6 +615,7 @@ func _populate() -> void:
 	if _data == null:
 		return
 	var d := _data
+	_fill_carpets(d)
 	var src_txt: String = {"archive": "🌎 Archive %d" % d.year,
 		"generated": "🔮 Generated %d" % d.year,
 		"synthetic": "🔄 Synthetic"}.get(d.weather_source, d.weather_source)
@@ -815,6 +854,41 @@ func _refresh_site_now_card() -> void:
 		cost_line += " [color=#%s](%s unpriced)[/color]" % [muted, UiText.count(int(placed["unpriced"]), "structure")]
 	lines.append(cost_line)
 	_site_now_stat.text = "\n".join(lines)
+
+
+## The year's hourly PV and temperature as carpet plots (CarpetPlot).
+func _fill_carpets(d: SiteReportData) -> void:
+	if _carpet_pv == null:
+		return
+	const MONTHS := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+	var ticks: Array = []
+	var day_label := func(day: int) -> String:
+		var md := SiteReportMetrics.month_day_from_doy(day)
+		return "%s %d" % [MONTHS[clampi(md.x - 1, 0, 11)], md.y]
+	for doy in 365:
+		var md2 := SiteReportMetrics.month_day_from_doy(doy)
+		if md2.y == 1:
+			ticks.append([doy, MONTHS[clampi(md2.x - 1, 0, 11)]])
+	var days := floori(mini(d.hourly_pv_kw.size(), d.hourly_temp_c.size()) / 24.0)
+	if days <= 0:
+		_carpet_pv.set_data(PackedFloat32Array(), 0)
+		_carpet_temp.set_data(PackedFloat32Array(), 0)
+		_carpet_note.text = "Recompute to see the year hour by hour."
+		return
+	_carpet_pv.set_data(d.hourly_pv_kw, days, {"ramp": "sun", "ticks": ticks, "day_label": day_label,
+		"fmt": func(v: float) -> String: return UiText.num(v * 1000.0, "W")})
+	var tr := PatternData.finite_range(d.hourly_temp_c)
+	var mid := 0.5 * (tr.x + tr.y) if not is_nan(tr.x) else 15.0
+	# Temperature as a diverging scale round the year's middle: blue colder,
+	# red warmer (the carpet's diverging pair is red for low; flip the sign).
+	var flipped := PackedFloat32Array()
+	flipped.resize(d.hourly_temp_c.size())
+	for i in d.hourly_temp_c.size():
+		flipped[i] = mid - float(d.hourly_temp_c[i])
+	_carpet_temp.set_data(flipped, days, {"ramp": "diverging", "ticks": ticks, "day_label": day_label,
+		"fmt": func(v: float) -> String: return "%.0f °C" % (mid - v)})
+	_carpet_note.text = ("Each column is a day, midnight at the top. Light = the array making the " +
+		"most; the dark band is night, and how wide it is through the year is the length of the day.")
 
 
 func _refresh_packing_card() -> void:

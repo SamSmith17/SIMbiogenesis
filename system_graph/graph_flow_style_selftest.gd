@@ -13,7 +13,7 @@ extends SceneTree
 ## function while the suite still prints PASS.
 ##   godot --headless --path . --script system_graph/graph_flow_style_selftest.gd
 
-const EXPECTED_CHECKS := 42
+const EXPECTED_CHECKS := 61
 
 var _checks := 0
 var _fails := 0
@@ -27,12 +27,100 @@ func _init() -> void:
 	_test_easing()
 	_test_legend()
 	_test_ribbon_geometry()
+	_test_conduits()
+	_test_looks()
 	if _checks != EXPECTED_CHECKS:
 		_fails += 1
 		print("FAIL check count %d != EXPECTED_CHECKS %d (a test function aborted?)" % [_checks, EXPECTED_CHECKS])
 	print("GRAPH FLOW STYLE SELFTEST %s  (%d checks, %d failed)" % [
 		"PASS" if _fails == 0 else "FAIL", _checks, _fails])
 	quit(0 if _fails == 0 else 1)
+
+
+## The look presets and knobs: every preset resolves to itself and saves as
+## its bare name, the look keys clamp, the old gradient bool migrates, the
+## pattern's spacing and length do what they say, cached geometry draws the
+## same ribbon, taper narrows the ends, and the heat ramp warms with flow.
+func _test_looks() -> void:
+	var all_ok := true
+	for pr in GraphFlowStyle.PRESETS:
+		var st := GraphFlowStyle.resolve({"preset": pr})
+		if str(st["preset"]) != str(pr) or GraphFlowStyle.to_sparse(st).size() != 1:
+			all_ok = false
+	_ok(all_ok, "every preset resolves to itself and saves as its bare name")
+	_ok(GraphFlowStyle.WIDTH_PRESETS.size() + GraphFlowStyle.LOOK_PRESETS.size() == GraphFlowStyle.PRESETS.size(),
+		"the two preset rows hold every preset")
+	var ink := GraphFlowStyle.resolve({"preset": GraphFlowStyle.PRESET_INK})
+	_ok(float(ink["glow"]) == 0.0 and str(ink["colour"]) == GraphFlowStyle.COLOUR_KIND,
+		"Ink is flat and in resource colours")
+	var cl := GraphFlowStyle.resolve({"glow_w": 99.0, "sat": -3.0, "duty": 7.0, "lens_gap": 1.0})
+	_ok(is_equal_approx(float(cl["glow_w"]), 5.0) and is_equal_approx(float(cl["sat"]), 0.0)
+		and is_equal_approx(float(cl["duty"]), 1.0) and is_equal_approx(float(cl["lens_gap"]), 36.0),
+		"look and lens keys clamp to their ranges")
+	_ok(str(GraphFlowStyle.resolve({"gradient": false})["colour"]) == GraphFlowStyle.COLOUR_KIND,
+		"an old 'gradient off' save reads as resource colour")
+	_ok(str(GraphFlowStyle.resolve({"gradient": false, "colour": "heat"})["colour"]) == "heat",
+		"a saved colour mode beats the old bool")
+	var bad := GraphFlowStyle.resolve({"colour": "plaid", "accent": "nope"})
+	_ok(str(bad["colour"]) == GraphFlowStyle.COLOUR_GRADIENT and str(bad["accent"]) == "8cd9ff",
+		"an unknown colour mode or accent falls back")
+	var lk := GraphFlowStyle.look(GraphFlowStyle.resolve({"colour": "mono", "accent": "#ff0000"}))
+	_ok(lk["accent"] is Color and (lk["accent"] as Color).r > 0.99 and (lk["accent"] as Color).g < 0.01,
+		"look() hands the accent over as a colour")
+	# Pattern length: a longer duty lights more of each period.
+	var lit := []
+	for d in [0.2, 0.5, 0.9]:
+		var sum := 0.0
+		for k in 88:
+			sum += GraphFlowStyle.pattern_ex(GraphFlowStyle.ANIM_STREAKS, float(k), 0.0, 0.0, false, false, 1.0, d)
+		lit.append(sum / 88.0)
+	_ok(lit[0] < lit[1] and lit[1] < lit[2], "a longer streak length lights more of the wire (%.2f %.2f %.2f)" % lit)
+	var a := GraphFlowStyle.pattern_ex(GraphFlowStyle.ANIM_COMETS, 30.0, 0.0, 0.0, false, false, 1.0, 0.5)
+	var b := GraphFlowStyle.pattern_ex(GraphFlowStyle.ANIM_COMETS, 60.0, 0.0, 0.0, false, false, 2.0, 0.5)
+	_ok(is_equal_approx(a, b), "spacing ×2 draws the same pattern twice as far apart")
+	_ok(is_equal_approx(GraphFlowStyle.pattern(GraphFlowStyle.ANIM_BEADS, 7.0, 0.3, 40.0, false),
+		GraphFlowStyle.pattern_ex(GraphFlowStyle.ANIM_BEADS, 7.0, 0.3, 40.0, false, false, 1.0, 0.5)),
+		"pattern() is pattern_ex at the natural spacing and length")
+	# Cached geometry draws the same ribbon.
+	var path := PackedVector2Array([Vector2(0, 0), Vector2(120, 40), Vector2(300, 10)])
+	var o := {"width": 14.0, "color": Color.ORANGE, "active": true, "t": 0.4, "speed": 60.0,
+		"look": GraphFlowStyle.look(GraphFlowStyle.resolve({"preset": "neon"}))}
+	var r1 := GraphFlowRibbons.build(path, o)
+	var o2 := o.duplicate()
+	o2["geo"] = GraphFlowRibbons.geometry(path, GraphFlowRibbons.STEP_PX)
+	var r2 := GraphFlowRibbons.build(path, o2)
+	_ok(r1["pts"] == r2["pts"] and r1["cols"] == r2["cols"], "cached geometry draws the same ribbon")
+	# Taper: the ends narrower than the middle.
+	var line := PackedVector2Array([Vector2(0, 0), Vector2(400, 0)])
+	var tl := GraphFlowStyle.look(GraphFlowStyle.resolve({"taper": 1.0, "glow": 0.0}))
+	var rt := GraphFlowRibbons.build(line, {"width": 20.0, "color": Color.WHITE, "active": false, "look": tl})
+	var end_w := 0.0
+	var mid_w := 0.0
+	for pt in (rt["pts"] as PackedVector2Array):
+		if pt.x < 1.0:
+			end_w = maxf(end_w, absf(pt.y))
+		if absf(pt.x - 200.0) < 3.0:
+			mid_w = maxf(mid_w, absf(pt.y))
+	_ok(end_w < mid_w * 0.5 and is_equal_approx(mid_w, 10.0), "taper narrows the ends, not the middle")
+	var h0 := GraphFlowRibbons.heat_color(0.1)
+	var h1 := GraphFlowRibbons.heat_color(0.95)
+	_ok(h1.get_luminance() > h0.get_luminance() + 0.3, "the heat ramp warms toward white with flow")
+	_ok(GraphFlowRibbons.grade(Color(1, 0, 0), 0.0, 1.0).is_equal_approx(
+		GraphFlowRibbons.grade(Color(1, 0, 0), 0.0, 1.0).lerp(Color(0.299, 0.299, 0.299), 1.0)),
+		"saturation 0 is grey")
+
+
+## The 3D runs follow the same rule: brighter and faster where more flows.
+func _test_conduits() -> void:
+	var st := GraphFlowStyle.resolve({"preset": "sankey"})
+	var lo := ConduitManager.flow_glow_for(st, 5.0, 100.0)
+	var hi := ConduitManager.flow_glow_for(st, 100.0, 100.0)
+	_ok(hi.x > lo.x and hi.y > lo.y, "a 3D run carrying more glows brighter and scrolls faster")
+	_ok(ConduitManager.flow_glow_for(st, 0.0, 100.0).x > 0.0, "an idle run keeps a quiet floor")
+	_ok(str(ConduitManager.flow_measure({"carried_amps": 8.0})[0]) == "electricity",
+		"a power run is measured in amps on the electricity scale")
+	var m := ConduitManager.flow_measure({"flow_rate": 120.0, "kind": "water"})
+	_ok(str(m[0]) == "water" and absf(float(m[1]) - 120.0) < 1e-9, "a water run in L/h on its own scale")
 
 
 func _ok(cond: bool, what: String) -> void:

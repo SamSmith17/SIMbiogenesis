@@ -161,6 +161,61 @@ static func flows(y: Object, did: Dictionary, days: float) -> Dictionary:
 		"wires": {"cols": ["from", "to", "kind", "total", "mean_per_h"], "rows": out_rows}}
 
 
+## The run's wires as a LoopSankeyLayout input: each wire's mean flow per
+## hour over the run, between design node ids (labels by `labels`).
+static func flow_input(y: Object, did: Dictionary, days: float, labels: Dictionary = {}) -> Dictionary:
+	var tot: Dictionary = y.get("conn_tot") if y.get("conn_tot") != null else {}
+	var ends: Dictionary = y.get("_conn_ends") if y.get("_conn_ends") != null else {}
+	var hours := maxf(days * 24.0, 1e-6)
+	var edges: Array = []
+	var touched := {}
+	var keys := {}
+	for cid in tot:
+		var t: Array = tot[cid]
+		var e: Array = ends.get(cid, [])
+		if e.size() < 2 or float(t[1]) <= 0.0:
+			continue
+		var a := str(did.get(str(e[0]), e[0]))
+		var b := str(did.get(str(e[1]), e[1]))
+		if a == b:
+			continue
+		edges.append({"id": str(cid), "a": a, "b": b, "key": str(t[0]), "value": float(t[1]) / hours})
+		touched[a] = true
+		touched[b] = true
+		keys[str(t[0])] = true
+	var nodes: Array = []
+	var labs := {}
+	var ids: Array = touched.keys()
+	ids.sort()
+	for nid in ids:
+		labs[nid] = str(labels.get(nid, nid))
+		nodes.append({"id": str(nid), "label": labs[nid]})
+	return {"nodes": nodes, "edges": edges, "bin": [], "bout": [], "labels": labs, "types": {},
+		"keys": keys.keys(), "opts": {"thickness": 30.0, "layer_gap": 90.0, "node_h": 30.0,
+			"min_node_w": 150.0}}
+
+
+## The year's loop Sankey as an SVG (LoopSankeySvg), for the run folder.
+static func flows_svg(y: Object, did: Dictionary, days: float, labels: Dictionary, title: String) -> String:
+	var inp := flow_input(y, did, days, labels)
+	if (inp["edges"] as Array).is_empty() or (inp["edges"] as Array).size() > 900:
+		return ""
+	var lay := LoopSankeyLayout.layout(inp["nodes"], inp["edges"], [], [], inp["opts"])
+	var cyc: Array = []
+	var m: Dictionary = lay.get("metrics", {})
+	for k in m:
+		var fci := float((m[k] as Dictionary).get("fci", 0.0))
+		if fci >= 0.005:
+			cyc.append("%s %d %% cycled" % [ResourceKinds.display_name(str(k)), int(round(fci * 100.0))])
+	var sub := "Mean flow per hour over %s. %s" % [UiText.count(days, "day"),
+		", ".join(cyc) if not cyc.is_empty() else "Nothing cycled back."]
+	return LoopSankeySvg.render(lay, {"title": title, "subtitle": sub,
+		"color_of": func(k: String) -> Color: return ResourceKinds.wire_color(k),
+		"name_of": func(k: String) -> String: return ResourceKinds.display_name(k),
+		"fmt": func(k: String, v: float) -> String:
+			return "%s/h" % UiText.num(v, ResourceKinds.default_unit(k))})
+
+
 ## One row per calendar month of the run.
 static func monthly(y: Object) -> Dictionary:
 	var rows: Array = []
