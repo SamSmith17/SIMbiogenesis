@@ -119,6 +119,8 @@ var _element_lens := ""
 ## What moved, element by element, over sim time (the Sankey's windows and
 ## the water-recovery track), recorded once a second graph open or not.
 var _element_history := ElementHistory.new()
+## What every wire carried, hourly (the Flows lens's 24 h / 7 day windows).
+var _flow_history := FlowHistory.new()
 var _element_leds: Dictionary = {}   # scope id -> {led, ms}
 var _element_acc := 0.0
 const _ELEMENT_INTERVAL := 1.0
@@ -423,6 +425,9 @@ const VIEW_MODE_DESIRE_RESET := 158
 ## the 2D positions; off = the legacy chip / port overlay).
 const VIEW_MODE_WORLD_PINS := 159
 const VIEW_MODE_DISPLAY_SETTINGS := 190
+## Flow style (GraphFlowStyle): the panel, and one radio item per preset.
+const VIEW_MODE_FLOW_STYLE := 191
+const VIEW_MODE_FLOW_PRESET_BASE := 192
 const DESIGNATE_OFF := 200
 const DESIGNATE_CATCHMENT := 201
 const DESIGNATE_CROP := 202
@@ -1892,6 +1897,7 @@ func _build_layout() -> void:
 	_graph_canvas = gc
 	_apply_display_prefs()
 	_apply_pv_snap_prefs()
+	_apply_flow_style()
 	gc.set("resource_flow_engine", _resource_flow)
 	_build_lens_strip()
 	_init_spatial_edit()
@@ -2669,6 +2675,10 @@ func _build_topbar() -> Control:
 				"Globe — orbit the Sphere of Influence as a snowglobe "
 				+ "(drag to orbit, wheel to zoom, double-click to re-fit)."],
 	]:
+		["flows", "Flows",
+				"Flows — the graph as a loop Sankey: sources on top, flow runs "
+				+ "down, and what cycles back returns up the sides. Hover a "
+				+ "return to light its whole loop; double-click a group to go in."],
 		var b := _make_mode_chip(str(pair[0]), str(pair[1]))
 		b.tooltip_text = str(pair[2]) + "\nTime keeps running in every lens — use the timeline."
 		_mode_chip_row.add_child(b)
@@ -2709,6 +2719,13 @@ func _build_topbar() -> Control:
 	_view_mode_subpopups.clear()
 	vmp.add_item("Display settings…", VIEW_MODE_DISPLAY_SETTINGS)
 	vmp.add_separator()
+	vmp.add_item("Flow style…", VIEW_MODE_FLOW_STYLE)
+	for fpi in GraphFlowStyle.PRESETS.size():
+		var fp := str(GraphFlowStyle.PRESETS[fpi])
+		vmp.add_radio_check_item("Flow: %s" % str(GraphFlowStyle.PRESET_LABELS[fp]),
+			VIEW_MODE_FLOW_PRESET_BASE + fpi)
+		vmp.set_item_tooltip(vmp.get_item_index(VIEW_MODE_FLOW_PRESET_BASE + fpi),
+			str(GraphFlowStyle.PRESET_TIPS.get(fp, "")))
 	vmp.add_check_item("SoI bubble (freeform)", VIEW_MODE_SOI_BUBBLE)
 	vmp.add_check_item("Node cards (no 3D previews)", VIEW_MODE_NODE_CARDS)
 	vmp.add_check_item("Preview node labels", VIEW_MODE_PREVIEW_LABELS)
@@ -3362,6 +3379,12 @@ func _on_view_mode_menu_id(id: int) -> void:
 		_open_display_settings()
 		return
 	match id:
+	if id == VIEW_MODE_FLOW_STYLE:
+		open_flow_style_panel()
+		return
+	if id >= VIEW_MODE_FLOW_PRESET_BASE and id < VIEW_MODE_FLOW_PRESET_BASE + GraphFlowStyle.PRESETS.size():
+		set_flow_style({"preset": str(GraphFlowStyle.PRESETS[id - VIEW_MODE_FLOW_PRESET_BASE])})
+		return
 		VIEW_MODE_FREEFORM:
 			_apply_graph_view_mode(GraphSiteLayout.VIEW_FREEFORM)
 		VIEW_MODE_SITE:
@@ -3547,6 +3570,8 @@ func _on_mode_chip_pressed(mode_id: String) -> void:
 		"globe", "snowglobe":
 			_apply_graph_view_mode(GraphSiteLayout.VIEW_GLOBE)
 
+		"flows":
+			_apply_graph_view_mode(GraphSiteLayout.VIEW_FLOWS)
 
 ## Full-screen globe (the map pin's view). It renders through the ROOT viewport,
 ## so SoiService.enter_snowglobe closes the graph first and reopens it on exit.
@@ -4926,6 +4951,8 @@ func _sync_view_mode_menu_checks() -> void:
 			"elevation":
 				on = _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION
 			"globe":
+			"flows":
+				on = _graph_view_mode == GraphSiteLayout.VIEW_FLOWS
 				on = _graph_view_mode == GraphSiteLayout.VIEW_GLOBE
 		btn.set_pressed_no_signal(on)
 
@@ -12395,6 +12422,69 @@ func _open_display_settings() -> void:
 
 
 func _display_check(box: VBoxContainer, key: String, text: String, tip: String) -> void:
+# ---------------------------------------------------------------------------
+# Flow style (View options ▾ → Flow style…, GraphFlowStyle): how flow shows
+# on every wire. Saved with the graph ("flow_style", sparse over its preset)
+# and as the default for graphs that have none (ui_prefs.cfg [graph_flow]).
+# ---------------------------------------------------------------------------
+
+const _FLOW_PANEL := preload("res://system_graph/graph_flow_style_panel.gd")
+var _flow_style: Dictionary = {}
+var _flow_style_panel: PopupPanel = null
+
+
+func flow_style() -> Dictionary:
+	return GraphFlowStyle.resolve(_flow_style if not _flow_style.is_empty() else _flow_style_default())
+
+
+func _flow_style_default() -> Dictionary:
+	var cfg := ConfigFile.new()
+	if cfg.load(_UI_PREFS_CFG) == OK and cfg.has_section_key("graph_flow", "style"):
+		var v: Variant = JSON.parse_string(str(cfg.get_value("graph_flow", "style")))
+		if v is Dictionary:
+			return v
+	return {"preset": GraphFlowStyle.PRESET_SANKEY}
+
+
+## Set the graph's flow style (a sparse or full dict). `save_default` also
+## makes it the default for graphs without their own.
+func set_flow_style(style: Dictionary, save_default: bool = true) -> void:
+	_flow_style = GraphFlowStyle.to_sparse(GraphFlowStyle.resolve(style))
+	if save_default:
+		var cfg := ConfigFile.new()
+		cfg.load(_UI_PREFS_CFG)
+		cfg.set_value("graph_flow", "style", JSON.stringify(_flow_style))
+		cfg.save(_UI_PREFS_CFG)
+	_apply_flow_style()
+	_mark_dirty_for_autosave()
+
+
+func _apply_flow_style() -> void:
+	var st := flow_style()
+	if _graph_canvas != null and "flow_style" in _graph_canvas:
+		_graph_canvas.set("flow_style", st)
+		_graph_canvas.call("queue_redraw")
+	if _view_mode_menu != null:
+		var preset := str(GraphFlowStyle.to_sparse(st).get("preset", ""))
+		var custom := GraphFlowStyle.to_sparse(st).size() > 1
+		for fpi in GraphFlowStyle.PRESETS.size():
+			_vm_set_checked(VIEW_MODE_FLOW_PRESET_BASE + fpi,
+				not custom and str(GraphFlowStyle.PRESETS[fpi]) == preset)
+
+
+func open_flow_style_panel() -> PopupPanel:
+	if _flow_style_panel != null and is_instance_valid(_flow_style_panel):
+		_flow_style_panel.queue_free()
+	var pop: PopupPanel = _FLOW_PANEL.new()
+	pop.call("setup", flow_style(), func(st: Dictionary) -> void: set_flow_style(st))
+	add_child(pop)
+	_flow_style_panel = pop
+	var anchor := _view_mode_menu.get_global_rect() if _view_mode_menu != null \
+		else Rect2(Vector2(600, 60), Vector2.ZERO)
+	pop.popup(Rect2i(Vector2i(int(anchor.position.x), int(anchor.end.y) + 4), Vector2i(400, 10)))
+	return pop
+
+
 	var cb := CheckBox.new()
 	cb.text = text
 	cb.tooltip_text = tip
@@ -17559,6 +17649,9 @@ func collect_save_state() -> Dictionary:
 		"view_filter": GraphDomainFilter.to_array(_domain_shown),
 		"view_filter_unwired": _domain_unwired,
 		"element_lens": _element_lens,
+		"flow_style": _flow_style.duplicate(),
+		"flows_channel": str(_graph_canvas.get("flows_channel")) if _graph_canvas != null else "",
+		"flows_window": str(_graph_canvas.get("flows_window")) if _graph_canvas != null else "now",
 		"elevation_3d_section": _elevation_3d_section,
 		"elevation_heading_rad": float(_graph_canvas.get("elevation_heading_rad")) if _graph_canvas != null else 0.0,
 		"elevation_section_offset_m": float(_graph_canvas.get("elevation_section_offset_m")) if _graph_canvas != null else 0.0,
@@ -17775,6 +17868,13 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 	set_domain_filter(GraphDomainFilter.from_array(data.get("view_filter", [])),
 		bool(data.get("view_filter_unwired", true)))
 	var lens_id := str(data.get("element_lens", ""))
+	var fsv: Variant = data.get("flow_style", {})
+	_flow_style = GraphFlowStyle.to_sparse(GraphFlowStyle.resolve(fsv)) \
+		if fsv is Dictionary and not (fsv as Dictionary).is_empty() else {}
+	_apply_flow_style()
+	if _graph_canvas != null:
+		_graph_canvas.set("flows_channel", str(data.get("flows_channel", "")))
+		_graph_canvas.set("flows_window", str(data.get("flows_window", "now")))
 	set_element_lens(lens_id if ElementLens.is_lens(lens_id) else "", false)
 	_elevation_3d_section = bool(data.get("elevation_3d_section", true))
 	_sync_elev_slice_row()
@@ -22679,10 +22779,26 @@ func _tick_elements(delta: float) -> void:
 	var led := element_ledger("root")
 	_element_history.record(_closure_abs_hours(), led)
 	if not _element_lens.is_empty() and visible:
+	_record_flow_history()
 		_push_element_lens()
 
 
 ## The lens, the air each node trades and the biggest wire flux in the scope
+## Record what every wire carries now (FlowHistory) and hand the history to
+## the canvas for the Flows lens's windows.
+func _record_flow_history() -> void:
+	if _graph_canvas == null or not _graph_canvas.has_method("flow_values_now"):
+		return
+	var now_h := _closure_abs_hours()
+	_flow_history.record(now_h, _graph_canvas.call("flow_values_now") as Dictionary)
+	_graph_canvas.set("flow_history", _flow_history)
+	_graph_canvas.set("flow_now_abs_h", now_h)
+
+
+func flow_history() -> FlowHistory:
+	return _flow_history
+
+
 ## on screen, handed to the canvas.
 func _push_element_lens() -> void:
 	if _graph_canvas == null or not _graph_canvas.has_method("set_element_lens"):

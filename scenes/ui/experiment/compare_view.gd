@@ -100,6 +100,10 @@ var _autos_header: SectionHeader = null
 var _autos: GridContainer = null
 var _res_header: SectionHeader = null
 var _res: GridContainer = null
+var _flows_header: SectionHeader = null
+var _flows_row: HBoxContainer = null
+var _flow_views: Array = []
+var _flow_caps: Array = []
 
 
 ## `selection`: [start, end] absolute hours (PackedFloat64Array or Array; a
@@ -253,6 +257,32 @@ func _build() -> void:
 	_res.add_theme_constant_override("v_separation", 3)
 	_res.visible = false
 	b.add_child(_res)
+
+	_flows_header = SectionHeader.make("Where it flowed", "route",
+		"each version's wires as a loop Sankey: what cycles back runs up the sides")
+	_flows_header.visible = false
+	b.add_child(_flows_header)
+	_flows_row = HBoxContainer.new()
+	_flows_row.add_theme_constant_override("separation", 12)
+	_flows_row.visible = false
+	b.add_child(_flows_row)
+	for fi in 2:
+		var col := VBoxContainer.new()
+		col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var cap := Label.new()
+		cap.name = "cap"
+		cap.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		cap.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+		cap.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		col.add_child(cap)
+		var lv: Control = (load("res://scenes/ui/loop_sankey_view.gd") as GDScript).new()
+		lv.name = "flows_%s" % ["a", "b"][fi]
+		lv.custom_minimum_size = Vector2(0, 420)
+		lv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		col.add_child(lv)
+		_flows_row.add_child(col)
+		_flow_views.append(lv)
+		_flow_caps.append(cap)
 
 	_autos_header = SectionHeader.make("Automations in the sim", "workflow")
 	b.add_child(_autos_header)
@@ -1095,6 +1125,7 @@ func _show_ab_result(res: Dictionary) -> void:
 	var sims: Array = res.get("sims", [])
 	if sims.size() < 2:
 		return
+	_fill_ab_flows(sims)
 	var span: PackedFloat64Array = res.get("span", PackedFloat64Array([0.0, 0.0]))
 	var ea: Dictionary = sims[0]["energy"]
 	var eb: Dictionary = sims[1]["energy"]
@@ -1188,6 +1219,33 @@ func _fill_ab_days(sims: Array) -> void:
 		_cell(_days, "%s / %s" % [UiText.num(float(a["served_kwh"]), "kWh"), UiText.num(float(b["served_kwh"]), "kWh")])
 		_cell(_days, "%s / %s" % [UiText.duration(float(a["ac_off_h"])), UiText.duration(float(b["ac_off_h"]))])
 		_cell(_days, "%s / %s" % [_pct(float(a["soc_end_pct"])), _pct(float(b["soc_end_pct"]))])
+
+
+## Each version's wires as a loop Sankey (LoopSankeyLayout), side by side,
+## with how much of each resource cycled back (Finn's cycling index).
+func _fill_ab_flows(sims: Array) -> void:
+	var any := false
+	for k in 2:
+		var inp: Dictionary = sims[k].get("flows", {})
+		var lv: Control = _flow_views[k]
+		lv.call("set_input", inp,
+			func(key: String, v: float) -> String:
+				return "%s/h" % UiText.num(v, ResourceKinds.default_unit(key)),
+			func(key: String) -> Color: return ResourceKinds.wire_color(key),
+			func(key: String) -> String: return ResourceKinds.display_name(key))
+		var lay: Dictionary = (lv.get("lens") as GraphFlowLens).cur
+		var parts: Array = []
+		var m: Dictionary = lay.get("metrics", {})
+		for mk in m:
+			var fci := float((m[mk] as Dictionary).get("fci", 0.0))
+			if fci >= 0.005:
+				parts.append("%s %d %%" % [ResourceKinds.display_name(str(mk)), int(round(fci * 100.0))])
+		var cap: Label = _flow_caps[k]
+		cap.text = "%s — %s" % [str(sims[k]["label"]),
+			("cycled back: " + ", ".join(parts)) if not parts.is_empty() else "nothing cycled back"]
+		any = any or not (inp.get("edges", []) as Array).is_empty()
+	_flows_header.visible = any
+	_flows_row.visible = any
 
 
 ## Every tank and machine side by side: fill start → end and the lowest,

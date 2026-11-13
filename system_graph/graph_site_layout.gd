@@ -27,6 +27,10 @@ const VIEW_ELEVATION := "elevation"
 const VIEW_SIPHON := "siphon"
 ## Globe — the SoI snowglobe as a graph lens (perspective orbit, read-only pins).
 const VIEW_GLOBE := "globe"
+## Flows — the loop Sankey lens: the scope's real nodes laid out by what
+## flows between them (LoopSankeyLayout), sources on top, returns arcing back
+## up either side. Not a physical projection.
+const VIEW_FLOWS := "flows"
 
 ## Floor on the Hydro Lab cross-section's ortho height, in metres. A CAMERA limit
 ## (5 cm frames a 25 mm nozzle), not a framing preference — it lives here because

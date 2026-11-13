@@ -1032,18 +1032,32 @@ func _rebuild_for_connection(conn: Dictionary) -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	var lbl := Label.new()
-	lbl.text = "Sankey Scale (Flow)"
+	lbl.text = "Flow width"
+	lbl.tooltip_text = ("How this wire shows its flow. The graph's flow style (View options ▾ → "
+		+ "Flow style…) sets every wire; this wire can stay plain or be emphasised.")
+	lbl.mouse_filter = Control.MOUSE_FILTER_PASS
 	lbl.add_theme_color_override("font_color", C_TEXT_S)
 	lbl.custom_minimum_size.x = 120.0
 	row.add_child(lbl)
-	var cb := CheckBox.new()
-	cb.button_pressed = bool(conn.get("sankey_scale", true))
-	cb.toggled.connect(func(toggled_on: bool) -> void:
+	var fw := OptionButton.new()
+	fw.name = "flow_width"
+	fw.fit_to_longest_item = false
+	fw.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var cur_fw := GraphFlowStyle.wire_override(conn)
+	for fwi in GraphFlowStyle.WIRE_CHOICES.size():
+		var choice := str(GraphFlowStyle.WIRE_CHOICES[fwi])
+		fw.add_item(str(GraphFlowStyle.WIRE_LABELS[choice]), fwi)
+		fw.set_item_metadata(fwi, choice)
+		if choice == cur_fw:
+			fw.select(fwi)
+	fw.item_selected.connect(func(idx: int) -> void:
 		if _updating_form or _model == null or _item_id.is_empty():
 			return
-		_model.update_connection(_item_id, {"sankey_scale": toggled_on})
+		var choice2 := str(fw.get_item_metadata(idx))
+		# The old checkbox key is retired here; flow_width is the one switch.
+		_model.update_connection(_item_id, {"flow_width": choice2, "sankey_scale": choice2 != GraphFlowStyle.WIRE_PLAIN})
 	)
-	row.add_child(cb)
+	row.add_child(fw)
 	_form_vbox.add_child(row)
 
 	_build_connection_2d_route_section(conn)

@@ -103,6 +103,7 @@ static func summary(y: Object, design: Dictionary, res: Dictionary, ids: Diction
 		"fails": fails, "checks": {"cols": ["id", "ok", "detail"], "rows": checks},
 		"kpi": kpi, "bottlenecks": bottlenecks, "stores": stores, "machines": machines,
 		"people_blocked_h": _round_dict(p["blocked_h"]),
+		"flows": flows(y, did, days),
 		"monthly": monthly(y),
 		"fidelity": {"kernel": "headless", "people": str(meta.get("people_mode", "agents")),
 			"step_min": _r(float(meta.get("step_min", 6.0))),
@@ -113,6 +114,51 @@ static func summary(y: Object, design: Dictionary, res: Dictionary, ids: Diction
 		"cost": {"wall_s": _r(float(meta.get("wall_s", 0.0))), "steps": int(y.steps)},
 	}
 	return out
+
+
+## What the wires carried over the run, and how much of each resource
+## cycled (Finn's cycling index over the run's mean flows, the same maths as
+## the graph's Flows lens: LoopSankeyLayout.cycling_metrics). Rows are the
+## biggest wires by total, keyed by design node ids:
+##   {"cycling": {kind: {pct_cycled, loops, wires}}, "wires": {cols, rows}}
+const FLOW_ROWS := 40
+
+static func flows(y: Object, did: Dictionary, days: float) -> Dictionary:
+	var tot: Dictionary = y.get("conn_tot") if y.get("conn_tot") != null else {}
+	var ends: Dictionary = y.get("_conn_ends") if y.get("_conn_ends") != null else {}
+	var hours := maxf(days * 24.0, 1e-6)
+	var edges: Array = []
+	var rows: Array = []
+	for cid in tot:
+		var t: Array = tot[cid]
+		var e: Array = ends.get(cid, [])
+		if e.size() < 2 or float(t[1]) <= 0.0:
+			continue
+		var a := str(did.get(str(e[0]), e[0]))
+		var b := str(did.get(str(e[1]), e[1]))
+		edges.append({"id": str(cid), "a": a, "b": b, "key": str(t[0]), "value": float(t[1]) / hours})
+		rows.append([a, b, str(t[0]), float(t[1]), float(t[1]) / hours])
+	rows.sort_custom(func(x, z) -> bool: return float(x[3]) > float(z[3]))
+	var out_rows: Array = []
+	for r in rows.slice(0, FLOW_ROWS):
+		out_rows.append([r[0], r[1], r[2], _r(float(r[3])), _r(float(r[4]))])
+	var ids := {}
+	for ed in edges:
+		ids[ed["a"]] = true
+		ids[ed["b"]] = true
+	var m := LoopSankeyLayout.cycling_metrics(ids.keys(), edges, [], [])
+	var lay_loops := 0
+	if edges.size() <= 600:
+		var nodes: Array = []
+		for nid in ids:
+			nodes.append({"id": str(nid)})
+		lay_loops = (LoopSankeyLayout.layout(nodes, edges).get("loops", []) as Array).size()
+	var cyc := {}
+	for k in m:
+		var mm: Dictionary = m[k]
+		cyc[str(k)] = {"pct_cycled": _r(100.0 * float(mm["fci"])), "nodes": int(mm.get("nodes", 0))}
+	return {"cycling": cyc, "loops": lay_loops,
+		"wires": {"cols": ["from", "to", "kind", "total", "mean_per_h"], "rows": out_rows}}
 
 
 ## One row per calendar month of the run.

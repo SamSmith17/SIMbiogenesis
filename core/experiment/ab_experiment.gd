@@ -139,6 +139,7 @@ func result() -> Dictionary:
 		en.merge(res.get("totals", {}), true)
 		sims.append({"id": e["id"], "label": e["label"], "series": r.series, "energy": en,
 			"resources": res,
+			"flows": w.flow_loop_input(float(_span[0]), float(_span[1])),
 			"automation_rules": w.automations.rules.size(), "automation_log": w.automations.log})
 	return {"mode": "ab", "span": _span, "step_h": _step, "sims": sims,
 		"report": {"start_soc_note": _start_note}}

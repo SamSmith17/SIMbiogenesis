@@ -57,6 +57,9 @@ var _scene_aux := 0.0
 var _dc_kw := 0.0
 ## Per-item accounting over the run (resource_summary()).
 var _acc: Dictionary = {}       # item id -> {...}
+## What each wire carried in this version (the resources the copy's own
+## engine moves), for the Compare window's loop Sankey.
+var flow_hist := FlowHistory.new()
 var _acc_h := 0.0
 
 
@@ -95,6 +98,35 @@ func enable_flow(host: Node) -> void:
 	_dc_kw = maxf(DcPowerWiring.sum_graph_dc_generation_kw(model), 0.0)
 	_acc.clear()
 	_acc_h = 0.0
+
+
+## The loop Sankey input for [t0, t1] of this version (LoopSankeyLayout):
+## every wire's mean flow in its own resource, between the items it joins.
+func flow_loop_input(t0: float, t1: float) -> Dictionary:
+	var win := flow_hist.window(t0, t1)
+	var edges: Array = []
+	var touched := {}
+	var keys := {}
+	for conn in model.connections:
+		var cid := str((conn as Dictionary).get("id", ""))
+		if not win.has(cid):
+			continue
+		var a := str(conn["source_item_id"])
+		var b := str(conn["target_item_id"])
+		var key := str(win[cid]["key"])
+		edges.append({"id": cid, "a": a, "b": b, "key": key, "value": float(win[cid]["mean"])})
+		touched[a] = true
+		touched[b] = true
+		keys[key] = true
+	var nodes: Array = []
+	var labels := {}
+	for iid in touched:
+		var it := model.get_item(str(iid))
+		var sp: Dictionary = it.get("specs", {}) as Dictionary
+		labels[iid] = str(sp.get("name", it.get("type", iid)))
+		nodes.append({"id": str(iid), "label": labels[iid]})
+	return {"nodes": nodes, "edges": edges, "bin": [], "bout": [], "labels": labels, "types": {},
+		"keys": keys.keys(), "opts": {"thickness": 26.0, "layer_gap": 60.0, "node_h": 30.0, "min_node_w": 130.0}}
 
 
 ## The live world's graph, copied.
@@ -174,7 +206,14 @@ func apply_command(item_id: String, command: String) -> void:
 func before_step(t: float, soc_kwh: float, ac_on: bool) -> void:
 	if flow != null:
 		var dt := 0.0 if is_nan(_last_t) else maxf(t - _last_t, 0.0)
+		flow._conn_flow.clear()
 		flow.render_step(t, dt, ac_on)
+		var fv := {}
+		for cid in flow._conn_flow:
+			var cf: Dictionary = flow._conn_flow[cid]
+			if float(cf.get("rate", 0.0)) > 0.0:
+				fv[cid] = {"key": str(cf.get("kind", "")), "value": float(cf.get("rate", 0.0))}
+		flow_hist.record(t, fv)
 		_dc_kw = maxf(DcPowerWiring.sum_graph_dc_generation_kw(model), 0.0)
 		_load_dirty = true   # a machine that started or stopped draws differently
 		_snapshot_resources()

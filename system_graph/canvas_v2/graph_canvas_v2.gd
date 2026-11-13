@@ -175,6 +175,9 @@ func _draw_v2_all() -> void:
 	_card_ctx = _build_card_ctx()
 	_tile_labels.clear()
 	super._draw()
+	# The Flows lens draws everything it shows itself (GraphFlowLens).
+	if view_mode == GraphSiteLayout.VIEW_FLOWS:
+		return
 	_draw_system_overlay_site()
 	_draw_tile_labels()
 	_draw_site_inset()
@@ -186,6 +189,8 @@ func _draw_v2_all() -> void:
 	# Reuse the per-draw visible cache (still populated by super._draw) for the
 	# V2 overlay passes below, then release it so input hit-testing recomputes.
 	_draw_cache_active = true
+	if not _v3_on():
+		_draw_flow_scale_legend()
 	_draw_v2_legend()
 	_draw_v2_connection_feedback()
 	_draw_v2_hover_port_tooltip()
@@ -521,7 +526,12 @@ func _plan_trunks(visible: Array, center: Vector2, solar_w: float, load_w: float
 		var tile: Dictionary = a if a_tile else b
 		var ch := "power" if str(conn.get("polarity", "")) != "resource" \
 			else GraphTheme.channel_of_kind(str(conn.get("resource_type", "")))
-		var key := "%s|%s" % [str(hub.get("id", "")), ch]
+		# Under a flow style, one trunk per RESOURCE (its own unit), never
+		# watts and litres added together.
+		var fkey := ch
+		if _ribbons_on():
+			fkey = str(_flow_est_for(conn, solar_w, load_w).get("_flow_key", ch))
+		var key := "%s|%s" % [str(hub.get("id", "")), fkey]
 		var g: Dictionary = groups.get(key, {})
 		if g.is_empty():
 			g = {"hub": hub, "ch": ch, "conns": [], "tiles": []}
@@ -542,11 +552,19 @@ func _plan_trunks(visible: Array, center: Vector2, solar_w: float, load_w: float
 			mid += p
 		mid /= float(pts.size())
 		var flow := 0.0
+		var vals: Array = []
+		var fk := ""
 		for conn: Dictionary in (g["conns"] as Array):
 			out[str(conn.get("id", ""))] = true
-			flow += absf(float(_estimate_connection_flow(conn, solar_w, load_w).get("watts", 0.0)))
+			var est := _flow_est_for(conn, solar_w, load_w)
+			flow += absf(float(est.get("watts", 0.0)))
+			vals.append(float(est.get("_flow_value", 0.0)))
+			fk = str(est.get("_flow_key", ""))
+		var tcol := GraphTheme.channel(str(g["ch"]))
+		if _ribbons_on() and fk != "" and fk != "electricity" and not fk.begins_with("element:"):
+			tcol = ResourceKinds.wire_color(fk)
 		_trunks.append({"src": src, "hub": src.lerp(mid, 0.72), "tiles": pts,
-			"col": GraphTheme.channel(str(g["ch"])), "n": pts.size(), "flow": flow})
+			"col": tcol, "n": pts.size(), "flow": flow, "vals": vals, "key": fk})
 	return out
 
 
@@ -557,6 +575,9 @@ func _is_tile(item: Dictionary) -> bool:
 
 func _draw_trunks() -> void:
 	trunks_drawn = _trunks.size()
+	if _ribbons_on():
+		_draw_trunks_ribbon()
+		return
 	for t: Dictionary in _trunks:
 		var col: Color = t["col"]
 		var src: Vector2 = t["src"]
@@ -577,6 +598,42 @@ func _draw_trunks() -> void:
 			for i in beads:
 				var u := fposmod(_flow_phase / TAU * maxf(1.0, length / 120.0) + float(i) / float(beads), 1.0)
 				GraphFastDraw.disc(self, src.lerp(hub, u), maxf(2.0, w * 0.45), Color(1, 1, 1, 0.85))
+
+
+## Trunks under a flow style: the trunk is as wide as everything it carries
+## (Sankey), each branch as wide as its own wire, all moving with the flow.
+func _draw_trunks_ribbon() -> void:
+	for t: Dictionary in _trunks:
+		var col: Color = t["col"]
+		var src: Vector2 = t["src"]
+		var hub: Vector2 = t["hub"]
+		var key := str(t.get("key", ""))
+		var vals: Array = t.get("vals", [])
+		var total := 0.0
+		for v in vals:
+			total += float(v)
+		var ref := float(_flow_refs.get(key, total))
+		# The trunk carries the sum: measure it against the sum's own scale
+		# so it is never narrower than the branches it splits into.
+		var ref_t := maxf(ref, total)
+		var w_t := GraphFlowStyle.width_px(flow_style, total, ref_t, total > 0.0, _zoom)
+		var live := _flow_live and total > 0.0
+		if live:
+			_flowing_drawn = true
+		var anim := str(flow_style.get("anim", GraphFlowStyle.ANIM_STREAKS))
+		GraphFlowRibbons.draw(get_canvas_item(), PackedVector2Array([src, hub]), {
+			"width": w_t, "color": col, "active": live, "anim": anim, "t": _flow_clock,
+			"speed": GraphFlowStyle.anim_speed_px(flow_style, total, ref_t),
+			"glow": float(flow_style.get("glow", 0.6)), "blur": _high_speed_lod})
+		var tiles: Array = t["tiles"]
+		for i in tiles.size():
+			var v := float(vals[i]) if i < vals.size() else 0.0
+			var w_b := GraphFlowStyle.width_px(flow_style, v, ref_t, v > 0.0, _zoom)
+			GraphFlowRibbons.draw(get_canvas_item(), PackedVector2Array([hub, tiles[i] as Vector2]), {
+				"width": w_b, "color": col, "active": _flow_live and v > 0.0, "anim": anim,
+				"t": _flow_clock, "speed": GraphFlowStyle.anim_speed_px(flow_style, v, ref_t),
+				"glow": 0.0, "far": true})
+		GraphFastDraw.disc(self, hub, maxf(3.0, w_t * 0.6), Color(col, 0.95))
 
 
 ## The twin badge (Phase 4): a small chip on a card's top edge saying what

@@ -8,6 +8,7 @@ extends Node
 ##   open_for(view, lens, scope)  view = SystemGraphView
 
 const SankeyView := preload("res://scenes/ui/element_sankey_view.gd")
+const LoopView := preload("res://scenes/ui/loop_sankey_view.gd")
 const WINDOWS := [
 	{"id": "now", "label": "Right now (per hour)", "h": 0.0},
 	{"id": "24h", "label": "The last 24 hours", "h": 24.0},
@@ -26,6 +27,10 @@ var _summary: Label = null
 var _note: Label = null
 var _hover: Label = null
 var _sankey: Control = null
+## The loop picture (LoopSankeyLayout): material cycles drawn as loops.
+var _loops: Control = null
+var _picture := "loops"
+var _pic_opt: OptionButton = null
 
 
 func open_for(view: Node, lens: String, scope: String = "root") -> void:
@@ -72,6 +77,18 @@ func _build() -> void:
 		_window = str(WINDOWS[j]["id"])
 		_refresh())
 	row.add_child(_win_opt)
+	var l3 := Label.new()
+	l3.text = "as"
+	row.add_child(l3)
+	_pic_opt = OptionButton.new()
+	_pic_opt.name = "picture"
+	_pic_opt.add_item("Loops (cycles come back up the sides)", 0)
+	_pic_opt.add_item("Columns (from → through → to)", 1)
+	_pic_opt.select(0 if _picture == "loops" else 1)
+	_pic_opt.item_selected.connect(func(k: int) -> void:
+		_picture = "loops" if k == 0 else "columns"
+		_refresh())
+	row.add_child(_pic_opt)
 	_summary = Label.new()
 	_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_summary.add_theme_color_override("font_color", UITheme.C_TEXT)
@@ -81,12 +98,20 @@ func _build() -> void:
 	_sankey.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_sankey.custom_minimum_size = Vector2(900, 480)
 	_frame.body.add_child(_sankey)
+	_loops = LoopView.new()
+	_loops.name = "loops"
+	_loops.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_loops.custom_minimum_size = Vector2(900, 480)
+	_frame.body.add_child(_loops)
+	_frame.body.move_child(_loops, _sankey.get_index())
 	_hover = Label.new()
 	_hover.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_hover.text = "Point at a bar or a ribbon to see what it carries."
 	_frame.body.add_child(_hover)
 	_sankey.connect("hovered", func(t: String) -> void:
 		_hover.text = t if not t.is_empty() else "Point at a bar or a ribbon to see what it carries.")
+	_loops.connect("hovered", func(t: String) -> void:
+		_hover.text = t if not t.is_empty() else "Point at a ribbon: what cycles back runs up the sides.")
 	_note = Label.new()
 	_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_note.add_theme_color_override("font_color", UITheme.C_TEXT_M)
@@ -153,6 +178,24 @@ func _refresh() -> void:
 		cross = r["cross"]
 	var sk := ElementSankey.build(w, _lens, node_ids, names)
 	_sankey.call("set_data", sk, _lens, rate)
+	_sankey.visible = _picture == "columns"
+	_loops.visible = _picture == "loops"
+	if _picture == "loops":
+		var lens_id := _lens
+		var li := ElementSankey.loop_input(w, _lens, names)
+		_loops.call("set_input", li,
+			func(_k: String, v: float) -> String:
+				return ElementLens.fmt_rate(v, lens_id) if rate else ElementLens.fmt_amount(v, lens_id),
+			func(_k: String) -> Color: return ElementLens.color(lens_id),
+			func(_k: String) -> String: return ElementLens.label(lens_id))
+		var lay: Dictionary = (_loops.get("lens") as GraphFlowLens).cur
+		var m: Dictionary = lay.get("metrics", {})
+		for mk in m:
+			var fci := float((m[mk] as Dictionary).get("fci", 0.0))
+			var nl := int((m[mk] as Dictionary).get("loops", 0))
+			note = ("%s: %d %% of what flows cycles back (Finn's cycling index)%s. " % [
+				ElementLens.label(_lens), int(round(fci * 100.0)),
+				(", " + UiText.count(nl, "loop")) if nl > 0 else ", no loops"]) + note
 	_summary.text = _summary_text(w, rate) if _scope == "root" or rate else _cross_text(cross)
 	_note.text = note + ("\n" if not note.is_empty() else "") \
 		+ "Stores drawn on the left give it out; on the right they take it in. Amounts come from each kind's listed make-up; estimates are marked in the inspector."

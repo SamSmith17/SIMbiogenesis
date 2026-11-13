@@ -3357,6 +3357,93 @@ and at 7200× the median was 27.6 ms with the graph's sections summing to
 32 ms. After the pass: 7200× median 16.7 ms, sections ~9.5 ms. Frames over
 budget are mostly frames a few ms past 16.7 ms that wait a whole vsync, so
 the fix was taking steady cost out. In order of size:
+## Flow visualization: Sankey wires, the Flows lens (2026-11-12)
+
+Plan + the catalog of further visualizations: `plans/FLOW_VIZ_PLAN.md`.
+- **One width rule** (`GraphFlowStyle`, `system_graph/data/graph_flow_style.gd`,
+  pure):
+  - Inside ONE resource, a wire's width is proportional to what it carries
+    (linear; sqrt / log optional). Each width is measured against the biggest
+    flow of that resource on screen (`ref`), eased fast up / slowly down.
+  - Resources are never compared: each keeps its own scale bar. The scale key
+    is the resource kind, or "electricity".
+  - `zoom_floor` (Sankey 0.55): a ribbon never shrinks below that share of its
+    100 % width. `screen_space` (Bold) ignores the zoom.
+  - Presets: Classic (the OLD renderer, untouched), Subtle, Sankey (default),
+    Bold. Anything else reads as "Custom".
+  - Animation speed encodes the MAGNITUDE (log, capped at `MAX_ANIM_PX_S`
+    140 px/s). The sim speed only decides whether anything moves. At ≥ 300×
+    the pattern turns into long soft streaks (`blur`).
+- **Graph-wide, per-wire override.**
+  - The graph's style is saved with the graph as `flow_style` (sparse over its
+    preset); new graphs default from ui_prefs.cfg `[graph_flow] style`.
+  - Set it from View options ▾ → "Flow: <preset>" radios or "Flow style…"
+    (`graph_flow_style_panel.gd`, live).
+  - `SystemGraphView.set_flow_style / flow_style / open_flow_style_panel`.
+  - Per wire: inspector "Flow width" (`conn.flow_width`: "" graph's /
+    "plain" / "x2"). The old `sankey_scale: false` reads as plain
+    (`GraphFlowStyle.wire_override`).
+- **Ribbons** (`GraphFlowRibbons`): a wire is one triangle array, a glow strip
+  under a three-lane body, coloured per vertex. The pattern (streaks / comets /
+  beads / pulse) comes from `GraphFlowStyle.pattern` on a continuous seconds
+  clock (`_flow_clock`), so it never jumps. No shader, no texture: it lands in
+  the canvas's own draw order.
+  - Idle wires are one plain polyline.
+  - Zoomed far out the pattern becomes a pulse.
+  - The canvas pre-pass `_prepare_flow_values` (one estimate per wire per draw,
+    cached in `_flow_est_cache`) feeds `_render_connection`'s ribbon branch,
+    the trunks (V2 `_draw_trunks_ribbon`: per resource, never W + L/h) and the
+    scale legend (`_draw_flow_scale_legend`, top-left).
+  - Freeform and the Flows lens only. The map lenses keep their own drawing.
+  - The hit test widens to the ribbon (`_ribbon_w_cache`).
+- **The Flows lens** (`GraphSiteLayout.VIEW_FLOWS`, lens chip "Flows",
+  `GraphFlowLens` + `LoopSankeyLayout`):
+  - The current scope's REAL nodes laid out as a Sankey that can loop. The lens
+    never writes x/y.
+  - `LoopSankeyLayout` (pure):
+    - Tarjan SCCs, with a weighted Eades–Lin–Smyth feedback arc set per loop:
+      the LIGHTEST flows that close each cycle become the **returns**.
+    - Longest-path layers with dummy nodes; barycenter ordering; slot ordering
+      by partner.
+    - Returns routed as field lines outside the column, nested by span.
+    - Boundary flows enter from above (made / from store) and leave below
+      (used / into store), read off each node's imbalance per resource.
+    - Finn's Cycling Index per resource (Finn 1976; `cycling_metrics`).
+  - The canvas draws it in its own pass (`_draw_flows_lens`, early in `_draw`;
+    V2's overlays return early). Input goes through `_handle_flows_input`:
+    - wheel / drag: zoom and pan;
+    - click a node: select; double-click a group: go inside;
+    - hover a ribbon: light its loop;
+    - header chips: one resource, or Now / 24 h / 7 days.
+  - Relayout at most every 0.9 s, only when topology or a flow moves ~25 %,
+    with a cross-fade.
+  - Windows come from `FlowHistory` (`core/flow/flow_history.gd`, hourly bins
+    per CONNECTION id, held readings integrated exactly). It is recorded by the
+    view's `_tick_elements` through `canvas.flow_values_now()`. Session data.
+- **Elsewhere:**
+  - `scenes/ui/loop_sankey_view.gd` puts the same picture in a window.
+  - "Where it goes…" draws Loops by default (`ElementSankey.loop_input`), with
+    Columns kept.
+  - A/B Compare has "Where it flowed": each version's own engine records a
+    FlowHistory (`ExperimentWorld.flow_hist`, `flow_loop_input`).
+  - The simkit compact report has a `flows` block: top wires, % cycled per
+    resource, loops (`SimkitCompact.flows`, `SimkitYear.conn_tot`).
+  - 3D conduits animate on `fx_time_lights` (paused with the sim).
+- ⚠ **Engine fix found by it:** `_process_plant` stamped flow only on a wire
+  whose kind was exactly "water". A bed on reclaimed water
+  ("irrigation_water") showed an idle wire while its tank emptied. It now
+  matches by port / source tank. Per-kind graphs alone rarely cycle (water →
+  people → greywater is a change of kind); loops show in the UNION graph over
+  a window.
+- Gates:
+  - `system_graph/graph_flow_style_selftest.gd` (42 checks),
+    `system_graph/loop_sankey_layout_selftest.gd` (31),
+    `core/flow/flow_history_selftest.gd` (9);
+  - `tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/flow_view_check.gd -Label flow_view -Timeout 900`
+    (31, real clicks);
+  - diagnostic `tools/diag/flow_loops_diag.gd` (what flowed over a day);
+  - tour stop `20f_flow_lens`.
+
 - **PV string walk.** `PvElectrical._pv_sources_reachable` rescanned every
   wire for every node it visited. It now builds `pv_adjacency(conns)` once
   per walk. On top of that:

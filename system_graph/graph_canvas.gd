@@ -733,6 +733,38 @@ var _bundle_plan: Dictionary = {}
 ## hold the 20 Hz cadence: "animate flow when paused" made flow_live true all
 ## the time, so a graph with nothing flowing redrew 20× a second for nothing.
 var _flowing_drawn := false
+## The graph's flow style (GraphFlowStyle): how flow shows on every wire.
+## Set by SystemGraphView from the save / prefs; Classic keeps the old look.
+var flow_style: Dictionary = GraphFlowStyle.resolve({})
+## Per scale key (resource kind or "electricity"): the eased biggest flow on
+## screen, which the Sankey widths are measured against.
+var _flow_refs: Dictionary = {}
+## Per wire: the displayed (smoothed) value, for the style's averaging.
+var _flow_smooth: Dictionary = {}
+## Per draw: each visible wire's flow estimate, its scale key + value, and
+## the ribbon width drawn (the hit test widens to it).
+var _flow_est_cache: Dictionary = {}
+var _ribbon_w_cache: Dictionary = {}
+## Per draw: {scale key: {ref, color, unit, resource}} for the scale legend.
+var _flow_legend_rows: Dictionary = {}
+## The pattern clock (s): advances only while flow is shown moving.
+var _flow_clock: float = 0.0
+## Sim hours since the last draw (for the display averaging).
+var _flow_sim_dt_h: float = 0.0
+var _flow_last_draw_ms: int = 0
+## The Flows lens (GraphFlowLens): the scope laid out as a loop Sankey.
+var _flow_lens: GraphFlowLens = GraphFlowLens.new()
+## FlowHistory, set by the view: the lens's 24 h / 7 day windows read it.
+var flow_history: FlowHistory = null
+## The sim hour "now" for the history windows (set by the view each tick).
+var flow_now_abs_h: float = NAN
+var _flows_drag := false
+var _flows_drag_moved := false
+var _flows_press_pos := Vector2.ZERO
+var _flows_fitted := false
+## Lens choices that survive a reload (the view saves them with the graph).
+var flows_channel: String = ""
+var flows_window: String = "now"
 ## Per-draw caches (valid while _draw_cache_active): each card asked for its
 ## resolved handles and scanned EVERY wire for its wired ports, several times
 ## a card — O(items × wires) per draw.
@@ -760,6 +792,8 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 		else:
 			flow_mult = clampf(sim_time_scale / REALTIME_SCALE_REF, 0.15, 80.0)
 	var clock_running := flow_mult > 0.0
+	if sim_time_scale > 0.0:
+		_flow_sim_dt_h += delta * sim_time_scale
 	if flow_mult <= 0.0 and (flow_when_paused or flow_playback):
 		flow_mult = 1.0
 	_flow_live = current_mode == "test" or flow_when_paused or flow_playback
@@ -773,8 +807,17 @@ func tick(delta: float, sim_time_scale: float = -1.0) -> void:
 		if _ac_shed_active and flow_mult <= 0.0:
 			vis_speed = 6.0
 		_flow_phase = fmod(_flow_phase + delta * vis_speed, TAU)
+		# The ribbons' pattern clock: plain real seconds, never wrapped (the
+		# pattern takes its own fposmod), so a cue never jumps. Its speed
+		# along a wire comes from the flow, not from the sim speed.
+		_flow_clock += delta
 		if _flowing_drawn or _ac_shed_active:
 			_needs_continuous_redraw = true
+	if view_mode == GraphSiteLayout.VIEW_FLOWS:
+		if _flow_lens.advance(delta):
+			_needs_continuous_redraw = true
+		if _flow_live and flow_mult > 0.0:
+			_flowing_drawn = true
 	# Automation flash pulse decay
 	if not _item_flash.is_empty():
 		for fid: Variant in _item_flash.keys():
@@ -1310,6 +1353,10 @@ func _gui_input(event: InputEvent) -> void:
 
 	if _should_ignore_emulated_mouse(event):
 		accept_event()
+		return
+	if view_mode == GraphSiteLayout.VIEW_FLOWS:
+		if _handle_flows_input(event):
+			accept_event()
 		return
 
 	# Elevation soil probe: track the pointer (the readout is drawn over the
@@ -2175,6 +2222,9 @@ func restore_scope_cam(focus_id: String = "") -> bool:
 func fit_items_to_view(ids: Array, pad_frac: float = 0.18) -> bool:
 	if model == null or ids.is_empty():
 		return false
+	if view_mode == GraphSiteLayout.VIEW_FLOWS:
+		flows_fit()
+		return true
 	if view_mode != GraphSiteLayout.VIEW_FREEFORM:
 		return frame_site_items(ids)
 	if _v3_on() and not view_3d_mode().is_empty():
@@ -5635,6 +5685,7 @@ func _draw_connections() -> void:
 			or _high_speed_lod
 	_bundle_plan = _build_bundle_plan(visible, center)
 	_flowing_drawn = false
+	_prepare_flow_values(visible, solar_w, load_w)
 	var trunked := _plan_trunks(visible, center, solar_w, load_w)
 	for conn: Dictionary in visible:
 		if trunked.has(str(conn.get("id", ""))):
@@ -5651,6 +5702,598 @@ func _plan_trunks(_visible: Array, _center: Vector2, _solar_w: float, _load_w: f
 
 func _draw_trunks() -> void:
 	pass
+
+
+## Ribbon wires (GraphFlowStyle, anything but Classic) — freeform and the
+## Flows lens. The map lenses keep their own conduit drawing.
+func _ribbons_on() -> bool:
+	if GraphFlowStyle.is_classic(flow_style):
+		return false
+	return view_mode == GraphSiteLayout.VIEW_FREEFORM or view_mode == GraphSiteLayout.VIEW_FLOWS
+
+
+## One pass over the visible wires before any is drawn: each wire's flow
+## estimate (cached for the draw), its displayed value after the style's
+## averaging, and per resource the biggest flow on screen, eased into the
+## reference the Sankey widths measure against.
+func _prepare_flow_values(visible: Array, solar_w: float, load_w: float) -> void:
+	_flow_est_cache.clear()
+	_ribbon_w_cache.clear()
+	_flow_legend_rows.clear()
+	var now_ms := Time.get_ticks_msec()
+	var dt_s := clampf(float(now_ms - _flow_last_draw_ms) / 1000.0, 0.0, 1.0) \
+			if _flow_last_draw_ms > 0 else 1.0
+	_flow_last_draw_ms = now_ms
+	var dt_h := _flow_sim_dt_h
+	_flow_sim_dt_h = 0.0
+	if not _ribbons_on():
+		return
+	var tau := float(flow_style.get("smoothing_h", 0.0))
+	var maxes := {}
+	var seen := {}
+	for conn: Dictionary in visible:
+		var cid := str(conn.get("id", ""))
+		var est := _estimate_connection_flow(conn, solar_w, load_w)
+		var fv := _flow_value_of(conn, est)
+		var key := str(fv["key"])
+		var raw := float(fv["value"])
+		var disp := raw
+		if tau > 0.0:
+			disp = GraphFlowStyle.ease_rate(float(_flow_smooth.get(cid, NAN)), raw, dt_h, tau)
+			if disp < 1e-6:
+				disp = 0.0
+		_flow_smooth[cid] = disp
+		seen[cid] = true
+		est["_flow_key"] = key
+		est["_flow_value"] = disp
+		est["_flow_resource"] = bool(fv["resource"])
+		est["_flow_kind"] = str(fv["kind"])
+		_flow_est_cache[cid] = est
+		if disp > 0.0:
+			maxes[key] = maxf(float(maxes.get(key, 0.0)), disp)
+	# Forget wires that left the view (their averages restart when back).
+	if _flow_smooth.size() > visible.size() * 2 + 32:
+		for k in _flow_smooth.keys():
+			if not seen.has(k):
+				_flow_smooth.erase(k)
+	var by_kind := str(flow_style.get("ref", GraphFlowStyle.REF_SCREEN)) == GraphFlowStyle.REF_KIND
+	for key in maxes:
+		var ref := 0.0
+		if by_kind:
+			ref = _flow_kind_ref(str(key))
+		else:
+			ref = GraphFlowStyle.ease_ref(float(_flow_refs.get(key, 0.0)), float(maxes[key]), dt_s)
+		_flow_refs[key] = ref
+		_flow_legend_rows[key] = {"ref": ref}
+	if not by_kind and dt_s > 0.0:
+		# Resources no longer flowing on screen let their reference decay, so
+		# coming back later does not start from a stale peak.
+		for key in _flow_refs.keys():
+			if not maxes.has(key):
+				_flow_refs[key] = float(_flow_refs[key]) * exp(-dt_s * 0.3)
+
+
+## A wire's scale key, the value its width is measured by (0 when nothing
+## moves), and whether that value is a resource rate or watts.
+func _flow_value_of(conn: Dictionary, est: Dictionary, ignore_lens: bool = false) -> Dictionary:
+	var is_res := bool(est.get("is_resource", false)) or str(conn.get("polarity", "")) == "resource"
+	var kind := ResourceKinds.normalize_kind(str(est.get("resource_kind", conn.get("resource_type", "")))) \
+			if is_res else ""
+	var active := bool(est.get("active", false)) and not bool(est.get("shed", false)) \
+			and not bool(conn.get("severed", false)) and not bool(conn.get("reverse_polarity", false))
+	if element_lens_on() and not ignore_lens:
+		var flux := ElementLens.amount_of(kind, float(est.get("rate", 0.0)), element_lens) \
+				if is_res else 0.0
+		return {"key": "element:" + element_lens, "value": flux if flux > 0.0 else 0.0,
+			"resource": true, "kind": kind}
+	var v := 0.0
+	if active:
+		v = float(est.get("rate", est.get("watts", 0.0))) if is_res else float(est.get("watts", 0.0))
+		if is_res and v <= ResourceEdgeVis.FLOW_DEAD_RATE:
+			v = 0.0
+		if not is_res and v <= WIRE_DEAD_W:
+			v = 0.0
+	return {"key": GraphFlowStyle.scale_key(is_res, kind), "value": maxf(v, 0.0),
+		"resource": is_res, "kind": kind}
+
+
+## The fixed reference for the "fixed per resource" scale.
+func _flow_kind_ref(key: String) -> float:
+	if key == "electricity":
+		return WIRE_GLOW_W_REF
+	if key.begins_with("element:"):
+		return maxf(element_flux_max, 1e-6)
+	return ResourceKinds.flow_ref_rate(key)
+
+
+## A visible wire's estimate: the cached one from this draw's pre-pass, else
+## computed now.
+func _flow_est_for(conn: Dictionary, solar_w: float, load_w: float) -> Dictionary:
+	var cid := str(conn.get("id", ""))
+	if _flow_est_cache.has(cid):
+		return _flow_est_cache[cid] as Dictionary
+	return _estimate_connection_flow(conn, solar_w, load_w)
+
+
+## The ribbon width of a wire in screen px under the graph's flow style.
+func _ribbon_width(conn: Dictionary, est: Dictionary, is_sel: bool) -> float:
+	var key := str(est.get("_flow_key", "electricity"))
+	var v := float(est.get("_flow_value", 0.0))
+	var ref := float(_flow_refs.get(key, v))
+	var w := GraphFlowStyle.width_px(flow_style, v, ref, v > 0.0, _zoom,
+		GraphFlowStyle.wire_override(conn))
+	var c_thick := float(conn.get("thickness_override", 0.0))
+	if c_thick > 0.1:
+		w = maxf(w, c_thick * _zoom)
+	if is_sel:
+		w += 2.0
+	return w
+
+
+## The polyline a wire is drawn along, in its own style.
+func _wire_polyline(style: String, src_pos: Vector2, src_t: Vector2, tgt_pos: Vector2,
+		tgt_t: Vector2, wps: Array, curve_t: float, conn: Dictionary) -> PackedVector2Array:
+	if style == "metro":
+		return _metro_polyline([src_pos] + wps + [tgt_pos], [src_t, tgt_t], conn)
+	if style == "orthogonal":
+		var poly := _build_orthogonal_polyline([src_pos] + wps + [tgt_pos], [src_t, tgt_t])
+		var radius_px := float(conn.get("_draw_corner_px",
+				_conn_corner_radius_graph(conn) * _zoom))
+		return _round_polyline_corners(poly, maxf(6.0, radius_px))
+	if wps.is_empty():
+		var bc := _wire_bezier_controls(src_pos, src_t, tgt_pos, tgt_t, curve_t)
+		var approx := src_pos.distance_to(bc["c1"]) + (bc["c1"] as Vector2).distance_to(bc["c2"]) \
+				+ (bc["c2"] as Vector2).distance_to(tgt_pos)
+		return _bezier_points(src_pos, bc["c1"], bc["c2"], tgt_pos, _adaptive_segments(approx, 40, 10))
+	var pts := [src_pos] + wps + [tgt_pos]
+	var n := clampi(16 * (pts.size() - 1), 16, 96)
+	var out := PackedVector2Array()
+	for i in n + 1:
+		out.append(_sample_wire_path(pts, [src_t, tgt_t], float(i) / float(n), curve_t))
+	return out
+
+
+## The Sankey scale bar (top-left of the canvas): per resource on screen, a
+## short ribbon as wide as a round value would be, labelled with that value.
+## Each resource keeps its own scale, so each gets its own bar.
+const FLOW_LEGEND_MAX_ROWS := 7
+
+## `origin` = top-left, or (x, -bottom) to anchor the box's bottom edge;
+## `mult` scales the widths (the Flows lens draws a little bolder).
+func _draw_flow_scale_legend(origin: Vector2 = Vector2(12.0, 12.0), mult: float = 1.0) -> void:
+	if not _ribbons_on() or not bool(flow_style.get("legend", true)) or _flow_legend_rows.is_empty():
+		return
+	var keys: Array = _flow_legend_rows.keys()
+	keys.sort_custom(func(a, b) -> bool:
+		if str(a) == "electricity":
+			return true
+		if str(b) == "electricity":
+			return false
+		return str(a) < str(b))
+	var fnt := UITheme.font("medium", true)
+	var fs := 12
+	var rows: Array = []
+	for k in keys.slice(0, FLOW_LEGEND_MAX_ROWS):
+		var key := str(k)
+		var ref := float((_flow_legend_rows[key] as Dictionary).get("ref", 0.0))
+		if ref <= 0.0:
+			continue
+		var tick: Array = GraphFlowStyle.legend_tick(ref)
+		var tv := float(tick[0])
+		var w := GraphFlowStyle.width_px(flow_style, tv, ref, true, _zoom) * mult
+		var col := Color(0.98, 0.74, 0.26)
+		var name := "Electricity"
+		var val := UiText.num(tv, "W")
+		if key.begins_with("element:"):
+			col = ElementLens.color(element_lens)
+			name = ElementLens.label(element_lens)
+			val = ElementLens.fmt_rate(tv, element_lens)
+		elif key != "electricity":
+			col = ResourceKinds.wire_color(key)
+			name = ResourceKinds.display_name(key)
+			val = "%s/h" % UiText.num(tv, ResourceKinds.default_unit(key))
+		rows.append({"w": minf(w, 60.0), "col": col, "name": name, "val": val})
+	if rows.is_empty():
+		return
+	var bar_len := 46.0
+	var name_w := 0.0
+	var val_w := 0.0
+	var row_h := 0.0
+	for r: Dictionary in rows:
+		name_w = maxf(name_w, fnt.get_string_size(str(r["name"]), HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x)
+		val_w = maxf(val_w, fnt.get_string_size(str(r["val"]), HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x)
+	for r: Dictionary in rows:
+		r["h"] = maxf(18.0, float(r["w"]) + 6.0)
+		row_h += float(r["h"])
+	var pad := 9.0
+	var box_sz := Vector2(pad * 2.0 + bar_len + 10.0 + val_w + 10.0 + name_w, pad * 2.0 + row_h + 16.0)
+	var box := Rect2(origin if origin.y >= 0.0 else Vector2(origin.x, -origin.y - box_sz.y), box_sz)
+	GraphFastDraw.rrect(self, box, 8.0, Color(0.04, 0.06, 0.10, 0.82))
+	draw_string(UITheme.font("semibold"), box.position + Vector2(pad, pad + 10.0),
+		"Flow width · %s" % GraphFlowStyle.label_of(flow_style), HORIZONTAL_ALIGNMENT_LEFT, -1, 11,
+		Color(0.70, 0.76, 0.84))
+	var y := box.position.y + pad + 16.0
+	for r: Dictionary in rows:
+		var h := float(r["h"])
+		var cy := y + h * 0.5
+		var x0 := box.position.x + pad
+		var col: Color = r["col"]
+		GraphFlowRibbons.draw(get_canvas_item(),
+			PackedVector2Array([Vector2(x0, cy), Vector2(x0 + bar_len, cy)]),
+			{"width": float(r["w"]), "color": col, "active": true, "anim": GraphFlowStyle.ANIM_NONE,
+			"glow": 0.0})
+		draw_string(fnt, Vector2(x0 + bar_len + 10.0, cy + fs * 0.36), str(r["val"]),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.94, 0.95, 0.97))
+		draw_string(fnt, Vector2(x0 + bar_len + 20.0 + val_w, cy + fs * 0.36), str(r["name"]),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(col.r, col.g, col.b, 0.9))
+		y += h
+
+
+# ---------------------------------------------------------------------------
+# The Flows lens (GraphFlowLens over LoopSankeyLayout)
+# ---------------------------------------------------------------------------
+
+## What every wire of the whole graph carries right now, in its own unit:
+## {conn id: {key, value}} (the view records this into FlowHistory).
+func flow_values_now() -> Dictionary:
+	var out := {}
+	if model == null:
+		return out
+	var solar_w: float = _solar_array_output_w() + _renewable_output_w()
+	var load_w: float = _sum_all_load_w()
+	for conn: Dictionary in model.connections:
+		var est := _estimate_connection_flow(conn, solar_w, load_w)
+		var fv := _flow_value_of(conn, est, true)
+		if float(fv["value"]) > 0.0:
+			out[str(conn.get("id", ""))] = {"key": str(fv["key"]), "value": float(fv["value"])}
+	return out
+
+
+## The Flows lens draws its ribbons this much bolder than the freeform wires.
+const FLOWS_THICK_MULT := 1.4
+
+## A display name for a node.
+func _flow_node_name(item: Dictionary) -> String:
+	var sp: Dictionary = item.get("specs", {}) as Dictionary
+	var n := str(sp.get("name", item.get("name", "")))
+	if n.is_empty():
+		n = _type_title(str(item.get("type", "")), sp).capitalize()
+	return n
+
+
+## What one resource is called and how its amounts read, for the lens.
+func _flow_key_name(key: String) -> String:
+	if key == "electricity":
+		return "Electricity"
+	if key.begins_with("element:"):
+		return ElementLens.label(element_lens)
+	return ResourceKinds.display_name(key)
+
+
+func _flow_key_color(key: String) -> Color:
+	if key == "electricity":
+		return Color(0.98, 0.74, 0.26)
+	if key.begins_with("element:"):
+		return ElementLens.color(element_lens)
+	if key.is_empty():
+		return UITheme.C_PRIMARY
+	return ResourceKinds.wire_color(key)
+
+
+func _flow_fmt(key: String, v: float) -> String:
+	if key == "electricity":
+		return UiText.num(v, "W")
+	if key.begins_with("element:"):
+		return ElementLens.fmt_rate(v, element_lens)
+	return "%s/h" % UiText.num(v, ResourceKinds.default_unit(key))
+
+
+## Is this node a store (tank, battery)? Its imbalance is a store filling
+## or emptying, not something made or used.
+func _flow_is_store(item: Dictionary) -> bool:
+	var t := str(item.get("type", ""))
+	return t == "resource" or _is_battery_type(t)
+
+
+## The lens input for the current scope: nodes, flow edges (each in its own
+## resource), the boundary flows (what a node makes / uses / stores, read
+## off its imbalance per resource) and a signature that only moves when the
+## topology or a flow changes by ~25 %.
+func _flows_input() -> Array:
+	var items: Array = _compute_visible_items()
+	var conns: Array = _compute_visible_connections()
+	var solar_w: float = _solar_array_output_w() + _renewable_output_w()
+	var load_w: float = _sum_all_load_w()
+	var hist: Dictionary = {}
+	var use_hist := flows_window != "now" and flow_history != null and not is_nan(flow_now_abs_h)
+	if use_hist:
+		var span := 24.0 if flows_window == "24h" else 168.0
+		hist = flow_history.window(flow_now_abs_h - span, flow_now_abs_h)
+	var edges: Array = []
+	var keys := {}
+	var in_by := {}
+	var out_by := {}
+	var touched := {}
+	var sig_parts: PackedStringArray = []
+	for conn: Dictionary in conns:
+		var cid := str(conn.get("id", ""))
+		var est := _estimate_connection_flow(conn, solar_w, load_w)
+		var fv := _flow_value_of(conn, est)
+		var key := str(fv["key"])
+		var v := float(fv["value"])
+		if use_hist:
+			v = float((hist.get(cid, {}) as Dictionary).get("mean", 0.0))
+			key = str((hist.get(cid, {}) as Dictionary).get("key", key))
+		if v <= 0.0:
+			continue
+		keys[key] = true
+		if flows_channel != "" and key != flows_channel:
+			continue
+		var a := str(conn.get("source_item_id", ""))
+		var b := str(conn.get("target_item_id", ""))
+		if bool(est.get("reverse", false)):
+			var t := a
+			a = b
+			b = t
+		edges.append({"id": cid, "a": a, "b": b, "key": key, "value": v, "conn_ids": [cid]})
+		touched[a] = true
+		touched[b] = true
+		var ka := "%s|%s" % [a, key]
+		var kb := "%s|%s" % [b, key]
+		out_by[ka] = float(out_by.get(ka, 0.0)) + v
+		in_by[kb] = float(in_by.get(kb, 0.0)) + v
+		sig_parts.append("%s:%s:%s>%s:%d" % [cid, key, a, b, int(round(log(v) / log(1.25)))])
+	var nodes: Array = []
+	var idle: Array = []
+	var labels := {}
+	var types := {}
+	var by_id := {}
+	for it: Dictionary in items:
+		var iid := str(it.get("id", ""))
+		if iid.is_empty():
+			continue
+		by_id[iid] = it
+		labels[iid] = _flow_node_name(it)
+		types[iid] = _type_title(str(it.get("type", "")), it.get("specs", {}) as Dictionary).capitalize()
+		if touched.has(iid):
+			nodes.append({"id": iid, "label": labels[iid]})
+		else:
+			idle.append(iid)
+	# Boundaries: per node and resource, what does not balance.
+	var bin: Array = []
+	var bout: Array = []
+	var seen := {}
+	for k in in_by.keys() + out_by.keys():
+		if seen.has(k):
+			continue
+		seen[k] = true
+		var parts := str(k).split("|")
+		if parts.size() < 2 or not by_id.has(parts[0]):
+			continue
+		var nid := parts[0]
+		var key2 := parts[1]
+		var d := float(out_by.get(k, 0.0)) - float(in_by.get(k, 0.0))
+		var scale := maxf(float(out_by.get(k, 0.0)), float(in_by.get(k, 0.0)))
+		if absf(d) <= scale * 0.02:
+			continue
+		var store := _flow_is_store(by_id[nid])
+		if d > 0.0:
+			bin.append({"node": nid, "key": key2, "value": d, "label": "from store" if store else "made"})
+		else:
+			bout.append({"node": nid, "key": key2, "value": -d, "label": "into store" if store else "used"})
+	sig_parts.sort()
+	var sig := "%s|%s|%s|%s|%d" % [active_scope_id, flows_channel, flows_window,
+		",".join(sig_parts), int(round(float(flow_style.get("thickness", 22.0))))]
+	var kl: Array = keys.keys()
+	kl.sort_custom(func(x, y) -> bool:
+		if str(x) == "electricity":
+			return true
+		if str(y) == "electricity":
+			return false
+		return str(x) < str(y))
+	return [sig, {"nodes": nodes, "edges": edges, "bin": bin, "bout": bout, "idle": idle,
+		"labels": labels, "types": types, "keys": kl,
+		"opts": {"style": flow_style, "thickness": float(flow_style.get("thickness", 22.0)) * FLOWS_THICK_MULT,
+			"layer_gap": 74.0, "node_h": 40.0, "min_node_w": 170.0}}]
+
+
+func _draw_flows_lens() -> void:
+	_draw_cache_active = true
+	_cached_visible_items = _compute_visible_items()
+	_cached_visible_connections = _compute_visible_connections()
+	_flow_lens.channel = flows_channel
+	_flow_lens.window = flows_window
+	var fill := Color(C_CANVAS_BG.r, C_CANVAS_BG.g, C_CANVAS_BG.b, C_CANVAS_BG.a * canvas_bg_alpha)
+	draw_rect(Rect2(Vector2.ZERO, size), fill)
+	_draw_dot_grid()
+	var inp := _flows_input()
+	_flow_lens.set_input(str(inp[0]), inp[1])
+	if not _flow_lens.has_layout() or (_flow_lens.cur.get("nodes", {}) as Dictionary).is_empty():
+		var f := UITheme.font("semibold")
+		var msg := "Nothing is flowing in this scope right now." if flows_window == "now" \
+			else "Nothing flowed in this window."
+		draw_string(f, size * 0.5 - Vector2(220.0, 0.0), msg, HORIZONTAL_ALIGNMENT_CENTER, 440.0, 16,
+			Color(0.70, 0.76, 0.84))
+		_flow_lens.draw(self, size * 0.5, _pan, _zoom, _flows_draw_opts())
+		_draw_cache_active = false
+		return
+	if not _flows_fitted:
+		flows_fit()
+	_flow_lens.draw(self, size * 0.5, _pan, _zoom, _flows_draw_opts())
+	# The Sankey scale bar, one row per resource on screen, under the header.
+	_flow_legend_rows.clear()
+	var refs: Dictionary = _flow_lens.cur.get("refs", {})
+	for k in refs:
+		_flow_legend_rows[k] = {"ref": float(refs[k])}
+	_draw_flow_scale_legend(Vector2(12.0, -(size.y - 12.0)), FLOWS_THICK_MULT)
+	_draw_cache_active = false
+
+
+func _flows_draw_opts() -> Dictionary:
+	return {
+		"style": flow_style,
+		"clock": _flow_clock,
+		"flowing": _flow_live and _sim_flow_mult > 0.0,
+		"blur": _high_speed_lod,
+		"selected": selected_item_id,
+		"font": UITheme.font("semibold"),
+		"color_of": Callable(self, "_flow_key_color"),
+		"name_of": Callable(self, "_flow_key_name"),
+		"fmt": Callable(self, "_flow_fmt"),
+		"node_color": Callable(self, "_flows_node_color"),
+	}
+
+
+func _flows_node_color(item_id: String) -> Color:
+	var it := model.get_item(item_id) if model != null else {}
+	if it.is_empty():
+		return Color(0.6, 0.7, 0.9)
+	return NODE_BORDER_COLORS.get(str(it.get("type", "")), Color(0.55, 0.65, 0.85)) as Color
+
+
+## Frame the whole loop picture in the canvas.
+func flows_fit() -> void:
+	var f := _flow_lens.fit(size)
+	if f.is_empty():
+		return
+	_zoom = float(f["zoom"])
+	_pan = f["pan"] as Vector2
+	_flows_fitted = true
+	queue_redraw()
+
+
+func flows_lens() -> GraphFlowLens:
+	return _flow_lens
+
+
+func set_flows_channel(key: String) -> void:
+	flows_channel = key
+	_flows_fitted = false
+	queue_redraw()
+
+
+func set_flows_window(w: String) -> void:
+	flows_window = w
+	_flows_fitted = false
+	queue_redraw()
+
+
+## Pointer input in the Flows lens: wheel zoom, drag to pan, click a node to
+## select it, double-click a group to go inside, click a chip to filter.
+## Nodes never move here: the lens is a way of looking.
+func _handle_flows_input(event: InputEvent) -> bool:
+	var center := size * 0.5
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
+			_zoom_at(1.12, mb.position)
+			return true
+		if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
+			_zoom_at(1.0 / 1.12, mb.position)
+			return true
+		if mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_MIDDLE \
+				or mb.button_index == MOUSE_BUTTON_RIGHT:
+			if mb.pressed:
+				var chip := _flow_lens.pick_chip(mb.position)
+				if not chip.is_empty() and mb.button_index == MOUSE_BUTTON_LEFT:
+					if str(chip["kind"]) == "channel":
+						set_flows_channel(str(chip["value"]))
+					else:
+						set_flows_window(str(chip["value"]))
+					layout_changed.emit()
+					return true
+				var nid := _flow_lens.pick_node(mb.position, center, _pan, _zoom) \
+					if mb.button_index == MOUSE_BUTTON_LEFT else ""
+				if nid != "":
+					if mb.double_click:
+						var it := model.get_item(nid) if model != null else {}
+						if str(it.get("type", "")) == "compound":
+							compound_open_requested.emit(nid)
+							_flows_fitted = false
+						else:
+							item_double_tapped.emit(nid)
+					else:
+						_select_item(nid)
+					return true
+				_flows_drag = true
+				_flows_drag_moved = false
+				_flows_press_pos = mb.position
+				return true
+			else:
+				if _flows_drag and not _flows_drag_moved and mb.button_index == MOUSE_BUTTON_LEFT:
+					var ri := _flow_lens.pick_ribbon(mb.position, center, _pan, _zoom)
+					var rb := _flow_lens.ribbon(ri)
+					var cids: Array = rb.get("conn_ids", [])
+					if not cids.is_empty():
+						_select_connection(str(cids[0]))
+					else:
+						_select_item("")
+				_flows_drag = false
+				return true
+	if event is InputEventMouseMotion:
+		var mm := event as InputEventMouseMotion
+		if _flows_drag:
+			if mm.position.distance_to(_flows_press_pos) > 3.0:
+				_flows_drag_moved = true
+			_pan += mm.relative
+			queue_redraw()
+			return true
+		var hn := _flow_lens.pick_node(mm.position, center, _pan, _zoom)
+		var hr := -1 if hn != "" else _flow_lens.pick_ribbon(mm.position, center, _pan, _zoom)
+		var hl := int(_flow_lens.ribbon(hr).get("loop", -1)) if hr >= 0 else -1
+		if hn != _flow_lens.hover_node or hr != _flow_lens.hover_ribbon or hl != _flow_lens.hover_loop:
+			_flow_lens.hover_node = hn
+			_flow_lens.hover_ribbon = hr
+			_flow_lens.hover_loop = hl
+			if hn != "":
+				item_hovered.emit(hn)
+			queue_redraw()
+		return false
+	if event is InputEventKey:
+		var k := event as InputEventKey
+		if k.pressed and not k.echo and (k.keycode == KEY_F or k.keycode == KEY_A) \
+				and not k.ctrl_pressed and not k.alt_pressed:
+			flows_fit()
+			return true
+	return false
+
+
+## Draw one wire as a flow ribbon (GraphFlowRibbons) under the graph's style.
+func _draw_flow_ribbon(path: PackedVector2Array, col: Color, width: float,
+		est: Dictionary, flowing: bool, reverse: bool) -> void:
+	if path.size() < 2:
+		return
+	var key := str(est.get("_flow_key", "electricity"))
+	var v := float(est.get("_flow_value", 0.0))
+	if not flowing or v <= 0.0:
+		# A wire carrying nothing is a plain thin line: no ribbon to build
+		# (most wires of a big graph are idle at any instant).
+		draw_polyline(path, Color(col.r * 0.8, col.g * 0.8, col.b * 0.85, col.a * 0.55), maxf(1.0, width))
+		return
+	var ref := float(_flow_refs.get(key, v))
+	var anim := str(flow_style.get("anim", GraphFlowStyle.ANIM_STREAKS))
+	var far := _zoom < WIRE_LOD_ZOOM_CUTOFF or _cached_visible_connections.size() > WIRE_LOD_HIGH_COUNT * 2
+	if far and anim != GraphFlowStyle.ANIM_NONE:
+		# Zoomed far out a moving stripe is a shimmer; a slow luminance wave
+		# still says "this one is live" without strobing.
+		anim = GraphFlowStyle.ANIM_PULSE
+	var col_end := col
+	if bool(flow_style.get("gradient", true)) and flowing:
+		col_end = col.lightened(0.18)
+	GraphFlowRibbons.draw(get_canvas_item(), path, {
+		"width": width,
+		"color": col,
+		"color_end": col_end,
+		"active": flowing,
+		"anim": anim,
+		"t": _flow_clock,
+		"speed": GraphFlowStyle.anim_speed_px(flow_style, v, ref),
+		"reverse": reverse,
+		"blur": _high_speed_lod,
+		"glow": float(flow_style.get("glow", 0.6)),
+		"intensity": clampf(GraphFlowStyle.norm(v, ref, GraphFlowStyle.SCALE_SQRT), 0.25, 1.0),
+		"far": far,
+	})
 
 
 ## GraphWireBundles input for the visible wires (bezier style, freeform only —
@@ -5767,7 +6410,7 @@ func _render_connection(
 	var polarity    := conn.get("polarity", "positive") as String
 	var is_sel:  bool = (conn.get("id", "") as String == selected_connection_id)
 	var is_resource_wire: bool = polarity == "resource"
-	var flow_est      := _estimate_connection_flow(conn, solar_w, load_w)
+	var flow_est      := _flow_est_for(conn, solar_w, load_w)
 	var flow_watts:   float  = float(flow_est.get("watts", 100.0))
 	var reverse: bool = bool(flow_est.get("reverse", false))
 	var flow_active:  bool   = bool(flow_est.get("active", true))
@@ -5896,6 +6539,14 @@ func _render_connection(
 		conn = conn.duplicate()
 		conn["_draw_corner_px"] = _conn_corner_radius_px(conn, link_len)
 	var sankey_scale = bool(conn.get("sankey_scale", true)) and not element_lens_on()
+	# The graph's flow style (anything but Classic): one width rule for every
+	# wire, Sankey-proportional inside each resource (GraphFlowStyle).
+	var ribbon := _ribbons_on()
+	if ribbon:
+		width = _ribbon_width(conn, flow_est, is_sel)
+		if element_lens_on() and float(flow_est.get("_flow_value", 0.0)) <= 0.0:
+			width = maxf(1.0, 1.2 * _zoom)
+		_ribbon_w_cache[str(conn.get("id", ""))] = width
 	# Parallel-wire comb: a bundled end starts its curve at its fan tooth.
 	var bundle: Dictionary = _bundle_plan.get(str(conn.get("id", "")), {}) as Dictionary
 	if not bundle.is_empty() and style != "metro" and style != "orthogonal":
@@ -5906,6 +6557,19 @@ func _render_connection(
 			_draw_bundle_stub(bundle["tgt"], col, width)
 			tgt_pos = (bundle["tgt"] as Dictionary)["tooth"]
 
+	if ribbon and not (is_resource_wire and (res_kind == "sunlight" or res_kind == "wind")) and not (is_resource_wire and ConduitKinds.is_direct_intake_connection(conn, model)):
+		var path := _wire_polyline(style, src_pos, src_t, tgt_pos, tgt_tang_out, wps, curve_t, conn)
+		_draw_flow_ribbon(path, col, width, flow_est, flowing, reverse)
+		var mid := path[path.size() / 2] if path.size() > 0 else Vector2.INF
+		if _zoom >= WIRE_LABEL_MIN_ZOOM:
+			if is_resource_wire:
+				if flowing or (element_lens_on() and flow_active):
+					_draw_flow_label(src_pos, tgt_pos, wps, res_rate, true, res_kind, col, 0.0, mid)
+			elif flowing:
+				_draw_flow_label(src_pos, tgt_pos, wps, flow_watts, false, "", col,
+					float(flow_est.get("volts", 0.0)), mid)
+		_draw_connection_waypoint_handles(conn, center)
+		return
 	if is_resource_wire:
 		# Radiant (sunlight) links are always dashed/glowing regardless of
 		# line_style — they visualize an ambient, non-blocking connection
@@ -6528,7 +7192,8 @@ func _draw_polyline_chase(poly: PackedVector2Array, _col: Color, width: float,
 				break
 			acc += seg_len
 		var tail_fade := 1.0 - float(s) / float(chase_count)
-		var wch := maxf(2.0, (width * (0.9 + 1.4 * gscale) + 0.5) * _zoom)
+		# `width` already carries zoom (see _render_connection).
+		var wch := maxf(2.0, width * (0.9 + 1.4 * gscale) + 0.5 * _zoom)
 		draw_line(p0, p1, Color(1, 0.99, 0.94, (0.55 + 0.35 * gscale) * tail_fade), wch)
 		if s == 0:
 			draw_line(p0, p1, Color(1, 1, 1, 0.55 * tail_fade), wch * 0.42)
@@ -7211,13 +7876,15 @@ func _connection_at_screen(screen_pos: Vector2) -> Dictionary:
 			and is_instance_valid(soi_preview_service) \
 			and bool(soi_preview_service.get("active")):
 		return {}
-	const PICK_DIST := 8.0
+	var pick_base := 8.0
 	var center := size * 0.5
 
 	for conn: Dictionary in _visible_connections():
 		var sid: String = conn.get("source_item_id", "") as String
 		var tid: String = conn.get("target_item_id", "") as String
 		var pol: String = conn.get("polarity", "positive") as String
+		# A thick flow ribbon is picked across its whole width.
+		var PICK_DIST := maxf(pick_base, float(_ribbon_w_cache.get(str(conn.get("id", "")), 0.0)) * 0.5 + 2.0)
 		var src := _get_handle_info(
 			sid, conn.get("source_handle_id", "") as String, center, tid, pol)
 		var tgt := _get_handle_info(
@@ -8160,6 +8827,12 @@ func _draw() -> void:
 	# Globe: the 3D snowglobe fills the canvas; this pass only adds pins.
 	if view_mode == GraphSiteLayout.VIEW_GLOBE:
 		_draw_globe_lens()
+		if pm != null:
+			pm.end("gv_draw")
+		return
+	# Flows: the scope as a loop Sankey (GraphFlowLens) — its own pass.
+	if view_mode == GraphSiteLayout.VIEW_FLOWS:
+		_draw_flows_lens()
 		if pm != null:
 			pm.end("gv_draw")
 		return
@@ -11709,7 +12382,8 @@ func _draw_elev_outlet_discharge(p0: Vector2, p1: Vector2, q_lps: float) -> void
 # Metro Style Routing
 # ---------------------------------------------------------------------------
 
-func _draw_wire_metro_path(pts: Array, tangents: Array, col: Color, width: float, flowing: bool, rate: float, reverse: bool, conn: Dictionary) -> void:
+## The metro track: rectilinear legs with 45° chamfers at the corners.
+func _metro_polyline(pts: Array, tangents: Array, conn: Dictionary) -> PackedVector2Array:
 	# Metro path consists of rectilinear segments and 45-degree chamfers.
 	var draw_pts := PackedVector2Array()
 	var src_p := pts[0] as Vector2
@@ -11779,7 +12453,11 @@ func _draw_wire_metro_path(pts: Array, tangents: Array, col: Color, width: float
 		final_pts.append(draw_pts[-1])
 	else:
 		final_pts = draw_pts
-	
+	return final_pts
+
+
+func _draw_wire_metro_path(pts: Array, tangents: Array, col: Color, width: float, flowing: bool, rate: float, reverse: bool, conn: Dictionary) -> void:
+	var final_pts := _metro_polyline(pts, tangents, conn)
 	# Draw the thick track
 	var track_col := Color(col.r, col.g, col.b, 0.8)
 	var base_w := 15.0 * _zoom

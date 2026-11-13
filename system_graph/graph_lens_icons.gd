@@ -44,6 +44,12 @@ static func icon(kind: String, px: int = 16) -> Texture2D:
 			_ring(img, Vector2(8, 8) * s, 6.4 * s, 1.3 * s)
 			_ellipse(img, Vector2(8, 8) * s, Vector2(6.4, 2.3) * s, 1.0 * s)
 			_ellipse(img, Vector2(8, 8) * s, Vector2(2.6, 6.4) * s, 1.0 * s)
+		"flows":
+			# A stream flowing down with loops returning up either side.
+			_line(img, Vector2(8, 2) * s, Vector2(8, 14) * s, 1.8 * s)
+			_ellipse(img, Vector2(8, 8) * s, Vector2(5.6, 5.0) * s, 1.0 * s)
+			_ellipse(img, Vector2(8, 8) * s, Vector2(3.0, 3.4) * s, 1.0 * s)
+			_disc(img, Vector2(8, 2.2) * s, 1.3 * s)
 		_:
 			_disc(img, Vector2(8, 8) * s, 4.0 * s)
 	img.resize(px, px, Image.INTERPOLATE_LANCZOS)

@@ -111,6 +111,64 @@ static func build(win: Dictionary, lens: String, node_ids: Dictionary, names: Di
 	return {"lens": lens, "nodes": nodes, "links": links, "total": total}
 
 
+## The same window as input for the LOOP Sankey (LoopSankeyLayout): every
+## store, machine, person and plant a node, every wire an edge of this
+## element (parallel wires between one pair summed), the air and what is
+## drained as boundary flows. Unlike the three columns, a material cycle
+## (food → people → urine → recovery → nutrients → beds → food) shows as a
+## loop. Pure.
+static func loop_input(win: Dictionary, lens: String, names: Dictionary) -> Dictionary:
+	var li := int(ElementLens.INDEX.get(lens, 0))
+	var ends: Dictionary = win.get("ends", {})
+	var edges: Dictionary = win.get("edges", {})
+	var pair := {}
+	var biggest := 0.0
+	for k in edges.keys():
+		var v := float((edges[k] as PackedFloat64Array)[li])
+		if v <= 0.0 or not ends.has(k):
+			continue
+		var src := str(ends[k][0])
+		var tgt := str(ends[k][1])
+		if src == tgt:
+			continue
+		var pk := src + ">" + tgt
+		pair[pk] = float(pair.get(pk, 0.0)) + v
+		biggest = maxf(biggest, float(pair[pk]))
+	var out_edges: Array = []
+	var touched := {}
+	var key := "element:" + lens
+	for pk in pair.keys():
+		var v2 := float(pair[pk])
+		if v2 < biggest * MIN_SHARE:
+			continue
+		var ab: PackedStringArray = str(pk).split(">")
+		out_edges.append({"id": str(pk), "a": ab[0], "b": ab[1], "key": key, "value": v2, "conn_ids": []})
+		touched[ab[0]] = true
+		touched[ab[1]] = true
+	var bin: Array = []
+	var bout: Array = []
+	for id in (win.get("node_air_in", {}) as Dictionary).keys():
+		var va := float((win["node_air_in"][id] as PackedFloat64Array)[li])
+		if va > biggest * MIN_SHARE and touched.has(str(id)):
+			bin.append({"node": str(id), "key": key, "value": va, "label": "from the air"})
+	for id2 in (win.get("node_air_out", {}) as Dictionary).keys():
+		var vb := float((win["node_air_out"][id2] as PackedFloat64Array)[li])
+		if vb > biggest * MIN_SHARE and touched.has(str(id2)):
+			bout.append({"node": str(id2), "key": key, "value": vb, "label": "to the air"})
+	for id3 in (win.get("node_dumped", {}) as Dictionary).keys():
+		var vc := float((win["node_dumped"][id3] as PackedFloat64Array)[li])
+		if vc > biggest * MIN_SHARE and touched.has(str(id3)):
+			bout.append({"node": str(id3), "key": key, "value": vc, "label": "drained"})
+	var nodes: Array = []
+	var labels := {}
+	for nid in touched.keys():
+		labels[nid] = str(names.get(nid, nid))
+		nodes.append({"id": str(nid), "label": labels[nid]})
+	return {"nodes": nodes, "edges": out_edges, "bin": bin, "bout": bout, "labels": labels,
+		"types": {}, "keys": [key], "opts": {"thickness": 30.0, "layer_gap": 70.0, "node_h": 34.0,
+			"min_node_w": 150.0}}
+
+
 static func _top(through: Dictionary, prefix: String, n: int) -> Dictionary:
 	var ks: Array = []
 	for k in through.keys():

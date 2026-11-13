@@ -16,6 +16,10 @@ uniform float pulse : hint_range(0.0, 1.0) = 0.35;
 uniform float conceptual : hint_range(0.0, 1.0) = 1.0;
 uniform float emission_boost : hint_range(0.0, 6.0) = 2.2;
 uniform float time_offset : hint_range(0.0, 100.0) = 0.0;
+// The cosmetic clock (SimFxRate, pushed by Main): still while the sim is
+// paused or scrubbing back, time-lapsed (sqrt) at speed — so a pipe's flow
+// moves with the world like the wires on the graph, not on wall time.
+global uniform float fx_time_lights;
 
 varying vec3 v_world_pos;
 
@@ -26,13 +30,13 @@ void vertex() {
 void fragment() {
 	soi_clip_fragment(v_world_pos);
 	float along = UV.y;
-	float phase = along * 4.0 - (TIME + time_offset) * flow_speed;
+	float phase = along * 4.0 - (fx_time_lights + time_offset) * flow_speed;
 	// Soft repeating band (conceptual) or thinner dashes (physical overlay).
 	float band_w = mix(0.12, 0.28, conceptual);
 	float band = smoothstep(band_w, 0.0, abs(fract(phase) - 0.5));
 	float dash = smoothstep(0.35, 0.15, abs(fract(phase * 2.2) - 0.5));
 	float flow = mix(dash, band, conceptual) * flow_strength;
-	float breathe = 0.85 + pulse * 0.15 * sin(TIME * 2.4 + along * 6.28318);
+	float breathe = 0.85 + pulse * 0.15 * sin(fx_time_lights * 2.4 + along * 6.28318);
 	vec3 base = base_color.rgb * breathe;
 	vec3 col = mix(base, flow_color.rgb, clamp(flow, 0.0, 1.0));
 	float alpha = mix(1.0, 0.92, conceptual);

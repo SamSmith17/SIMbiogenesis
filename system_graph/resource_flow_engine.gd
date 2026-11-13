@@ -1258,10 +1258,16 @@ func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
 		if rk.is_empty():
 			rk = ResourceKinds.normalize_kind(str(
 					(src.get("specs", {}) as Dictionary).get("resource_kind", "")))
-		if rk == "water":
-			_cache_conn_flow(str(conn.get("id", "")), water_lph, "water")
-		elif rk == "nutrients":
+		# Match the wire by the PORT it lands on (or the tank the plant draws
+		# from), not by kind: a bed on reclaimed water ("irrigation_water")
+		# or rainwater drinks through its water_in port too, and matching
+		# "water" only left those wires reading zero while the tank emptied.
+		var th := str(conn.get("target_handle_id", conn.get("target_handle", "")))
+		var from_id := str(conn.get("source_item_id", ""))
+		if th == "nutrients_in" or (nutrients_wired and from_id == nutrient_id):
 			_cache_conn_flow(str(conn.get("id", "")), nut_kgph, "nutrients")
+		elif th == "water_in" or (from_id == water_id and rk != "sunlight"):
+			_cache_conn_flow(str(conn.get("id", "")), water_lph, rk if not rk.is_empty() else "water")
 		elif rk == "sunlight":
 			# Radiant wire is informational — animate at PAR×area (kW of PAR).
 			_cache_conn_flow(str(conn.get("id", "")), par * area / 1000.0, "sunlight")

@@ -68,6 +68,9 @@ var _released := false
 var _pop_driven := false
 var _conn_flow: Dictionary = {}
 var _conn_ends := {}
+## Per wire over the whole run: conn id -> [kind, total qty] (the engine's
+## per-wire flows × dt). The report's "flows" block and its loop metrics.
+var conn_tot := {}
 var _live_engine: Node = null
 var _live_engine_was := false
 
@@ -273,6 +276,9 @@ func _step() -> void:
 		var rate := float((_conn_flow[cid] as Dictionary).get("rate", 0.0))
 		if rate <= 0.0:
 			continue
+		var ct: Array = conn_tot.get(cid, [str((_conn_flow[cid] as Dictionary).get("kind", "")), 0.0])
+		ct[1] = float(ct[1]) + rate * dt
+		conn_tot[cid] = ct
 		var ends: Array = _conn_ends.get(cid, [])
 		if ends.is_empty():
 			continue
