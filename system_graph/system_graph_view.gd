@@ -1387,7 +1387,8 @@ func _bind_map_graph(force: bool) -> void:
 		_autosave_pending = true
 		_flush_graph_autosave()
 	_cached_map_graph_key = new_key
-	if FileAccess.file_exists(_graph_autosave_path()):
+	# The headless sim kernel builds its own graph: never the last run's.
+	if FileAccess.file_exists(_graph_autosave_path()) and not SimkitMode.active():
 		_try_restore_graph_autosave()
 	else:
 		_clear_graph_contents_for_new_map()
@@ -1473,7 +1474,7 @@ func flush_world_state() -> void:
 
 
 func _flush_graph_autosave() -> void:
-	if Engine.is_editor_hint() or not _autosave_pending or _autosave_suspended:
+	if Engine.is_editor_hint() or not _autosave_pending or _autosave_suspended or SimkitMode.active():
 		return
 	if _cached_map_graph_key.is_empty():
 		_cache_map_graph_key()

@@ -1488,7 +1488,7 @@ func _on_delete_slot( slot_index: int ) -> void :
 
 ## Called periodically by SaveSystem autoload.
 func request_autosave() -> void :
-	if Engine.is_editor_hint() :
+	if Engine.is_editor_hint() or SimkitMode.active() :
 		return
 	# Inside a world the autosave IS the world save (snapshot + flush; asset
 	# vendoring is left to explicit saves and exit — it parses the graph).
@@ -2485,6 +2485,11 @@ func _setup_environment_vfx() -> void :
 	_dust_layer = GroundFogLayer.new()
 	_dust_layer.name = "DustLayer"
 	add_child( _dust_layer )
+	# Visual style post pass (Settings → Lighting → Visual style).
+	var style := RenderStyleDriver.new()
+	style.name = "RenderStyle"
+	style.setup( self )
+	add_child( style )
 
 
 func _on_lightning_flash( intensity: float ) -> void :
@@ -3544,6 +3549,9 @@ func _update_environment() -> void :
 	# computed the clean-air look for this instant (night, twilight, eclipse,
 	# the user fog knob), and a hazard is a modifier on that. One choke point,
 	# so no existing branch above needs to know this subsystem exists.
+	# The visual style (Settings → Lighting → Visual style) goes BEFORE it, so
+	# a hazard still thickens the air the style has cleared.
+	_apply_render_style_env()
 	_apply_hazard_atmosphere( night_amount, sun_height )
 	# Volumetric fog AFTER the hazard pass: _apply_hazard_atmosphere refreshes
 	# _hazard_vol, which this reads. Called before it, the dust wall always ran
@@ -3706,6 +3714,16 @@ func _update_glow( night_amount : float ) -> void :
 	# terrain never blooms); night -> low so the saturated emissive markers
 	# (cores up to ~14.0) bloom into coloured halos.
 	env.glow_hdr_threshold = lerpf( 1.5, 0.6, night_amount )
+	RenderStyle.apply_env( env, RenderStylePrefs.resolved(), "glow" )
+
+
+## The environment half of the visual style (RenderStyle): multipliers on the
+## values computed just above, so applying it again is harmless. Vegetation
+## takes its ambient from _vegetation_ambient_energy, which follows too.
+func _apply_render_style_env() -> void :
+	var p := RenderStylePrefs.resolved()
+	RenderStyle.apply_env( environment.environment, p, "env" )
+	_vegetation_ambient_energy *= float( p.get( "ambient_mult", 1.0 ) )
 
 ## Get moon brightness based on phase using realistic non-linear scaling
 ## Based on the visible illuminated fraction and opposition surge effect

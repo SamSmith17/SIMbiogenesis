@@ -1843,6 +1843,7 @@ func _sync_horizon_haze_from_snapshot(snap: Dictionary) -> void:
 
 func _build_lighting_tab(tabs: TabContainer) -> void:
 	var v := _make_tab(tabs, "Lighting")
+	_build_visual_style_section(v)
 	_add_section_lbl(v, "Graphics Quality (performance)")
 	_graphics_quality = OptionButton.new()
 	_graphics_quality.add_item("Low (fastest)",  0)
@@ -1962,6 +1963,89 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	gr_hint.add_theme_font_size_override("font_size", 10)
 	v.add_child(gr_hint)
 	# (The player's field of view moved to the Player tab.)
+
+
+## Settings → Lighting → Visual style (RenderStyle / RenderStylePrefs). Global
+## like the graphics preset, so it is here at the launch hub too.
+var _style_opt: OptionButton
+var _style_blurb: Label
+var _style_rows: Array = []
+var _style_sliders: Dictionary = {}
+
+
+func _build_visual_style_section(v: VBoxContainer) -> void:
+	_add_section_lbl(v, "Visual style")
+	var labels: Array = []
+	for id in RenderStyle.ORDER:
+		labels.append(RenderStyle.label(id))
+	_style_opt = _add_option(v, "Look", labels, _on_visual_style)
+	_style_opt.name = "visual_style"
+	_style_opt.tooltip_text = "How the world is drawn. A style changes only the picture: the light the simulation uses (solar output, plants, people) is the same in every style."
+	_style_blurb = Label.new()
+	_style_blurb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_style_blurb.custom_minimum_size = Vector2(420, 0)
+	_style_blurb.add_theme_color_override("font_color", C_TEXT_S)
+	_style_blurb.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_style_blurb.set_meta("keep_wrap", true)
+	v.add_child(_style_blurb)
+	var specs := [
+		["strength", "Style strength", 1.0, func(x: float) -> void: RenderStylePrefs.set_strength(x)],
+		["outlines", "Ink outlines", 2.0, func(x: float) -> void: RenderStylePrefs.set_outlines(x)],
+		["painterly", "Painterly", 2.0, func(x: float) -> void: RenderStylePrefs.set_painterly(x)],
+		["cel", "Cel shading", 2.0, func(x: float) -> void: RenderStylePrefs.set_cel(x)],
+	]
+	for sp in specs:
+		var sl := _add_slider(v, String(sp[1]), 0.0, float(sp[2]), 0.05, sp[3])
+		sl.name = "style_" + String(sp[0])
+		_style_sliders[String(sp[0])] = sl
+		_style_rows.append(sl.get_parent())
+	_style_sliders["strength"].tooltip_text = "0 is the realistic look; 1 is the style as designed."
+	_style_sliders["outlines"].tooltip_text = "Dark lines round near things and their creases. 1 is the style's own."
+	_style_sliders["painterly"].tooltip_text = "Flattens texture detail into painted patches (leaves into brush blobs). 1 is the style's own."
+	_style_sliders["cel"].tooltip_text = "Light falls into a few flat bands instead of a smooth gradient. 1 is the style's own."
+	var reset := Button.new()
+	reset.text = "Reset style tuning"
+	reset.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	reset.pressed.connect(func() -> void:
+		RenderStylePrefs.reset_tuning()
+		_sync_visual_style())
+	v.add_child(reset)
+	_style_rows.append(reset)
+	_sync_visual_style()
+	v.add_child(HSeparator.new())
+
+
+func _sync_visual_style() -> void:
+	if _style_opt == null:
+		return
+	var id := RenderStylePrefs.style()
+	_style_opt.set_block_signals(true)
+	_style_opt.selected = maxi(RenderStyle.ORDER.find(id), 0)
+	_style_opt.set_block_signals(false)
+	_style_blurb.text = String(RenderStyle.BLURBS.get(id, ""))
+	var vals := {
+		"strength": RenderStylePrefs.strength(),
+		"outlines": RenderStylePrefs.outlines(),
+		"painterly": RenderStylePrefs.painterly(),
+		"cel": RenderStylePrefs.cel(),
+	}
+	for k in _style_sliders:
+		(_style_sliders[k] as HSlider).value = float(vals[k])
+	var styled := id != RenderStyle.REALISTIC
+	for row in _style_rows:
+		if is_instance_valid(row):
+			(row as Control).visible = styled
+	# Only the sliders that do something for this style.
+	for k in ["outlines", "painterly", "cel"]:
+		var sl: HSlider = _style_sliders[k]
+		if is_instance_valid(sl):
+			sl.get_parent().visible = styled and RenderStyle.has_sub_control(id, k)
+
+
+func _on_visual_style(idx: int) -> void:
+
+	RenderStylePrefs.set_style(String(RenderStyle.ORDER[clampi(idx, 0, RenderStyle.ORDER.size() - 1)]))
+	_sync_visual_style()
 
 
 func _build_stars_planets_tab(tabs: TabContainer) -> void:

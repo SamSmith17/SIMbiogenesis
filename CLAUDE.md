@@ -779,6 +779,15 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 -- --user-map=mtvernon -
 # (assets/sky/starmap_equirect_8k.{png,json}: 2:1, pole rows black, fit
 # residual <= 8 px). Carries EXPECTED_CHECKS; run --import first:
 Godot.exe.exe --headless --path . --script core/astronomy/star_sky_selftest.gd
+# Visual styles (offline — RenderStyle identity / blend / sub-controls, the
+# environment overlay, the 128-byte push-constant layout, RenderStylePrefs on
+# a TEMP file; EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/env/render_style_selftest.gd
+# The same on a real world (sandbox): every style at the same views and hours,
+# side-by-side pairs under screenshots/render_style/<world>/, the post pass
+# compiled + running, its GPU ms over realistic (--style-hours=13,18.5
+# --style-views=player,eye,eye2,mid,high):
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/render_style_look_check.gd -Label render_style
 # Daylight model self-test (offline — core/env/daylight_model.gd, the ONE curve
 # the DirectionalLight sun/moon, the ambient, the vegetation night signal, the
 # glow AND sky.gdshader's daylight_fraction() all follow). Pins what a PNG
@@ -10285,6 +10294,75 @@ High-accuracy mode (`_high_accuracy_physics = true` in Panel Settings):
 
 Self-test: `power_system/sources/source_physics_selftest.gd` (97 checks total)
 includes solar-physics checks (NOCT formula, gamma derating, SPA horizon, cos_incidence).
+
+## Visual styles — Settings → Lighting → Visual style (core/env/, 2026-11-12)
+
+"Skins" that change how the world is drawn, never what the simulation sees.
+Styles: **Solarpunk (painted)**, from the user's two reference images
+(Ghibli-ish: saturated greens, deep blue sky, soft coloured shadows, ink
+lines, painted foliage); **Storybook watercolor** (big loose brush, paper
+texture, pale violet shadows, sepia silhouette lines); **Ink & halftone**
+(hard bands, black lines with creases, near-mono blue/cream duotone, the
+dark band as a 45-degree dot screen); **Cinematic** (teal/orange grade,
+contrast, vignette, moving film grain; no Kuwahara, so ~1 ms). The Lighting
+page shows only the sub-control sliders a style uses
+(`RenderStyle.has_sub_control`). The finish layer (lift, paper tint, paper
+texture / film grain, vignette, halftone) rides a 48-byte uniform buffer
+(`extra_floats`, binding 4): the 128-byte push constant is full. Cost at
+1280x720 on Walton: solarpunk 2.9 ms, watercolor 5.1, ink 3.2, cinematic 1.0.
+⚠ `glow_bloom` above 0 puts a milky film over the whole frame — it was most
+of what made the first watercolor look like fog.
+- `RenderStyle` (pure): `STYLES` tables over `IDENTITY` (the values that
+  change nothing). `resolve(id, strength, outlines, painterly, cel)` blends
+  toward the identity, so strength 0 IS realistic. A new style = one table +
+  `ORDER` / `LABELS` / `BLURBS`.
+- `RenderStylePrefs` (`user://render_style.cfg`, global like the graphics
+  preset, so it is on the hub's Lighting page too): style + four sliders,
+  polled by `generation()`.
+- **Environment half**: `RenderStyle.apply_env` multiplies what Main just
+  computed (ambient, haze density, aerial perspective, glow) and sets the
+  post-tonemap `adjustment_*`. Main calls it (`_apply_render_style_env`)
+  BEFORE the hazard pass (a dust storm still thickens the cleared air) and
+  at the end of `_update_glow`; the vegetation ambient follows.
+- **Post half**: `RenderStyleEffect`, a `CompositorEffect` at
+  POST_TRANSPARENT (HDR, before tonemap, so water / glass / particles are
+  in it) on the WorldEnvironment's compositor (`RenderStyleDriver`, Main
+  child "RenderStyle", made in `_setup_environment_vfx`). GLSL compiled at
+  runtime (`shader_compile_spirv_from_source`, no .glsl import). Two
+  dispatches: copy colour → scratch (`RenderSceneBuffersRD.create_texture`,
+  context "render_style"), then the style pass: smooth 4-sector Kuwahara
+  (painterly), log-luminance cel bands (fade with distance — banding a
+  distant aerial photo reads as camouflage) + lighting compression, grade
+  (saturation, vibrance off hazy blues and deep shadow, a yellow-olive →
+  green push that spares bright autumn yellow, sky cyan, teal/warm split
+  tone), ink outlines from the depth buffer's SECOND difference (reverse-Z
+  depth ∝ 1/z is affine in screen space, so planes and grazing ground give
+  no line; drawn on the near side) + normal-buffer creases up close.
+  Every camera in the world gets it (player, drone, settlement view,
+  window wall, video export, graph lens previews); modals with their own
+  worlds do not. Compatibility renderer: no compute, environment half only.
+- **World labels are exempt** (`StyleLabelOverlay`, the driver's child, on
+  only while the post pass is): the post pass cannot tell a label's pixels
+  from water's (neither writes depth; Label3D has no stencil hook), so every
+  SCREEN-FACING Label3D under Main (billboard on: turbine status, NPC tags,
+  POI pins, run lengths, beacons) gets `layers = 0` (the old value kept in
+  meta `style_label_orig_layers`, put back exactly when the style goes off)
+  and is drawn as 2D text at the same spot, size (pixel_size × scale ×
+  the camera's px per metre, × depth for fixed_size), colour and outline,
+  far first. Depth-tested labels are hidden by a camera→label physics ray
+  (24 a frame, round robin). Billboard-off labels (a sign's lettering) stay
+  3D and take the style. Not shown while a style is on: these labels in the
+  graph lens previews, extra Window Wall windows and video export. A new
+  world label needs nothing; a NEW label that must stay painted sets
+  billboard off.
+- ⚠ Kuwahara weights must be RELATIVE to the smoothest sector: absolute
+  `1/(1+σ^8)` underflowed on a white tent against grass and drew a black dot.
+- ⚠ A thing a few pixels across is "edge" in both axes: those pixels are
+  damped, or every far tent and car from the air is an ink blot.
+- Cost: ~2.7 ms GPU at 1280×720 on Walton (Kuwahara radius scales with the
+  internal height, capped at 6 px).
+- ⚠ The Read tool caches images by path: copy a re-shot PNG to a new name
+  before looking at it again.
 
 ## Night sky (stars)
 
