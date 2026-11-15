@@ -160,6 +160,9 @@ static func layout_area_m2(s: Dictionary) -> float:
 			return tot
 		"plot":
 			return maxf(float(s.get("area_m2", 50.0)), 1.0)
+		"rect":
+			var sz := rect_size(s)
+			return sz.x * sz.y
 		_:
 			var a := float(s.get("area_m2", 0.0))
 			return a if a > 0.0 else SMALL_BED.x * SMALL_BED.y
@@ -181,6 +184,10 @@ static func packed_spec(s: Dictionary) -> Dictionary:
 		"plot":
 			return {"w_m": 1.2, "d_m": 0.8, "h_m": 0.6, "mass_kg": 25.0 + 0.4 * float(s.get("area_m2", 50.0)),
 				"form": "crate", "source": "computed"}
+		"rect":
+			var sz2 := rect_size(s)
+			wall_h = float(s.get("wall_h", WALL_H))
+			wall_m = 2.0 * (sz2.x + sz2.y)
 		_:
 			var a := layout_area_m2(s)
 			for b in _bed_rects(a):
@@ -214,6 +221,8 @@ func _build_visuals() -> void:
 			_layout_keyhole(shell, places, rng)
 		"plot":
 			_layout_plot(shell, places, rng)
+		"rect":
+			_layout_rect(shell, places, rng)
 		_:
 			_layout_beds(shell, places, rng)
 	var frame := MeshInstance3D.new()
@@ -400,6 +409,36 @@ static func _bed_rects(area: float) -> Array:
 		var x0 := -total_w * 0.5 + float(i) * (BED_W + BED_PATH)
 		out.append(Rect2(x0, -ln * 0.5, BED_W, ln))
 	return out
+
+
+## A "rect" bed's size [x, z] in metres.
+static func rect_size(s: Dictionary) -> Vector2:
+	var v: Variant = s.get("size_m", [BED_W, 2.4])
+	if v is Array and (v as Array).size() >= 2:
+		return Vector2(maxf(float(v[0]), 0.3), maxf(float(v[1]), 0.3))
+	if v is Vector2:
+		return (v as Vector2).max(Vector2(0.3, 0.3))
+	return Vector2(BED_W, 2.4)
+
+
+## One bed of the spec's exact size, sown in sections along its longer side.
+func _layout_rect(shell: GrowBedShell, places: Dictionary, rng: RandomNumberGenerator) -> void:
+	var sz := rect_size(spec)
+	var wall_h := float(spec.get("wall_h", WALL_H))
+	var rc := Rect2(-sz.x * 0.5, -sz.y * 0.5, sz.x, sz.y)
+	shell.box_bed(rc, maxf(wall_h, 0.05))
+	var along_x := sz.x > sz.y
+	var long_side := sz.x if along_x else sz.y
+	var n := maxi(int(roundf(long_side / SECTION_M)), 1)
+	var top := maxf(wall_h, 0.03)
+	for s in n:
+		var a0 := float(s) / float(n)
+		var a1 := float(s + 1) / float(n)
+		var part := Rect2(rc.position.x + rc.size.x * a0, rc.position.y, rc.size.x * (a1 - a0), rc.size.y) if along_x 			else Rect2(rc.position.x, rc.position.y + rc.size.y * a0, rc.size.x, rc.size.y * (a1 - a0))
+		var crop := _crop_for(0, s, false)
+		var pts := _rect_points(part, GardenCrops.spacing(crop), rng)
+		shell.canopy_rect(part, top + float(GardenCrops.info(crop)["height"]) * 0.45, _leaf_tint(crop))
+		_sow(places, crop, pts, top - 0.02, _first_sow(crop, s, n), rng)
 
 
 func _layout_beds(shell: GrowBedShell, places: Dictionary, rng: RandomNumberGenerator) -> void:

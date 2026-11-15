@@ -1108,6 +1108,22 @@ func get_automation_resource_context() -> Dictionary:
 			var nm := str(specs.get("name", "")).strip_edges().to_lower().replace(" ", "_")
 			if not nm.is_empty():
 				states["node.%s" % nm] = states["node.%s" % iid]
+		# Greenhouses: the air inside, for rules ("vent when over 28 °C").
+		for item: Dictionary in model.items_of_type("compound"):
+			var gs: Dictionary = item.get("specs", {}) as Dictionary
+			if not bool(gs.get("greenhouse_system", false)) or not gs.has("gh_t_air"):
+				continue
+			var keys: Array = [str(item.get("id", ""))]
+			var gnm := str(gs.get("name", "")).strip_edges().to_lower().replace(" ", "_")
+			if not gnm.is_empty():
+				keys.append(gnm)
+			for k in keys:
+				numeric["greenhouse.%s.temp" % k] = float(gs.get("gh_t_air", 0.0))
+				numeric["greenhouse.%s.rh" % k] = float(gs.get("gh_rh", 0.0))
+				numeric["greenhouse.%s.dli" % k] = float(gs.get("gh_dli", 0.0))
+				numeric["greenhouse.%s.vent" % k] = float(gs.get("gh_vent_pct", 0.0))
+				numeric["greenhouse.%s.water_temp" % k] = float(gs.get("gh_t_water", 0.0))
+				states["greenhouse.%s.frost" % k] = "on" if bool(gs.get("gh_frost", false)) else "off"
 	if _resource_flow == null or not _resource_flow.has_method("state_snapshot"):
 		return {"numeric_values": numeric, "device_states": states}
 	var snap: Dictionary = _resource_flow.call("state_snapshot")
@@ -10479,6 +10495,118 @@ func vehicle_system_item_id(prop_id: String) -> String:
 	for it in model.get_items_in_scope("root"):
 		var d: Dictionary = it
 		if str((d.get("specs", {}) as Dictionary).get("vehicle_prop_id", "")) == prop_id:
+			return str(d.get("id", ""))
+	return ""
+
+
+## A placed greenhouse's ONE graph node (GreenhouseGraph): realized at root
+## and made unique, bound to the shell prop. A design change rebuilds it in
+## place — its spot on the canvas, every wire from outside to its ports and
+## its stores' levels kept. `parts` = {gh_part: prop id}. Returns the id.
+func sync_greenhouse_system(prop_id: String, d: Dictionary, parts: Dictionary, world_pos: Vector3,
+		yaw_deg: float = 0.0) -> String:
+	if model == null or prop_id.is_empty():
+		return ""
+	var existing := greenhouse_system_item_id(prop_id)
+	var def_id := GreenhouseGraph.def_id_for(prop_id)
+	var sig := GreenhouseGraph.signature(d, parts)
+	var site := Vector2.ZERO
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("world_center"):
+		site = GraphSiteLayout.world_xz_to_site(Vector2(world_pos.x, world_pos.z), soi.call("world_center") as Vector3)
+	var def := GreenhouseGraph.definition(d, def_id, parts)
+	var pos := Vector2.ZERO
+	var outside: Array = []
+	var levels := {}
+	if not existing.is_empty():
+		var it := model.get_item(existing)
+		var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+		if str(specs.get("gh_sig", "")) == sig:
+			if GraphSiteLayout.site_xz(it).distance_to(site) > 0.05 or str(specs.get("name", "")) != str(def["name"]) \
+					or absf(float(specs.get("gh_yaw", 0.0)) - yaw_deg) > 0.05:
+				specs["name"] = str(def["name"])
+				specs["gh_yaw"] = yaw_deg
+				_history_suppress = true
+				model.update_item(existing, {"specs": specs, "site_x_m": site.x, "site_z_m": site.y})
+				_history_suppress = false
+			return existing
+		pos = Vector2(float(it.get("x", 0.0)), float(it.get("y", 0.0)))
+		for c in model.connections:
+			var cd: Dictionary = c
+			if str(cd.get("source_item_id", "")) == existing or str(cd.get("target_item_id", "")) == existing:
+				outside.append(cd.duplicate(true))
+		var by_role := GreenhouseGraph.children_by_role(model, existing)
+		for r in ["tank", "barrels", "harvest", "residue", "nutrients"]:
+			if by_role.has(r):
+				levels[r] = float(((by_role[r][0] as Dictionary).get("specs", {}) as Dictionary).get("level", 0.0))
+		var was_b := _sim_bulk_update
+		_sim_bulk_update = true
+		_history_suppress = true
+		model.remove_item(existing)
+		_history_suppress = false
+		_sim_bulk_update = was_b
+	else:
+		pos = _free_system_card_pos(site, Vector2(230.0, 160.0))
+	var was_bulk := _sim_bulk_update
+	_sim_bulk_update = true
+	_history_suppress = true
+	model.put_definition(def)
+	var cid := GraphComponentDefs.realize(model, def_id, "root", pos, {
+		"name": str(def["name"]), "greenhouse_prop_id": prop_id, "bound_prop_id": prop_id,
+		"gh_sig": sig, "gh_yaw": yaw_deg, "gh_spec": GreenhouseSpec.to_json_safe(d["spec"]),
+		"node_banner": false})
+	if not cid.is_empty():
+		GraphComponentDefs.make_unique(model, cid)
+		model.update_item(cid, {"site_x_m": site.x, "site_z_m": site.y, "elevation_m": world_pos.y})
+		var by_role2 := GreenhouseGraph.children_by_role(model, cid)
+		for r in levels:
+			if by_role2.has(r):
+				var ch: Dictionary = by_role2[r][0]
+				var sp: Dictionary = (ch.get("specs", {}) as Dictionary).duplicate(true)
+				sp["level"] = float(levels[r])
+				model.update_item(str(ch["id"]), {"specs": sp})
+		var handles := {}
+		for h in model.get_item(cid).get("handles", []):
+			handles[str((h as Dictionary).get("id", ""))] = true
+		for cd in outside:
+			var c2: Dictionary = cd
+			c2.erase("id")
+			if str(c2.get("source_item_id", "")) == existing:
+				c2["source_item_id"] = cid
+				if not handles.has(str(c2.get("source_handle_id", ""))):
+					continue
+			if str(c2.get("target_item_id", "")) == existing:
+				c2["target_item_id"] = cid
+				if not handles.has(str(c2.get("target_handle_id", ""))):
+					continue
+			model.add_connection(c2)
+	_history_suppress = false
+	_sim_bulk_update = was_bulk
+	_on_model_changed("add_item")
+	_schedule_graph_autosave()
+	return cid
+
+
+func remove_greenhouse_system(prop_id: String) -> void:
+	var cid := greenhouse_system_item_id(prop_id)
+	if cid.is_empty():
+		return
+	var was_bulk := _sim_bulk_update
+	_sim_bulk_update = true
+	_history_suppress = true
+	model.remove_item(cid)
+	_history_suppress = false
+	_sim_bulk_update = was_bulk
+	_on_model_changed("remove_item")
+	_schedule_graph_autosave()
+
+
+func greenhouse_system_item_id(prop_id: String) -> String:
+	if model == null or prop_id.is_empty():
+		return ""
+	for it in model.items:
+		var d: Dictionary = it
+		if str((d.get("specs", {}) as Dictionary).get("greenhouse_prop_id", "")) == prop_id:
 			return str(d.get("id", ""))
 	return ""
 

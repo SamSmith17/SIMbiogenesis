@@ -242,6 +242,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		WindLabRuntime.attach(prop, rec)
 		CspLabRuntime.attach(prop, rec)
 		FarmBotRuntime.attach(prop, rec)
+		GreenhouseRuntime.attach(prop, rec)
 		EspLabRuntime.attach(prop, rec)
 		PalletRackBuildSite.attach(prop, rec)
 		_maybe_attach_stream_intake_flow(prop, rec)
@@ -890,6 +891,10 @@ static func model_extras(rec: Dictionary) -> Dictionary:
 		extras["domelab_spec"] = rec.get("domelab_spec", {})
 	if rec.has("earthship_spec"):
 		extras["earthship_spec"] = rec.get("earthship_spec", {})
+	if rec.has(GreenhouseSpec.KEY):
+		extras[GreenhouseSpec.KEY] = rec.get(GreenhouseSpec.KEY, {})
+	if rec.has(GrowLightRack.KEY):
+		extras[GrowLightRack.KEY] = rec.get(GrowLightRack.KEY, {})
 	# Without this every placed parametric building drew the default cottage
 	# (and none had its basement).
 	if rec.has("building_spec"):

@@ -126,6 +126,9 @@ static func apply_catalog_earthworks(main: Node, prop_id: String) -> void:
 	if str(rec.get("model_id", "")) == EarthshipBuilder.MODEL_ID:
 		sync_earthship(main, prop_id)
 		return
+	if GreenhouseWorld.is_greenhouse(rec):
+		GreenhouseWorld.sync(main, prop_id)
+		return
 	if rec.has(StructureEarthworks.KEY):
 		return
 	var cat: Variant = ModelCatalog.find(str(rec.get("model_id", ""))).get("earthworks", null)
@@ -256,7 +259,7 @@ static func update_prop_record(main: Node, prop_id: String, patch: Dictionary,
 
 
 static func _update_prop_record_depth(main: Node, prop_id: String, patch: Dictionary, depth: int,
-		rebuild_prop: bool = true) -> bool:
+		rebuild_prop: bool = true, save: bool = true) -> bool:
 	if main == null or prop_id.is_empty() or patch.is_empty():
 		return false
 	var layer := _layer_for_main(main)
@@ -268,6 +271,8 @@ static func _update_prop_record_depth(main: Node, prop_id: String, patch: Dictio
 		light_from = layer.find_by_id(prop_id).duplicate(true)
 	if not layer.update_prop(prop_id, patch.duplicate(true)):
 		return false
+	if patch.has(PlacedPropHosts.KEY):
+		PlacedPropHosts.invalidate()
 	if not light_from.is_empty():
 		PlacedLightService.follow_prop(main, prop_id, light_from, layer.find_by_id(prop_id))
 	if rebuild_prop:
@@ -290,7 +295,10 @@ static func _update_prop_record_depth(main: Node, prop_id: String, patch: Dictio
 	# array (the graph's tilt / azimuth) follows its own pose.
 	for k2 in ["x", "z", "yaw", "pitch", "roll", "y_offset", "scale"]:
 		if patch.has(k2):
-			_reseat_hosted(main, prop_id, depth)
+			# A direct call respawns the children's nodes; a nested one (a
+			# child following its host) does what its caller asked.
+			PlacedPropHosts.follow(main, prop_id, depth,
+				PlacedPropHosts.NODES_REBUILD if (rebuild_prop or depth == 0) else PlacedPropHosts.NODES_NONE)
 			if str(layer.find_by_id(prop_id).get("model_id", "")) == PvLabBuilder.MODEL_ID:
 				Callable(PlacedPropService, "seed_pvlab_graph").call_deferred(main, prop_id)
 			_reseat_cargo(main, layer, prop_id)
@@ -299,9 +307,11 @@ static func _update_prop_record_depth(main: Node, prop_id: String, patch: Dictio
 	# read their records again.
 	if (patch.has("arrival") or patch.has("departure") or patch.has("hitched_to")) and main.is_inside_tree():
 		main.get_tree().call_group(VehicleDriveRuntime.GROUP, "wake")
-	# One save for the record and everything that moved with it (its cargo).
-	_save_layer(main, layer)
-	_notify_mp_props_edited()
+	# One save for the record and everything that moved with it (its cargo,
+	# its hosted children — they are written with save=false).
+	if save:
+		_save_layer(main, layer)
+		_notify_mp_props_edited()
 	return true
 
 
@@ -357,6 +367,8 @@ static func move_prop_at(main: Node, prop_id: String, x: float, z: float,
 	if not layer.update_prop(prop_id, patch):
 		return false
 	PlacedLightService.follow_prop(main, prop_id, light_from, layer.find_by_id(prop_id))
+	# What stands on it (beds in a greenhouse, an array on a roof) comes along.
+	PlacedPropHosts.follow(main, prop_id)
 	_save_layer(main, layer)
 	_reposition_scene_prop(main, layer, prop_id)
 	if glide_from != Vector3.INF:
@@ -654,57 +666,24 @@ static func _commit_pvlab(main: Node) -> String:
 		float(pr["yaw"]), true, float(pr["pitch"]), float(pr["roll"]), float(pr["y_offset"]))
 
 
+## Kept for callers; the host rule lives in PlacedPropHosts.
 static func _xf_to_array(t: Transform3D) -> Array:
-	return [t.basis.x.x, t.basis.x.y, t.basis.x.z, t.basis.y.x, t.basis.y.y, t.basis.y.z,
-		t.basis.z.x, t.basis.z.y, t.basis.z.z, t.origin.x, t.origin.y, t.origin.z]
+	return PlacedPropHosts.xf_to_array(t)
 
 
 static func _xf_from_array(a: Array) -> Transform3D:
-	if a.size() < 12:
-		return Transform3D.IDENTITY
-	return Transform3D(Basis(Vector3(float(a[0]), float(a[1]), float(a[2])), Vector3(float(a[3]), float(a[4]), float(a[5])),
-		Vector3(float(a[6]), float(a[7]), float(a[8]))), Vector3(float(a[9]), float(a[10]), float(a[11])))
+	return PlacedPropHosts.xf_from_array(a)
 
 
-## Props standing on `host_id` (a solar array on a shed roof) follow it: their
-## pose in the host's frame, applied to the host's new pose.
+## Props standing on `host_id` follow it (PlacedPropHosts.follow).
 static func _reseat_hosted(main: Node, host_id: String, depth: int = 0) -> void:
-	if depth > 3:
-		return
-	var layer := _layer_for_main(main)
-	if layer == null:
-		return
-	var host_rec := layer.find_by_id(host_id)
-	if host_rec.is_empty():
-		return
-	var host_xf := PvSurfaceAim.record_xf(main, host_rec)
-	for rec in layer.props.duplicate():
-		var mh: Variant = (rec as Dictionary).get("mount_host")
-		if not (mh is Dictionary) or str((mh as Dictionary).get("kind", "")) != "prop" \
-				or str((mh as Dictionary).get("id", "")) != host_id:
-			continue
-		var loc: Variant = (mh as Dictionary).get("local")
-		if not (loc is Array):
-			continue
-		var nxf := host_xf * _xf_from_array(loc as Array)
-		var pr := PvSurfaceAim.record_patch_for(main, str((rec as Dictionary).get("model_id", "")), nxf)
-		_update_prop_record_depth(main, str((rec as Dictionary).get("id", "")), pr, depth + 1)
+	PlacedPropHosts.follow(main, host_id, depth)
 
 
-## A host is deleted: what stood on it comes down to the ground under it.
+## A host is deleted: what stood on it (and is not part of it) comes down to
+## the ground under it (PlacedPropHosts.release).
 static func release_hosted(main: Node, host_id: String) -> int:
-	var layer := _layer_for_main(main)
-	if layer == null:
-		return 0
-	var n := 0
-	for rec in layer.props.duplicate():
-		var mh: Variant = (rec as Dictionary).get("mount_host")
-		if mh is Dictionary and str((mh as Dictionary).get("kind", "")) == "prop" \
-				and str((mh as Dictionary).get("id", "")) == host_id:
-			update_prop_record(main, str((rec as Dictionary).get("id", "")),
-				{"y_offset": 0.0, "pitch": 0.0, "roll": 0.0, "mount_host": null}, true)
-			n += 1
-	return n
+	return PlacedPropHosts.release(main, host_id)
 
 
 static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
@@ -728,6 +707,8 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 	var record_extra := prep.get("record_extra", {}) as Dictionary
 	if not record_extra.is_empty():
 		layer.update_prop(prop_id, record_extra.duplicate(true))
+		if record_extra.has(PlacedPropHosts.KEY):
+			PlacedPropHosts.invalidate()
 	# Create + bind the 2D graph node for a linked generator (VAWT), stamping the
 	# resulting item id back onto the record so save/reload keeps the link.
 	var graph_link := prep.get("graph_link", {}) as Dictionary
@@ -1789,7 +1770,7 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 	# must build THAT design, not the builder's default (a concentrator's
 	# ghost was always the default dish).
 	var rec_extra_d: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
-	for dk in ["csplab_spec", "windlab_spec", "pelton_spec", "tc_spec", "esp_spec", "farmbot_spec", "earthship_spec", "building_spec"]:
+	for dk in ["csplab_spec", "windlab_spec", "pelton_spec", "tc_spec", "esp_spec", "farmbot_spec", "earthship_spec", "building_spec", "greenhouse_spec", "light_rack_spec", "grow_bed_spec"]:
 		if rec_extra_d.has(dk) and not extras.has(dk):
 			extras[dk] = rec_extra_d[dk]
 	var model := ModelCatalog.instantiate(model_id, extras)
@@ -2015,6 +1996,7 @@ static func mp_upsert_record(main: Node, rec: Dictionary, glide_s: float = 0.25)
 		return false
 	var live := layer.find_by_id(id)
 	var pose_only := false
+	PlacedPropHosts.invalidate()
 	if live.is_empty():
 		layer.props.append(rec.duplicate(true))
 	else:

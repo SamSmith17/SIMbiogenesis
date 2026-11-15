@@ -176,6 +176,12 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 	if model_id == EarthshipBuilder.MODEL_ID:
 		var es_spec: Dictionary = extras.get("earthship_spec", extras) as Dictionary
 		return EarthshipBuilder.build_node(es_spec, "Earthship")
+	if model_id == GreenhouseBuilder.MODEL_ID:
+		var gh_spec: Dictionary = extras.get(GreenhouseSpec.KEY, extras) as Dictionary
+		return GreenhouseBuilder.build_node(gh_spec, "Greenhouse")
+	if model_id == GrowLightRack.MODEL_ID:
+		var lr_spec: Dictionary = extras.get(GrowLightRack.KEY, extras) as Dictionary
+		return GrowLightRack.build_node(lr_spec, "GrowLights")
 	if model_id == ToroidLabBuilder.MODEL_ID:
 		var tl_spec: Dictionary = extras.get("toroid_spec", extras) as Dictionary
 		return ToroidLabBuilder.build_node(tl_spec, "ToroidStructure",
@@ -804,6 +810,14 @@ static func _shipped_models() -> Array[Dictionary]:
 		# A designed Earthship (core/earthshiplab/, record key earthship_spec);
 		# placing one stamps its earthworks (bermed, sunk, an opening over the
 		# rooms) from the design.
+		# A greenhouse from the Greenhouse designer (core/greenhouselab/,
+		# record key greenhouse_spec): the shell; its beds, FarmBot beds and
+		# light racks are their own props mounted on it (GreenhouseParts).
+		{"id": "greenhouse_structure", "label": "Greenhouse (designed)",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"walk_in": true},
+		{"id": "grow_light_rack", "label": "Grow-light rack",
+			"procedural": true, "preserve_scale": true, "category": "tools"},
 		{"id": "earthshiplab_structure", "label": "Earthship (designed)",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"walk_in": true},

@@ -14582,9 +14582,13 @@ func _replace_osm_from_pick(pick: Dictionary, model_id: String) -> bool:
 	return true
 
 
-func delete_prop_by_id(prop_id: String) -> bool:
+func delete_prop_by_id(prop_id: String, rebuild: bool = true) -> bool:
 	if _placed_prop_layer == null:
 		return false
+	# What is PART of it (a greenhouse's beds, mount_host.owned) goes with it,
+	# first, with one rebuild at the end.
+	for cid in PlacedPropHosts.owned_children(_placed_prop_layer, prop_id):
+		delete_prop_by_id(str(cid), false)
 	# A live-foldable linkage structure owns a per-prop graph solar array —
 	# drop it so deleting the structure doesn't orphan its power contribution.
 	var rec := _placed_prop_layer.find_by_id(prop_id)
@@ -14614,6 +14618,9 @@ func delete_prop_by_id(prop_id: String) -> bool:
 		var sgv := ServiceLocator.graph()
 		if sgv != null and sgv.has_method("remove_items_bound_to_prop"):
 			sgv.call("remove_items_bound_to_prop", prop_id)
+	PlacedPropHosts.invalidate()
+	if not rebuild:
+		return true
 	_save_props_and_share()
 	_attach_buildings()
 	_rebuild_placed_props()
@@ -14634,7 +14641,7 @@ func get_prop_record(prop_id: String) -> Dictionary:
 ## first (the stow sweep IS the packing) and only then swaps in the crate;
 ## unpacking swaps the crate for the stowed frame and plays the deploy
 ## sweep — so pack/unpack reads as one continuous motion, never a teleport.
-func set_prop_packed(prop_id: String, packed: bool) -> void:
+func set_prop_packed(prop_id: String, packed: bool, rebuild: bool = true) -> void:
 	if _placed_prop_layer == null or prop_id.is_empty():
 		return
 	if _pack_anim_in_flight.has(prop_id):
@@ -14677,8 +14684,16 @@ func set_prop_packed(prop_id: String, packed: bool) -> void:
 				return
 	if not _placed_prop_layer.update_prop(prop_id, {"packed": packed}):
 		return
-	_save_props_and_share()
-	_rebuild_placed_props()
+	# Its parts (mount_host.owned) pack and unpack with it, before the one
+	# rebuild below. A linkage part animates and rebuilds on its own.
+	for cid in PlacedPropHosts.owned_children(_placed_prop_layer, prop_id):
+		var crec := _placed_prop_layer.find_by_id(str(cid))
+		if bool(crec.get("packed", false)) != packed:
+			set_prop_packed(str(cid), packed,
+				str(crec.get("model_id", "")) == LinkageStructureBuilder.MODEL_ID)
+	if rebuild or is_linkage:
+		_save_props_and_share()
+		_rebuild_placed_props()
 	var sgv: Node = ServiceLocator.graph()
 	if is_linkage:
 		if sgv != null and sgv.has_method("set_imported_array_stowed"):
@@ -15511,8 +15526,13 @@ func update_prop_record(prop_id: String, patch: Dictionary) -> void:
 		light_from = _placed_prop_layer.find_by_id(prop_id).duplicate(true)
 	if not _placed_prop_layer.update_prop(prop_id, patch):
 		return
+	if patch.has(PlacedPropHosts.KEY):
+		PlacedPropHosts.invalidate()
 	if not light_from.is_empty() and _main != null:
 		PlacedLightService.follow_prop(_main, prop_id, light_from, _placed_prop_layer.find_by_id(prop_id))
+	# What stands on it comes along; every node is rebuilt below.
+	if _main != null and PlacedPropHosts.patch_moves(patch):
+		PlacedPropHosts.follow(_main, prop_id, 0, PlacedPropHosts.NODES_NONE)
 	_save_props_and_share()
 	_attach_buildings()
 	_rebuild_placed_props()
@@ -15548,9 +15568,10 @@ func set_prop_fire_plan(prop_id: String, plan: Dictionary) -> void:
 
 ## A copy of a prop record (already offset by the caller) as a new free prop.
 ## Returns the new id, "" when the layer is full.
-func duplicate_prop_record(copy: Dictionary) -> String:
+func duplicate_prop_record(copy: Dictionary, rebuild: bool = true) -> String:
 	if _placed_prop_layer == null or copy.is_empty():
 		return ""
+	var source_id := _duplicate_source_id(copy)
 	var mid := str(copy.get("model_id", ""))
 	var new_id := _placed_prop_layer.add_free_prop(mid, float(copy.get("x", 0.0)),
 		float(copy.get("y_offset", 0.0)), float(copy.get("z", 0.0)),
@@ -15563,13 +15584,79 @@ func duplicate_prop_record(copy: Dictionary) -> String:
 			"y", "ground_y", "building_idx",
 			# A copy is its own thing: no delivery, hitch, schedule or load.
 			"delivery", "towing", "hitched_to", "arrival", "departure", "fork_load_id",
-			"stowed_in", "stow_local", "unload_rank", "delivery_id", "delivery_slot", "camp_id"]:
+			"stowed_in", "stow_local", "unload_rank", "delivery_id", "delivery_slot", "camp_id",
+			"dup_of"]:
 		patch.erase(k)
 	if not patch.is_empty():
 		_placed_prop_layer.update_prop(new_id, patch)
-	_save_props_and_share()
-	_rebuild_placed_props()
+	if _main != null:
+		_duplicate_hosted(source_id, new_id, copy)
+	if rebuild:
+		_save_props_and_share()
+		_rebuild_placed_props()
 	return new_id
+
+
+## The record a duplicate was copied from: its "dup_of" (or "id"), else the
+## nearest record of the same model with parts on it whose other keys match
+## the copy (the prop editor erases the id before handing the copy over).
+## "" = none.
+func _duplicate_source_id(copy: Dictionary) -> String:
+	for k in ["dup_of", "id"]:
+		var sid := str(copy.get(k, ""))
+		if not sid.is_empty() and not _placed_prop_layer.find_by_id(sid).is_empty():
+			return sid
+	var skip := ["id", "x", "y", "z", "y_offset", "yaw", "pitch", "roll", "scale", "ground_y",
+		"burn", "graph_item_id", "stowed_in", "stow_local", "packed", "build_state", "build_run",
+		"delivery", "camp_id", "dup_of"]
+	var mid := str(copy.get("model_id", ""))
+	var at := Vector2(float(copy.get("x", 0.0)), float(copy.get("z", 0.0)))
+	var best := ""
+	var best_d := INF
+	for rec in _placed_prop_layer.props:
+		if not (rec is Dictionary) or str((rec as Dictionary).get("model_id", "")) != mid:
+			continue
+		var r := rec as Dictionary
+		if PlacedPropHosts.owned_children(_placed_prop_layer, str(r.get("id", ""))).is_empty():
+			continue
+		var same := true
+		for k in copy:
+			if not (k in skip) and str(r.get(k)) != str(copy[k]):
+				same = false
+				break
+		if not same:
+			continue
+		var d := at.distance_to(Vector2(float(r.get("x", 0.0)), float(r.get("z", 0.0))))
+		if d < best_d:
+			best_d = d
+			best = str(r.get("id", ""))
+	return best
+
+
+## A duplicate's host links: a copied child keeps its host, at its own new
+## spot; the source's own parts (owned children) are copied onto the copy at
+## the same place in its frame.
+func _duplicate_hosted(source_id: String, new_id: String, copy: Dictionary) -> void:
+	var host := PlacedPropHosts.host_of(copy)
+	if not host.is_empty():
+		PlacedPropHosts.attach(_main, new_id, host, PlacedPropHosts.is_owned(copy))
+	if source_id.is_empty() or source_id == new_id:
+		return
+	var new_xf := PlacedPropHosts.record_frame(_main, _placed_prop_layer.find_by_id(new_id))
+	for cid in PlacedPropHosts.owned_children(_placed_prop_layer, source_id):
+		var crec := _placed_prop_layer.find_by_id(str(cid))
+		var link := PlacedPropHosts.link_of(crec)
+		if crec.is_empty() or not (link.get("local") is Array):
+			continue
+		var ccopy := crec.duplicate(true)
+		for k in ["burn", "graph_item_id", "build_state", "build_run"]:
+			ccopy.erase(k)
+		ccopy.merge(PlacedPropHosts.child_patch(_main, crec,
+			PlacedPropHosts.carried(new_xf, link["local"])), true)
+		ccopy["dup_of"] = str(cid)
+		ccopy[PlacedPropHosts.KEY] = {"kind": "prop", "id": new_id,
+			"local": (link["local"] as Array).duplicate(), "owned": true}
+		duplicate_prop_record(ccopy, false)
 
 
 ## Restore / "forget the fire": the FireNode disposes itself on its next frame.
@@ -15718,6 +15805,8 @@ func preview_prop(prop_id: String, patch: Dictionary) -> void:
 			PlacedPropRuntime.apply_record_to_prop(child as PlacedProp, rec, Callable(self, "_ground_height_at"))
 			# The lights on it follow the preview (their records move on commit).
 			PlacedLightService.follow_prop(_main, prop_id, saved, rec, false)
+			# So do the props standing on it (nodes only; records on commit).
+			PlacedPropHosts.preview(_main, prop_id, PlacedPropHosts.record_frame(_main, rec))
 			return
 
 
@@ -15735,6 +15824,8 @@ func save_prop_from_node(prop: PlacedProp) -> void:
 	_placed_prop_layer.update_prop(prop.prop_id, patch)
 	if _main != null:
 		PlacedLightService.follow_prop(_main, prop.prop_id, light_from, _placed_prop_layer.find_by_id(prop.prop_id))
+		# The props standing on it are carried to where it was dropped.
+		PlacedPropHosts.follow(_main, prop.prop_id)
 	_save_props_and_share()
 
 

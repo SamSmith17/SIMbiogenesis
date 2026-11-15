@@ -735,6 +735,8 @@ func _rebuild_for_item(item: Dictionary) -> void:
 		_build_shelly4pm_controls_section(item)
 	if itype == "compound":
 		_build_compound_section(item)
+	if str((item.get("specs", {}) as Dictionary).get("gh_role", "")) in ["fans", "heater", "lights", "vents"]:
+		_build_greenhouse_manual_row(item)
 
 	# Optional LIVE twin + calibration - tucked under Advanced so the default
 	# inspector stays focused on simulation gameplay.
@@ -4853,6 +4855,30 @@ func _set_spec(item_id: String, key: String, value: Variant) -> void:
 	_model.update_item(item_id, {"specs": specs})
 
 
+## A greenhouse's fan / heater / lamp / vent load: the house's controller runs
+## it unless the player (or a rule writing specs.gh_manual) says on or off.
+func _build_greenhouse_manual_row(item: Dictionary) -> void:
+	_section("Greenhouse control")
+	var iid := str(item.get("id", ""))
+	var cur := str((item.get("specs", {}) as Dictionary).get("gh_manual", ""))
+	var ob := OptionButton.new()
+	ob.focus_mode = Control.FOCUS_NONE
+	ob.tooltip_text = "Who switches it: the greenhouse's controller (its setpoints), or always on / off"
+	var opts := [["", "Controller decides"], ["on", "Always on"], ["off", "Always off"]]
+	for i in opts.size():
+		ob.add_item(str(opts[i][1]), i)
+		if str(opts[i][0]) == cur:
+			ob.select(i)
+	ob.item_selected.connect(func(i: int) -> void:
+		var it := _model.get_item(iid) if _model != null else {}
+		if it.is_empty():
+			return
+		var sp: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+		sp["gh_manual"] = str(opts[i][0])
+		_model.update_item(iid, {"specs": sp}))
+	_form_vbox.add_child(ob)
+
+
 func _build_compound_section(item: Dictionary) -> void:
 	_section("Nested Graph")
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
@@ -4878,6 +4904,31 @@ func _build_compound_section(item: Dictionary) -> void:
 		_readonly_field("Combined draw", "%.0f W" % float(specs.get("avg_watts", 0.0)))
 		_readonly_field("Rated max", "%.0f W" % float(specs.get("max_watts", 0.0)))
 		_readonly_field("Summary", str(specs.get("summary", "")))
+	if bool(specs.get("greenhouse_system", false)):
+		_section("Greenhouse")
+		if specs.has("gh_t_air"):
+			_readonly_field("Inside", "%.1f °C · %d %% RH" % [float(specs["gh_t_air"]), int(specs.get("gh_rh", 0))])
+			_readonly_field("Outside", "%.1f °C" % float(specs.get("gh_t_out", 0.0)))
+			_readonly_field("Water barrels", "%.1f °C" % float(specs.get("gh_t_water", 0.0)))
+			_readonly_field("Light today", "%.1f mol/m²" % float(specs.get("gh_dli", 0.0)))
+			_readonly_field("Vents", "%d %% open" % int(specs.get("gh_vent_pct", 0)))
+			var on: PackedStringArray = PackedStringArray()
+			for k in [["gh_fans", "fans"], ["gh_heater", "heater"], ["gh_lights", "lamps"]]:
+				if bool(specs.get(k[0], false)):
+					on.append(str(k[1]))
+			_readonly_field("Running", ", ".join(on) if not on.is_empty() else "nothing")
+			_readonly_field("Electricity", "%.0f W" % float(specs.get("gh_power_w", 0.0)))
+		else:
+			_readonly_field("Inside", "starts with the clock")
+		var gh_prop := str(specs.get("greenhouse_prop_id", ""))
+		var gh_btn := Button.new()
+		gh_btn.text = "Open in Greenhouse designer"
+		gh_btn.focus_mode = Control.FOCUS_NONE
+		gh_btn.tooltip_text = "Change the house, its beds, lamps, vents or controller"
+		gh_btn.pressed.connect(func() -> void:
+			load("res://scenes/ui/greenhouselab_modal.gd").call("open", get_tree(), {"prop_id": gh_prop}))
+		_form_vbox.add_child(gh_btn)
+		_readonly_field("Rules", "greenhouse.<name>.temp / .rh / .dli / .vent in automations; set a fan, heater or lamp node's Manual to on / off to take it from the controller")
 	if specs.has("pv_wp") or specs.has("battery_kwh") or specs.has("camp_lot_id"):
 		_section("Camp power")
 		_readonly_field("Solar", "%.0f W" % float(specs.get("pv_wp", 0.0)))

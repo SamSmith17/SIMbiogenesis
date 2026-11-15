@@ -952,6 +952,12 @@ func _rebuild_dynamic_sections() -> void:
 	if mid == EarthshipBuilder.MODEL_ID:
 		_button("Edit Earthship…", "The Earthship designer, bound to this one (its earthworks follow the design)",
 			_model_btns, _on_earthship)
+	if mid == GreenhouseBuilder.MODEL_ID:
+		_button("Edit greenhouse…", "The greenhouse designer, bound to this one (its beds, gantries and lights follow the design)",
+			_model_btns, _on_greenhouse)
+	elif not str(_rec.get(GreenhouseParts.KEY, "")).is_empty():
+		_button("Edit its greenhouse…", "This is part of a greenhouse: open the designer on the house it stands in",
+			_model_btns, _on_greenhouse)
 	if VehicleBuilder.handles(mid):
 		_button("Edit vehicle…", "The vehicle designer, bound to this vehicle", _model_btns, _on_vehiclelab)
 		var pv := prop.get_node_or_null("PlacedVehicle") if prop != null else null
@@ -1811,6 +1817,16 @@ func _on_unhitch() -> void:
 	if main != null:
 		PlacedVehicle.unhitch_prop(main, _prop_id)
 		_rec = PlacedPropService.get_prop_record(main, _prop_id)
+
+
+func _on_greenhouse() -> void:
+	var pid := _prop_id
+	var host := PlacedPropHosts.host_of(_rec)
+	if str(_rec.get("model_id", "")) != GreenhouseBuilder.MODEL_ID and not host.is_empty():
+		pid = host
+	var tree := get_tree()
+	close()
+	load("res://scenes/ui/greenhouselab_modal.gd").call("open", tree, {"prop_id": pid})
 
 
 func _on_earthship() -> void:

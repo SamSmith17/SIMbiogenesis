@@ -231,6 +231,14 @@ const DYNAMIC_MODELS := {
 	"intermodal_unit": {"w_m": 1.219, "d_m": 1.016, "h_m": 0.140,
 		"mass_kg": 20.0, "form": "pallet", "source": "estimated",
 		"this_side_up": true},
+	# A designed greenhouse ships as its frame bundle and rolled / stacked
+	# glazing; the real spec is GreenhouseDesign.packed_spec (the record's
+	# greenhouse_spec). This fallback is the default 6 x 14 m hoop house.
+	"greenhouse_structure": {"w_m": 6.0, "d_m": 0.6, "h_m": 0.5,
+		"mass_kg": 480.0, "form": "bundle", "source": "estimated"},
+	# A rack of LED bars boxed with its hangers.
+	"grow_light_rack": {"w_m": 1.3, "d_m": 0.4, "h_m": 0.25,
+		"mass_kg": 14.0, "form": "crate", "source": "estimated"},
 	# ForkliftBuilder: a 2.5 t electric counterbalance truck (service mass).
 	"vehicle_forklift": {"w_m": 3.6, "d_m": 1.15, "h_m": 2.1,
 		"mass_kg": 4100.0, "form": "folded", "source": "curated",

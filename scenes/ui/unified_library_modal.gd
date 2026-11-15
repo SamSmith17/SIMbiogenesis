@@ -301,6 +301,8 @@ func _populate() -> void:
 			"Sanitary fittings snapped into process runs: reactors, stills, kettles.", "tclab_biochar_reactor", "workflow"),
 		_designer("esplab", "ESP sensor boards",
 			"Pick a board, add sensors; it wires them and writes the ESPHome YAML.", "esplab_board", "cpu"),
+		_designer("greenhouse", "Greenhouses",
+			"Gable, lean-to, hoop, gothic and dome greenhouses with beds, FarmBots, grow lights, vents, barrels and rain.", GreenhouseBuilder.MODEL_ID, "sprout"),
 		_designer("earthship", "Earthships",
 			"Tyre-wall rooms sunk into the ground behind a sloped greenhouse; digs and berms the site.",
 			EarthshipBuilder.MODEL_ID, "house"),
@@ -632,6 +634,11 @@ func _activate(e: Dictionary, force_place: bool) -> void:
 				close()
 			else:
 				_status.text = "Pallet rack builder needs a location map (TerrainLoader)."
+		"greenhouse":
+			var ghm: GDScript = load("res://scenes/ui/greenhouselab_modal.gd")
+			var gtree: SceneTree = get_tree()
+			close()
+			ghm.call("open", gtree)
 		"earthship":
 			var esm: GDScript = load("res://scenes/ui/earthshiplab_modal.gd")
 			var etree: SceneTree = get_tree()

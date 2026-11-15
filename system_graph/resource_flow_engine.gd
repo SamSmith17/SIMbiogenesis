@@ -138,6 +138,14 @@ var _conn_flow: Dictionary = {}
 ## processor_id -> { "state": String, "elapsed": float, "penalty_qty": float }
 var _processor_states: Dictionary = {}
 
+## Greenhouses (a compound with specs.greenhouse_system): the climate state
+## per compound (GreenhouseClimate), its model cached by signature, and the
+## last step's inside climate the beds grow from.
+var _gh_state: Dictionary = {}
+var _gh_models: Dictionary = {}
+var _gh_climate: Dictionary = {}
+var _gh_last_h: Dictionary = {}
+
 ## Per-tick adjacency index, rebuilt once at the top of _simulate_step() by
 ## _rebuild_conn_index(). Resolving a processor's I/O ports used to re-scan
 ## every connection in the graph per port (_tank_at_port /
@@ -500,6 +508,9 @@ func internal_state_snapshot() -> Dictionary:
 		"scope_ac_available": _scope_ac_available.duplicate(true),
 		"supply_profiles": _supply_profiles.duplicate(true),
 		"stream_diversions": _stream_diversions.duplicate(true),
+		"gh_state": _gh_state.duplicate(true),
+		"gh_climate": _gh_climate.duplicate(true),
+		"gh_last_h": _gh_last_h.duplicate(true),
 		"last_abs_hours": _last_abs_hours,
 	}
 
@@ -513,6 +524,9 @@ func restore_internal_state(snap: Dictionary) -> void:
 	_scope_ac_available = (snap.get("scope_ac_available", {}) as Dictionary).duplicate(true)
 	_supply_profiles = (snap.get("supply_profiles", {}) as Dictionary).duplicate(true)
 	_stream_diversions = (snap.get("stream_diversions", {}) as Dictionary).duplicate(true)
+	_gh_state = (snap.get("gh_state", {}) as Dictionary).duplicate(true)
+	_gh_climate = (snap.get("gh_climate", {}) as Dictionary).duplicate(true)
+	_gh_last_h = (snap.get("gh_last_h", {}) as Dictionary).duplicate(true)
 	_last_abs_hours = float(snap.get("last_abs_hours", _last_abs_hours))
 
 
@@ -844,6 +858,12 @@ func _simulate_step(abs_hours: float, dt_hours: float) -> void:
 	# Per-tank net rates (qty/hour in tank's capacity units)
 	var net_rates: Dictionary = {}
 
+	# Greenhouses first: their beds grow from the climate they make.
+	for item: Dictionary in _model.items_of_type("compound"):
+		if bool((item.get("specs", {}) as Dictionary).get("greenhouse_system", false)):
+			_process_greenhouse(item, dt_hours, abs_hours)
+			_gh_exchange(item, net_rates, dt_hours, abs_hours)
+
 	for item: Dictionary in _model.items:
 		var ty: String = str(item.get("type", ""))
 		if ty == "pbi":
@@ -1062,6 +1082,244 @@ func _process_food_forest(item: Dictionary, specs: Dictionary,
 ## sunlight — same SoI GHI whether or not a radiant wire is drawn), gated by
 ## wired water (required) and optional nutrients. Credits a biomass tank.
 ## Biomass is a downstream consequence of sunlight — not a separate PBI.
+## The mean over a bed's crops of their temperature × humidity response
+## (CropPhysiology), 0..1 — a greenhouse bed's growth multiplier.
+func _gh_crop_factor(mix: Variant, t_c: float, vpd: float) -> float:
+	var ids := GreenhouseSpec.mix_crops(mix)
+	if ids.is_empty():
+		return 1.0
+	var s := 0.0
+	for id in ids:
+		s += CropPhysiology.temp_factor(str(id), t_c) * CropPhysiology.vpd_factor(str(id), vpd)
+	return s / float(ids.size())
+
+
+## One greenhouse compound: its climate stepped by `dt_hours` with the built-in
+## controller (GreenhouseClimate / GreenhouseControl), the house's loads
+## switched to what the controller wants (so the AC draw follows), the inside
+## climate written on the compound and kept for its beds. A forward integrator
+## like the camps' power: a scrub back holds it, a jump past 6 h starts it again
+## from the outside air. Packed: nothing runs.
+func _process_greenhouse(item: Dictionary, dt_hours: float, abs_hours: float) -> void:
+	var cid := str(item.get("id", ""))
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if bool(specs.get("packed_3d", false)) or not (specs.get("gh_spec", null) is Dictionary):
+		_gh_climate.erase(cid)
+		return
+	var m := _gh_model(cid, specs)
+	if m.is_empty():
+		return
+	var atmo := _atmosphere_sample()
+	var t_out := float(atmo.get("temp_c", 15.0))
+	var rh_out := float(atmo.get("humidity_pct", 60.0))
+	var last := float(_gh_last_h.get(cid, -1.0))
+	var sun := _gh_sun(abs_hours)
+	var doy := float(sun.get("doy", 180.0))
+	if not _gh_state.has(cid) or last < 0.0 or abs_hours - last > 6.0:
+		_gh_state[cid] = GreenhouseClimate.initial_state(m, t_out, rh_out, doy)
+	elif abs_hours < last - 1e-4:
+		return
+	var dt := clampf(abs_hours - last, 0.0, 6.0) if last >= 0.0 else dt_hours
+	_gh_last_h[cid] = abs_hours
+	if dt <= 1e-6:
+		return
+	var st: Dictionary = _gh_state[cid]
+	var kids := GreenhouseGraph.children_by_role(_model, cid)
+	var power_ok := _ac_output_available() and _gh_has_ac(cid, kids)
+	var ovr := {}
+	for role in ["fans", "heater", "lights", "vents"]:
+		for c in kids.get(role, []):
+			var man := str(((c as Dictionary).get("specs", {}) as Dictionary).get("gh_manual", ""))
+			if man == "on" or man == "off":
+				ovr["vent" if role == "vents" else role] = (1.0 if role == "vents" else 1) if man == "on" else 0
+	var lai := 0.0
+	var nb := 0
+	for c in kids.get("bed", []):
+		var bs: Dictionary = (c as Dictionary).get("specs", {})
+		lai += GreenhouseCrops.LAI_FULL * clampf(float(bs.get("established_pct", 100.0)) / 100.0, 0.05, 1.0)
+		nb += 1
+	var inp := {"t_out": t_out, "rh_out": rh_out, "wind": float(atmo.get("wind_ms", 2.0)),
+		"ghi": _sun_ghi_wm2(), "cloud": _sun_cloud_frac(), "sun_az": float(sun.get("az", 180.0)),
+		"sun_el": float(sun.get("el", -10.0)), "rain_mmh": _rain_rate_mmh(), "doy": doy,
+		"hour": float(sun.get("hour", 12.0)), "abs_h": abs_hours, "has_real": bool(atmo.get("has_real", false)),
+		"power_ok": power_ok, "lai": lai / float(nb) if nb > 0 else 0.0, "override": ovr}
+	var o := GreenhouseClimate.step(m, st, inp, dt)
+	# The loads follow the controller (their AC draw is what the site pays).
+	var want := {"fans": bool(o["fans"]), "heater": bool(o["heater"]), "lights": bool(o["lights"]),
+		"vents": float(o["vent"]) > 0.02 and float(o["vent"]) < 0.98}
+	for role in want:
+		for c in kids.get(role, []):
+			var cd: Dictionary = c
+			var cs: Dictionary = cd.get("specs", {})
+			var on := "on" if bool(want[role]) else "off"
+			if str(cs.get("requested_state", "")) != on:
+				var ns := cs.duplicate(true)
+				ns["requested_state"] = on
+				_model.update_item(str(cd["id"]), {"specs": ns})
+	var lit := {}
+	for c in kids.get("lights", []):
+		var ls: Dictionary = (c as Dictionary).get("specs", {})
+		if bool(o["lights"]):
+			if ls.has("gh_bed"):
+				lit[str(ls["gh_bed"])] = true
+			else:
+				for b in kids.get("bed", []):
+					lit[str(((b as Dictionary).get("specs", {}) as Dictionary).get("gh_bed", ""))] = true
+	var ppfd_sun := float(o["ppfd_sun"])
+	var ppfd_lamp := float(m["ppfd_lights"]) if bool(o["lights"]) else 0.0
+	_gh_climate[cid] = {"t_air": float(o["t_air"]), "vpd": float(o["vpd"]), "rh": float(o["rh"]),
+		"par_sun_wm2": ppfd_sun / GreenhouseClimate.UMOL_PER_J_PAR,
+		"par_lit_wm2": (ppfd_sun + ppfd_lamp) / GreenhouseClimate.UMOL_PER_J_PAR, "lit_beds": lit}
+	var tel := {"gh_t_air": snappedf(float(o["t_air"]), 0.1), "gh_rh": snappedf(float(o["rh"]), 1.0),
+		"gh_t_out": snappedf(t_out, 0.1), "gh_vent_pct": roundf(float(o["vent"]) * 100.0),
+		"gh_fans": bool(o["fans"]), "gh_heater": bool(o["heater"]), "gh_lights": bool(o["lights"]),
+		"gh_dli": snappedf(float(o["dli"]), 0.1), "gh_ppfd": roundf(float(o["ppfd"])),
+		"gh_t_water": snappedf(float(o["t_water"]), 0.1), "gh_cond_lph": snappedf(float(o["cond_lph"]), 0.01),
+		"gh_power_w": roundf(float(o["power_w"])), "gh_frost": float(o["t_air"]) < 0.0,
+		"gh_power_ok": power_ok or (kids.get("fans", []).is_empty() and kids.get("heater", []).is_empty()
+			and kids.get("lights", []).is_empty() and kids.get("vents", []).is_empty())}
+	var changed := false
+	for k in tel:
+		var a: Variant = specs.get(k, null)
+		var b: Variant = tel[k]
+		if a == null or (b is float and absf(float(a) - float(b)) > 0.05) or (not (b is float) and a != b):
+			changed = true
+			break
+	if changed:
+		var ns2 := specs.duplicate(true)
+		for k in tel:
+			ns2[k] = tel[k]
+		ns2["display_value"] = "%.0f °C · %d %%" % [float(o["t_air"]), int(round(float(o["rh"])))]
+		_model.update_item(cid, {"specs": ns2})
+
+
+## A greenhouse trades with what is wired to its ports: its own tank and
+## nutrient store are topped up (to GH_TOPUP) from the stores wired into
+## water_in / nutrients_in, as a gardener fills the watering tank, and the
+## harvest crate and residue bin are emptied into the stores wired to
+## food_out / biomass_out. Without it a plain wire into a port moves nothing
+## (tanks pass contents on only when flagged jit_outflow).
+const GH_TOPUP := 0.6
+const GH_PORTS := {"water_in": ["tank", true], "nutrients_in": ["nutrients", true],
+	"food_out": ["harvest", false], "biomass_out": ["residue", false]}
+
+
+func _gh_exchange(item: Dictionary, net_rates: Dictionary, dt_hours: float, abs_h: float) -> void:
+	if dt_hours <= 1e-6 or bool((item.get("specs", {}) as Dictionary).get("packed_3d", false)):
+		return
+	var cid := str(item.get("id", ""))
+	var kids := GreenhouseGraph.children_by_role(_model, cid)
+	for c in _model.connections:
+		var cd: Dictionary = c
+		var port := ""
+		var other := ""
+		if str(cd.get("target_item_id", "")) == cid:
+			port = str(cd.get("target_handle_id", ""))
+			other = str(cd.get("source_item_id", ""))
+		elif str(cd.get("source_item_id", "")) == cid:
+			port = str(cd.get("source_handle_id", ""))
+			other = str(cd.get("target_item_id", ""))
+		if not GH_PORTS.has(port) or bool(cd.get("severed", false)):
+			continue
+		var role: String = GH_PORTS[port][0]
+		var inward: bool = GH_PORTS[port][1]
+		if not kids.has(role):
+			continue
+		var inner: Dictionary = kids[role][0]
+		var ext := _model.get_item(other)
+		if ext.is_empty() or str(ext.get("type", "")) != "resource":
+			continue
+		var in_id := str(inner["id"])
+		var in_specs: Dictionary = (inner.get("specs", {}) as Dictionary).duplicate(true)
+		var ex_specs: Dictionary = (ext.get("specs", {}) as Dictionary).duplicate(true)
+		_rk.migrate_resource_specs(in_specs)
+		_rk.migrate_resource_specs(ex_specs)
+		var in_kind := ResourceKinds.normalize_kind(str(in_specs.get("resource_kind", "")))
+		if in_kind != ResourceKinds.normalize_kind(str(ex_specs.get("resource_kind", ""))):
+			continue
+		var in_tl: ResourceTimeline = _timelines.get(in_id) as ResourceTimeline
+		var ex_tl: ResourceTimeline = _timelines.get(other) as ResourceTimeline
+		var in_cap := maxf(_effective_capacity_qty(in_specs), 0.001)
+		var in_lvl: float = in_tl.level_at(abs_h) if in_tl != null else float(in_specs.get("level", 0.0))
+		var rate := 0.0
+		if inward:
+			var want := maxf(GH_TOPUP - in_lvl, 0.0) * in_cap
+			if want <= 1e-6 or not _tank_has_supply(ex_specs, ex_tl, abs_h):
+				continue
+			var ex_cap := maxf(_effective_capacity_qty(ex_specs), 0.001)
+			var ex_lvl: float = ex_tl.level_at(abs_h) if ex_tl != null else float(ex_specs.get("level", 0.0))
+			var have := INF if _tank_is_unlimited(ex_specs) else maxf(ex_lvl, 0.0) * ex_cap
+			rate = minf(want, have) / dt_hours
+			net_rates[other] = float(net_rates.get(other, 0.0)) - rate
+			net_rates[in_id] = float(net_rates.get(in_id, 0.0)) + rate
+		else:
+			var qty := maxf(in_lvl, 0.0) * in_cap
+			if qty <= 1e-6 or not _tank_accepts_inflow(ex_specs, ex_tl, abs_h):
+				continue
+			rate = qty / dt_hours
+			net_rates[in_id] = float(net_rates.get(in_id, 0.0)) - rate
+			net_rates[other] = float(net_rates.get(other, 0.0)) + rate
+		_cache_conn_flow(str(cd.get("id", "")), rate, ResourceKinds.normalize_kind(str(in_specs.get("resource_kind", ""))))
+
+
+func _gh_model(cid: String, specs: Dictionary) -> Dictionary:
+	var key := "%s|%.1f" % [str(specs.get("gh_sig", "")), float(specs.get("gh_yaw", 0.0))]
+	var c: Dictionary = _gh_models.get(cid, {})
+	if str(c.get("key", "")) == key:
+		return c["m"]
+	var d := GreenhouseDesign.solve(specs["gh_spec"])
+	var monthly: Array = []
+	var tree: SceneTree = _host.get_tree() if _host != null and is_instance_valid(_host) and _host.is_inside_tree() else null
+	var ws: Node = tree.root.get_node_or_null("WeatherService") if tree != null else null
+	if ws != null and ws.has_method("monthly_mean_temp_c"):
+		monthly = ws.call("monthly_mean_temp_c")
+	var m := GreenhouseClimate.model(d, {"yaw_deg": float(specs.get("gh_yaw", 0.0)), "monthly_c": monthly})
+	_gh_models[cid] = {"key": key, "m": m}
+	return m
+
+
+## AC reaches the house when its panel (or the house's AC port) is wired.
+func _gh_has_ac(cid: String, kids: Dictionary) -> bool:
+	if _has_incoming_connection(cid, "ac_in") or not _connections_from_handle(cid, "ac_in").is_empty():
+		return true
+	for p in kids.get("panel", []):
+		var pid := str((p as Dictionary).get("id", ""))
+		if _has_incoming_connection(pid, "ac_in") or not _connections_from_handle(pid, "ac_in").is_empty():
+			return true
+	for it in _model.get_items_in_scope(str(_model.get_item(cid).get("child_scope_id", ""))):
+		if str((it as Dictionary).get("type", "")) == "breaker_panel":
+			var pid2 := str((it as Dictionary)["id"])
+			if _has_incoming_connection(pid2, "ac_in") or not _connections_from_handle(pid2, "ac_in").is_empty():
+				return true
+	return false
+
+
+## The sun at `abs_h` at the site: {az, el, doy, hour}.
+func _gh_sun(abs_h: float) -> Dictionary:
+	var main_node: Node = null
+	if _host != null and _host.has_method("_get_scene_main_node"):
+		main_node = _host.call("_get_scene_main_node")
+	if main_node == null:
+		return {"az": 180.0, "el": -10.0, "doy": 180.0, "hour": fposmod(abs_h, 24.0)}
+	var clock: Object = main_node.get("clock")
+	if clock == null or not clock.has_method("abs_hours_to_date"):
+		return {"az": 180.0, "el": -10.0, "doy": 180.0, "hour": fposmod(abs_h, 24.0)}
+	var dd: Dictionary = clock.call("abs_hours_to_date", abs_h)
+	var y := int(dd.get("year", 2026))
+	var mo := int(dd.get("month", 6))
+	var d := int(dd.get("day", 15))
+	var tod := float(dd.get("day_time", 12.0))
+	var lat := float(main_node.get("latitude")) if main_node.get("latitude") != null else 0.0
+	var lon := float(main_node.get("longitude")) if main_node.get("longitude") != null else 0.0
+	var jd := float(clock.call("_julian_day_utc_for", y, mo, d, tod))
+	var sp := SolarPosition.get_position(lat, lon, jd)
+	var doy := 0
+	for i in mo - 1:
+		doy += int(GreenhouseYear.DAYS_IN_MONTH[i])
+	return {"az": float(sp.get("azimuth_deg", 180.0)), "el": float(sp.get("elevation_deg", -10.0)),
+		"doy": float(doy + d - 1), "hour": tod}
+
+
 func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
 		abs_hours: float = -1.0) -> void:
 	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
@@ -1089,6 +1347,16 @@ func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
 	var lue := PlantGrowthScript.lue_from_specs(specs)
 	var month := _sim_month()
 	var season := PlantGrowthScript.season_for_specs(specs)
+	# A bed in a greenhouse grows from the house's inside climate: the light
+	# through the glazing (plus its lamps when lit), and its crops' response
+	# to the inside temperature and humidity in place of the outdoor season.
+	var gh: Dictionary = _gh_climate.get(str(item.get("parent_compound_id", "")), {})
+	if specs.has("gh_bed") and not gh.is_empty():
+		var lit := bool((gh.get("lit_beds", {}) as Dictionary).get(str(specs["gh_bed"]), false))
+		par = float(gh["par_lit_wm2"]) if lit else float(gh["par_sun_wm2"])
+		sun_f = 1.0
+		season = _gh_crop_factor(specs.get("gh_crops", "garden"), float(gh["t_air"]), float(gh["vpd"]))
+		specs["gh_t_air"] = snappedf(float(gh["t_air"]), 0.1)
 	var potential := PlantGrowthScript.potential_biomass_kg_h(par, area, lue, month, season) * sun_f
 	# A bed built from its kit is sown then and comes up over establish_days
 	# (the processor rule, establish_factor): nothing before it is planted.
@@ -1300,8 +1568,11 @@ func _process_catchment(item: Dictionary, net_rates: Dictionary, dt_hours: float
 	# Pond surface + DEM watershed catchments rain-feed directly (no Rain-PBI wire).
 	# Culvert stage-discharge outflows are applied separately (Phase 3).
 	var pond_direct := kind == "pond" or kind == "watershed"
+	# A structure's own roof (a greenhouse, an Earthship) catches the rain that
+	# falls on it with no Rain-PBI wire, like a pond's surface.
+	var roof_direct := kind == "roof" or specs.has("structure_water") or str(specs.get("gh_role", "")) == "roof"
 	# Rain catchments require an inbound wire from a Rain PBI node.
-	if not pond_direct and not _catchment_has_pbi_feed(item, "water"):
+	if not pond_direct and not roof_direct and not _catchment_has_pbi_feed(item, "water"):
 		specs["live_capture_lph"] = 0.0
 		_write_if_changed(str(item.get("id", "")), item, specs, ["live_capture_lph"])
 		return

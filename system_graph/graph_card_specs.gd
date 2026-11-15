@@ -453,6 +453,44 @@ static func _group(spec: Dictionary, specs: Dictionary, ctx: Dictionary) -> void
 			spec["footer"] = "⚠ " + ", ".join(names)
 			spec["footer_color"] = GraphTheme.WARN
 		return
+	# A greenhouse: the air inside, what its controller is doing.
+	if bool(specs.get("greenhouse_system", false)):
+		spec["icon"] = "sprout"
+		spec["chip"] = "GREENHOUSE"
+		spec["accent"] = Color(0.45, 0.82, 0.52)
+		if not specs.has("gh_t_air"):
+			spec["hero"] = ""
+			spec["sub"] = str(specs.get("summary", ""))
+			spec["footer"] = "Waiting for the clock"
+			spec["footer_color"] = GraphTheme.TEXT_MUTED
+			return
+		var t := float(specs["gh_t_air"])
+		spec["hero"] = "%.0f °C" % t
+		spec["hero_color"] = Color(0.45, 0.65, 1.0) if t < 2.0 else (Color(1.0, 0.6, 0.3) if t > 35.0 else GraphTheme.OK)
+		spec["sub"] = "%d %% RH · outside %.0f °C" % [int(specs.get("gh_rh", 0)), float(specs.get("gh_t_out", 0.0))]
+		var bits: PackedStringArray = PackedStringArray()
+		var vent := int(specs.get("gh_vent_pct", 0))
+		if vent > 0:
+			bits.append("vents %d %%" % vent)
+		if bool(specs.get("gh_fans", false)):
+			bits.append("fans")
+		if bool(specs.get("gh_heater", false)):
+			bits.append("heater")
+		if bool(specs.get("gh_lights", false)):
+			bits.append("lamps")
+		bits.append("light %.0f mol" % float(specs.get("gh_dli", 0.0)))
+		spec["footer"] = " · ".join(bits)
+		spec["footer_color"] = GraphTheme.TEXT_MUTED
+		if bool(specs.get("gh_frost", false)):
+			spec["footer"] = "⚠ Below freezing inside"
+			spec["footer_color"] = Color(0.98, 0.36, 0.36)
+		elif not bool(specs.get("gh_power_ok", true)) and specs.has("gh_power_ok"):
+			spec["footer"] = "⚠ No power: fans, heater and lamps are off"
+			spec["footer_color"] = GraphTheme.WARN
+		if bool(specs.get("packed_3d", false)):
+			spec["footer"] = "Packed"
+			spec["dim"] = true
+		return
 	# Every solar array — imported, placed, grouped or from the Solar designer —
 	# reads the same: topology chip, live watts against its peak, its panels.
 	if kind == "array" or kind == "pv_design":

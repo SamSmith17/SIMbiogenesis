@@ -5594,6 +5594,115 @@ graph preset "FarmBot bed (designed)" (a food `plant` of the bed's area,
   crop's water), the rotary tool's job, a modal-audit run (the entry is in
   the list).
 
+## Greenhouse designer (core/greenhouselab/, 2026-11-13)
+
+Plan: `plans/GREENHOUSE_PLAN.md`. Library → Designers → Greenhouses
+(`scenes/ui/greenhouselab_modal.gd`, static `open(tree, {spec, prop_id})`),
+the prop editor's "Edit greenhouse…" (on the house or any of its parts).
+User's choices: the house and its parts are SEPARATE props mounted on it;
+convert Closed Loop Ten; a lumped, physics-based climate.
+- **Pure core.** `GreenhouseSpec` (record key `greenhouse_spec`; forms
+  gable / lean_to / hoop / gothic / dome; local frame: length along X, width
+  along Z, +Z the front, floor y 0), `GreenhouseMaterials` (glazing τ, τ
+  diffuse, τ long-wave, U, cost — cited; walls, frames, fans, heaters),
+  `GreenhouseFrame` (profiles, faces with their glazing / normal / area,
+  ribs, vents, doors; the gothic arc through the wall top and the ridge;
+  the dome through `DomeLabDesign`), `GreenhouseBeds` (auto rows / keyholes /
+  the player's own, barrels, checks), `GreenhouseDesign.solve` (cached on
+  `key_of`: stats, BOM, cost, packed spec), `GreenhousePresets` (8 + the
+  library `user://greenhouselab_library.json`).
+- **Placed: one house, its parts its own props** (`GreenhouseWorld.sync`,
+  from placement through `apply_catalog_earthworks` and from Apply):
+  `GreenhouseParts` makes a `grow_bed` (layout "rect" / "keyhole") or a
+  `farmbot` per bed and a `grow_light_rack` per lit bed, each record
+  `gh_part` + `mount_host {kind: "prop", id, local, owned: true}`
+  (`PlacedPropHosts`): every move path carries them, pack / delete /
+  duplicate cascade. A sunk or bermed house writes `earthworks`
+  (`GreenhouseWorld.earthworks`, a ramp to the door when sunk).
+- **The climate** (`GreenhouseClimate`, pure): the air solved quasi-steady
+  each step (iterated for vents, transpiration, condensation); three masses
+  stepped (barrels, bed soil, structure + earth); sun per glazing face
+  (PvLabShading.poa, Fresnel IAM, shade cloth), skin U·A raised with wind,
+  long-wave to a Berdahl–Martin sky through τ_lw, the ground at the
+  Kusuda temperature (EarthTemperature), stack + wind vents (ASHRAE), fans,
+  Penman–Monteith transpiration (Stanghellini resistances), soil
+  evaporation, Lewis-analogy condensation. The energy ledger closes
+  (selftest). `GreenhouseControl.decide` is the built-in controller
+  (proportional vents, RH flush, rain / gale caps, fan + heater hysteresis,
+  lamps in a photoperiod while the day's light is short); an override
+  {vent, fans, heater, lights} wins, −1 hands it back. Heater and fans run
+  a duty cycle inside a step (the air has no capacity to bang-bang against).
+- **Crops** (`GreenhouseCrops`, pure, over `CropPhysiology`): per bed, per
+  crop by share: thermal time to maturity, growth = LUE × PAR × temperature
+  × VPD × canopy cover × the stand alive, frost losses, harvest capped at
+  1.5 × the table yield (an estimate: a closed-canopy LUE overstates).
+- **The year** (`GreenhouseYear`): `weather_table` on the main thread
+  (WeatherService where it covers the site, else a synthetic year from the
+  latitude — said so), `run` pure on a WorkerThreadPool task (~3 s a year
+  at 1 h). The designer's **Climate** tab (`GreenhouseClimateChart`: every
+  day's inside min–max over outside, hover a day) + the year's totals,
+  harvest by crop and a month table; tiles "Coldest night" and
+  "Harvest / yr" once it has run. Re-runs when the tab shows a changed design.
+- **The graph: ONE node** (`GreenhouseGraph.definition` →
+  `SystemGraphView.sync_greenhouse_system`, realized at root and made
+  unique, identity `greenhouse_prop_id` + `bound_prop_id` + `gh_sig` +
+  `gh_yaw` + `gh_spec`). Inside: a plant node per bed (bound to the bed's
+  prop; the prop's `graph_item_id` points back), a lamp load per lit bed
+  (one load past 5), fans, vent motors, an electric heater on a breaker
+  panel, the water barrels (`gh_role` barrels), the roof catchment
+  (`catchment_kind` "roof") into the tank, a harvest and a residue store.
+  Ports: `ac_in`, `water_in`, `food_out`, `biomass_out`, and with
+  `beds.feed` ("Fed beds") a nutrient store feeding every bed and a
+  `nutrients_in` port. The house TRADES with what is wired to its ports
+  (`ResourceFlowEngine._gh_exchange`, each step): its tank and nutrient
+  store are topped up to 60 % from the wired sources, its harvest crate and
+  residue bin emptied into the wired stores — a plain wire between two
+  tanks moves nothing unless the source is `jit_outflow`. A design change
+  rebuilds it keeping its spot, its outside wires and its stores' levels.
+  Not a power island: its loads draw the site's AC.
+- **The engine** (`ResourceFlowEngine._process_greenhouse`, before every
+  other item): steps the climate by the clock (a scrub back holds, a jump
+  past 6 h restarts it from the outside air; packed = nothing), writes the
+  loads' `requested_state` from the controller (so the AC the site pays
+  follows), stamps `gh_*` on the compound (`gh_t_air`, `gh_rh`, `gh_t_out`,
+  `gh_vent_pct`, `gh_fans`, `gh_heater`, `gh_lights`, `gh_dli`,
+  `gh_t_water`, `gh_cond_lph`, `gh_power_w`, `gh_frost`, `gh_power_ok`),
+  and `_process_plant` grows a bed with `gh_bed` from the INSIDE light
+  (sun through the glazing, + lamps over a lit bed) and its crops'
+  temperature × VPD response in place of the outdoor season. State in
+  `internal_state_snapshot` (`gh_state`, `gh_climate`, `gh_last_h`).
+  A load's `gh_manual` ("on" / "off", inspector "Greenhouse control") takes
+  it from the controller. Automations read `greenhouse.<id|name>.temp /
+  .rh / .dli / .vent / .water_temp` and the state `.frost`.
+- **Roofs catch rain with no Rain wire**: `_process_catchment` treats
+  `catchment_kind` "roof", any `structure_water` catchment (an Earthship's)
+  and a greenhouse roof as direct, like a pond's surface. Before, a
+  structure's roof caught nothing without a Rain-PBI wire.
+- **World** (`GreenhouseRuntime`, gameplay/, on the house): vents ease to
+  the node's share, fans spin while they run, the lamp racks in it glow
+  with the lamps, the glazing mists with condensation, a label over the
+  door ("27 °C · 68 % · vents 40 %"); rests with no node.
+- **Closed Loop Ten** (`tools/fixes/closed_loop_greenhouses.gd`): each
+  dome-over-bed pair → a `dome_20m` greenhouse at the dome's pose, the
+  plant's wires and planting hour carried over, chores re-pointed, 40 %
+  shade cloth May–September and NO fans (2 × 560 W in twelve domes is more
+  than the site's array carries).
+- Gates: `greenhouselab_selftest` (89), `greenhouse_climate_selftest` (26),
+  `greenhouse_year_selftest` (17), `greenhouse_graph_selftest` (16),
+  `placed_prop_hosts_selftest`, `crop_physiology_selftest`;
+  `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/greenhouse_designer_check.gd -Label greenhouse -Timeout 1200`
+  (REAL clicks on the Plan, the Climate tab's year, placed parts following
+  every move path, pack, a sunk walipini, delete) and
+  `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/greenhouse_world_check.gd -Label greenhouse_world -Timeout 1200`
+  (one node with its parts bound both ways, the climate on the clock, the
+  loads following the controller, the card, the runtime, move / pack /
+  delete); tour stop `18o_greenhouse`; modal audit `greenhouselab`; look
+  sheet `tools/diag/greenhouse_look_diag.gd`.
+- Not built: a bed's drawn crops following the climate's development
+  (GrowBed still draws from its planting hour), crop frost in the live
+  engine (the year preview has it), propane on the graph, the simkit /
+  bombay_ten `with_greenhouse`.
+
 ## Tri-clamp designer (core/tclab/, 2026-11-06)
 
 Library → Structures → "Tri-clamp designer…" (Main hosts it, every map:
