@@ -95,6 +95,10 @@ static func place_model_at_xz(main: Node, model_id: String, x: float, z: float,
 		tag_flatpack_space(main, prop_id)
 	elif model_id == FirepitBuilder.MODEL_ID:
 		_auto_tag_space(main, prop_id, "fire_circle", SpaceRegistry.CAPACITY_AUTO, "Firepit")
+	elif model_id == ToiletBankBuilder.MODEL_ID:
+		_auto_tag_toilet_bank(main, prop_id)
+	elif model_id == CampKitchenBuilder.MODEL_ID:
+		_auto_tag_space(main, prop_id, "kitchen", SpaceRegistry.CAPACITY_AUTO, "Camp kitchen")
 	elif model_id == DomeLabBuilder.MODEL_ID:
 		_auto_tag_dome_space(main, prop_id)
 	elif TcBuilder.handles(model_id):
@@ -767,6 +771,10 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 		tag_flatpack_space(main, prop_id)
 	elif model_id == FirepitBuilder.MODEL_ID:
 		_auto_tag_space(main, prop_id, "fire_circle", SpaceRegistry.CAPACITY_AUTO, "Firepit")
+	elif model_id == ToiletBankBuilder.MODEL_ID:
+		_auto_tag_toilet_bank(main, prop_id)
+	elif model_id == CampKitchenBuilder.MODEL_ID:
+		_auto_tag_space(main, prop_id, "kitchen", SpaceRegistry.CAPACITY_AUTO, "Camp kitchen")
 	elif model_id == DomeLabBuilder.MODEL_ID:
 		_auto_tag_dome_space(main, prop_id)
 	elif TcBuilder.handles(model_id):
@@ -849,6 +857,16 @@ static func tag_flatpack_space(main: Node, prop_id: String) -> void:
 static func _auto_tag_space(main: Node, prop_id: String, space_type: String, capacity: int,
 		label: String) -> void:
 	_tag_target(main, {"kind": "prop", "prop_id": prop_id}, space_type, capacity, label)
+
+
+## A toilet bank is a restroom with one stall per toilet — unless it was
+## placed FOR a restroom area (`restroom_for`), which is then the space.
+static func _auto_tag_toilet_bank(main: Node, prop_id: String) -> void:
+	var rec := get_prop_record(main, prop_id)
+	if not str(rec.get("restroom_for", "")).is_empty():
+		return
+	var spec := ToiletBankBuilder.resolve(rec.get("toilet_spec", {}) as Dictionary)
+	_auto_tag_space(main, prop_id, "restroom", int(spec["stalls"]), "Toilets")
 
 
 ## A living vehicle is a home: its beds are a sleep space (people lie ON them,

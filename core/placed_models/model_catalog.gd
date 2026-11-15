@@ -248,6 +248,10 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		return StreamIntakeBuilder.build_node(extras)
 	if model_id == FirepitBuilder.MODEL_ID:
 		return FirepitBuilder.build_node(extras)
+	if model_id == ToiletBankBuilder.MODEL_ID:
+		return ToiletBankBuilder.build_node(extras.get("toilet_spec", extras) as Dictionary)
+	if model_id == CampKitchenBuilder.MODEL_ID:
+		return CampKitchenBuilder.build_node(extras.get("kitchen_spec", {}) as Dictionary)
 	if model_id == SiteGateBuilder.MODEL_ID:
 		return SiteGateBuilder.build_node(extras)
 	if model_id == ForkliftBuilder.MODEL_ID:
@@ -562,6 +566,19 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "firepit", "label": "Firepit",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 0.36},
+		# Procedural TOILET BANK: a row of portable toilets, one person per
+		# stall, a first-come line in front (ToiletBankBuilder). Placing one
+		# tags it a restroom; a restroom AREA gets one placed in it.
+		{"id": "toilet_bank", "label": "Toilet bank",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 2.3},
+		# Procedural CAMP KITCHEN: the stations a meal is cooked at (store,
+		# prep, stove, wash, serving table; CampKitchenBuilder) under a
+		# shade. Placing one tags a kitchen space; cooks work the meal there
+		# as a small crew job (MealJobPlan, KitchenSite).
+		{"id": "camp_kitchen", "label": "Camp kitchen",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 2.4},
 		# Procedural SITE GATE: where the camp's living vehicles drive in
 		# (VehicleDrive, TerrainLoader.schedule_vehicle_arrivals). Vehicles
 		# pass through it heading its forward (-Z).

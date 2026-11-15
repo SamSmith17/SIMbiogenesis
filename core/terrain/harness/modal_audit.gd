@@ -34,6 +34,7 @@ func run() -> Dictionary:
 		{"id": "challenges", "open": func() -> void: tl.call("_on_challenge_pressed")},
 		{"id": "multiplayer", "open": func() -> void: tl.call("_on_mp_pressed")},
 		{"id": "microclimate", "open": func() -> void: tl.call("_on_microclimate_pressed")},
+		{"id": "community_schedule", "open": func() -> void: tl.call("open_community_schedule", "Day")},
 		{"id": "location_picker", "open": func() -> void: picker.call("show_picker"),
 			"close": func() -> void: picker.call("hide_picker")},
 		{"id": "help", "open": func() -> void: help.call("open"),

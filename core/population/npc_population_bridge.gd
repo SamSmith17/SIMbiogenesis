@@ -44,6 +44,8 @@ var _camp_homes: Array = []
 ## while their camp is light (board, labour, skills and duties stay on them,
 ## so promotion finds the settlement exactly as left). CrowdFocus decides.
 var _cohorts: Dictionary = {}          # item_id -> CrowdCohort
+## How everybody spends their time (NPC life pass, Phase 9; session data).
+var _time_use := NpcTimeUse.new()
 var _tiers: Dictionary = {}            # item_id -> CrowdFocus.TIER_*
 var _tier_pending: Dictionary = {}
 var _parked: Dictionary = {}           # item_id -> NpcPopulationEngine
@@ -167,6 +169,10 @@ var _persist_budget := PERSIST_PER_TICK
 ## Graph items with a recipe step waiting for hands, listed once per tick by
 ## tick_at's walk and read by every camp's _service_machine_chores.
 var _waiting_machines: Array = []
+## Kitchens (role "kitchen" processors) seen this tick, and the habitat each
+## one cooks for (the nearest camp's home): {gid: item}, {gid: iid}.
+var _kitchens: Dictionary = {}
+var _kitchen_owner: Dictionary = {}
 ## Light camps waiting for their slice of a frame (see _drain_light_queue).
 ## Ticking ~37 camps in the one tick frame was the 15-18 ms crowd_sim spike.
 var _light_queue: Array = []
@@ -316,11 +322,14 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 	var habitats: Array = []
 	var camps: Array = []
 	_waiting_machines.clear()
+	_kitchens.clear()
 	for item in GraphNesting.walk_items(model, "root"):
 		var d0: Dictionary = item
 		var sp_w: Dictionary = d0.get("specs", {})
 		if bool(sp_w.get("recipe_waiting_chore", false)):
 			_waiting_machines.append(d0)
+		if str(sp_w.get("role", "")) == "kitchen":
+			_kitchens[str(d0.get("id", ""))] = d0
 		if str(d0.get("type", "")) != "processor":
 			continue
 		var specs0: Dictionary = d0.get("specs", {})
@@ -332,6 +341,7 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 	# Every camp's home + headcount this tick, both tiers (the site deployment
 	# director picks crews off it before they have a board).
 	_camp_homes = camps
+	_assign_kitchens(main, camps)
 	_update_away(main, abs_h, camps)
 	var ts_mult := 0.0
 	if main != null and "time_scale" in main and NpcDisplayPrefs.speed_shed():
@@ -416,6 +426,9 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 			# people sit on the bench, not inside it.
 			"seat_spot_of": func(sid: String, k: int) -> Dictionary:
 				return seat_spot(sid, k),
+			# Where place k in a restroom's line stands (toilet stalls).
+			"queue_spot_of": func(sid: String, k: int) -> Variant:
+				return queue_spot(sid, k),
 			# Weather comfort (NpcComfort): this hour's pulls, the shade /
 			# warmth spot finder, and a person's own bed in this camp.
 			"comfort": _comfort,
@@ -485,6 +498,62 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 	PerfMonitor.begin("npc_peaks")
 	_service_peaks(main, registry, abs_h)
 	PerfMonitor.end("npc_peaks")
+	PerfMonitor.begin("npc_time_use")
+	_record_time_use(abs_h)
+	PerfMonitor.end("npc_time_use")
+
+
+## Every person on site, once a tick, credited with the time since the last
+## tick in what they are doing now (both tiers, one mapping).
+func _record_time_use(abs_h: float) -> void:
+	var dt := _time_use.step(abs_h)
+	if dt <= 0.0:
+		return
+	for iid in _engines:
+		if _away.has(iid):
+			continue
+		var engine: NpcPopulationEngine = _engines[iid]
+		for a in engine.agents:
+			var ag: NpcAgent = a
+			_time_use.record(ag.id, NpcTimeUse.category_full(ag.state, ag.activity), dt, abs_h)
+	for iid in _cohorts:
+		if _away.has(iid):
+			continue
+		var c: CrowdCohort = _cohorts[iid]
+		for i in c.count():
+			_time_use.record(c.ids[i], NpcTimeUse.category_light(int(c.state[i]), int(c.act[i])), dt, abs_h)
+
+
+## The last `n_days` days of time use (NpcTimeUse.summary), with the work the
+## rota plans per person per week beside the work measured.
+## `item_id` limits it to one camp ("" = the whole site).
+func time_use_summary(n_days: int = 7, item_id: String = "") -> Dictionary:
+	var only := {}
+	if not item_id.is_empty():
+		if _engines.has(item_id):
+			for a in (_engines[item_id] as NpcPopulationEngine).agents:
+				only[(a as NpcAgent).id] = true
+		elif _cohorts.has(item_id):
+			for pid in (_cohorts[item_id] as CrowdCohort).ids:
+				only[pid] = true
+		if only.is_empty():
+			only["-"] = true
+	var s := _time_use.summary(_last_abs_h, n_days, only)
+	var items: Array = []
+	var people := 0
+	for iid in _engines:
+		if not item_id.is_empty() and str(iid) != item_id:
+			continue
+		items.append_array(rota_items(str(iid)))
+		people += (_engines[iid] as NpcPopulationEngine).agents.size()
+	s["planned_h_week"] = NpcTimeUse.demand_h_week(items, people, NpcDutyRoster.HORIZON_DAYS)
+	s["planned_people"] = people
+	return s
+
+
+## Whole-session hours per person per day by category, and the person-hours.
+func time_use_totals() -> Dictionary:
+	return {"per_day": _time_use.totals_per_day(), "person_h": _time_use.total_h}
 
 
 # ---------------------------------------------------------------------------
@@ -797,6 +866,13 @@ func _tick_light(iid: String, specs: Dictionary, main: Node, flow_engine, model,
 		"comfort": _comfort,
 		"comfort_spot": func(kind: String, from: Vector2, aid: String) -> Dictionary:
 			return _comfort_spot(kind, from, aid),
+		# Seats on furniture and toilet stalls, and the line outside them —
+		# the light tier sits where the full tier sits (it was never given
+		# the seats at all).
+		"seat_spot_of": func(sid: String, k: int) -> Dictionary:
+			return seat_spot(sid, k),
+		"queue_spot_of": func(sid: String, k: int) -> Variant:
+			return queue_spot(sid, k),
 	}
 	# Home beds: the shelters of the camp this habitat stands in (positions,
 	# plus the way each sleeper lies and how high — a van's bed).
@@ -858,6 +934,7 @@ func _ensure_cohort(iid: String, specs: Dictionary, main: Node, registry: SpaceR
 	var routine_arr: Array = specs.get("pop_routine", []) as Array
 	cohort.routine = NpcRoutine.from_array(routine_arr) if not routine_arr.is_empty() \
 		else NpcRoutine.default_day()
+	cohort.routine.set_personas(specs.get("pop_personas", {}) as Dictionary)
 	cohort.consequence = NpcConsequence.normalize(specs.get("pop_consequence", ""))
 	cohort.agent_departed.connect(
 		func(_aid: String, who: String, reason: String) -> void:
@@ -1817,21 +1894,192 @@ func _resolve_seat_spots(main: Node, registry: SpaceRegistry) -> void:
 		return
 	_seat_spots_at_ms = now
 	_seat_spots = {}
+	_queue_lines = {}
+	_bank_space = {}
 	for item in registry.spaces:
 		var space: Dictionary = item
+		var sid := str(space.get("id", ""))
 		var tgt: Dictionary = space.get("target", {})
-		if str(tgt.get("kind", "")) != "prop":
+		var stype := str(space.get("space_type", ""))
+		var prop_id := str(tgt.get("prop_id", "")) if str(tgt.get("kind", "")) == "prop" else ""
+		# A restroom AREA is served by the toilet bank placed for it.
+		if prop_id.is_empty() and stype == "restroom":
+			prop_id = str(space.get("bank_prop", ""))
+		if prop_id.is_empty():
+			if stype == "restroom":
+				registry.set_stalls(sid, 0)
 			continue
-		var prop := PlacedPropRuntime.find_by_prop_id(main, str(tgt.get("prop_id", "")))
+		var prop := PlacedPropRuntime.find_by_prop_id(main, prop_id)
 		if prop == null:
+			if stype == "restroom":
+				registry.set_stalls(sid, 0)
 			continue
 		var spots: Array = []
 		if prop.model_id == FlatpackBuilder.MODEL_ID:
 			spots = furniture_spots(prop)
+		elif prop.model_id == ToiletBankBuilder.MODEL_ID:
+			spots = toilet_spots(prop)
+			_queue_lines[sid] = _queue_line_world(prop)
+			_bank_space[prop_id] = sid
 		elif VehicleBuilder.handles(prop.model_id):
-			spots = vehicle_spots(prop, str(tgt.get("role", "")), str(space.get("space_type", "")))
+			spots = vehicle_spots(prop, str(tgt.get("role", "")), stype)
+		elif stype == "restroom":
+			# Any other prop tagged a restroom (a player's own portable-toilet
+			# model, a privy): `units` stalls inside its footprint.
+			spots = generic_toilet_spots(prop, maxi(int(space.get("units", 1)), 1))
+			_queue_lines[sid] = _queue_lines_static.get(prop.get_instance_id(), {})
+			_bank_space[prop_id] = sid
 		if not spots.is_empty():
-			_seat_spots[str(space.get("id", ""))] = spots
+			_seat_spots[sid] = spots
+		if stype == "restroom":
+			var n := 0
+			for sp in spots:
+				if str((sp as Dictionary).get("kind", "")) == NpcSeatPose.KIND_TOILET:
+					n += 1
+			registry.set_stalls(sid, n)
+	_ensure_restroom_banks(main, registry)
+
+
+## Restroom stalls -> world line geometry for the queue (see queue_spot).
+var _queue_lines: Dictionary = {}
+## Toilet bank prop id -> the restroom space it serves (the runtime's lookup).
+var _bank_space: Dictionary = {}
+
+
+## A toilet bank's stalls in world space (kind "toilet", elev = seat height).
+static func toilet_spots(prop: Node3D) -> Array:
+	var node := _meta_node(prop.get_node_or_null("ModelRoot") as Node3D, "stall_spots")
+	if node == null:
+		return []
+	return _spots_world(node, node.get_meta("stall_spots", []))
+
+
+## Stalls for a prop that is not a toilet bank: `n` seats side by side across
+## its footprint, at a toilet seat's height, facing the model's front (+Z,
+## the way a placed prop's front faces), each with a door point in front.
+static func generic_toilet_spots(prop: Node3D, n: int) -> Array:
+	var bb: AABB = prop.get_world_pick_aabb() if prop.has_method("get_world_pick_aabb") else AABB()
+	var xf := prop.global_transform
+	var model := prop.get_node_or_null("ModelRoot") as Node3D
+	if model != null:
+		xf = model.global_transform
+	var basis := xf.basis.orthonormalized()
+	var fwd := basis * Vector3(0.0, 0.0, 1.0)
+	var across := basis * Vector3(1.0, 0.0, 0.0)
+	var centre := bb.get_center() if bb.size != Vector3.ZERO else xf.origin
+	var half_d := maxf(absf(bb.size.dot(fwd.abs())) * 0.5, 0.5)
+	var width := maxf(absf(bb.size.dot(across.abs())), 1.0)
+	var out: Array = []
+	var yaw0 := atan2(-fwd.x, -fwd.z)   # turns -Z to the way faced (fwd)
+	for k in n:
+		var off := (float(k) + 0.5) / float(n) - 0.5
+		var c := centre + across * off * width
+		var seat := Vector2(c.x, c.z) - Vector2(fwd.x, fwd.z).normalized() * 0.15
+		var door := Vector2(c.x, c.z) + Vector2(fwd.x, fwd.z).normalized() * (half_d + 0.45)
+		out.append({"pos": seat, "yaw": yaw0, "elev": ToiletBankBuilder.SEAT_TOP, "kind": NpcSeatPose.KIND_TOILET,
+			"door": door, "flush": 0.0})
+	_queue_lines_static[prop.get_instance_id()] = {"origin": Vector2(centre.x, centre.z)
+		+ Vector2(fwd.x, fwd.z).normalized() * (half_d + ToiletBankBuilder.QUEUE_OFF),
+		"dir": Vector2(fwd.x, fwd.z).normalized(), "side": Vector2(across.x, across.z).normalized()}
+	return out
+
+
+static var _queue_lines_static: Dictionary = {}
+
+
+static func _queue_line_world(prop: Node3D) -> Dictionary:
+	var node := _meta_node(prop.get_node_or_null("ModelRoot") as Node3D, "queue_line")
+	if node == null:
+		return {}
+	var line: Dictionary = node.get_meta("queue_line", {})
+	var xf := node.global_transform
+	var o: Vector3 = xf * (line["origin"] as Vector3)
+	var d: Vector3 = xf.basis * (line["dir"] as Vector3)
+	var sd: Vector3 = xf.basis * (line["side"] as Vector3)
+	var d2 := Vector2(d.x, d.z).normalized()
+	var s2 := Vector2(sd.x, sd.z).normalized()
+	return {"origin": Vector2(o.x, o.z), "dir": d2, "side": s2}
+
+
+## Place k in a restroom's line (world xz), or null with no bank (the agent's
+## own spiral fallback). Straight out from the doors for eight, then bending.
+func queue_spot(sid: String, k: int) -> Variant:
+	var line: Dictionary = _queue_lines.get(sid, {})
+	if line.is_empty():
+		return null
+	var o: Vector2 = line["origin"]
+	var d: Vector2 = line["dir"]
+	var sd: Vector2 = line["side"]
+	var g := ToiletBankBuilder.QUEUE_GAP
+	if k < 8:
+		return o + d * g * float(k)
+	return o + d * g * 7.0 + sd * g * float(k - 7)
+
+
+## Which stalls of a toilet bank are taken right now (for its doors and flags).
+func toilet_stalls_busy(prop_id: String) -> Array:
+	var sid := str(_bank_space.get(prop_id, ""))
+	var reg: SpaceRegistry = _registry_ref
+	if sid.is_empty() or reg == null:
+		return []
+	var n := reg.stall_count(sid)
+	var out: Array = []
+	out.resize(n)
+	out.fill(false)
+	for aid in (reg._occupancy.get(sid, []) as Array):
+		var k := reg.slot_index_for(sid, str(aid))
+		if k >= 0 and k < n:
+			out[k] = true
+	return out
+
+
+## How many wait in a toilet bank's line right now.
+func toilet_queue_len(prop_id: String) -> int:
+	var sid := str(_bank_space.get(prop_id, ""))
+	var reg: SpaceRegistry = _registry_ref
+	if sid.is_empty() or reg == null:
+		return 0
+	return reg.queue_len(sid)
+
+
+var _registry_ref: SpaceRegistry = null
+
+
+## A restroom AREA gets a real toilet bank placed in it (the player's choice:
+## restrooms are stalls). Idempotent: the space remembers its bank
+## (`bank_prop`); a bank the player deletes is not put back — the area is
+## left with no stalls and a warning in the space list — unless they clear
+## the space's `bank_prop` themselves. Stalls = the area's `units` (festival
+## mode sets them), else 4. Doors face the site's middle.
+func _ensure_restroom_banks(main: Node, registry: SpaceRegistry) -> void:
+	_registry_ref = registry
+	if main == null or not main.has_node("Terrain/TerrainLoader") and _find_terrain_loader(main) == null:
+		return
+	for item in registry.spaces:
+		var space: Dictionary = item
+		if str(space.get("space_type", "")) != "restroom":
+			continue
+		var tgt: Dictionary = space.get("target", {})
+		if str(tgt.get("kind", "")) != "area" or space.has("bank_prop"):
+			continue
+		var sid := str(space.get("id", ""))
+		var p: Variant = registry.cached_position(sid)
+		if not (p is Vector2):
+			continue
+		var n := clampi(int(space.get("units", 0)) if int(space.get("units", 0)) > 1 else 4,
+			1, ToiletBankBuilder.MAX_STALLS)
+		var centre := SiteCentre.xz(main)
+		var dir: Vector2 = centre - (p as Vector2)
+		var yaw_deg := rad_to_deg(atan2(dir.x, dir.y)) if dir.length() > 1.0 else 0.0
+		var res := PlacedPropService.place_model_at_xz(main, ToiletBankBuilder.MODEL_ID,
+			(p as Vector2).x, (p as Vector2).y, {"yaw": yaw_deg, "toilet_spec": {"stalls": n},
+				"restroom_for": sid})
+		# Remember even a failed placement (no layer): never retry every second.
+		registry.set_space_fields(sid, {"bank_prop": str(res.get("prop_id", "")) if bool(res.get("ok", false)) else ""})
+
+
+func _find_terrain_loader(main: Node) -> Node:
+	return main.find_child("TerrainLoader", true, false) if main != null else null
 
 
 ## A living vehicle's spots for ONE of its spaces: its sleep space lies on
@@ -1844,7 +2092,14 @@ static func vehicle_spots(prop: Node3D, role: String, space_type: String) -> Arr
 		if node == null:
 			return out
 		var roles: Dictionary = node.get_meta("role_spots", {})
-		return _spots_world(node, roles.get(role, []))
+		var rs := _spots_world(node, roles.get(role, []))
+		if role == "restroom":
+			# A vehicle's toilet is a seat (NpcSeatPose): sit ON it, at its
+			# bowl height over the vehicle floor.
+			for sp in rs:
+				(sp as Dictionary)["kind"] = NpcSeatPose.KIND_TOILET
+				(sp as Dictionary)["elev"] = float((sp as Dictionary).get("elev", 0.0)) + 0.42
+		return rs
 	var want := "lie" if space_type == "sleep" else "sit"
 	for sp in furniture_spots(prop):
 		if str((sp as Dictionary).get("kind", "")) == want:
@@ -1869,8 +2124,15 @@ static func _spots_world(node: Node3D, spots: Array) -> Array:
 	var yaw0 := xf.basis.get_euler().y
 	for st in spots:
 		var w: Vector3 = xf * (st["pos"] as Vector3)
-		out.append({"pos": Vector2(w.x, w.z), "yaw": float(st["yaw"]) + yaw0,
-			"elev": maxf(w.y - xf.origin.y, 0.0), "kind": str(st.get("kind", "sit"))})
+		var one := {"pos": Vector2(w.x, w.z), "yaw": float(st["yaw"]) + yaw0,
+			"elev": maxf(w.y - xf.origin.y, 0.0), "kind": str(st.get("kind", "sit"))}
+		if (st as Dictionary).has("flush"):
+			one["flush"] = float(st["flush"])
+		# A toilet stall's door: people walk in through it, never through a wall.
+		if (st as Dictionary).has("door"):
+			var dw: Vector3 = xf * (st["door"] as Vector3)
+			one["door"] = Vector2(dw.x, dw.z)
+		out.append(one)
 	return out
 
 
@@ -2468,6 +2730,9 @@ func crew_site_markers(main: Node) -> Array:
 			var workers := (chore.get("workers", []) as Array).size()
 			if workers <= 0:
 				continue
+			# A meal step is drawn by its KitchenSite (stations, label).
+			if chore.has("meal_step"):
+				continue
 			var p: Variant = _chore_position(chore, main, reg)
 			if not (p is Vector2):
 				continue
@@ -2562,7 +2827,9 @@ func set_routine(item_id: String, blocks: Array) -> bool:
 	var engine: NpcPopulationEngine = _engines.get(item_id)
 	if engine == null:
 		return false
+	var keep_personas: Dictionary = engine.routine.personas if engine.routine != null else {}
 	engine.routine = NpcRoutine.from_array(blocks)
+	engine.routine.set_personas(keep_personas)
 	if _model == null:
 		return true   # applied live; persistence waits for the next tick
 	var item: Dictionary = _model.get_item(item_id)
@@ -2572,6 +2839,73 @@ func set_routine(item_id: String, blocks: Array) -> bool:
 	specs["pop_routine"] = engine.routine.to_array()
 	_model.update_item(item_id, {"specs": specs})
 	return true
+
+
+## This habitat's weekly rota (NpcWorkScheduler.plan output, {} = none yet).
+func rota_for(item_id: String) -> Dictionary:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	return engine.rota if engine != null else {}
+
+
+## Plan the week again now (a profile or a chore changed). Returns the rota.
+func replan_rota(item_id: String) -> Dictionary:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	if engine == null or _last_abs_h <= 0.0:
+		return {}
+	return engine.plan_rota(_last_abs_h, NpcDutyRoster.HORIZON_DAYS, true,
+		_kitchen_rota_items(item_id, engine, NpcChoreBoard.day_index(_last_abs_h), NpcDutyRoster.HORIZON_DAYS))
+
+
+## The week's recurring work the rota plans for a habitat, the kitchen's
+## cooking included (the Community schedule's Work tab).
+func rota_items(item_id: String) -> Array:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	if engine == null:
+		return []
+	var day0 := NpcChoreBoard.day_index(_last_abs_h)
+	var items := NpcWorkScheduler.collect(engine.chore_board, engine.duty, day0, NpcDutyRoster.HORIZON_DAYS)
+	items.append_array(_kitchen_rota_items(item_id, engine, day0, NpcDutyRoster.HORIZON_DAYS))
+	return items
+
+
+## This person's profile (NpcPersona) as the habitat's routine sees it.
+func persona_of(item_id: String, agent_id: String) -> Dictionary:
+	var r := _routine_any(item_id)
+	return r.persona_of(agent_id) if r != null else NpcPersona.for_id(agent_id)
+
+
+## The player's edits to one person's profile ({} = back to generated), applied
+## to both tiers live and persisted in specs.pop_personas.
+func set_persona(item_id: String, agent_id: String, overrides: Dictionary) -> bool:
+	var r := _routine_any(item_id)
+	if r == null:
+		return false
+	var all: Dictionary = r.personas.duplicate(true)
+	if overrides.is_empty():
+		all.erase(agent_id)
+	else:
+		all[agent_id] = overrides.duplicate(true)
+	for rr in [_engines.get(item_id), _cohorts.get(item_id)]:
+		if rr != null and rr.routine != null:
+			rr.routine.set_personas(all)
+	if _model != null:
+		var item: Dictionary = _model.get_item(item_id)
+		if not item.is_empty():
+			var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+			if all.is_empty():
+				specs.erase("pop_personas")
+			else:
+				specs["pop_personas"] = all
+			_model.update_item(item_id, {"specs": specs})
+	return true
+
+
+func _routine_any(item_id: String) -> NpcRoutine:
+	var engine: NpcPopulationEngine = _engines.get(item_id)
+	if engine != null and engine.routine != null:
+		return engine.routine
+	var cohort: CrowdCohort = _cohorts.get(item_id)
+	return cohort.routine if cohort != null else null
 
 
 ## What running out of a critical resource does here. Same shape as
@@ -3651,6 +3985,7 @@ func _ensure_engine(iid: String, specs: Dictionary, main: Node) -> NpcPopulation
 	var routine_arr: Array = specs.get("pop_routine", []) as Array
 	engine.routine = NpcRoutine.from_array(routine_arr) if not routine_arr.is_empty() \
 			else NpcRoutine.default_day()
+	engine.routine.set_personas(specs.get("pop_personas", {}) as Dictionary)
 	engine.anim_overrides = (specs.get("pop_anim_map", {}) as Dictionary).duplicate()
 	# Also config rather than simulation state: an absent key normalizes to
 	# STRIKE, which is exactly the behaviour that shipped, so every existing
@@ -3751,6 +4086,127 @@ static func _need_text(need: String) -> String:
 ## Settle yesterday, top the plan back up to the horizon, mint today's slots
 ## onto the board, and retire finished one-offs so a month of dead chores is
 ## not competing with the rota for MAX_CHORES.
+## Which habitat each kitchen cooks for: the camp whose home is nearest the
+## kitchen's 3D twin (or its own site), so one camp's cooks feed it.
+func _assign_kitchens(main: Node, camps: Array) -> void:
+	_kitchen_owner.clear()
+	if camps.is_empty():
+		return
+	for gid in _kitchens:
+		var sp: Dictionary = (_kitchens[gid] as Dictionary).get("specs", {})
+		var at := _home_pos(sp, main)
+		var best := ""
+		var bd := INF
+		for c in camps:
+			var d := at.distance_to(c["home"])
+			if d < bd:
+				bd = d
+				best = str(c["id"])
+		_kitchen_owner[gid] = best
+
+
+## The rota's cooking for this camp's kitchens (NpcWorkScheduler items): one
+## "Cook" item a day per kitchen, its hours the recipe's crew hours times the
+## batches the camp eats a day (people x meals a day / servings a batch), its
+## crew the meal's (MealJobPlan.crew_for). The chores are minted later, when a
+## batch needs hands (_service_machine_chores reads the day's cooks).
+func _kitchen_rota_items(iid: String, engine: NpcPopulationEngine, day0: int, days: int) -> Array:
+	var out: Array = []
+	var people := engine.agents.size()
+	if people <= 0:
+		return out
+	var meals := 0
+	if engine.routine != null:
+		for b in engine.routine.blocks:
+			if str((b as Dictionary).get("kind", "")) == NpcRoutine.EAT:
+				meals += 1
+	meals = maxi(meals, 1)
+	for gid in _kitchens:
+		if str(_kitchen_owner.get(gid, "")) != iid:
+			continue
+		var it: Dictionary = _kitchens[gid]
+		var info := MealJobPlan.recipe_info(it.get("specs", {}))
+		if float(info["hours"]) <= 0.0 or float(info["servings"]) <= 0.0:
+			continue
+		var batches := clampi(int(ceil(float(people * meals) / float(info["servings"]))), 1, 6)
+		var name := str((it.get("specs", {}) as Dictionary).get("name", "Kitchen"))
+		for off in days:
+			var day := day0 + off
+			out.append({"key": "cook|%s|%d" % [str(gid), day], "kind": "cook", "ref": str(gid),
+				"label": "Cook: %s" % name, "family": "cook", "day": day,
+				"hours": float(info["hours"]) * float(batches),
+				"crew": MealJobPlan.crew_for(float(info["servings"])), "min_crew": 1,
+				"window": {"start_h": 6.0, "end_h": 20.0}, "skill": "", "priority": 5})
+	return out
+
+
+## The cooks the rota named for a kitchen today ([] = none).
+func kitchen_cooks(gid: String, abs_h: float) -> Array:
+	var iid := str(_kitchen_owner.get(gid, ""))
+	var engine: NpcPopulationEngine = _engines.get(iid)
+	if engine == null:
+		return []
+	var sh: Dictionary = (engine.rota.get("shifts", {}) as Dictionary).get(
+		"cook|%s|%d" % [gid, NpcChoreBoard.day_index(abs_h)], {})
+	return (sh.get("agents", []) as Array).duplicate()
+
+
+## A kitchen at work, for the KitchenSite that draws it: the meal chore on
+## the board at this kitchen (the first one live), how far along, its crew
+## size and who is DOING it within `radius_m` of `center`. {found: false}
+## when nothing is being cooked.
+func kitchen_status(gid: String, center: Vector2, radius_m: float) -> Dictionary:
+	var it: Dictionary = _kitchens.get(gid, {})
+	if it.is_empty():
+		return {"found": false}
+	var ksp: Dictionary = it.get("specs", {})
+	var info := MealJobPlan.recipe_info(ksp)
+	# A finished step's chore stays on the board after the next one is minted:
+	# the step the kitchen waits on wins, then any unfinished one.
+	var waiting := str(ksp.get("recipe_waiting_step_id", "")) if bool(ksp.get("recipe_waiting_chore", false)) else ""
+	var best_rank := -1
+	var best: Array = []
+	for iid in _engines:
+		var engine: NpcPopulationEngine = _engines[iid]
+		var board := engine.chore_board
+		if board == null:
+			continue
+		for c in board.chores:
+			var ch: Dictionary = c
+			var key := str(ch.get("chore_key", ""))
+			if not key.begins_with("mach|%s|" % gid):
+				continue
+			var rank := 0 if int(ch.get("done_day", -1)) >= 0 else 1
+			if not waiting.is_empty() and key.get_slice("|", 2) == waiting:
+				rank = 2
+			if rank > best_rank:
+				best_rank = rank
+				best = [iid, ch]
+	if best.is_empty():
+		return {"found": false}
+	var iid: String = str(best[0])
+	var engine: NpcPopulationEngine = _engines[iid]
+	var board := engine.chore_board
+	var ch: Dictionary = best[1]
+	var key := str(ch.get("chore_key", ""))
+	var step_id := key.get_slice("|", 2)
+	var hours := maxf(float(ch.get("chore_hours", 0.0)), 1e-6)
+	var left := board.remaining(str(ch.get("id", "")))
+	var present: Array = []
+	for a in engine.agents:
+		var ag: NpcAgent = a
+		if ag.state == NpcAgent.State.DOING and ag.chore_id == str(ch.get("id", "")) \
+				and ag.pos.distance_to(center) <= radius_m:
+			present.append({"id": ag.id, "pos": ag.pos,
+				"color": NpcPopulationEngine.color_for_agent(ag.id)})
+	var kind := MealJobPlan.step_kind(step_id, str(ch.get("label", "")))
+	return {"found": true, "iid": str(iid), "chore_id": str(ch.get("id", "")),
+		"step_id": step_id, "kind": kind, "label": str(ch.get("label", "")),
+		"hours": hours, "progress": clampf(1.0 - left / hours, 0.0, 1.0),
+		"crew": maxi(int(ch.get("max_workers", 1)), 1), "servings": float(info["servings"]),
+		"present": present}
+
+
 func _service_duty_roster(iid: String, engine: NpcPopulationEngine,
 		abs_h: float) -> void:
 	var board := engine.chore_board
@@ -3768,6 +4224,10 @@ func _service_duty_roster(iid: String, engine: NpcPopulationEngine,
 	engine.skills.forget_missing(ids)
 	engine.duty.settle_day(board, day)
 	engine.duty.generate(day, ids, engine.skills, engine.labour)
+	# The weekly rota names who does each duty slot and recurring chore,
+	# by everyone's own day (NpcWorkScheduler).
+	engine.plan_rota(abs_h, NpcDutyRoster.HORIZON_DAYS, true,
+		_kitchen_rota_items(iid, engine, day, NpcDutyRoster.HORIZON_DAYS))
 	engine.duty.mint_day(board, day, abs_h, ids, engine.skills,
 		engine.labour, settlement_log())
 	board.prune_completed(abs_h)
@@ -3830,7 +4290,29 @@ func _service_machine_chores(iid: String, engine: NpcPopulationEngine, model,
 		# fallback for a graph-only site.
 		if not prop_id.is_empty():
 			opts["target"] = {"kind": "prop", "id": prop_id}
+		# A meal step is a small crew job (MealJobPlan): several cooks at
+		# once, the rota's cooks for the day getting first refusal.
+		if str(specs.get("role", "")) == "kitchen" and effect.get("op", "") == "recipe_step_done":
+			var info := MealJobPlan.recipe_info(specs)
+			var crew := MealJobPlan.crew_for(float(info["servings"]))
+			for st in info["steps"]:
+				if str((st as Dictionary)["id"]) == step_id and int((st as Dictionary)["crew_max"]) > 0:
+					crew = int((st as Dictionary)["crew_max"])
+			opts["max_workers"] = clampi(crew, 1, 6)
+			opts["meal_step"] = MealJobPlan.step_kind(step_id, label)
+			var cooks := kitchen_cooks(gid, _abs_h)
+			if not cooks.is_empty():
+				opts["assigned_to"] = str(cooks[0])
 		var cid := board.add_chore(label, hours, opts)
+		if not cid.is_empty() and opts.has("meal_step"):
+			board.find(cid)["meal_step"] = str(opts["meal_step"])
+		var cooks2 := kitchen_cooks(gid, _abs_h) if str(specs.get("role", "")) == "kitchen" else []
+		if not cid.is_empty() and not cooks2.is_empty():
+			var ch := board.find(cid)
+			ch["assigned_crew"] = cooks2
+			ch["assign_at_h"] = _abs_h
+			ch["assign_hold_h"] = NpcDutyRoster.ASSIGN_HOLD_H
+			ch["rota_day"] = NpcChoreBoard.day_index(_abs_h)
 		if cid.is_empty():
 			continue
 		var patch: Dictionary = (d.get("specs", {}) as Dictionary).duplicate(true)

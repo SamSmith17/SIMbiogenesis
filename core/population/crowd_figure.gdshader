@@ -52,6 +52,10 @@ uniform float rim_power : hint_range(0.5, 16.0) = 6.5;
 uniform float rim_strength : hint_range(0.0, 2.0) = 0.85;
 uniform float rim_emission : hint_range(0.0, 1.0) = 0.16;
 uniform float stride_m = 0.75;
+// NpcGait.display_scale for the world's walking cadence: at 1440x the true
+// cadence (~2500 strides a real second) lands the legs on a random phase each
+// frame. CrowdRenderer pushes it; 1 at ordinary speeds.
+uniform float gait_scale = 1.0;
 // Height raster over the population region (CrowdRenderer bakes it from the
 // terrain): R = ground height. Inside the rect the figure's feet follow it
 // EVERY frame along the segment; outside (or before the bake lands) the
@@ -91,6 +95,8 @@ const float POSE_FIREFLOW = 16.0;
 const float POSE_GAZE = 17.0;
 // A light dance on the spot (a fire with a stage's music carrying over).
 const float POSE_SWAY = 18.0;
+// Squatting on the heels (NpcSeatPose.SQUAT).
+const float POSE_SQUAT = 19.0;
 // Peak experience: ramp-in and ignition flash, in SIM hours from the onset
 // (so a spreading peak is drawn as neighbours lighting up one after another).
 const float PEAK_RAMP_H = 0.012;
@@ -305,7 +311,7 @@ void vertex() {
 		// positive leans it back (LIE lies on its back). A positive head_nod
 		// tips the head forward (a nod), negative back (looking up).
 		if (walking) {
-			float ph = (u * seg_len / max(stride_m, 0.1)) * 6.283 + seed * 6.283;
+			float ph = (u * seg_len / max(stride_m, 0.1)) * gait_scale * 6.283 + seed * 6.283;
 			float swing = sin(ph) * 0.55;
 			if (part == 4.0) limb_angle = swing;
 			else if (part == 5.0) limb_angle = -swing;
@@ -313,8 +319,20 @@ void vertex() {
 			else if (part == 3.0) limb_angle = swing * 0.7;
 			body_lower = -abs(sin(ph)) * 0.03;
 		} else if (pose == POSE_SIT) {
-			if (part >= 4.0) limb_angle = -1.35;  // thighs forward, as a bench
-			body_lower = 0.42;
+			// ON a seat (NpcSeatPose: a chair pose is only ever drawn on one):
+			// the figure's origin is the seat surface, the hips just above it,
+			// the knee-less legs angled down and forward to the ground.
+			if (part >= 4.0) limb_angle = -1.0;
+			else if (part >= 2.0) limb_angle = -0.35;
+			body_lower = 0.80;
+		} else if (pose == POSE_SQUAT) {
+			// On the heels: hips low, the (knee-less) legs folded short and
+			// forward, forearms toward the knees, the head up.
+			body_lower = 0.52;
+			body_tilt = -0.35;
+			if (part >= 4.0) { limb_angle = -1.1; limb_splay = 0.3; leg_scale = 0.5; }
+			else if (part >= 2.0) { limb_angle = -0.9; limb_splay = 0.1; }
+			head_nod = -0.25;
 		} else if (pose == POSE_CROSS) {
 			// Cross-legged on the ground: hips down, the (knee-less) legs
 			// forward, splayed and SHORTENED so they read as folded; hands

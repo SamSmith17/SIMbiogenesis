@@ -154,6 +154,14 @@ var _neck: Node3D = null
 var _feet: Array[Node3D] = []
 var _head_meshes: Array[MeshInstance3D] = []
 var _phase := 0.0
+## Seconds the body has been in a gait (walk / urgent walk / run) — the gait
+## joints track their swing tightly once settled (see _gait_rate).
+var _gait_t := 0.0
+## Sitting ON a seat (NpcSeatPose.on_chair): the chair pose's origin is the
+## seat surface and the hips sit just above it. Off a seat the chair pose
+## only appears in the sit-down / stand-up transitions of a ground sit.
+var on_seat := false
+var _in_gait := false
 ## Per-agent flavour, all set once in setup(). Applied ONLY in the asymmetric
 ## work families: mirroring a contralateral gait just phase-shifts it, and
 ## mirroring the lying/sitting poses risks fighting _place_body's cos(pitch)
@@ -556,8 +564,19 @@ func _pose_procedural(clip: String, rate: float, dt: float, flavor: String = "")
 	if _body == null:
 		return
 	var r := clampf(rate, 0.0, 12.0)
-	_phase += dt * TAU * STRIDE_HZ * maxf(r, 0.001)
+	# The SHOWN cadence (NpcGait): the true one up to ~2x, then saturating, so
+	# a 1440x world still reads as brisk walking instead of a blur.
+	_phase += dt * TAU * NpcGait.display_hz(STRIDE_HZ * maxf(r, 0.001))
 	_flavor = flavor
+	_in_gait = false
+	_pose_procedural_inner(clip, dt)
+	if _in_gait:
+		_gait_t += dt
+	else:
+		_gait_t = 0.0
+
+
+func _pose_procedural_inner(clip: String, dt: float) -> void:
 	# Matched on the LOGICAL clip, before the file mapping collapses it onto
 	# the plain walk/idle (which is only right for the rigged body).
 	if _carry_box != null:
@@ -592,6 +611,9 @@ func _pose_procedural(clip: String, rate: float, dt: float, flavor: String = "")
 			return
 		NpcRig.CLIP_GAZE:
 			_pose_gaze(dt)
+			return
+		NpcRig.CLIP_SQUAT:
+			_pose_heel_squat(dt)
 			return
 	# Shared moments and the decks (venue hints the avatar passes as flavour).
 	if _flavor == "cheer":
@@ -684,34 +706,40 @@ func _pose_walk(amp: float, dt: float) -> void:
 	if _flavor == "run":
 		_pose_run(dt)
 		return
+	_in_gait = true
+	var gr := _gait_rate()
 	var s := sin(_phase)
 	var body_y := HIP_Y + absf(sin(_phase * 2.0)) * 0.022 * amp
 	_settle(_torso, Vector3(0.0, 0.0, 0.0), dt)
 	_place_body(body_y, 0.0, dt)
+	var bias := _hip_bias(0.95 * amp)
 	for i in 2:
 		var side := 1.0 if i == 0 else -1.0
 		var swing := s * side * 0.62 * amp
-		_ease(_hip[i], Vector3(swing, 0.0, 0.0), dt)
+		_ease(_hip[i], Vector3(swing + bias, 0.0, 0.0), dt, gr)
 		# Knee only bends when the leg is travelling forward.
 		var lift := maxf(-s * side, 0.0)
-		_ease(_knee[i], Vector3(lift * 0.95 * amp, 0.0, 0.0), dt)
-		_ease(_shoulder[i], Vector3(-swing * 0.75, 0.0, 0.0), dt)
-		_ease(_elbow[i], Vector3(-(0.25 + maxf(s * side, 0.0) * 0.35) * amp, 0.0, 0.0), dt)
+		_ease(_knee[i], Vector3(lift * 0.95 * amp, 0.0, 0.0), dt, gr)
+		_ease(_shoulder[i], Vector3(-swing * 0.75, 0.0, 0.0), dt, gr)
+		_ease(_elbow[i], Vector3(-(0.25 + maxf(s * side, 0.0) * 0.35) * amp, 0.0, 0.0), dt, gr)
 	# Trudging drops the head and rounds the shoulders.
 	_ease(_head, Vector3(0.30 * (1.0 - amp), 0.0, 0.0), dt)
 
 
 func _pose_walk_urgent(amp: float, dt: float) -> void:
+	_in_gait = true
+	var gr := _gait_rate()
 	var s := sin(_phase)
 	_settle(_torso, Vector3(0.14, 0.0, 0.0), dt)
 	_place_body(HIP_Y - 0.03 + absf(sin(_phase * 2.0)) * 0.014, 0.0, dt)
 	_ease(_head, Vector3(0.08, 0.0, 0.0), dt)
+	var bias := _hip_bias(0.75)
 	for i in 2:
 		var side := 1.0 if i == 0 else -1.0
 		# Short quick steps, knees a touch together.
 		var swing := s * side * 0.44 * amp
-		_ease(_hip[i], Vector3(swing, 0.0, -0.03 * side), dt)
-		_ease(_knee[i], Vector3(maxf(-s * side, 0.0) * 0.75, 0.0, 0.0), dt)
+		_ease(_hip[i], Vector3(swing + bias, 0.0, -0.03 * side), dt, gr)
+		_ease(_knee[i], Vector3(maxf(-s * side, 0.0) * 0.75, 0.0, 0.0), dt, gr)
 		# Arms clamped in across the front — the tell.
 		_ease(_shoulder[i], Vector3(-0.55, 0.0, 0.30 * side), dt)
 		_ease(_elbow[i], Vector3(-1.05, 0.0, 0.0), dt)
@@ -959,7 +987,7 @@ func _pose_idle(sad: bool, dt: float) -> void:
 ## Hips drop to seat height, thighs forward, shins down. Reused for the
 ## seated-clap pose with the arms overridden.
 func _pose_sitting(clapping: bool, dt: float) -> void:
-	_place_body(HIP_Y * 0.42, 0.0, dt)
+	_place_body(NpcSeatPose.CHAIR_HIP_ABOVE_SEAT if on_seat else HIP_Y * 0.42, 0.0, dt)
 	_settle(_torso, Vector3(0.10, 0.0, 0.0), dt)
 	_ease(_head, Vector3(0.0, 0.0, 0.0), dt)
 	for i in 2:
@@ -1298,6 +1326,23 @@ func _pose_sit_cross(dt: float) -> void:
 		_ease(_elbow[i], Vector3(-0.75, 0.0, 0.0), dt)
 
 
+## Squatting on the heels: hips low over the feet, knees deep, forearms
+## resting on the knees, the head up and looking about. Held still apart from
+## the breath and a glance — a short stint, a quick chat, a pit toilet.
+func _pose_heel_squat(dt: float) -> void:
+	var breathe := sin(_phase * 0.33) * 0.01
+	var look := sin(_phase * 0.07 * _tempo + _lean * 5.0)
+	_place_body(0.34 + breathe, 0.0, dt)
+	_settle(_torso, Vector3(0.42, 0.0, 0.0), dt)
+	_ease(_head, Vector3(-0.30, look * 0.5, 0.0), dt)
+	for i in 2:
+		var side := 1.0 if i == 0 else -1.0
+		_ease(_hip[i], Vector3(-1.75, 0.0, -0.22 * side), dt)
+		_ease(_knee[i], Vector3(2.55, 0.0, 0.0), dt)
+		_ease(_shoulder[i], Vector3(-0.95, 0.0, -0.10 * side), dt)
+		_ease(_elbow[i], Vector3(-0.55, 0.0, 0.0), dt)
+
+
 ## Sitting back on the ground: legs out (one knee up for some), propped on
 ## straight arms behind, the torso leaning back but the head UP and looking
 ## out — relaxed, never flat (lying at a venue read as dead).
@@ -1453,6 +1498,23 @@ func _pose_clap(dt: float) -> void:
 ## Critically-damped-ish approach. Every pose is expressed as a target rather
 ## than a jump, so switching activity reads as a movement instead of a cut —
 ## which is what keeps a figure with no blend system from looking snappy.
+## The gait joints' tracking rate: the ordinary 9/s while a body eases INTO
+## a walk from another pose, then tight (45/s) once it has walked 0.3 s, so the
+## leg follows its swing instead of settling at the swing's average.
+func _gait_rate() -> float:
+	return lerpf(9.0, 45.0, clampf(_gait_t / 0.3, 0.0, 1.0))
+
+
+## The thigh's forward bias that puts the AVERAGE foot under the hips. The knee
+## bends only on the recovery (mean flex = peak / PI), which swings the shin
+## back; without this the feet trailed the hips by ~0.12 m at every speed —
+## hidden by the stride at 1x, a forward lean once the stride is fast.
+## Hanging-limb convention: a NEGATIVE hip angle swings the thigh forward.
+func _hip_bias(knee_peak: float) -> float:
+	var knee_mean := knee_peak / PI
+	return -knee_mean * SHIN / (THIGH + SHIN)
+
+
 func _ease(n: Node3D, target: Vector3, dt: float, rate: float = 9.0) -> void:
 	if n == null:
 		return

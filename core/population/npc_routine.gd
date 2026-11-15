@@ -85,6 +85,9 @@ const BATHROOM_HOURS := 5.0 / 60.0
 const MAX_PHASE_OFFSET_H := 0.5
 
 var blocks: Array = []   # [{start_h, end_h, kind}], ordered, may wrap midnight
+## The player's per-person edits (NpcPersona overrides), {agent_id: {field: v}},
+## from the habitat's specs.pop_personas. Runtime only: never in to_array.
+var personas: Dictionary = {}
 
 
 ## The default day:
@@ -243,6 +246,34 @@ func wake_base_h(fallback: float) -> float:
 	return fallback
 
 
+## This person's profile (NpcPersona), with the player's edits.
+func persona_of(agent_id: String) -> Dictionary:
+	return NpcPersona.for_id(agent_id, personas.get(agent_id, {}) as Dictionary)
+
+
+## Replace the per-person edits (and forget schedules built from the old ones).
+func set_personas(overrides: Dictionary) -> void:
+	personas = overrides.duplicate(true)
+	invalidate_personal()
+
+
+## How far this person's bedtime (x) and wake time (y) sit from the routine's.
+func sleep_shift_of(agent_id: String) -> Vector2:
+	if agent_id.is_empty():
+		return Vector2.ZERO
+	return NpcPersona.sleep_shift(persona_of(agent_id))
+
+
+## sleep_start_h moved by the person's chronotype and sleep need.
+func person_sleep_start(agent_id: String, fallback: float) -> float:
+	return fposmod(sleep_start_h(fallback) + sleep_shift_of(agent_id).x, 24.0)
+
+
+## wake_base_h moved by the person's chronotype and sleep need.
+func person_wake_base(agent_id: String, fallback: float) -> float:
+	return fposmod(wake_base_h(fallback) + sleep_shift_of(agent_id).y, 24.0)
+
+
 ## When the sleep need's window opens: EARLY_BED_H before the first SLEEP
 ## block, or `fallback` when the routine has none.
 func sleep_start_h(fallback: float) -> float:
@@ -361,7 +392,120 @@ func personal_blocks(key: String) -> Array:
 		bd["start_h"] = fposmod(float(bd.get("start_h", 0.0)) + float(shift[k]), 24.0)
 		bd["end_h"] = fposmod(float(bd.get("end_h", 0.0)) + float(shift[(k + 1) % n]), 24.0)
 		out.append(bd)
+	# The person's own night (NpcPersona): the SLEEP block, the wash before it
+	# and the bathroom after it move with their chronotype and sleep need;
+	# meals and work stay where the community put them.
+	var sh := sleep_shift_of(key.get_slice("|", 0))
+	if absf(sh.x) > 0.01 or absf(sh.y) > 0.01:
+		out = _move_night(out, sh)
 	_personal[key] = out
+	return out
+
+
+## `src` with its SLEEP block moved by `sh` (bedtime x, wake y), the short WASH
+## before it and short BATHROOM after it carried along, everything else clipped
+## round them, and any time left uncovered given to the leisure kind.
+func _move_night(src: Array, sh: Vector2) -> Array:
+	var n := src.size()
+	var ks := -1
+	for k in n:
+		if str((src[k] as Dictionary).get("kind", "")) == SLEEP:
+			ks = k
+			break
+	if ks < 0:
+		return src
+	var sb: Dictionary = src[ks]
+	var s := fposmod(float(sb["start_h"]) + sh.x, 24.0)
+	var e := fposmod(float(sb["end_h"]) + sh.y, 24.0)
+	if fposmod(e - s, 24.0) < 1.0:
+		return src
+	var anchors: Array = [{"start_h": s, "end_h": e, "kind": SLEEP}]
+	var moved := {ks: true}
+	var kp := (ks - 1 + n) % n
+	var pb: Dictionary = src[kp]
+	var pl := fposmod(float(pb["end_h"]) - float(pb["start_h"]), 24.0)
+	if str(pb.get("kind", "")) == WASH and pl < 1.0 and kp != ks:
+		anchors.append({"start_h": fposmod(s - pl, 24.0), "end_h": s, "kind": WASH})
+		moved[kp] = true
+	var kn := (ks + 1) % n
+	var nb: Dictionary = src[kn]
+	var nlen := fposmod(float(nb["end_h"]) - float(nb["start_h"]), 24.0)
+	if str(nb.get("kind", "")) == BATHROOM and nlen < SHORT_BLOCK_H and kn != ks:
+		anchors.append({"start_h": e, "end_h": fposmod(e + nlen, 24.0), "kind": BATHROOM})
+		moved[kn] = true
+	# Linear pieces in [0, 24): anchors first, then everything else clipped.
+	var taken: Array = []
+	var pieces: Array = []
+	for a in anchors:
+		for seg in _segments(a):
+			pieces.append({"s": seg.x, "e": seg.y, "kind": a["kind"], "src": a})
+			taken.append(seg)
+	for k in n:
+		if moved.has(k):
+			continue
+		var b: Dictionary = src[k]
+		for seg in _segments(b):
+			for part in _subtract(seg, taken):
+				pieces.append({"s": part.x, "e": part.y, "kind": b["kind"], "src": b})
+	pieces.sort_custom(func(a, b): return float(a["s"]) < float(b["s"]))
+	# Fill gaps with leisure, then join neighbours of one kind.
+	var filled: Array = []
+	var cur := 0.0
+	var leisure := leisure_kind()
+	for p in pieces:
+		if float(p["s"]) - cur > 1.0 / 120.0:
+			filled.append({"s": cur, "e": float(p["s"]), "kind": leisure, "src": {}})
+		if float(p["e"]) - float(p["s"]) > 1.0 / 120.0:
+			filled.append(p)
+		cur = maxf(cur, float(p["e"]))
+	if 24.0 - cur > 1.0 / 120.0:
+		filled.append({"s": cur, "e": 24.0, "kind": leisure, "src": {}})
+	var joined: Array = []
+	for p in filled:
+		if not joined.is_empty() and str(joined[-1]["kind"]) == str(p["kind"]) \
+				and absf(float(joined[-1]["e"]) - float(p["s"])) < 1.0 / 60.0:
+			joined[-1]["e"] = p["e"]
+		else:
+			joined.append(p.duplicate())
+	if joined.size() > 1 and str(joined[0]["kind"]) == str(joined[-1]["kind"]) \
+			and float(joined[0]["s"]) < 1.0 / 60.0 and float(joined[-1]["e"]) > 24.0 - 1.0 / 60.0:
+		joined[0]["s"] = joined[-1]["s"]
+		joined.pop_back()
+	var out: Array = []
+	for p in joined:
+		var bd: Dictionary = (p["src"] as Dictionary).duplicate()
+		bd["kind"] = p["kind"]
+		bd["start_h"] = fposmod(float(p["s"]), 24.0)
+		bd["end_h"] = fposmod(float(p["e"]), 24.0)
+		out.append(bd)
+	return out
+
+
+## A block as linear pieces of [0, 24).
+static func _segments(b: Dictionary) -> Array:
+	var s := fposmod(float(b.get("start_h", 0.0)), 24.0)
+	var e := fposmod(float(b.get("end_h", 0.0)), 24.0)
+	if is_equal_approx(s, e):
+		return []
+	if s < e:
+		return [Vector2(s, e)]
+	return [Vector2(s, 24.0), Vector2(0.0, e)]
+
+
+## `seg` minus every piece in `cut`.
+static func _subtract(seg: Vector2, cut: Array) -> Array:
+	var out: Array = [seg]
+	for c: Vector2 in cut:
+		var next: Array = []
+		for p: Vector2 in out:
+			if c.y <= p.x or c.x >= p.y:
+				next.append(p)
+				continue
+			if c.x > p.x:
+				next.append(Vector2(p.x, c.x))
+			if c.y < p.y:
+				next.append(Vector2(c.y, p.y))
+		out = next
 	return out
 
 
@@ -539,7 +683,9 @@ func invalidate_personal() -> void:
 
 
 func duplicate_routine() -> NpcRoutine:
-	return from_array(to_array())
+	var r := from_array(to_array())
+	r.personas = personas.duplicate(true)
+	return r
 
 
 ## Human-readable time, for the editor and tooltips.

@@ -90,6 +90,11 @@ var _carrying := false
 ## machine's purity contract means any per-agent or per-job variation has to
 ## arrive through step() rather than be drawn inside it.
 var _work_pose := ""
+## The seat the person took (NpcSeatPose kind, "" = none), its height, and
+## the person (pose variety): the sitting rule reads all three.
+var _seat := ""
+var _seat_elev := 0.0
+var _person := ""
 ## PEAK EXPERIENCE: this person is at FUCK YES!!! (an INPUT, from the dot's
 ## `peak_since`). Standing at a venue or a hang, they break into the peak
 ## dance instead of whatever the venue would have them do.
@@ -207,6 +212,9 @@ func step(dt: float, inp: Dictionary) -> void:
 	var dwell := float(inp.get("dwell_left_s", 0.0))
 	_carrying = bool(inp.get("carrying", false))
 	_work_pose = str(inp.get("work_pose", ""))
+	_seat = str(inp.get("seat", ""))
+	_seat_elev = float(inp.get("elev", 0.0))
+	_person = str(inp.get("agent_id", _person))
 	var venue_pose := str(inp.get("venue_pose", ""))
 	var peaking := bool(inp.get("peaking", false))
 	_update_mood(float(inp.get("morale", 1.0)))
@@ -348,6 +356,16 @@ func _base_pose_clip() -> String:
 		var want := str(_anim_overrides[slot])
 		if not want.is_empty() and _has(want):
 			return want
+	# Sitting is ONE rule (NpcSeatPose): a chair pose only ON a seat (a bench,
+	# a vehicle seat, a toilet), the ground poses everywhere else.
+	var seat_word := NpcSeatPose.for_activity(_activity, _venue_pose, _seat, _seat_elev,
+		_person, _space_type)
+	if not seat_word.is_empty():
+		if seat_word == NpcSeatPose.STAND:
+			return _idle_clip()
+		var seat_clip := NpcSeatPose.clip_for(seat_word)
+		if _has(seat_clip):
+			return seat_clip
 	match _activity:
 		"sleep":
 			return NpcRig.CLIP_SLEEP
@@ -472,6 +490,8 @@ static func _clip_file_for(clip: String) -> String:
 		return NpcRig.CLIP_SIT
 	if clip == NpcRig.CLIP_REDIRECT or clip == NpcRig.CLIP_GAZE:
 		return NpcRig.CLIP_IDLE
+	if clip == NpcRig.CLIP_SQUAT:
+		return NpcRig.CLIP_WORK
 	if clip == NpcRig.CLIP_FIREFLOW:
 		return NpcRig.CLIP_DANCE
 	if clip == NpcRig.CLIP_CARRY:

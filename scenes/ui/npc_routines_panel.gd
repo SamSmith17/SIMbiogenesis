@@ -229,6 +229,18 @@ func _build_ui() -> void:
 			close()
 			sgv.call("open_site_projects"))
 	header.add_child(projects_btn)
+	var sched_btn := Button.new()
+	UITheme.style_button(sched_btn)
+	sched_btn.text = "👥 Schedule…"
+	sched_btn.name = "community_schedule"
+	sched_btn.tooltip_text = "Community schedule: everyone's day, the week's events, the rota, calendars to export"
+	sched_btn.pressed.connect(func() -> void:
+		var tl: Node = ServiceLocator.timeline_ui()
+		if tl != null and tl.has_method("open_community_schedule"):
+			var iid := _item_id
+			close()
+			tl.call("open_community_schedule", "Day", {"habitat": iid}))
+	header.add_child(sched_btn)
 	var close_btn := IconButton.close(close)
 	header.add_child(close_btn)
 

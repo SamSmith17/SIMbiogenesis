@@ -785,7 +785,18 @@ func _on_recipe_parts_ready(item_id: String, parts: Array) -> void:
 			_show_part_up_toast(str(meta["label"]), count)
 
 
+## One confirm card per machine, step and batch: the flow engine signals the
+## wait on every tick it lasts, and each signal used to add another card.
+var _chore_card_keys: Dictionary = {}
+
+
 func _on_recipe_chore_waiting(item_id: String, request: Dictionary) -> void:
+	var sp: Dictionary = (model.get_item(item_id).get("specs", {}) as Dictionary) if model != null else {}
+	var card_key := "%s|%.4f" % [str(request.get("step_id", sp.get("recipe_waiting_step_id", ""))),
+		float(sp.get("recipe_start_abs_hours", 0.0))]
+	if str(_chore_card_keys.get(item_id, "")) == card_key:
+		return
+	_chore_card_keys[item_id] = card_key
 	var label := str(request.get("label", "Needs attention"))
 	var hours := float(request.get("chore_hours", 0.0))
 	var main := _get_scene_main_node()
@@ -843,7 +854,8 @@ func start_process_recipe(item_id: String) -> bool:
 	# Ensure switched on so RFE will run the batch.
 	specs["switched_on"] = true
 	specs["on"] = true
-	var begin := RecipeRunner.begin_run(specs, abs_h, recipe)
+	var led: ChoreLedger = _resource_flow.get("chore_ledger") if _resource_flow != null else null
+	var begin := RecipeRunner.begin_run(specs, abs_h, recipe, led)
 	model.update_item(item_id, {"specs": specs})
 	if bool(begin.get("waiting_chore", false)):
 		_on_recipe_chore_waiting(item_id, {

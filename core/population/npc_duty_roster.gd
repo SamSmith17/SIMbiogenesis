@@ -265,7 +265,7 @@ func mint_day(board: NpcChoreBoard, day: int, abs_hours: float,
 				"min_workers": 1,
 				"max_workers": maxi(planned.size(), 1),
 				"assigned_to": str(planned[0]),
-				"assign_at_h": abs_hours,
+				"assign_at_h": _slot_start_abs(slot, day, abs_hours),
 				"assign_hold_h": ASSIGN_HOLD_H,
 				"requires_skill": str(duty.get("requires_skill", "")),
 				"target": duty.get("target", {}),
@@ -276,13 +276,23 @@ func mint_day(board: NpcChoreBoard, day: int, abs_hours: float,
 		# assign_at_h / assign_hold_h are not add_chore parameters — they are
 		# free-form record keys, so stamp them after.
 		var rec := board.find(new_id)
-		rec["assign_at_h"] = abs_hours
+		rec["assign_at_h"] = _slot_start_abs(slot, day, abs_hours)
 		rec["assign_hold_h"] = ASSIGN_HOLD_H
 		rec["duty_crew"] = planned.duplicate()
+		# The whole named crew may claim it during the hold, not only the first.
+		rec["assigned_crew"] = planned.duplicate()
 		slot["chore_id"] = new_id
 		slot["state"] = "minted"
 		made.append(new_id)
 	return made
+
+
+## When a slot's hold starts: the rota's planned start (NpcWorkScheduler),
+## else when it was minted.
+static func _slot_start_abs(slot: Dictionary, day: int, minted_at: float) -> float:
+	if slot.has("start_h"):
+		return maxf(float(day) * 24.0 + float(slot["start_h"]), minted_at)
+	return minted_at
 
 
 ## Mark yesterday's minted slots done, so the calendar can dim them and

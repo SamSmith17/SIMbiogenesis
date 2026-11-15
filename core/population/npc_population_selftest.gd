@@ -4371,7 +4371,7 @@ func _test_rig_assets() -> void:
 			NpcRig.CLIP_IDLE: {"len": 2.0}, NpcRig.CLIP_WALK: {"len": 1.0}})
 	var t_seen := 0
 	for i in 200:
-		pm.step(1.0 / 60.0, {"in_transit": false, "activity": "bladder",
+		pm.step(1.0 / 60.0, {"in_transit": false, "activity": "bladder", "seat": "toilet", "elev": 0.42,
 				"morale": 0.9, "dwell_left_s": 300.0, "playback_rate": 6.0})
 		if pm.clip() == NpcRig.CLIP_SIT_ENTER:
 			t_seen += 1
@@ -4982,7 +4982,14 @@ func _test_area_spaces() -> void:
 ## version of the routine, different each day, so a camp does not eat and
 ## queue for the toilets in the same ten minutes.
 func _test_personal_schedules() -> void:
+	# The jitter alone: everyone here keeps the routine's night (neutral
+	# personas). Chronotypes moving the night are _test_personas'.
+	var neutral := {}
+	for i in 200:
+		neutral["cmp_npc_%d" % i] = {"chrono_h": 0.0, "sleep_need_h": NpcPersona.BASE_SLEEP_H}
+	neutral["x_npc_1"] = {"chrono_h": 0.0, "sleep_need_h": NpcPersona.BASE_SLEEP_H}
 	var r := NpcRoutine.festival_day()
+	r.set_personas(neutral)
 	var lunch: Array = []
 	var loo: Array = []
 	var tiled := true
@@ -5016,7 +5023,9 @@ func _test_personal_schedules() -> void:
 	_check("the after-lunch toilet visit spreads out (sd %.2f h)" % spread.call(loo), float(spread.call(loo)) > 0.15)
 	var k1 := r.day_key("cmp_npc_3", 24.0 * 740000.0 + 12.0)
 	var k2 := r.day_key("cmp_npc_3", 24.0 * 740001.0 + 12.0)
-	_check("a person's day is deterministic", r.personal_blocks(k1) == NpcRoutine.festival_day().personal_blocks(k1))
+	var r_again := NpcRoutine.festival_day()
+	r_again.set_personas(neutral)
+	_check("a person's day is deterministic", r.personal_blocks(k1) == r_again.personal_blocks(k1))
 	_check("and different the next day", r.personal_blocks(k1) != r.personal_blocks(k2)
 		and not is_equal_approx(NpcRoutine.day_shift(k1), NpcRoutine.day_shift(k2)))
 	_check("block_at reads the day shift", r.block_at(13.0 + NpcRoutine.day_shift(k1) + 0.05, 0.0, k1).get("kind") == NpcRoutine.EAT)
@@ -5778,7 +5787,11 @@ func _test_fairness_rotation() -> void:
 	e2.configure(6, "fair", Vector2.ZERO)
 	e2.chore_board = _fair_board()
 	e2.routine = NpcRoutine.default_day()
-	_run_sim(e2, site, 8.0, 24.0 * 4.0 - 8.0, 1.0 / 60.0)
+	# Its own site: sharing one registry handed run 2 run 1's leftover claims
+	# and toilet-line places under the same agent ids.
+	var site2 := _make_test_site()
+	site2["chore_pos_of"] = _pos_chore_resolver()
+	_run_sim(e2, site2, 8.0, 24.0 * 4.0 - 8.0, 1.0 / 60.0)
 	var same := true
 	for aid in ids:
 		if absf(engine.labour.total_hours(str(aid))
@@ -6667,13 +6680,13 @@ func _test_pose_machine() -> void:
 	_check("waking plays the get-up", i_exit >= 0, ", ".join(PackedStringArray(wake)))
 	_check("the get-up precedes walking", i_exit >= 0 and i_walk > i_exit)
 
-	# 4. The bathroom, at BOTH time scales. A 5-minute visit is 0.67 real
+	# 4. The bathroom (ON a toilet seat: NpcSeatPose sits only on a seat), at BOTH time scales. A 5-minute visit is 0.67 real
 	#    seconds at 450x — shorter than one sit-down — so transitions have to
 	#    disappear at speed rather than be started and aborted.
 	var m2 := NpcPoseMachine.new()
 	m2.set_catalog(cat)
 	var slow: Array = []
-	_pose_run(m2, 8.0, {"in_transit": false, "activity": "bladder",
+	_pose_run(m2, 8.0, {"in_transit": false, "activity": "bladder", "seat": "toilet", "elev": 0.42,
 			"morale": 0.8, "dwell_left_s": 300.0}, slow)
 	_check("the bathroom is used sitting down", slow.has(NpcRig.CLIP_SIT),
 			", ".join(PackedStringArray(slow)))
@@ -6683,7 +6696,7 @@ func _test_pose_machine() -> void:
 	var m3 := NpcPoseMachine.new()
 	m3.set_catalog(cat)
 	var fast: Array = []
-	_pose_run(m3, 4.0, {"in_transit": false, "activity": "bladder",
+	_pose_run(m3, 4.0, {"in_transit": false, "activity": "bladder", "seat": "toilet", "elev": 0.42,
 			"morale": 0.8, "dwell_left_s": 0.67}, fast)
 	_check("a 0.67 s visit skips the sit-down entirely",
 			not fast.has(NpcRig.CLIP_SIT_ENTER), ", ".join(PackedStringArray(fast)))
@@ -6693,12 +6706,12 @@ func _test_pose_machine() -> void:
 	var m4 := NpcPoseMachine.new()
 	m4.set_catalog(cat)
 	for i in 20:
-		m4.step(1.0 / 60.0, {"in_transit": false, "activity": "bladder",
+		m4.step(1.0 / 60.0, {"in_transit": false, "activity": "bladder", "seat": "toilet", "elev": 0.42,
 				"morale": 0.8, "dwell_left_s": 300.0})
-	m4.step(1.0 / 60.0, {"in_transit": true, "activity": "bladder",
+	m4.step(1.0 / 60.0, {"in_transit": true, "activity": "bladder", "seat": "toilet", "elev": 0.42,
 			"morale": 0.8, "dwell_left_s": 0.0})
 	for i in 10:
-		m4.step(1.0 / 60.0, {"in_transit": true, "activity": "bladder",
+		m4.step(1.0 / 60.0, {"in_transit": true, "activity": "bladder", "seat": "toilet", "elev": 0.42,
 				"morale": 0.8, "dwell_left_s": 0.0})
 	_check("an interrupted sit-down abandons the seat", not m4.is_seated())
 

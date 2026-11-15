@@ -350,6 +350,70 @@ Godot.exe.exe --headless --path . --script gameplay/site_target_picker_selftest.
 # bucket NAMED. Expect "< 0.3 m: 0" in both tiers on both routines; a new
 # generator that stacks people shows up here by name. --routine=default too:
 Godot.exe.exe --headless --path . --script tools/diag/npc_spacing_probe.gd -- --days=2 --routine=festival
+# How a day is spent (NOT a selftest; both tiers, a week): hours per person by
+# category, toilet visits, chair sits with no seat, work-hour spread (Gini),
+# work inside sleep windows. The before/after of the NPC life pass:
+Godot.exe.exe --headless --path . --script tools/diag/npc_time_use_probe.gd -- --days=7 --routine=default --work=20
+# Bodies at speed (offline — NpcGait display cadence, the stick figure's mean
+# foot under the hips at 1x / 4x / 12x and on a 20 fps frame; EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/population/npc_gait_selftest.gd
+# Sitting + toilets (offline — NpcSeatPose, ToiletBankBuilder stalls / doors /
+# line, SpaceRegistry stalls + FIFO line + wait-priced choice, and BOTH tiers on
+# a 2-stall bank: never over capacity, one per stall, seated facing the door;
+# EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/population/sanitation_selftest.gd
+# People (offline — NpcPersona: chronotype / sleep-need moments, clamps, override
+# precedence, the sleep shift, a moved night tiling the day with meals kept;
+# EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/population/npc_persona_selftest.gd
+# The weekly rota (offline — NpcWorkScheduler: what it collects, every item
+# crewed, hours within 10 % (plus one shift), nobody on a shift in their sleep,
+# skills / unavailable hours / daily caps / preference, the board side (crew
+# claims, shares, the hold, your own shift first), the engine once a day, duty
+# slots; 40 people x 7 days timed; EXPECTED_CHECKS). The probe's --rota=0|1
+# compares the same week with and without it, --who per person, --trace=<id>:
+Godot.exe.exe --headless --path . --script core/population/work_scheduler_selftest.gd
+# The schedule (offline — ScheduledEvents: every source (deploy, burns,
+# venue sets once a day, drives, meals, rota shifts), windows, merge, a
+# person's day agreeing with block_at hour by hour; IcsWriter: dates against
+# CelestialClock, escaping, 75-octet folding, the VTIMEZONE (US daylight rule
+# or one fixed offset), a round trip through its own parser, stable UIDs;
+# EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/schedule/schedule_selftest.gd
+# Meals as small crew jobs (offline — CrewJobPlan: every job scheduled, deps
+# kept, crews in range, nobody in two places, deterministic, more hands never
+# slower, state_at pure; MealJobPlan: step kinds, crew per servings, the plan's
+# work = the chore's hours, parallel chopping, serve order, every job's rig /
+# tool / clip existing, the simmer unattended, progress -> time monotone; the
+# camp kitchen's stations; meal_prep's recipe reading; the rota crewing a
+# day's cooking; EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/population/meal_job_selftest.gd
+# Time use (offline — NpcTimeUse: both tiers' category maps, tick
+# accounting (first tick, a jump, a scrub back), whole days preferred over a
+# part day, per person / per camp, ATUS groups, verdicts, rota demand;
+# EXPECTED_CHECKS):
+Godot.exe.exe --headless --path . --script core/population/npc_time_use_selftest.gd
+# The same on Closed Loop Ten (sandbox): two days lived with the graph
+# closed, every person's day adding to 24 h, a scrub back not counted, then
+# the Balance tab (tiles, the ATUS chart, a hover), the Site Report's Time
+# use card and the dashboard's work line with REAL clicks; UiAudit:
+tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/time_use_check.gd -Label time_use -Timeout 1500
+# The same on Closed Loop Ten (sandbox; the world's labour is infinite, so
+# the check sets it finite with an empty pool): the rota's cooks, a meal step
+# minted for a crew of 3 with the cooks first, the KitchenSite drawing them at
+# the stations with a tool in hand, the step finished, one confirm card:
+tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/meal_job_check.gd -Label meal_job -Timeout 1500
+# The Community schedule with REAL input (sandbox, Closed Loop Ten's ten
+# people; run with -UserArgs @("--window-size=1280x720") too): Day rows tile
+# 24 h, a person click opens their week, a profile Apply saves + replans, a
+# REAL Add / drag / select / Remove of a deploy event in the Week tab (the
+# timeline's flag follows), Work + Balance, Export + a second export keeping
+# every UID, UiAudit per tab; shots under screenshots\community_schedule\:
+tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/community_schedule_check.gd -Label community_schedule -Timeout 1200
+# The same in the world (sandbox, Walton, natural headcount, the morning block):
+# stalls resolved, a 4-stall bank placed beside the busy toilet and used, every
+# full-tier toilet user on a seat; shots of the line and doors, walkers at 1440x:
+tools\harness.ps1 -World walton -RunScript res://tools/checks/toilet_check.gd -Label toilets -Timeout 1200
 # Tier morale under the step-aside switch (NpcAgent.loiter_enabled on / off,
 # last-day averages + loiter counts; how the equivalence pin was moved to a
 # day average):
@@ -15591,6 +15655,342 @@ duplicated.
     "Set the gate here"; its status line names the gate and the events.
   - Gates: `site_deploy_selftest` (105) and
     `tools/checks/deploy_roundtrip_check.gd` (Validation list).
+
+## NPC life pass — bodies, sitting, toilets, bathroom, people, rota, schedule, meals, time use (2026-11-13, Phases 0-9)
+
+Plan: `~/.claude/plans/now-that-we-have-gleaming-river.md` (10 phases: bodies,
+sitting, toilets, bathroom physiology, personas, a weekly rota, schedule UI +
+group calendar + .ics, meals as small builds, time-use readouts). The user's
+choices: people FOLLOW their rota (leftovers on the open board), a restroom
+area AUTO-PLACES a stall bank, export is .ics, profiles are editable per person.
+Measure with `tools/diag/npc_time_use_probe.gd` first (baseline 2026-11-13,
+default day, 24 people, 20 person-h/day of work: 8.6 h a day IDLE, 0.76 h work,
+work Gini 0.13, every toilet visit a chair sit with no seat).
+- **The 1440x slant was structural, not the speed** (`npc_gait_selftest`). The
+  stick figure's knee bends only on the recovery (mean flex = peak / PI), which
+  swings the shin back: the average foot sat 0.125 m behind the hips at EVERY
+  speed. At 1x the stride hid it; at 12x the eased joints could not follow the
+  swing (0.09 of 0.62 rad left) and what remained was a body leaning over its
+  feet. Fixed by a forward hip bias (`_hip_bias`, the knee's mean flex x SHIN /
+  leg), tight gait tracking once walking (`_gait_rate`, 9 -> 45 /s over 0.3 s)
+  and ONE shown cadence for every body, `NpcGait.display_hz` (the true cadence
+  to 1.9 Hz, saturating at 3.2): the stick figure's phase, the rigged body's
+  walk scale and the crowd shader's `gait_scale` (CrowdRenderer pushes it).
+- **Sitting is one rule, `NpcSeatPose.for_activity`** (both tiers, the host's
+  overflow pose, the pose machine): a chair pose ONLY on a seat spot of kind
+  `sit` / `toilet` at least 0.3 m up; otherwise ground poses by hash (meal:
+  cross / kneel; hang: cross / lounge / kneel; short: squat — new
+  `CLIP_SQUAT` / `POSE_SQUAT` 19, `_pose_heel_squat`); a toilet visit with no
+  toilet stands. Seats carry their kind to the renderers (agent `seat_kind`,
+  cohort `seat_kind_of`, dot key `seat`). Convention for every body: a chair
+  pose's ORIGIN is the seat surface (flat-pack seat `elev` = seat height) and the
+  hips sit `CHAIR_HIP_ABOVE_SEAT` above it — bench sitters used to float 0.36 m
+  (the stick figure's chair hips were 0.36 m up AND lifted by elev). The rigged
+  body shifts its chair clip down on a seat (`NpcAvatar._seat_shift`); its
+  ground sits still play the chair clip lowered (open).
+  ⚠ The light tier was never given `seat_spot_of`: light-tier people never sat
+  on furniture. The bridge's light ctx passes it (and `queue_spot_of`) now.
+- **Toilets are stalls** (`ToiletBankBuilder`, catalog `toilet_bank`, record
+  key `toilet_spec` {stalls 1..16, rows (auto 2 past 8), style porta | compost,
+  wash}): primitive meshes, a door pivot per stall (`Doors/D<k>`, hinge on -X,
+  the leaf + handle + occupied `Flag`), a toilet against the back wall, a wash
+  stand at the end. Metas `stall_spots` [{pos = seat surface, yaw = facing out
+  of the door, kind toilet, door}], `queue_line`. `ToiletBankRuntime` (gameplay/)
+  swings a door open for `OPEN_S` when its stall changes hands and sets the
+  flag green / red (bridge `toilet_stalls_busy`).
+  - `SpaceRegistry`: `set_stalls(sid, n)` (runtime, from the bridge): a stall
+    space's capacity is its stalls, counting RESERVED slots too (`stalls_used`:
+    the light tier reserves at decision and claims on arrival — without it the
+    head of the line walked into a reserved stall). ONE first-come line per
+    space (`queue_join / queue_index / queue_leave / queue_len`): `claim` lets
+    only the head (or someone holding a reservation) take a free stall.
+    `expected_wait_h` prices the choice in `nearest_space_by` (wait x walking
+    speed as metres), and a stall space is never skipped as "full" (you queue).
+    Stalls hold even under the testing switches (`ignore_capacity`, festival
+    mode's easy override): a door is not a supply.
+  - The bridge resolves stalls once a second (`_resolve_seat_spots`): a
+    toilet-bank prop, a restroom AREA's bank (`bank_prop` on the space, a
+    `set_space_fields` key), a vehicle's toilet role spot (now kind toilet at
+    +0.42), any other prop tagged restroom (`generic_toilet_spots`: `units`
+    seats across its footprint facing its +Z — Walton's restroom is the
+    player's own portable-toilet GLB). `queue_spot(sid, k)`: straight out from
+    the doors for eight, then bending sideways.
+  - **A restroom area auto-places a bank** (`_ensure_restroom_banks`, once per
+    space: stalls = `units` or 4, doors toward the site centre, record
+    `restroom_for`; a deleted bank is not put back). A bank placed by hand tags
+    itself a restroom (`_auto_tag_toilet_bank`, both placement chains).
+    TerrainLoader's nav footprints skip banks (agents route door -> seat).
+  - Full tier: activity `queue` (consumes nothing, `QUEUE_PATIENCE_H` 0.5),
+    `_begin_queue` / `_step_queue` (steps up as the line moves, takes the stall
+    at the head, gives up into a blocked need), `_route_via_door`. Light tier:
+    the line at decision when the stalls are taken (`_queued`), `_poll_queue`
+    every `QUEUE_POLL_H` 0.02 h (was 0.05), `_walk_into_stall` / `_via_door`.
+  - Measured on Walton (sandbox, natural headcount, morning block): one
+    portable toilet for 168 people made a line of 14-36; a 4-stall bank placed
+    25 m away filled (4 inside, a line of 11). That is a SIZING answer for the
+    site, not a bug.
+
+- **Bathroom physiology (Phase 4, `NpcBathroom`, pure).** Each person has
+  their own pee count (3-6 a day, `pees_per_day`) and 1 or 2 poos
+  (`TWO_POOP_SHARE` 0.35). The count sets the bladder's fill rate
+  (`bladder_rise`, through `NpcAgent.rate_scale_for("bladder")`), so trips come
+  when it fills and are spread across the camp. Asleep it fills at
+  `SLEEP_FACTOR` 0.15 (hunger and thirst keep 0.35): at a shared 0.35 sleepers
+  hit the morale pain line every night. Poos: `poop_hours` (the first 0.3-2 h
+  after waking, a second 6-13 h after), checked when a person next picks what to
+  do (`NpcAgent._check_poop_urge`, the cohort's `_decide`; idle dawdles end at
+  `next_poop`) and set the bladder to its threshold with `poop_now`. A visit
+  lasts `visit_h` (a pee ~2.5 min, a poo 6-11) and bills ONE flush (the seat's
+  `flush`, 0 for a portable toilet, else `NpcRoutine.WATER_PER_VISIT_L`). A
+  routine BATHROOM block is a soft anchor: below `SOFT_BAR` 0.3 it is skipped
+  unless a poo is due. Both tiers' leisure bladder bar is the THRESHOLD (the
+  full tier interrupts enrichment / mingling there, the light heartbeat wakes at
+  the crossing) — two different bars split the tiers' food 6.8 % and festival
+  morale 0.2 apart. Measured (probe, both routines, both tiers): 3.8-4.2 pees +
+  1.2-1.3 poos a person a day, toilet starts peaking at 2.1-2.7x the waking-hour
+  mean (the after-waking poo; chronotypes in Phase 5 should spread it).
+  Selftest: `sanitation_selftest` `_test_bathroom_physiology`.
+
+- **People (Phase 5, `NpcPersona`, pure).** `for_id(id, overrides)`: a
+  profile hashed from the id with the player's edits laid over it (`EDITABLE`
+  fields clamped, affinities / unavailable / skills cleaned, anything else
+  dropped). CHRONOTYPE `chrono_h` ~ N(0, 1 h) clamped ±2.5 (MCTQ, Roenneberg
+  2007), SLEEP NEED ~ N(8, 0.6) in 6.5-9.5 h, queue patience, pace,
+  sociability, work affinities per `FAMILIES`, max hours a day / week,
+  unavailable hours, skills (the last ones are for the rota). Overrides live in
+  the habitat's `specs.pop_personas` and on the ROUTINE (`NpcRoutine.personas`,
+  `set_personas`, runtime only — the bridge sets it wherever it builds a
+  routine; `persona_of(item, agent)` / `set_persona(item, agent, overrides)`).
+  - The person's night: `NpcPersona.sleep_shift` = (bed, wake) offsets (the
+    chronotype moves the middle, the need the length). `personal_blocks` moves
+    the SLEEP block, the short WASH before it and the BATHROOM after it
+    (`_move_night`), clips everything else round them and fills uncovered time
+    with the leisure kind; meals and work stay where the community put them.
+    So the list's SHAPE changes per person: never index personal blocks by the
+    routine's block index (the schedule test did). Both tiers' sleep window
+    and wake read `person_sleep_start` / `person_wake_base`.
+  - The circadian gate (`NpcAgent.early_sleep_bar`, both tiers): outside the
+    window the sleep need sends someone to bed early only within
+    `SLEEP_GATE_H` 1 h of it opening, else at `EXHAUSTED_BAR` 0.97.
+  - Wash before bed: when the sleep need wins and hygiene is past
+    `WASH_BEFORE_BED_BAR` 0.45 the person showers first (a lark tired before
+    their moved WASH block never washed).
+  - Thirst asleep rises at `SLEEP_THIRST_FACTOR` 0.2 (insensible loss; at 0.35
+    a 9 h sleeper woke pinned).
+  - ⚠ Two light-tier bugs this exposed: `_wake_base` / `_sleep_start_cur` are
+    ONE shared member set by `_decide`, but a sleeper's duration was computed
+    on ARRIVAL at bed, after other people's decisions overwrote them — every
+    light-tier sleeper woke on someone else's clock (now `_sleep_window(i, t,
+    ctx)` at the point of use). And the full tier's asleep bladder branch
+    scaled the rate without adding it (Phase 4 slip).
+  - The full tier's wake jitter is now NpcHash "wake", the light tier's.
+  - Measured (probe, 24 people, a week): festival day larks 22:46 -> 07:05,
+    owls 00:41 -> 09:27, the tiers within ~15 min; default day larks up 05:35,
+    owls 07:56. Toilet starts peak at 1.6-1.9x the waking-hour mean.
+
+- **The weekly rota (Phase 6, `NpcWorkScheduler`, pure).** One planner over
+  the RECURRING work: duty-roster slots and repeating board chores. One-offs,
+  machine steps (`mach|`), held chores and chores the player assigned stay on
+  the open board, along with whatever the rota cannot place.
+  - **Planning.** `collect` lists the week's items; `availability` gives each
+    person 96 quarter-hours a day, workable only in WORK or FREE blocks of
+    their OWN day. SOCIAL is excluded because people never pick up chores
+    there, so a festival day gets no rota (the open board runs it as before).
+  - **Crewing.** `plan` takes items DAY FIRST, then priority, then scarcity,
+    and picks the cheapest crew at the best window start. Cost is hours worked
+    in the last six days plus hours planned, minus the preference credit
+    (affinity × hours × `AFFINITY_W` 0.5), plus a split-shift penalty.
+    Constraints: skills, unavailable hours, `max_h_day` / `max_h_week`,
+    no overlap with a `GAP_H`. A local search then moves single seats to
+    whoever lowers the spread.
+  - **Why day first.** Only today's part is applied and it is replanned
+    nightly. Sorting by scarcity first let next week's scarce jobs fill the
+    least-worked person's plan, so they looked busy when today's work was
+    handed out, again and again; one person stood idle through WORK blocks
+    while "planned" 9 h.
+  - **Applying.** `engine.plan_rota(abs_h)` runs once a sim-day; the bridge
+    calls it in `_service_duty_roster` between `duty.generate` and
+    `mint_day`. `apply` writes duty slots' `agents` + `start_h`, and stamps
+    today's recurring chores with `assigned_to`, `assigned_crew`,
+    `assign_at_h` (the shift start), `assign_hold_h` 2 h and `rota_day`.
+    Yesterday's rota names are cleared first.
+  - **Board rules.**
+    - The named crew may claim during the hold (`assigned_crew`; duty mints
+      set it too).
+    - A rota chore opens `ROTA_EARLY_H` 0.25 h before its start, not at its
+      window.
+    - Your own shift heads your `available_for` list.
+    - Each named crew member works their planned share and then steps off
+      (`note_rota_work` / `rota_share_done`). A chore that starts with one
+      person never waits for the rest, so the first to arrive used to do
+      most of it.
+    - A missed shift opens to everyone when the hold lapses.
+  - **Measured** (probe, default day, 24 people, 20 person-h/day): over two
+    weeks the work Gini is 0.069 (4.3–6.4 h a week) against 0.094 (3.9–8.2)
+    without the rota, and work inside a person's sleep window goes from 12 h
+    to 0. Over one week the Gini is 0.132 against 0.135; the plan catches up
+    on the cold start over days.
+  - **Speed.** 24 people × 7 days plan in ~50 ms and 40 people in ~70 ms
+    (once a sim-day).
+  - **Not done.** Machine crew steps, projects and deploys are not in the rota
+    (they stay on the open board). Nothing shows the rota yet (Phase 8). Only
+    the full tier works chores, so light camps get none.
+
+- **The Community schedule (Phase 8).** One window for when things happen
+  and who does what: the timeline's 👥 button (`TimelineUI.
+  open_community_schedule(tab, {habitat, person})`), "👥 Schedule…" in the
+  Routines panel, "Schedule…" in Site Projects.
+  - **`ScheduledEvents`** (`core/schedule/`, pure) is the ONE list of what
+    is scheduled: `{id, kind, at_h, end_h, label, source, ref, editable,
+    who}`. Sources: deploy / pack-up / arrive / leave (SiteDeploySchedule),
+    burns, venue programme slots (once a day; a slot's `day` is ignored, as
+    FestivalProgram ignores it), scheduled drives, the routine's EAT blocks
+    (breakfast / lunch / dinner by hour), rota shifts (naming their crew).
+    `person_day(routine, id, offset, day, shifts)` samples
+    `NpcRoutine.block_at` with the person's own day key every 15 min, so
+    it IS what the agent does (chronotype night, jitter) with their shifts
+    laid over it.
+  - **`ScheduleSources`** (impure, ServiceLocator only) gathers them and
+    routes edits to the owner: `retime` (deploy → `move_event`, burn →
+    `schedule_prop_burn`, set → the slot's start keeping its length, every
+    day's copy), `remove`, `add_deploy` / `add_set` / `add_burn`. Drives,
+    meals and shifts follow something else and are not editable here.
+    `export_ics(h0, h1)` writes `user://schedule_export/<world>/
+    community.ics` + `<Name>_<id>.ics` per person (site events + their own
+    shifts + their own camp's meals).
+  - **`IcsWriter`** (pure, RFC 5545): local times with `TZID:
+    SIMbiogenesis-Site` and a VTIMEZONE from the clock's zone meridian (+
+    the US daylight rule the clock uses when `auto_dst`), so an import
+    shows each event at the hour the game does; UID = `<calendar key>-<event
+    id>@simbiogenesis`, stable, so re-importing UPDATES; 75-octet folding
+    by character; an instant is written as a quarter hour; `parse` reads it
+    back (the selftest round trip). Dates by the clock's epoch (day 0 =
+    0001-01-01, 719162 days before the Unix epoch).
+  - **`GanttRows`** (`scenes/ui/kit/`): rows of segments, each row its own
+    `t0` over a shared `span_h`; overlaps stack into lanes; instants are
+    markers; NOW line; hover / click / ruler click (moves the clock) / drag
+    of an editable segment onto any row (`segment_moved(seg, new_a)`,
+    snapped to 15 min). `is_busy()` — the window never rebuilds rows under
+    a press or a drag, never while a field has focus, and never on the
+    Person tab (unapplied profile edits).
+  - **Tabs:** Day (a Site row + a row per person, their rota hours in the
+    second label line), Week (a day per row; Meals / Crew shifts toggles;
+    drag to move; click selects → Jump / Move to the clock / Remove; New
+    event: deploy, pack up, arrive, leave, a set at a venue, a burn),
+    Person (their week, shifts planned vs worked, the profile editor →
+    `bridge.set_persona` + `replan_rota`, "Back to generated"), Work (the
+    week's recurring jobs, unassigned and short-handed first), Balance
+    (planned / worked per person, the Gini).
+  - The timeline draws venue sets as thin spans under the flag tags
+    (`_draw_set_spans`, rebuilt per quarter-hour window or registry change).
+  - Bridge additions: `rota_for(iid)`, `replan_rota(iid)`.
+  - Measured on Closed Loop Ten (10 people): 124 recurring jobs a week, 123
+    crewed, Gini 0.04, 144 events in the group calendar.
+  - Not done: editing the rota by hand, the hours-by-category "actual"
+    view (Phase 9), the old Routines / Work Planner authoring folded in
+    (they are linked, not replaced).
+
+- **Meals as small crew jobs (Phase 7).** A kitchen recipe's crew steps
+  (prep, serve) are worked by several cooks at stations, drawn like a build.
+  - **`CrewJobPlan`** (`core/assembly/`, pure): jobs at named STATIONS
+    (`{pos, face, side}`), deps, crew min..max, person-seconds, an
+    `unattended` job runs by itself; list scheduling (longest chain first,
+    nearest free workers, side by side along the station); `state_at(tl, t)`
+    pure. The plan asked for the pallet rack's scheduler to be lifted out
+    here; that one is bound up with carries and holds, so this is a separate
+    small one and the rack keeps its own.
+  - **`MealJobPlan`** (pure): a step's jobs — prep: fetch from the store,
+    wash, chop in parallel (≤ 3), into the pot; cook: stir, simmer
+    (unattended), stir; serve: carry the pot out, plate up in parallel, wash
+    up. Per-serving minutes are ESTIMATES; `person_hours` scales the work to
+    the chore's hours exactly, and `time_for_progress` maps credited labour
+    onto the plan's time by work done. `crew_for(servings)` = one cook per
+    ~12, 1..4. `recipe_info(specs)` reads a kitchen's recipe (servings,
+    crew steps, their kinds via `step_kind`). Kitchen frame: counters along
+    X at z −0.6 (0.9 m high), cooks at z −0.1 facing −Z, the serving table
+    at z 1.15 with servers behind it.
+  - **`CampKitchenBuilder`** (catalog `camp_kitchen`, structures, PackedSpec
+    curated): store, prep, two-burner stove + pot rack, three basins, a
+    serving table, a shade; meta `stations` = `MealJobPlan.default_stations()`.
+    Placing one tags a kitchen space.
+  - **Kitchen tools + clips:** FabToolCatalog `knife`, `ladle`, `pot`,
+    `sponge`, `crate`; FabContextRig kinds `chop`, `stir`, `plate`, `wash`,
+    `carry_pot`, `carry_crate` (`CLIP_FOR`, so npc_anim_selftest's reach
+    test covers them); clips `chop`, `stir_pot`, `plate_up`, `wash_dishes`,
+    `carry_pot` (torso keys, hands by IK on the tool's sockets).
+  - **Board + rota:** `_service_machine_chores` mints a kitchen step for
+    `crew_for(servings)` workers (or the step's `crew_max`), with the day's
+    cooks (`kitchen_cooks`) as `assigned_crew` for the hold. The rota plans
+    a "Cook: <kitchen>" item a day per kitchen (`_kitchen_rota_items`: the
+    recipe's crew hours × batches the camp eats a day), passed to
+    `engine.plan_rota(..., extra_items)`; a kitchen belongs to the camp
+    whose home is nearest (`_assign_kitchens`). `bridge.rota_items(iid)`
+    feeds the schedule's Work tab.
+  - **`KitchenSite`** (gameplay/, on a camp kitchen and on any prop bound
+    to a kitchen node — it checks the role itself): polls
+    `bridge.kitchen_status(gid, centre, r)` (the live `mach|<gid>|…` chore,
+    progress, crew, who is DOING it nearby), builds the step's MealJobPlan,
+    eases the drawn time to the labour's, and draws a lane per person
+    present (their own body stood in via NpcStandIns) with the tool in hand.
+    On a prop that is not a camp kitchen it draws the counters too while a
+    meal is under way. Duck-typed bridge access (naming NpcPopulationBridge
+    there broke every selftest that loads a placed prop).
+  - **Fixes it took:** a rota cook who has done their share steps off only
+    while another of the crew is on it or within `ROTA_SHARE_GRACE_H`
+    (0.75 h) of the start — a named cook who never showed left the meal
+    waiting the whole 2 h hold; the recipe's "waiting for crew" confirm card
+    showed once per TICK (six stacked) — now once per machine, step and
+    batch (`_chore_card_keys`); `RecipeRunner.begin_run` now takes the
+    ledger (the flow engine and `start_process_recipe` pass it): a step at
+    the START of a batch (the prep) was taken as done with no ledger and
+    never needed hands; `kitchen_status` picks the step the kitchen waits on
+    (a finished step's chore stays on the board and was drawn instead); the
+    generic crew-site marker skips chores carrying `meal_step` (stamped after
+    `add_chore`, which copies only known keys) — its 0.24 m-a-line label
+    filled the screen over the kitchen's own.
+  - ⚠ A world with `infinite_labor` (Closed Loop Ten has it) never mints
+    crew chores at all: the kitchen's steps are paid from the pool and
+    nobody cooks visibly. That is the existing difficulty switch.
+  - Not done: diners gathering when a meal is served (they still eat when
+    hungry, at the kitchen space); other templates (toilet cleaning, water
+    runs, compost, laundry) on the same layer.
+- **Time use (Phase 9).** How the people really spend their days, measured
+  as the clock runs.
+  - **`NpcTimeUse`** (pure): CATS sleep / toilet / wash / eat / drink /
+    work / walk / queue / social / venue / idle; `category_full(state,
+    activity)` and `category_light(state, act)` are THE mapping (the
+    time-use probe uses them too). The bridge's `_record_time_use` (end of
+    `tick_at`, PerfSpan `npc_time_use`) credits every person on site with
+    the time since the last tick in what they are doing now; away camps
+    are skipped. `step`: the first tick, a jump past `MAX_STEP_H` and a
+    scrub back credit nothing, and a scrub back forgets the days from the
+    one scrubbed into. Hours per person per day for `DAYS_KEPT` 14 days
+    (session data, not saved) plus whole-session totals (a simkit year).
+  - **Whole days only.** `summary` scales each person's recorded time to
+    24 h, which is biased on a part day (a morning has no night's sleep:
+    the first readout said 2 h of sleep). Once a day in the window is
+    complete (`day_span` ≥ 23.5 h) only complete days are used;
+    `partial` true says otherwise, and the readouts say so.
+  - **Reference:** BLS American Time Use Survey 2025, Table 1, all persons
+    15+ (`ATUS_2025`, `GROUPS`): sleep 9.03, personal care 0.77, eating
+    1.21, work + household 5.31, leisure 5.16 h a day. A reference, never a
+    target. Work per person a week is `sustainable` up to 37 h (the ATUS
+    adult's paid work + housework × 7), `overloaded` past 50 (an estimate).
+  - **Readouts:** the Community schedule's Balance tab ("How they spend
+    their days": tiles, `TimeUseBars` groups with ATUS ticks, a 24 h bar
+    per person; `bridge.time_use_summary(7, iid)` per camp), the Site
+    Report's Time use card, the dashboard's settlement card ("Work: N per
+    person a week (verdict) · rota plans M", asked every 5 s). The rota's
+    planned work is `NpcTimeUse.demand_h_week(rota_items, people, 7)`.
+  - **Simkit:** the compact report's `time_use` (h_per_day by category,
+    person_days, vs_atus) and `work_per_person_h_week` (empty with people
+    as rates).
+  - What it shows today: on Closed Loop Ten people sleep ~7.5 h, work
+    ~2–3 h a day and stand idle ~7 h (the default day's FREE blocks with
+    nothing chosen). Not done: the behaviour that would follow from it
+    (rest breaks in long shifts, a heat siesta, hand-washing after the
+    toilet, eating together at meals, quiet time for introverts, shift
+    hand-offs) and a time-use history saved with the world.
 
 ## NPC realism pass — spacing, sliding, moving between spaces (2026-10-25)
 

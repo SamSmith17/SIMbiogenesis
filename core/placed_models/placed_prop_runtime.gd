@@ -247,6 +247,8 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		PalletRackBuildSite.attach(prop, rec)
 		_maybe_attach_stream_intake_flow(prop, rec)
 		_maybe_attach_firepit_fire(prop, rec)
+		_maybe_attach_toilet_bank(prop, rec)
+		KitchenSite.attach(prop, rec)
 		_maybe_attach_vehicle(prop, model, rec)
 		VehicleDriveRuntime.attach(prop, model, rec)
 		VehicleWalkIn.attach(prop, model, rec)
@@ -573,6 +575,19 @@ static func _maybe_attach_vehicle(prop: PlacedProp, model: Node3D, rec: Dictiona
 		rig.name = "ForkliftRig"
 		rig.configure(v, model)
 		prop.add_child(rig)
+
+
+## A toilet bank's doors and occupied flags follow who is in each stall.
+static func _maybe_attach_toilet_bank(prop: PlacedProp, rec: Dictionary) -> void:
+	if str(rec.get("model_id", "")) != ToiletBankBuilder.MODEL_ID:
+		return
+	var model := prop.get_node_or_null("ModelRoot")
+	if model == null or model.get_node_or_null("ToiletBankRuntime") != null:
+		return
+	var rt := ToiletBankRuntime.new()
+	rt.name = "ToiletBankRuntime"
+	rt.configure(str(rec.get("id", "")))
+	model.add_child(rt)
 
 
 ## The firepit's own small fire (FirepitFire): lit at night when it is cold.

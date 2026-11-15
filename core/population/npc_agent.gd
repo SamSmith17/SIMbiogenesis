@@ -81,7 +81,30 @@ const ACTIVITIES: Dictionary = {
 	# used (its slot is the next person's) and hang out a few metres off
 	# (_maybe_loiter). Consumes nothing; any need past its threshold ends it.
 	LOITER_ACTIVITY: {"space": "", "duration_h": 0.25, "consumes": {}},
+	# Waiting in the line outside a restroom's stalls (SpaceRegistry queue).
+	# Consumes nothing; patience runs out after QUEUE_PATIENCE_H.
+	QUEUE_ACTIVITY: {"space": "", "duration_h": QUEUE_PATIENCE_H, "consumes": {}},
 }
+
+## Waiting for a free stall (see _begin_queue). CrowdCohort.QUEUE_MAX_H.
+const QUEUE_ACTIVITY := "queue"
+const QUEUE_PATIENCE_H := 0.5
+## Asleep, thirst rises at this share of its waking rate: overnight water loss
+## is mostly insensible (~30 ml/h through breath and skin) against a waking
+## intake of ~2 L over 16 h. At the old shared 0.35 a night owl's 9-hour sleep
+## woke them with thirst pinned at 1.0 (NPC life pass, Phase 5).
+const SLEEP_THIRST_FACTOR := 0.2
+## Going to bed with hygiene past this, a person washes first (_pick).
+const WASH_BEFORE_BED_BAR := 0.45
+## The circadian gate (two-process model, Borbély 1982): outside a person's
+## sleep window the sleep need may send them to bed early only within this
+## long of the window opening; earlier than that only near exhaustion. Without
+## it a night owl, tired 13-14 h after waking like everyone else, was in bed by
+## 21:45 on the default day (NPC life pass, Phase 5).
+const SLEEP_GATE_H := 1.0
+const EXHAUSTED_BAR := 0.97
+## A place in the line that moved further than this is walked up to.
+const QUEUE_STEP_M := 0.3
 
 ## Hanging out beside a space just used (see _maybe_loiter).
 const LOITER_ACTIVITY := "loiter"
@@ -196,6 +219,20 @@ var perform_elev := 0.0
 ## On a piece of furniture (a bench seat, a daybed): how high the person sits
 ## or lies while DOING the visit. Transient, like perform_elev.
 var seat_elev := 0.0
+## The kind of the seat spot taken (NpcSeatPose.KIND_*), "" = none.
+var seat_kind := ""
+## In a restroom line: the need it is for and the space. Transient.
+var queue_for := ""
+var queue_sid := ""
+## The door of the toilet stall taken (INF = none): walked in through.
+var seat_door := Vector2.INF
+## The toilet's flush (litres a visit; NAN = the restroom default).
+var seat_flush := NAN
+## Bathroom physiology (NpcBathroom): the last poo time consumed, whether the
+## next toilet visit is a poo, and how long this visit is.
+var last_poop_h := NAN
+var poop_now := false
+var visit_len_h := 0.0
 var _perform_until := 0.0
 ## A burn ROLE ("dj", "flow", "sandman", "redirect") and, for a fire-flow
 ## performer, the moving lane (VenueCrowd.orbit_point). Transient.
@@ -590,6 +627,9 @@ static func rate_scale_for(agent_id: String, need: String) -> float:
 	if hit != null:
 		return hit
 	var v := 1.0 + (NpcHash.unit01(agent_id, "rate_" + need) * 2.0 - 1.0) * RATE_JITTER
+	if need == "bladder":
+		# Each person's own pee count sets how fast the bladder fills.
+		v = NpcBathroom.bladder_rise(agent_id) / float(RISE_PER_H["bladder"])
 	if _rate_memo.size() >= RATE_MEMO_MAX:
 		_rate_memo.clear()
 	_rate_memo[key] = v
@@ -603,7 +643,12 @@ func _decay(dt_hours: float) -> void:
 		var rate := float(RISE_PER_H[n]) * rate_scale_for(id, n)
 		if n == "sleep" and asleep:
 			v -= SLEEP_RECOVER_PER_H * dt_hours
-		elif asleep and (n == "hunger" or n == "thirst" or n == "bladder"):
+		elif asleep and n == "bladder":
+			# Urine production falls at night (NpcBathroom.SLEEP_FACTOR).
+			v += rate * NpcBathroom.SLEEP_FACTOR * dt_hours
+		elif asleep and n == "thirst":
+			v += rate * SLEEP_THIRST_FACTOR * dt_hours
+		elif asleep and n == "hunger":
 			v += rate * 0.35 * dt_hours  # metabolic slowdown overnight
 		else:
 			v += rate * dt_hours
@@ -613,6 +658,8 @@ func _decay(dt_hours: float) -> void:
 func _step_doing(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictionary:
 	if activity == CHORE_ACTIVITY:
 		return _step_chore(abs_hours, dt_hours, ctx)
+	if activity == QUEUE_ACTIVITY:
+		return _step_queue(abs_hours, ctx)
 	# Starved supply blocks the activity: abort and retry later — the need is
 	# NOT satisfied and keeps rising (the two-way-coupling payoff).
 	var consumes: Dictionary = _consumes_for(activity, ctx)
@@ -673,6 +720,10 @@ func _step_doing(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 		# Hanging out is the idle re-pick in all but name: any need past its
 		# own threshold ends it (the light tier's FREE dawdle bar).
 		bar = float(THRESHOLD.get(urgent, URGENT)) if not urgent.is_empty() else URGENT
+	elif urgent == "bladder" and (activity == "enrichment" or activity == NpcSocial.ACTIVITY):
+		# People step out of a conversation or a set to pee when they need
+		# to, not when it is desperate (CrowdCohort._heartbeat, the same bar).
+		bar = float(THRESHOLD["bladder"])
 	if not urgent.is_empty() and urgent != activity and float(needs.get(urgent, 0.0)) >= bar:
 		var billed_part := _scaled(consumes, doing_h, dt_hours)
 		_finish(ctx, false)
@@ -726,6 +777,11 @@ func _step_chore(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 		var train: Callable = ctx.get("train_skill", Callable())
 		if train.is_valid():
 			train.call(id, board.find(chore_id), applied)
+		# A rota crew member works their planned share, then leaves the rest
+		# to the others the rota named (NpcChoreBoard.rota_share_done).
+		if board.note_rota_work(chore_id, id, applied, abs_hours) and board.remaining(chore_id) > 0.0:
+			_finish(ctx, true)
+			return {}
 	if board.remaining(chore_id) <= 0.0:
 		# Finished (by this credit, or a crewmate's).
 		_finish(ctx, true)
@@ -827,6 +883,9 @@ func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dict
 	if activity == CHORE_ACTIVITY:
 		activity_ends_h = INF   # ends when the work is done, not on a clock
 		return _step_chore(abs_hours, abs_hours - arrive_abs, ctx)
+	if activity == QUEUE_ACTIVITY:
+		# The patience deadline was set on joining; stepping up keeps it.
+		return _step_queue(abs_hours, ctx)
 	var dur := float((ACTIVITIES.get(activity, {}) as Dictionary).get("duration_h", 0.25))
 	if activity == PERFORM_ACTIVITY:
 		# The DJ plays until the set ends — no routine block cuts it short.
@@ -851,6 +910,11 @@ func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dict
 		activity_ends_h = arrive_abs + 0.25 * (0.85 + 0.4 * NpcHash.unit01(id, "loiterd%d" % int(floor(arrive_abs * 4.0))))
 	if dur > 0.0:
 		activity_ends_h = arrive_abs + dur * rng.randf_range(0.85, 1.25)
+		if activity == "bladder":
+			# A pee or a poo (NpcBathroom), hashed per visit: the draw above is
+			# kept so the RNG stream does not move.
+			visit_len_h = NpcBathroom.visit_h(id, poop_now, str(int(floor(arrive_abs * 60.0))))
+			activity_ends_h = arrive_abs + visit_len_h
 		# Never run past the end of the scheduled block that asked for this.
 		# The 5-minute bathroom visit is only 5 minutes if the schedule can
 		# actually reclaim the person afterwards.
@@ -899,6 +963,10 @@ const MEAL_PER_H := 2.0
 ## so a camp with no kitchen behaves byte-identically to before meals existed.
 func _consumes_for(act: String, ctx: Dictionary = {}) -> Dictionary:
 	var base: Dictionary = (ACTIVITIES.get(act, {}) as Dictionary).get("consumes", {})
+	if act == "bladder" and visit_len_h > 0.0:
+		# One flush a visit (a portable toilet has none), spread over the visit.
+		var flush := NpcRoutine.WATER_PER_VISIT_L if is_nan(seat_flush) else seat_flush
+		return {"water": flush / visit_len_h} if flush > 0.0 else {}
 	if act == "enrichment" and target_space_type == "fire_circle":
 		return {"biomass": FIRE_BIOMASS_KG_H}
 	if act == "hunger" and bool(ctx.get("meal_available", false)):
@@ -1065,6 +1133,7 @@ static func _scaled(consumes: Dictionary, doing_h: float, dt_hours: float) -> Di
 ## complete" bug. POPULATION_PLAN.md §4 only ever promised absorbing behaviour
 ## for tier 1; tier 2 inherited it by accident.
 func _step_idle(abs_hours: float, ctx: Dictionary) -> void:
+	_check_poop_urge(abs_hours, ctx)
 	# Tiers 1-2: needs. Retried on their OWN backoff — never suppressed by an
 	# unrelated tier having failed. Needs still outrank the schedule: a
 	# desperately thirsty person leaves their work block.
@@ -1094,6 +1163,10 @@ func _step_idle(abs_hours: float, ctx: Dictionary) -> void:
 		if NpcRoutine.ONCE_KINDS.has(kind) and absf(_routine_mark - mark) < 1e-6 and routine.meals_once():
 			kind = routine.leisure_kind()
 		var scheduled := NpcRoutine.activity_for(kind)
+		# A BATHROOM block is a soft anchor (NpcBathroom): go before you leave
+		# only if there is something in it.
+		if scheduled == "bladder" and float(needs.get("bladder", 0.0)) < NpcBathroom.SOFT_BAR and not poop_now:
+			scheduled = ""
 		# Mirror _pick's slept-enough guard: the SLEEP block runs to ~08:00
 		# while people wake 6.0-7.5, and re-issuing sleep with the need near 0
 		# walked the whole camp back to bed every tick. Fall through — NOT an
@@ -1261,6 +1334,11 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 		return
 	var sid := str(space.get("id", ""))
 	if not registry.claim(sid, id):
+		# Every stall taken (or a line ahead): join the line outside — even on
+		# ideal supply (a toilet is a door, not a supply).
+		if registry.has_stalls(sid):
+			_begin_queue(need, sid, space, abs_hours, ctx)
+			return
 		if ideal:
 			_begin_virtual_need(need)
 			return
@@ -1326,8 +1404,141 @@ func _begin_need(need: String, abs_hours: float, ctx: Dictionary) -> void:
 	if not _take_seat(ctx, sid, registry.slot_index_for(sid, id)) and bed_elev > 0.0:
 		seat_elev = bed_elev
 	last_exposure = NpcWeatherGate.EXPOSURE_SHELTERED
-	_request_path(ctx, p, from_key, sid)
+	if seat_door != Vector2.INF:
+		_route_via_door(ctx, from_key, sid)
+	else:
+		_request_path(ctx, p, from_key, sid)
 	state = State.TRAVELING
+
+
+## Join the line outside a restroom's stalls and walk to my place in it.
+func _begin_queue(need: String, sid: String, space: Dictionary, abs_hours: float,
+		ctx: Dictionary) -> void:
+	var registry: SpaceRegistry = ctx.get("registry")
+	var pos_of: Callable = ctx.get("pos_of", Callable())
+	var centre: Variant = pos_of.call(space) if pos_of.is_valid() else null
+	if not (centre is Vector2):
+		_mark_blocked(need, abs_hours)
+		retry_at[need] = abs_hours + RETRY_BACKOFF_H
+		return
+	var k := registry.queue_join(sid, id)
+	_clear_blocked(need)
+	queue_for = need
+	queue_sid = sid
+	trip_distance_m = 0.0
+	activity = QUEUE_ACTIVITY
+	target_space_id = ""
+	target_space_type = ""
+	target_pos = _queue_spot(ctx, sid, k, centre)
+	face_anchor = centre
+	activity_ends_h = abs_hours + patience_h(ctx.get("routine"), id)
+	_request_path(ctx, target_pos, at_space_id, "")
+	state = State.TRAVELING
+
+
+func _queue_spot(ctx: Dictionary, sid: String, k: int, centre: Vector2) -> Vector2:
+	var q_of: Callable = ctx.get("queue_spot_of", Callable())
+	if q_of.is_valid():
+		var v: Variant = q_of.call(sid, k)
+		if v is Vector2:
+			return v
+	return centre + SpaceRegistry.slot_offset_for_index(4 + k)
+
+
+## Outside the sleep window, how tired a person must be to go to bed: the
+## routine's early bar within SLEEP_GATE_H of their window opening, near
+## exhaustion before that. Both tiers.
+static func early_sleep_bar(hour: float, sleep_start: float, early_bar: float) -> float:
+	if fposmod(sleep_start - hour, 24.0) <= SLEEP_GATE_H:
+		return early_bar
+	return maxf(early_bar, EXHAUSTED_BAR)
+
+
+## How long this person waits in a toilet line (NpcPersona; both tiers).
+static func patience_h(r, agent_id: String) -> float:
+	if r == null:
+		return QUEUE_PATIENCE_H
+	return float((r as NpcRoutine).persona_of(agent_id).get("patience_h", QUEUE_PATIENCE_H))
+
+
+## The wake hour a poo schedule hangs off: the routine's (both tiers agree).
+static func poop_wake_h(r, agent_id: String = "") -> float:
+	return (r.person_wake_base(agent_id, SLEEP_END_H) if r != null else SLEEP_END_H) + 0.75
+
+
+## A poo is due (NpcBathroom.poop_due) when the person next picks what to do:
+## the bladder need jumps past its threshold and the next visit is a long one.
+func _check_poop_urge(abs_hours: float, ctx: Dictionary) -> void:
+	if is_nan(last_poop_h):
+		last_poop_h = abs_hours
+		return
+	var due := NpcBathroom.poop_due(id, last_poop_h, abs_hours, poop_wake_h(ctx.get("routine"), id))
+	if is_nan(due):
+		return
+	last_poop_h = abs_hours
+	poop_now = true
+	needs["bladder"] = maxf(float(needs.get("bladder", 0.0)), NpcBathroom.THRESHOLD)
+
+
+## Walk to a toilet stall's door, then in to the seat (never through a wall).
+func _route_via_door(ctx: Dictionary, from_key: String, sid: String) -> void:
+	var seat := target_pos
+	if pos.distance_to(seat_door) > 6.0:
+		_request_path(ctx, seat_door, from_key, sid)
+		target_pos = seat
+	else:
+		_clear_path()
+	if path.is_empty():
+		path = PackedVector2Array([seat_door])
+		path_idx = 0
+	elif path[path.size() - 1].distance_to(seat_door) > 0.1:
+		path.append(seat_door)
+	path.append(seat)
+
+
+## In the line: take a stall the moment I am at the head and one frees, step
+## up when the line moves, give up when patience runs out.
+func _step_queue(abs_hours: float, ctx: Dictionary) -> Dictionary:
+	var registry: SpaceRegistry = ctx.get("registry")
+	if registry == null or queue_sid.is_empty():
+		_finish(ctx, false)
+		return {}
+	var sid := queue_sid
+	if registry.claim(sid, id):
+		var need := queue_for
+		queue_for = ""
+		queue_sid = ""
+		activity = need
+		target_space_id = sid
+		target_space_type = str(registry.find_by_id(sid).get("space_type", ""))
+		var centre: Variant = registry.cached_position(sid)
+		if not (centre is Vector2):
+			centre = pos
+		target_pos = _standing_spot(registry, sid, centre, ctx)
+		face_anchor = centre
+		_take_seat(ctx, sid, registry.slot_index_for(sid, id))
+		if seat_door != Vector2.INF:
+			_route_via_door(ctx, "", sid)
+		else:
+			_request_path(ctx, target_pos, "", sid)
+		state = State.TRAVELING
+		return {}
+	if abs_hours >= activity_ends_h:
+		# Patience ran out: the need stays, and the next try looks again
+		# (perhaps at another restroom).
+		var need2 := queue_for
+		_mark_blocked(need2, abs_hours)
+		retry_at[need2] = abs_hours + RETRY_BACKOFF_H * 0.5
+		_finish(ctx, false)
+		return {}
+	var centre2: Variant = registry.cached_position(sid)
+	if centre2 is Vector2:
+		var spot := _queue_spot(ctx, sid, maxi(registry.queue_index(sid, id), 0), centre2)
+		if spot.distance_to(pos) > QUEUE_STEP_M:
+			target_pos = spot
+			_clear_path()
+			state = State.TRAVELING
+	return {}
 
 
 ## IDEAL SUPPLY (PopTestPrefs): the need is met where the person stands —
@@ -1721,6 +1932,9 @@ func elev() -> float:
 ## it faces and its height. False when the space has none.
 func _take_seat(ctx: Dictionary, sid: String, k: int) -> bool:
 	seat_elev = 0.0
+	seat_kind = ""
+	seat_door = Vector2.INF
+	seat_flush = NAN
 	var seat_of: Callable = ctx.get("seat_spot_of", Callable())
 	if not seat_of.is_valid():
 		return false
@@ -1731,6 +1945,12 @@ func _take_seat(ctx: Dictionary, sid: String, k: int) -> bool:
 	var yaw := float(sp.get("yaw", 0.0))
 	target_pos = sp.get("pos", target_pos)
 	seat_elev = float(sp.get("elev", 0.0))
+	seat_kind = str(sp.get("kind", ""))
+	var door: Variant = sp.get("door", null)
+	if door is Vector2:
+		seat_door = door
+	if sp.has("flush"):
+		seat_flush = float(sp["flush"])
 	# Godot's forward is -Z: a seat's yaw turns it to face (-sin, -cos).
 	face_anchor = target_pos + Vector2(-sin(yaw), -cos(yaw)) * FACE_PROJECT_M
 	if str(sp.get("kind", "")) == "lie":
@@ -1886,7 +2106,7 @@ func _pick(ctx: Dictionary) -> String:
 			var up := _attending_burn(ctx)
 			if up:
 				early_bar = STAY_UP_BAR
-			if not in_window and v < early_bar:
+			if not in_window and v < early_sleep_bar(_hour(ctx), _sleep_start(ctx), early_bar):
 				continue
 			if in_window and v < (STAY_UP_BAR if up else 0.25):
 				continue  # slept enough — don't go straight back to bed
@@ -1895,6 +2115,11 @@ func _pick(ctx: Dictionary) -> String:
 		if v > best_score:
 			best_score = v
 			best = n
+	# Wash before bed: a person the sleep need sends to bed goes past the
+	# shower first when they are getting grubby (both tiers). Without it a
+	# lark, tired before their moved WASH block, never washed at all.
+	if best == "sleep" and float(needs.get("hygiene", 0.0)) >= WASH_BEFORE_BED_BAR and not is_blocked("hygiene"):
+		return "hygiene"
 	if not best.is_empty():
 		return best
 	# Tier 2: comfort, only once nothing critical is calling.
@@ -1963,6 +2188,8 @@ func _satisfy(need: String) -> void:
 		return
 	needs[need] = rng.randf_range(0.0, 0.08)
 	_clear_blocked(need)
+	if need == "bladder":
+		poop_now = false
 	if need == "thirst":
 		needs["bladder"] = clampf(float(needs.get("bladder", 0.0)) + DRINK_BLADDER_KICK, 0.0, 1.0)
 
@@ -1971,6 +2198,11 @@ func _finish(ctx: Dictionary, _completed: bool) -> void:
 	var registry: SpaceRegistry = ctx.get("registry")
 	if registry != null and not target_space_id.is_empty():
 		registry.release(target_space_id, id)
+	if registry != null and not queue_sid.is_empty():
+		registry.queue_leave(queue_sid, id)
+	queue_sid = ""
+	queue_for = ""
+	seat_door = Vector2.INF
 	var board = ctx.get("board")
 	if board != null and not chore_id.is_empty():
 		board.release(chore_id, id)
@@ -2101,12 +2333,13 @@ func _my_skills(ctx: Dictionary) -> Dictionary:
 func _wake_hour(ctx: Dictionary = {}) -> float:
 	# Per-agent jittered wake time off the ROUTINE's wake base (NpcRoutine
 	# .wake_base_h — 06:00 for the default day, 07:30 for a festival).
-	return _wake_base(ctx) + (float(hash(id) % 97) / 97.0) * 1.5
+	# The same jitter the light tier draws (CrowdCohort._begin_activity).
+	return _wake_base(ctx) + NpcHash.unit01(id, "wake") * 1.5
 
 
 func _wake_base(ctx: Dictionary) -> float:
 	var r: NpcRoutine = ctx.get("routine")
-	return fposmod(r.wake_base_h(SLEEP_END_H) + _personal_shift(r, ctx), 24.0) if r != null else SLEEP_END_H
+	return fposmod(r.person_wake_base(id, SLEEP_END_H) + _personal_shift(r, ctx), 24.0) if r != null else SLEEP_END_H
 
 
 ## How far this person's whole day sits from the routine as written: the
@@ -2140,7 +2373,7 @@ static func night_from_h(sleep_start: float) -> float:
 
 func _sleep_start(ctx: Dictionary) -> float:
 	var r: NpcRoutine = ctx.get("routine")
-	return fposmod(r.sleep_start_h(SLEEP_START_H) + _personal_shift(r, ctx), 24.0) if r != null else SLEEP_START_H
+	return fposmod(r.person_sleep_start(id, SLEEP_START_H) + _personal_shift(r, ctx), 24.0) if r != null else SLEEP_START_H
 
 
 # --- readouts ---------------------------------------------------------------

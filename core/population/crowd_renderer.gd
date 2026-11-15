@@ -158,6 +158,7 @@ func _process(_delta: float) -> void:
 		var t_rel := float(_main.call("get_absolute_hours")) - _time_base
 		_fig_mat.set_shader_parameter("t_rel", t_rel)
 		_card_mat.set_shader_parameter("t_rel", t_rel)
+	_push_gait_scale()
 	PerfMonitor.begin("crowd_raster")
 	_service_height_raster()
 	PerfMonitor.end("crowd_raster")
@@ -165,6 +166,26 @@ func _process(_delta: float) -> void:
 	if gen != _last_pref_gen:
 		_last_pref_gen = gen
 		_apply_prefs()
+
+
+var _gait_scale := 1.0
+
+
+## The crowd's walking cadence as SHOWN (NpcGait): the shader's leg phase is
+## distance / stride, so at high speed it is scaled down to the saturating
+## display cadence. Pushed only when it moves by more than 1 %.
+func _push_gait_scale() -> void:
+	var ts := 0.0
+	var v: Variant = _main.get("time_scale")
+	if v != null:
+		ts = absf(float(v))
+	# time_scale is sim-hours per real second: ground metres per real second
+	# at the nominal walk, over the shader's stride length.
+	var true_hz := NpcNav.WALK_SPEED_MPS * 3600.0 * ts / 0.75
+	var g := NpcGait.display_scale(true_hz)
+	if absf(g - _gait_scale) > _gait_scale * 0.01:
+		_gait_scale = g
+		_fig_mat.set_shader_parameter("gait_scale", g)
 
 
 func _apply_prefs() -> void:

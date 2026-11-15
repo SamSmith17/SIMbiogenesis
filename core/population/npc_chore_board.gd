@@ -53,6 +53,11 @@ const MAX_CHORES := 160
 ## retires it. Long enough that "what did we get done this week" still has
 ## something to show.
 const KEEP_DONE_DAYS := 3
+## A rota shift may start this long before its planned time.
+## How long the rest of a rota crew have to turn up before those who have
+## done their share may carry on with theirs (rota_share_done).
+const ROTA_SHARE_GRACE_H := 0.75
+const ROTA_EARLY_H := 0.25
 
 ## UI-toast convenience ONLY — completion is authoritative as board STATE
 ## (done_day >= 0 on a repeat:"once" chore), which the SiteProject sweep in
@@ -487,7 +492,16 @@ func available_for(agent_id: String, abs_hours: float, hour_of_day: float,
 			continue
 		var assigned := str(chore.get("assigned_to", ""))
 		if not assigned.is_empty() and assigned != agent_id \
-				and not _assign_expired(chore, abs_hours):
+				and not _assign_expired(chore, abs_hours) \
+				and not (chore.get("assigned_crew", []) as Array).has(agent_id):
+			continue
+		# A rota shift (NpcWorkScheduler) opens at its planned start, not when
+		# the window does: the crew is planned to be free then.
+		if chore.has("rota_day") and abs_hours < float(chore.get("assign_at_h", 0.0)) - ROTA_EARLY_H:
+			continue
+		# A crew member who has done their share leaves the rest to the others
+		# while the hold lasts.
+		if rota_share_done(chore, agent_id, abs_hours):
 			continue
 		var workers: Array = chore.get("workers", [])
 		if not workers.has(agent_id) \
@@ -535,6 +549,19 @@ func available_for(agent_id: String, abs_hours: float, hour_of_day: float,
 		var head: Array = out.slice(0, shift)
 		out = out.slice(shift)
 		out.append_array(head)
+	# Your own rota shift first (NpcWorkScheduler): the plan already balanced
+	# who does what, and the shared order sent named people to other jobs.
+	if out.size() > 1:
+		var mine: Array = []
+		var rest: Array = []
+		for ch in out:
+			if (ch as Dictionary).has("rota_day") and ((ch as Dictionary).get("assigned_crew", []) as Array).has(agent_id):
+				mine.append(ch)
+			else:
+				rest.append(ch)
+		if not mine.is_empty():
+			mine.append_array(rest)
+			out = mine
 	return out
 
 
@@ -807,6 +834,42 @@ func credit(chore_id: String, hours: float, abs_hours: float) -> float:
 		rec["workers"] = []
 		chore_completed.emit(str(rec.get("id", "")), str(rec.get("label", "")))
 	return applied
+
+
+## Has this rota crew member worked their planned share (chore_hours over the
+## named crew) while the hold lasts? A chore a first arrival can start alone
+## (min_workers 1) used to be worked mostly by whoever came first, so the
+## hours worked drifted far from the rota's.
+static func rota_share_done(chore: Dictionary, agent_id: String, abs_hours: float) -> bool:
+	if not chore.has("rota_day") or _assign_expired(chore, abs_hours):
+		return false
+	var crew: Array = chore.get("assigned_crew", []) as Array
+	if crew.size() < 2 or not crew.has(agent_id):
+		return false
+	var share := float(chore.get("chore_hours", 0.0)) / float(crew.size())
+	var worked: Dictionary = chore.get("rota_worked", {})
+	if float(worked.get(agent_id, 0.0)) < share - 1e-4:
+		return false
+	# Step off only while the rest can still come: someone else of the crew is
+	# on it now, or the shift is young. A named cook who never shows must not
+	# leave the meal waiting for the whole hold.
+	for w in chore.get("workers", []):
+		if str(w) != agent_id and crew.has(str(w)):
+			return true
+	return abs_hours < float(chore.get("assign_at_h", abs_hours)) + ROTA_SHARE_GRACE_H
+
+
+## Count `hours` of rota work by `agent_id`; true when their share is now done.
+func note_rota_work(chore_id: String, agent_id: String, hours: float, abs_hours: float) -> bool:
+	var rec := find(chore_id)
+	if rec.is_empty() or not rec.has("rota_day"):
+		return false
+	if not (rec.get("assigned_crew", []) as Array).has(agent_id):
+		return false
+	var worked: Dictionary = rec.get("rota_worked", {})
+	worked[agent_id] = float(worked.get(agent_id, 0.0)) + hours
+	rec["rota_worked"] = worked
+	return rota_share_done(rec, agent_id, abs_hours)
 
 
 ## Total labour a given agent is on the hook for today — feeds the day-plan

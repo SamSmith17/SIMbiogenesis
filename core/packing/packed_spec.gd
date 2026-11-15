@@ -103,6 +103,14 @@ const CURATED_MODELS := {
 	# bundle (~0.24 m³ of pine at 470 kg/m³ + the sign).
 	"site_gate": {"w_m": 6.6, "d_m": 0.6, "h_m": 0.4, "mass_kg": 130.0,
 		"form": "bundle", "source": "estimated"},
+	# Toilet bank: portable toilets, ~75 kg each and shipped standing on a
+	# flatbed; the curated envelope is the default four in a row.
+	"toilet_bank": {"w_m": 4.9, "d_m": 1.22, "h_m": 2.3, "mass_kg": 300.0,
+		"form": "crate", "this_side_up": true, "source": "estimated"},
+	# Camp kitchen: folding tables, a two-burner stove, basins, pots and a
+	# 5 x 3.4 m shade, packed into crates (~180 kg, an estimate).
+	"camp_kitchen": {"w_m": 2.0, "d_m": 1.0, "h_m": 1.0, "mass_kg": 180.0,
+		"form": "crate", "source": "estimated"},
 	# Firepit: a 1.1 m steel ring, ~35 kg, ships as itself (logs not included).
 	"firepit": {"w_m": 1.12, "d_m": 1.12, "h_m": 0.38, "mass_kg": 35.0,
 		"form": "crate", "source": "estimated"},

@@ -58,6 +58,8 @@ var _hover: Dictionary = {}   # canvas instance id -> month/sector idx
 var _builder: SiteReportBuilder = null
 var _packing_stat: RichTextLabel = null
 var _site_now_stat: RichTextLabel = null
+var _time_use_bars: TimeUseBars = null
+var _time_use_stat: RichTextLabel = null
 var _data: SiteReportData = null
 var _building: bool = false
 var _waiting_weather: bool = false
@@ -366,6 +368,25 @@ func _build_cards(parent: VBoxContainer) -> void:
 	now_vb.add_child(now_title)
 	_site_now_stat = _mk_stat()
 	now_vb.add_child(_site_now_stat)
+	# How the community spends its time (NpcTimeUse), live like the card above.
+	var tu_card := PanelContainer.new()
+	tu_card.name = "TimeUseCard"
+	tu_card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tu_card.add_theme_stylebox_override("panel", UITheme.card_style())
+	parent.add_child(tu_card)
+	var tu_vb := VBoxContainer.new()
+	tu_vb.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	tu_card.add_child(tu_vb)
+	var tu_title := Label.new()
+	tu_title.text = "🕑 Time use — how the people here spend their days"
+	tu_title.add_theme_color_override("font_color", UITheme.C_TEXT)
+	tu_title.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	tu_vb.add_child(tu_title)
+	_time_use_stat = _mk_stat()
+	tu_vb.add_child(_time_use_stat)
+	_time_use_bars = TimeUseBars.new()
+	_time_use_bars.mode = "groups"
+	tu_vb.add_child(_time_use_bars)
 
 
 func _add_card(parent: Control, title: String, canvas: Control, stat: RichTextLabel,
@@ -612,6 +633,7 @@ func _on_recompute_pressed() -> void:
 func _populate() -> void:
 	_refresh_packing_card()
 	_refresh_site_now_card()
+	_refresh_time_use_card()
 	if _data == null:
 		return
 	var d := _data
@@ -854,6 +876,30 @@ func _refresh_site_now_card() -> void:
 		cost_line += " [color=#%s](%s unpriced)[/color]" % [muted, UiText.count(int(placed["unpriced"]), "structure")]
 	lines.append(cost_line)
 	_site_now_stat.text = "\n".join(lines)
+
+
+func _refresh_time_use_card() -> void:
+	if _time_use_stat == null:
+		return
+	var sgv: Node = _resolve_refs()["sgv"]
+	var bridge: Variant = sgv.call("npc_population_bridge") if sgv != null and sgv.has_method("npc_population_bridge") else null
+	var tu: Dictionary = bridge.call("time_use_summary", 7, "") if bridge != null and bridge.has_method("time_use_summary") else {}
+	var muted := UITheme.C_TEXT_M.to_html(false)
+	if int(tu.get("people", 0)) == 0 or float(tu.get("recorded_h", 0.0)) < 1.0:
+		_time_use_stat.text = "[color=#%s]Nothing measured yet: time is counted while the clock runs with people simulated.[/color]" % muted
+		_time_use_bars.visible = false
+		return
+	_time_use_bars.visible = true
+	_time_use_bars.set_summary(tu)
+	var v := str(tu["verdict"])
+	var vc := NpcTimeUse.verdict_color(v).to_html(false)
+	var planned := float(tu.get("planned_h_week", 0.0))
+	_time_use_stat.text = "Work this site takes: [b]%s per person a week[/b] [color=#%s](%s)[/color]%s · leisure %s a day · %s over %s\n[color=#%s]Ticks: %s. A reference, not a target.[/color]" % [
+		UiText.duration(float(tu["work_h_week"])), vc, v,
+		(" · the rota plans %s" % UiText.duration(planned)) if planned > 0.0 else "",
+		UiText.duration(float(tu["leisure_h_day"])), UiText.count(int(tu["people"]), "person", "people"),
+		"part of a day so far" if bool(tu.get("partial", false)) else UiText.count(int(tu["days"]), "day"),
+		muted, NpcTimeUse.ATUS_SOURCE]
 
 
 ## The year's hourly PV and temperature as carpet plots (CarpetPlot).

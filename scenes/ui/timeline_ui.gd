@@ -441,6 +441,7 @@ var _last_viewport_size: Vector2 = Vector2.ZERO
 var _record_book_panel: Control = null
 var _site_report_panel: Control = null
 var _patterns_modal: Node = null
+var _schedule_modal: Node = null
 ## 🌫 Microclimate drawer (scenes/ui/microclimate_drawer.gd), lazy.
 var _microclimate_drawer: CanvasLayer = null
 
@@ -1764,6 +1765,7 @@ func _draw_deploy_flags(lane_rect : Rect2, lane_y : float, win_start : float, sp
 	var evs : Array = sd.events() if sd != null else []
 	if sd != null:
 		_refresh_deploy_chip(sd)
+	_draw_set_spans(lane_y, win_start, span, w, fnt)
 	evs = evs + _burn_flag_events()
 	if evs.is_empty():
 		return
@@ -1813,6 +1815,39 @@ func _draw_deploy_flags(lane_rect : Rect2, lane_y : float, win_start : float, sp
 			_track.draw_rect(Rect2(x, lane_y + band_h - 2.0, tw * frac, 2.0), Color(1.0, 1.0, 1.0, 0.9), true)
 		_track.draw_string(fnt, Vector2(x + 3.0, lane_y + band_h * 0.8), txt,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 7, Color(0.08, 0.08, 0.1, 0.95))
+
+
+var _set_spans_cache : Array = []
+var _set_spans_key := ""
+
+## Venue sets (a stage's programme, ScheduledEvents.from_programs) as thin
+## spans along the bottom of the flag row, so a festival's evening shows on
+## the timeline. Rebuilt when the window moves a quarter hour or the spaces
+## change (the registry's revision).
+func _draw_set_spans(lane_y : float, win_start : float, span : float, w : float, fnt : Font) -> void:
+	var tl := _get_terrain_loader()
+	var reg : SpaceRegistry = tl.get("npc_spaces") if tl != null and tl.get("npc_spaces") is SpaceRegistry else null
+	if reg == null:
+		return
+	var key := "%d|%d|%d" % [int(floor(win_start * 4.0)), int(span), reg.revision]
+	if key != _set_spans_key:
+		_set_spans_key = key
+		_set_spans_cache = ScheduledEvents.from_programs(reg.spaces, win_start, win_start + span)
+	if _set_spans_cache.is_empty():
+		return
+	var band_h := _deploy_flag_band.size.y
+	var y := lane_y + band_h - 3.0
+	var col := ScheduledEvents.color_of(ScheduledEvents.KIND_SET)
+	for e in _set_spans_cache:
+		var ev := e as Dictionary
+		var x0 := clampf((float(ev["at_h"]) - win_start) / span * w, 0.0, w)
+		var x1 := clampf((float(ev["end_h"]) - win_start) / span * w, 0.0, w)
+		if x1 - x0 < 1.0:
+			continue
+		_track.draw_rect(Rect2(x0, y, x1 - x0, 3.0), Color(col.r, col.g, col.b, 0.85), true)
+		if x1 - x0 > 60.0:
+			_track.draw_string(fnt, Vector2(x0 + 3.0, y - 1.0), str(ev["label"]),
+				HORIZONTAL_ALIGNMENT_LEFT, x1 - x0 - 6.0, 7, Color(col.r, col.g, col.b, 0.9))
 
 
 ## The flag under track point `p` (its event id), "" for none. The tag row
@@ -4096,6 +4131,10 @@ func _build_right_cluster() -> Control:
 	var patterns_btn := _mk_icon_btn("🗓", _on_patterns_pressed,
 		"Patterns — the recorded days hour by hour, the battery against a store, and where the energy went")
 	right.add_child(patterns_btn)
+	var sched_btn := _mk_icon_btn("👥", _on_community_schedule_pressed,
+		"Community schedule — everyone's day, the week's events, who is on the rota; export calendars (.ics)")
+	sched_btn.name = "CommunityScheduleBtn"
+	right.add_child(sched_btn)
 	var mc_btn := _mk_icon_btn("🌫", _on_microclimate_pressed,
 		"Microclimate — calibrate how this site's fog, haze, cloud and wind look against the weather data")
 	right.add_child(mc_btn)
@@ -4131,7 +4170,8 @@ func _build_right_cluster() -> Control:
 	for pair in [[csv_btn, "Open datastream CSV"], [_linkagelab_btn, "Import LinkageLab bundle"],
 			[_shading_btn, "Solar shading"], [mc_btn, "Microclimate"],
 			[record_btn, "Climate Record Book"], [_challenge_chip, "Challenges"],
-			[report_btn, "Site Report"], [patterns_btn, "Patterns"], [map_btn, "Map select"],
+			[report_btn, "Site Report"], [patterns_btn, "Patterns"],
+			[sched_btn, "Community schedule"], [map_btn, "Map select"],
 			[_mp_chip, "Multiplayer"], [_conduits_chip, "3D wires"],
 			[_festival_chip, "Festival mode"], [_deploy_chip, "Site deployment"],
 			[_settlement_chip, "Settlement view"],
@@ -4389,6 +4429,25 @@ func open_patterns() -> Node:
 		add_child(_patterns_modal)
 	_patterns_modal.call("open")
 	return _patterns_modal
+
+
+func _on_community_schedule_pressed() -> void:
+	open_community_schedule()
+
+
+## The Community schedule (scenes/ui/community_schedule_modal.gd). `tab`: Day,
+## Week, Person, Work, Balance; `opts`: {habitat, person}.
+func open_community_schedule(tab : String = "", opts : Dictionary = {}) -> Node:
+	if _schedule_modal == null or not is_instance_valid(_schedule_modal):
+		var script := load("res://scenes/ui/community_schedule_modal.gd") as Script
+		if script == null:
+			return null
+		_schedule_modal = Node.new()
+		_schedule_modal.set_script(script)
+		_schedule_modal.name = "CommunityScheduleModal"
+		add_child(_schedule_modal)
+	_schedule_modal.call("open", tab, opts)
+	return _schedule_modal
 
 
 func _on_microclimate_pressed() -> void:

@@ -12,12 +12,20 @@ extends RefCounted
 ## the beam) -> world X, bench Z (across it) -> world +Z (away from the
 ## worker), bench Y -> up, bench top at BENCH_TOP_M.
 
-const KINDS := ["none", "cut", "drill", "fasten", "place", "carry", "lift"]
+const KINDS := ["none", "cut", "drill", "fasten", "place", "carry", "lift",
+	"chop", "stir", "plate", "wash", "carry_pot", "carry_crate"]
 const IN_TO_M := 0.0254
 const BENCH_TOP_M := 0.8
 ## The clip a context is authored for (the editor's default pairing).
 const CLIP_FOR := {"cut": "saw_cut", "drill": "drill_hole", "fasten": "fasten_bolt",
-	"place": "place_beam", "carry": "carry_beam", "lift": "lift_ring"}
+	"place": "place_beam", "carry": "carry_beam", "lift": "lift_ring",
+	"chop": "chop", "stir": "stir_pot", "plate": "plate_up", "wash": "wash_dishes",
+	"carry_pot": "carry_pot", "carry_crate": "carry_pot"}
+## The kitchen (MealJobPlan): a counter 0.9 m high whose near edge is 0.2 m in
+## front of the cook; the same in CampKitchenBuilder.
+const COUNTER_TOP_M := 0.9
+const KITCHEN_TOOL := {"chop": "knife", "stir": "ladle", "plate": "ladle", "wash": "sponge",
+	"carry_pot": "pot", "carry_crate": "crate"}
 
 
 ## {kind, tool_id ("" = a carried beam), plan (LinkageBuildOps plan for cut /
@@ -59,6 +67,22 @@ static func setup(kind: String) -> Dictionary:
 				"xform": Transform3D(Basis(), Vector3(-0.1, 0.8, 0.5))})
 		"place", "carry", "lift":
 			rig["workpieces"] = []
+		"chop", "stir", "plate", "wash":
+			rig["tool_id"] = str(KITCHEN_TOOL[kind])
+			# The counter (or the stove / basins / serving table) in front.
+			rig["workpieces"].append({"size": Vector3(1.2, COUNTER_TOP_M, 0.6), "color": Color(0.45, 0.38, 0.3),
+				"xform": Transform3D(Basis(), Vector3(0.0, COUNTER_TOP_M / 2.0 - 0.002, 0.5))})
+			if kind == "chop":
+				rig["workpieces"].append({"size": Vector3(0.4, 0.025, 0.28), "color": Color(0.78, 0.62, 0.42),
+					"xform": Transform3D(Basis(), Vector3(-0.04, COUNTER_TOP_M + 0.0125, 0.38))})
+			elif kind == "stir" or kind == "plate":
+				rig["workpieces"].append({"size": Vector3(0.32, 0.18, 0.32), "color": Color(0.55, 0.57, 0.6),
+					"xform": Transform3D(Basis(), Vector3(-0.2 if kind == "plate" else 0.0, COUNTER_TOP_M + 0.09, 0.42))})
+			elif kind == "wash":
+				rig["workpieces"].append({"size": Vector3(0.45, 0.02, 0.35), "color": Color(0.35, 0.5, 0.6),
+					"xform": Transform3D(Basis(), Vector3(0.0, COUNTER_TOP_M - 0.08, 0.42))})
+		"carry_pot", "carry_crate":
+			rig["tool_id"] = str(KITCHEN_TOOL[kind])
 	return rig
 
 
@@ -122,6 +146,28 @@ static func tool_at(rig: Dictionary, u: float) -> Dictionary:
 				"spin": 0.0, "visible": true}
 		"carry":
 			return {"xform": Transform3D(Basis(), Vector3(0.0, 0.95, 0.32)), "spin": 0.0, "visible": true}
+		"chop":
+			# Three chops a cycle along the board, the blade lifting off it.
+			var lift := 0.06 * absf(sin(u * TAU * 3.0))
+			return {"xform": Transform3D(Basis(), Vector3(-0.06 + 0.06 * u, COUNTER_TOP_M + 0.03 + lift, 0.4)),
+				"spin": 0.0, "visible": true}
+		"stir":
+			var a := u * TAU
+			return {"xform": Transform3D(Basis(), Vector3(0.07 * cos(a), COUNTER_TOP_M + 0.06, 0.42 + 0.07 * sin(a))),
+				"spin": 0.0, "visible": true}
+		"plate":
+			# From the pot (left) to the plate (right) and back, over the rim.
+			var e := 0.5 - 0.5 * cos(u * TAU)
+			return {"xform": Transform3D(Basis(), Vector3(lerpf(-0.2, 0.18, e), COUNTER_TOP_M + 0.07 + 0.08 * sin(e * PI), 0.4)),
+				"spin": 0.0, "visible": true}
+		"wash":
+			var a2 := u * TAU * 2.0
+			return {"xform": Transform3D(Basis(), Vector3(0.08 * cos(a2), COUNTER_TOP_M - 0.02, 0.4 + 0.05 * sin(a2))),
+				"spin": 0.0, "visible": true}
+		"carry_pot":
+			return {"xform": Transform3D(Basis(), Vector3(0.0, 0.86, 0.3)), "spin": 0.0, "visible": true}
+		"carry_crate":
+			return {"xform": Transform3D(Basis(), Vector3(0.0, 0.84, 0.32)), "spin": 0.0, "visible": true}
 		"lift":
 			var e3 := LinkageBuildSteps.ease_in_out_cubic(u)
 			return {"xform": Transform3D(Basis(), Vector3(0.0, lerpf(0.55, 1.92, e3), lerpf(0.42, 0.15, e3))),

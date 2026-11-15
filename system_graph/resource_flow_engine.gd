@@ -3757,7 +3757,7 @@ func _process_processor_batch(item: Dictionary, specs: Dictionary, net_rates: Di
 					if not tank_id2.is_empty() and dt_hours > 0.0:
 						net_rates[tank_id2] = float(net_rates.get(tank_id2, 0.0)) - (qty2 / dt_hours)
 
-			var begin := RecipeRunner.begin_run(specs, abs_h, recipe)
+			var begin := RecipeRunner.begin_run(specs, abs_h, recipe, chore_ledger)
 			state["state"] = "running"
 			state["elapsed"] = 0.0
 			state["penalty_qty"] = 0.0

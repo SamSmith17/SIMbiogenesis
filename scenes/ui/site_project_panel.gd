@@ -170,6 +170,17 @@ func _build_ui() -> void:
 	plan_btn.tooltip_text = "Work Planner: recurring chores, tasks, the duty rota, per-person hours and skills"
 	plan_btn.pressed.connect(func() -> void: _open_work_modal("open_work_planner"))
 	head.add_child(plan_btn)
+	var sched_btn := Button.new()
+	UITheme.style_button(sched_btn)
+	sched_btn.text = "Schedule…"
+	sched_btn.name = "community_schedule"
+	sched_btn.tooltip_text = "Community schedule: the week's events (deploys, drives, burns, sets) on a calendar"
+	sched_btn.pressed.connect(func() -> void:
+		var tl: Node = ServiceLocator.timeline_ui()
+		if tl != null and tl.has_method("open_community_schedule"):
+			close()
+			tl.call("open_community_schedule", "Week"))
+	head.add_child(sched_btn)
 	var close_btn := IconButton.close(close)
 	head.add_child(close_btn)
 

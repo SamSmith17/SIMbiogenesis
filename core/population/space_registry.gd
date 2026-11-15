@@ -73,6 +73,17 @@ var _pos_cache: Dictionary = {}
 ## Overlays and the Site Plan poll it instead of rebuilding on a timer.
 var revision := 0
 
+## TOILET STALLS (NPC life pass, Phase 3). Runtime only, set by the bridge from
+## the stall spots it resolves (a toilet bank prop, a vehicle's toilet): a
+## restroom with stalls holds exactly one person per stall, and the rest wait
+## in ONE first-come line outside (`_queues`), whichever tier they are in.
+var _stalls: Dictionary = {}     # space_id -> stall count
+var _queues: Dictionary = {}     # space_id -> Array of agent ids, head first
+## The mean stall visit the expected-wait estimate uses (NpcRoutine's 5 min).
+const STALL_VISIT_H := 5.0 / 60.0
+## Walking speed that turns a wait into metres of detour (NpcNav's 1.3 m/s).
+const WAIT_TO_M := 1.3 * 3600.0
+
 
 static func create_empty() -> SpaceRegistry:
 	var layer := SpaceRegistry.new()
@@ -239,7 +250,8 @@ func set_space_fields(space_id: String, patch: Dictionary) -> bool:
 	for k in patch.keys():
 		match str(k):
 			"capacity", "label", "draw", "units", "graph_item_id", "program", "facing_deg", \
-					"layout", "perform_h_m", "crowd_gap_m", "music", "festival_seeded", "camp_id":
+					"layout", "perform_h_m", "crowd_gap_m", "music", "festival_seeded", "camp_id", \
+					"bank_prop":
 				rec[str(k)] = patch[k]
 	_normalized(rec)
 	revision += 1
@@ -488,16 +500,23 @@ func nearest_space_by(space_type: String, pos: Vector2, pos_of: Callable,
 			if owner_live:
 				continue
 		var sid := str(space.get("id", ""))
-		if require_free and not has_free_capacity(sid):
+		# A restroom with stalls is never "full" to choose: you queue at it.
+		var stalled := _stalls.has(sid)
+		if require_free and not stalled and not has_free_capacity(sid):
 			continue
 		var p: Variant = _position_for(space, pos_of)
 		if not (p is Vector2):
 			continue
 		# Share the load: every occupant already there costs SHARE_SPREAD_M
 		# of extra walk, so people draw their share of a type's spaces by
-		# distance instead of all converging on the nearest one.
-		var d := ((p as Vector2) - pos).length() \
-			+ (float(occupant_count(sid)) * SHARE_SPREAD_M if spread else 0.0)
+		# distance instead of all converging on the nearest one. Stalls price
+		# the honest number instead: the expected WAIT, as metres of walk — a
+		# free stall 60 m further beats a line of three.
+		var d := ((p as Vector2) - pos).length()
+		if stalled:
+			d += expected_wait_h(sid) * WAIT_TO_M
+		elif spread:
+			d += float(occupant_count(sid)) * SHARE_SPREAD_M
 		if d < best_d:
 			best_d = d
 			best = space
@@ -880,6 +899,10 @@ func has_free_capacity(space_id: String) -> bool:
 	var rec := find_by_id(space_id)
 	if rec.is_empty():
 		return false
+	# A toilet stall holds one person whatever the testing switches say: it is
+	# a physical door, not a planning limit.
+	if _stalls.has(space_id):
+		return stalls_used(space_id) < int(_stalls[space_id])
 	if ignore_capacity:
 		return true
 	# People PILE UP to sleep: a tent or a sleep area never turns anyone away
@@ -888,6 +911,11 @@ func has_free_capacity(space_id: String) -> bool:
 	# the ground wherever they stood.
 	if str(rec.get("space_type", "")) == "sleep":
 		return true
+	# Stalls are the capacity: one person per toilet, whatever the record says.
+	# A stall someone has RESERVED on their way (the light tier claims on
+	# arrival) is taken too, or the head of the line walks into it with them.
+	if _stalls.has(space_id):
+		return stalls_used(space_id) < int(_stalls[space_id])
 	var cap := int(rec.get("capacity", DEFAULT_CAPACITY))
 	if cap <= CAPACITY_AUTO:
 		return true   # AUTO: never full, the load is shared by choice instead
@@ -906,6 +934,16 @@ func claim(space_id: String, agent_id: String) -> bool:
 		return true
 	if not has_free_capacity(space_id):
 		return false
+	# First come, first served: with people waiting, only the head of the line
+	# takes a free stall (nobody walks up and jumps the queue).
+	var q: Array = _queues.get(space_id, [])
+	var reserved := (_slots.get(space_id, {}) as Dictionary).has(agent_id)
+	if not q.is_empty() and not reserved:
+		if str(q[0]) != agent_id:
+			return false
+		q.remove_at(0)
+		if q.is_empty():
+			_queues.erase(space_id)
 	occ.append(agent_id)
 	_occupancy[space_id] = occ
 	_take_slot(space_id, agent_id)
@@ -925,13 +963,75 @@ func release(space_id: String, agent_id: String) -> void:
 func release_all_for_agent(agent_id: String) -> void:
 	for sid in _occupancy.keys():
 		release(str(sid), agent_id)
+	for sid in _queues.keys():
+		queue_leave(str(sid), agent_id)
 	var held := str(_slot_at.get(agent_id, ""))
 	if not held.is_empty():
 		_free_slot(held, agent_id)
 
 
+## The stalls a restroom has right now (0 = none: the old open area).
+func set_stalls(space_id: String, n: int) -> void:
+	if n <= 0:
+		_stalls.erase(space_id)
+	else:
+		_stalls[space_id] = n
+
+
+## Stalls taken: everyone inside plus everyone walking to a reserved stall.
+func stalls_used(space_id: String) -> int:
+	return maxi((_slots.get(space_id, {}) as Dictionary).size(), occupant_count(space_id))
+
+
+func stall_count(space_id: String) -> int:
+	return int(_stalls.get(space_id, 0))
+
+
+func has_stalls(space_id: String) -> bool:
+	return _stalls.has(space_id)
+
+
+## Join the line (idempotent); returns the place in it (0 = next in).
+func queue_join(space_id: String, agent_id: String) -> int:
+	var q: Array = _queues.get(space_id, [])
+	var k := q.find(agent_id)
+	if k < 0:
+		q.append(agent_id)
+		k = q.size() - 1
+	_queues[space_id] = q
+	return k
+
+
+func queue_index(space_id: String, agent_id: String) -> int:
+	return (_queues.get(space_id, []) as Array).find(agent_id)
+
+
+func queue_leave(space_id: String, agent_id: String) -> void:
+	var q: Array = _queues.get(space_id, [])
+	q.erase(agent_id)
+	if q.is_empty():
+		_queues.erase(space_id)
+	else:
+		_queues[space_id] = q
+
+
+func queue_len(space_id: String) -> int:
+	return (_queues.get(space_id, []) as Array).size()
+
+
+## Hours a newcomer can expect to wait for a stall: everyone ahead of them
+## (the line, plus anyone inside past the stalls free) shares the stalls.
+func expected_wait_h(space_id: String) -> float:
+	var n := stall_count(space_id)
+	if n <= 0:
+		return 0.0
+	var ahead := queue_len(space_id) + stalls_used(space_id) + 1 - n
+	return maxf(float(ahead), 0.0) * STALL_VISIT_H / float(n)
+
+
 func clear_occupancy() -> void:
 	_occupancy = {}
+	_queues = {}
 	_slots = {}
 	_slot_at = {}
 	_clusters = {}

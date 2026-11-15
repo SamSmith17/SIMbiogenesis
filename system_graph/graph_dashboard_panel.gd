@@ -40,6 +40,10 @@ var _stores_vbox: VBoxContainer = null
 var _stores_sig := "<unset>"
 var _settlement_vbox: VBoxContainer = null
 var _settlement_sig := "<unset>"
+## Time use (NpcTimeUse), asked of the bridge at most every TU_EVERY_MS.
+var _tu: Dictionary = {}
+var _tu_msec := -100000
+const TU_EVERY_MS := 5000
 ## SITE BALANCE card (SiteBalance.lines) — rebuilt on content change only.
 var _balance_vbox: VBoxContainer = null
 ## Its render state for _render_rows: the rows' signature, their structure
@@ -1127,6 +1131,13 @@ func _refresh_settlement() -> void:
 		if _graph_view != null and _graph_view.has_method("festival_vibe") else {}
 	if not vibe.is_empty():
 		sig_parts.append("v=%s" % str(vibe.get("headline", "")))
+	if Time.get_ticks_msec() - _tu_msec >= TU_EVERY_MS:
+		_tu_msec = Time.get_ticks_msec()
+		var br: Variant = _graph_view.call("npc_population_bridge") \
+			if _graph_view != null and _graph_view.has_method("npc_population_bridge") else null
+		_tu = br.call("time_use_summary", 7, "") if br != null and br.has_method("time_use_summary") else {}
+	if int(_tu.get("people", 0)) > 0:
+		sig_parts.append("tu=%.1f/%.1f" % [float(_tu.get("work_h_week", 0.0)), float(_tu.get("planned_h_week", 0.0))])
 	var sig := "\n".join(sig_parts)
 	if sig == _settlement_sig:
 		return
@@ -1152,6 +1163,26 @@ func _refresh_settlement() -> void:
 	head.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	head.add_theme_color_override("font_color", NpcMorale.color(morale_avg))
 	_settlement_vbox.add_child(head)
+	# The work this site takes per person, measured (and planned by the rota).
+	if int(_tu.get("people", 0)) > 0 and float(_tu.get("recorded_h", 0.0)) >= 1.0:
+		var v := str(_tu.get("verdict", ""))
+		var wl := Label.new()
+		wl.name = "work_per_person"
+		var planned := float(_tu.get("planned_h_week", 0.0))
+		wl.text = "🔧 Work: %s per person a week (%s)%s · leisure %s a day" % [
+			UiText.duration(float(_tu["work_h_week"])), v,
+			(" · rota plans %s" % UiText.duration(planned)) if planned > 0.0 else "",
+			UiText.duration(float(_tu.get("leisure_h_day", 0.0)))]
+		if bool(_tu.get("partial", false)):
+			wl.text += " · part of a day so far"
+		wl.tooltip_text = "Measured over the last %s while the clock ran. Up to %s a week (the ATUS adult's paid work and housework) is sustainable, past %s overloaded. The Community schedule's Balance tab has the whole day." % [
+			UiText.count(int(_tu.get("days", 0)), "day"), UiText.duration(NpcTimeUse.SUSTAINABLE_H_WEEK),
+			UiText.duration(NpcTimeUse.OVERLOADED_H_WEEK)]
+		wl.mouse_filter = Control.MOUSE_FILTER_PASS
+		wl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		wl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		wl.add_theme_color_override("font_color", NpcTimeUse.verdict_color(v))
+		_settlement_vbox.add_child(wl)
 
 	# One line of "what everyone is doing", biggest groups first.
 	var acts2: Dictionary = summary.get("activities", {})

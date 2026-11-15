@@ -58,8 +58,11 @@ static func select_recipe(specs: Dictionary, recipe: Dictionary) -> void:
 	ProcessRecipe.apply_to_specs(specs, recipe)
 
 
-static func begin_run(specs: Dictionary, abs_hours: float, recipe: Dictionary = {}) -> Dictionary:
-	## Returns {ok, reason, waiting_chore?, step?}
+static func begin_run(specs: Dictionary, abs_hours: float, recipe: Dictionary = {},
+		ledger: ChoreLedger = null) -> Dictionary:
+	## Returns {ok, reason, waiting_chore?, step?}. With a finite-labour
+	## `ledger` a step at the start of the batch waits for a crew like any
+	## other (without one it was taken as done, so prep never needed hands).
 	var r := recipe if not recipe.is_empty() else resolve_recipe(specs)
 	if r.is_empty() and bool(specs.get("batch_mode", false)):
 		r = ProcessRecipe.from_batch_specs(specs)
@@ -94,7 +97,7 @@ static func begin_run(specs: Dictionary, abs_hours: float, recipe: Dictionary = 
 		return {"ok": true, "waiting_chore": true, "step": specs.get("recipe_waiting_step_id", "")}
 
 	# Fire at_frac==0 steps immediately.
-	var gate := _try_enter_steps(specs, r, -1.0, 0.0, abs_hours, null)
+	var gate := _try_enter_steps(specs, r, -1.0, 0.0, abs_hours, ledger)
 	if bool(gate.get("waiting_chore", false)):
 		return {"ok": true, "waiting_chore": true, "step": gate.get("step", "")}
 	return {"ok": true, "waiting_chore": false}

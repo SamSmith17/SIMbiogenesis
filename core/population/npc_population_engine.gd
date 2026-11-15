@@ -70,10 +70,34 @@ var skills := NpcSkills.create_empty()
 ## The duty rota. `duties` are config (specs.pop_duties); `slots` are
 ## simulation state and ride the snapshot below.
 var duty := NpcDutyRoster.create_empty()
+## The weekly rota (NpcWorkScheduler.plan), redone each sim-day by plan_rota.
+## Derived, never persisted.
+var rota: Dictionary = {}
+var rota_day := -999999
 ## Who answers when something breaks. CONFIG (specs.pop_oncall), read by the
 ## bridge's _service_oncall — the engine itself never consults it, so keeping
 ## it here is purely so config survives a roster reset beside skills/duties.
 var oncall := NpcOnCall.create_empty()
+## Plan the coming week's recurring work and put today's part on the board
+## (NpcWorkScheduler). Once per sim-day unless `force`.
+func plan_rota(abs_h: float, days: int = NpcDutyRoster.HORIZON_DAYS, force: bool = false,
+		extra_items: Array = []) -> Dictionary:
+	var today := NpcChoreBoard.day_index(abs_h)
+	if not force and today == rota_day:
+		return rota
+	rota_day = today
+	if agents.is_empty():
+		rota = {}
+		return rota
+	var items := NpcWorkScheduler.collect(chore_board, duty, today, days)
+	# Work the board does not hold yet (the kitchen's cooking, minted when a
+	# batch needs hands): planned like the rest, its crew read at mint time.
+	items.append_array(extra_items)
+	rota = NpcWorkScheduler.plan(items, NpcWorkScheduler.people_of(self, today), routine, today, days)
+	NpcWorkScheduler.apply(rota, chore_board, duty, today)
+	return rota
+
+
 ## The daily schedule everyone follows (per-agent phase offsets vary it).
 ## Editable by the player; defaults to NpcRoutine.default_day().
 var routine: NpcRoutine = null
@@ -557,6 +581,8 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		"registry": ctx_in.get("registry"),
 		"pos_of": ctx_in.get("pos_of", Callable()),
 		"chore_pos_of": ctx_in.get("chore_pos_of", Callable()),
+		# Where place k in a restroom's line stands (toilet stalls).
+		"queue_spot_of": ctx_in.get("queue_spot_of", Callable()),
 		"plan_path": ctx_in.get("plan_path", Callable()),
 		"height_at": ctx_in.get("height_at", Callable()),
 		"walkable": ctx_in.get("walkable", Callable()),
@@ -1117,6 +1143,8 @@ func agent_dots() -> Array:
 			# rotating in place; at high time scale, as a head-shake).
 			# The DJ stands ON the deck: metres above the ground.
 			"elev": a.elev(),
+			# The seat's kind (NpcSeatPose): a chair pose only on a seat.
+			"seat": a.seat_kind if a.state == NpcAgent.State.DOING else "",
 			"peak_since": a.peak_since,
 			"peak_buzz": a.peak_buzz, "peak_fed": a.peak_fed,
 			"comfort": a._comfort,

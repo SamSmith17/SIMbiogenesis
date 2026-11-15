@@ -33,6 +33,12 @@ const TOOLS := {
 	"wrench": {"label": "Wrench", "ops": ["fasten"]},
 	"mallet": {"label": "Mallet", "ops": ["place"]},
 	"clamp": {"label": "Bar clamp", "ops": ["place"]},
+	# Kitchen (NPC life pass, Phase 7: meals as small crew jobs).
+	"knife": {"label": "Kitchen knife", "ops": ["chop"]},
+	"ladle": {"label": "Ladle", "ops": ["stir", "plate"]},
+	"pot": {"label": "Stock pot", "ops": ["carry_pot"]},
+	"sponge": {"label": "Sponge", "ops": ["wash"]},
+	"crate": {"label": "Produce crate", "ops": ["carry_crate"]},
 }
 
 const STEEL := Color(0.72, 0.74, 0.77)
@@ -121,6 +127,38 @@ static func sockets(id: String) -> Dictionary:
 				"tip": Transform3D(Basis(), Vector3.ZERO),
 				"spin_node": "", "spin_axis": Vector3(0, 1, 0),
 			}
+		"knife":
+			# Edge along +Z at y 0 with its middle at the origin; the handle
+			# behind it (toward the cook), held from above.
+			return {
+				"grip": Transform3D(hand_basis(Vector3(0, 0, 1), Vector3(0, 1, -0.6)), Vector3(0, 0.035, -0.12)),
+				"tip": Transform3D(Basis(), Vector3.ZERO),
+				"spin_node": "", "spin_axis": Vector3(0, 1, 0),
+			}
+		"ladle":
+			# The bowl at the origin; the handle rises up and back.
+			return {
+				"grip": Transform3D(hand_basis(Vector3(0, 0.9, -0.4), Vector3(0, 0, -1)), Vector3(0, 0.26, -0.115)),
+				"tip": Transform3D(Basis(), Vector3.ZERO),
+				"spin_node": "", "spin_axis": Vector3(0, 1, 0),
+			}
+		"pot", "crate":
+			# Held in front by its two side handles (the carried beam's grip).
+			var hb := hand_basis(Vector3(1, 0, 0), Vector3(0, 0.35, -1))
+			var hx := 0.2 if id == "pot" else 0.27
+			var hy := 0.12 if id == "pot" else 0.1
+			return {
+				"grip": Transform3D(hb, Vector3(-hx, hy, 0)),
+				"grip2": Transform3D(hb, Vector3(hx, hy, 0)),
+				"tip": Transform3D(Basis(), Vector3.ZERO),
+				"spin_node": "", "spin_axis": Vector3(0, 1, 0),
+			}
+		"sponge":
+			return {
+				"grip": Transform3D(hand_basis(Vector3(1, 0, 0), Vector3(0, 1, -0.3)), Vector3(0, 0.04, 0)),
+				"tip": Transform3D(Basis(), Vector3.ZERO),
+				"spin_node": "", "spin_axis": Vector3(0, 1, 0),
+			}
 	return {}
 
 
@@ -148,6 +186,17 @@ static func build(id: String, allow_override: bool = true) -> Node3D:
 			_build_mallet(root)
 		"clamp":
 			_build_clamp(root)
+		"knife":
+			_build_knife(root)
+		"ladle":
+			_build_ladle(root)
+		"pot":
+			_build_pot(root)
+		"sponge":
+			_box(root, Vector3(0.1, 0.04, 0.07), Vector3(0, 0.02, 0), Color(0.95, 0.82, 0.25))
+			_box(root, Vector3(0.1, 0.012, 0.07), Vector3(0, 0.002, 0), Color(0.2, 0.55, 0.3))
+		"crate":
+			_build_crate(root)
 		_:
 			return null
 	_add_markers(root, s)
@@ -323,6 +372,40 @@ static func _build_clamp(root: Node3D) -> void:
 	_box(root, Vector3(0.02, 0.025, 0.07), Vector3(0, 0.14, 0.035), DARK)
 	_box(root, Vector3(0.02, 0.025, 0.07), Vector3(0, -0.02, 0.035), DARK)
 	_box(root, Vector3(0.03, 0.09, 0.035), Vector3(0, -0.08, 0.0), Color(0.85, 0.65, 0.1))
+
+
+static func _build_knife(root: Node3D) -> void:
+	_box(root, Vector3(0.003, 0.035, 0.18), Vector3(0, 0.018, 0.02), STEEL)      # blade
+	_box(root, Vector3(0.018, 0.022, 0.11), Vector3(0, 0.032, -0.12), DARK)      # handle
+
+
+static func _build_ladle(root: Node3D) -> void:
+	var bowl := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = 0.045
+	sm.height = 0.05
+	sm.is_hemisphere = true
+	bowl.mesh = sm
+	bowl.basis = Basis(Vector3(1, 0, 0), PI)
+	bowl.position = Vector3(0, 0.03, 0)
+	bowl.material_override = _mat(STEEL, 0.8, 0.35)
+	root.add_child(bowl)
+	var dir := Vector3(0, 0.9, -0.4).normalized()
+	_cyl(root, 0.006, 0.32, Vector3(0, 0.03, 0) + dir * 0.16, dir, STEEL, 0.8, 8)
+
+
+static func _build_pot(root: Node3D) -> void:
+	_cyl(root, 0.16, 0.18, Vector3(0, 0.09, 0), Vector3.UP, Color(0.55, 0.57, 0.6), 0.7, 24)
+	_cyl(root, 0.15, 0.01, Vector3(0, 0.16, 0), Vector3.UP, Color(0.62, 0.48, 0.25), 0.0, 24)   # stew
+	for x in [-0.2, 0.2]:
+		_box(root, Vector3(0.05, 0.015, 0.06), Vector3(x, 0.12, 0), DARK)
+
+
+static func _build_crate(root: Node3D) -> void:
+	_box(root, Vector3(0.5, 0.2, 0.35), Vector3(0, 0.1, 0), WOOD)
+	_box(root, Vector3(0.44, 0.06, 0.3), Vector3(0, 0.22, 0), Color(0.36, 0.6, 0.24))   # greens
+	for x in [-0.27, 0.27]:
+		_box(root, Vector3(0.04, 0.03, 0.12), Vector3(x, 0.1, 0), WOOD)
 
 
 static func _add_markers(root: Node3D, s: Dictionary) -> void:

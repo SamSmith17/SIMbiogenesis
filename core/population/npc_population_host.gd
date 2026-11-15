@@ -1214,6 +1214,9 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 		"activity": str(dot.get("activity", "")),
 		"space_type": str(dot.get("space_type", "")),
 		"venue_pose": venue_pose,
+		"seat": str(dot.get("seat", "")),
+		"elev": elev,
+		"agent_id": aid,
 		"peaking": not is_nan(float(dot.get("peak_since", NAN))),
 		"morale": float(dot.get("morale", 1.0)),
 		"dwell_left_s": _dwell_left_s(dot),
@@ -1395,10 +1398,14 @@ static func _crowd_pose_base(dot: Dictionary) -> int:
 	var act := str(dot.get("activity", ""))
 	if act == "sleep":
 		return CrowdCohort.POSE_LIE
+	# Sitting is ONE rule (NpcSeatPose), shared with both tiers' own poses.
+	var seat_code := NpcSeatPose.crowd_code_for(NpcSeatPose.for_activity(act,
+		str(dot.get("venue_pose", "")), str(dot.get("seat", "")), float(dot.get("elev", 0.0)),
+		str(dot.get("id", "")), str(dot.get("space_type", ""))))
+	if seat_code >= 0:
+		return seat_code
 	if act in ["eat", "rest", "hunger"]:
 		return CrowdCohort.POSE_CROSS        # a meal on the ground
-	if act in ["bathroom", "bladder"]:
-		return CrowdCohort.POSE_SIT          # the portapotty is a seat
 	if act == "chore" or act == "work" or not str(dot.get("work_pose", "")).is_empty():
 		return CrowdCohort.POSE_WORK
 	if act == NpcAgent.PERFORM_ACTIVITY:

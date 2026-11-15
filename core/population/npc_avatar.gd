@@ -117,6 +117,9 @@ var _activity := ""
 var _space_type := ""
 var _clip := ""
 var _rig_y_target := 0.0
+## Sitting ON a seat (NpcSeatPose): the body origin is the seat surface, so
+## the chair clip's hips come down to just above it.
+var _on_seat := false
 var _backwards := false
 var _machine: NpcPoseMachine = null
 ## Set when the AnimationPlayer reports a one-shot ended. The machine treats
@@ -644,6 +647,9 @@ func _drive(dt: float, inp: Dictionary) -> void:
 	_apparent_speed = float(inp.get("apparent_speed_mps", WALK_SPEED_MPS))
 	_time_mult = clampf(float(inp.get("time_mult", 1.0)), 0.05, NpcRig.MAX_PLAYBACK_RATE)
 	_carrying = bool(inp.get("carrying", false))
+	_on_seat = NpcSeatPose.on_chair(str(inp.get("seat", "")), float(inp.get("elev", 0.0)))
+	if _simple != null:
+		_simple.on_seat = _on_seat
 	_carry_prop_live = bool(inp.get("carry_prop_live", false))
 	_carry_heavy = bool(inp.get("carry_heavy", false))
 	if _machine == null:
@@ -775,7 +781,8 @@ func _apply_clip(clip: String, backwards: bool, blend: float, immediate: bool) -
 	_speed_scale = NpcRig.walk_speed_scale_for(file_clip, WALK_SPEED_MPS) \
 		if _is_gait(file_clip) else 1.0
 	_rig_ap.speed_scale = 0.0 if _frozen else _speed_scale
-	_rig_y_target = NpcRig.clip_ground_offset_at(file_clip, 1.0 if backwards else 0.0)
+	_rig_y_target = NpcRig.clip_ground_offset_at(file_clip, 1.0 if backwards else 0.0) \
+		+ _seat_shift(file_clip)
 	if immediate or blend <= 0.0:
 		if backwards:
 			_rig_ap.play_backwards(file_clip)
@@ -891,13 +898,22 @@ func _follow_head(delta: float) -> void:
 ## the other; the curve is indexed by the clip\'s own descent, so the body meets
 ## the ground exactly when the animation puts it there. A small follow remains
 ## only to absorb cuts.
+## On a seat the chair clip's hips sit just above the body origin (the seat
+## surface) instead of at its standing-on-the-ground target.
+func _seat_shift(file_clip: String) -> float:
+	if not _on_seat or file_clip != NpcRig.CLIP_SIT:
+		return 0.0
+	return NpcSeatPose.CHAIR_HIP_ABOVE_SEAT - float(NpcRig.TARGET_HIPS_Y.get(NpcRig.CLIP_SIT, 0.26))
+
+
 func _follow_ground_offset(delta: float) -> void:
 	if _rig == null or _rig_ap == null:
 		return
 	var length := _rig_ap.current_animation_length
 	if length > 0.0:
 		var u := clampf(_rig_ap.current_animation_position / length, 0.0, 1.0)
-		_rig_y_target = NpcRig.clip_ground_offset_at(_rig_ap.current_animation, u)
+		_rig_y_target = NpcRig.clip_ground_offset_at(_rig_ap.current_animation, u) \
+			+ _seat_shift(_rig_ap.current_animation)
 	if not is_equal_approx(_rig.position.y, _rig_y_target):
 		_rig.position.y = lerpf(_rig.position.y, _rig_y_target,
 				minf(delta * 20.0, 1.0))

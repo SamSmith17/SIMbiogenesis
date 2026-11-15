@@ -182,6 +182,13 @@ folder (`runs/<run id>/`) holds `flows.svg`, the year's loop Sankey: the main
 stream runs down, what cycles back returns up the sides. Hovering a ribbon in a
 browser shows its value.
 
+With people as agents, `time_use` says how they spent the run: hours per
+person per day by category (sleep, toilet, washing, eating, drinking, work,
+walking, queueing, hanging out, venues, idle), beside the American Time Use
+Survey 2025 averages (`vs_atus`), and `work_per_person_h_week` is the work
+each person did per week, so a design can trade machines against human
+hours. Both are empty with people as rates.
+
 ## In the game: reviewing a submitted design
 
 A submitted design lands in the game's `user://simkit/inbox/`. When a world

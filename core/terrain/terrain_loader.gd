@@ -6322,6 +6322,10 @@ func nav_solid_footprints(enterable: Dictionary = {}) -> Array:
 			# inside it) is not a wall to walk round.
 			if bool(rec.get("walk_in", false)):
 				continue
+			# A toilet bank's stalls are walked into through their doors
+			# (the agents route door -> seat themselves).
+			if str(rec.get("model_id", "")) == ToiletBankBuilder.MODEL_ID:
+				continue
 			# A structure with an opening in the ground: its walls and door
 			# come from earthworks_nav_entries instead.
 			if StructureEarthworks.is_on(rec) and bool(StructureEarthworks.resolve(

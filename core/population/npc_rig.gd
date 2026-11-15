@@ -56,7 +56,11 @@ const CLIP_KNEEL := "kneel"
 const CLIP_REDIRECT := "redirect"
 const CLIP_FIREFLOW := "fire_flow"
 const CLIP_GAZE := "gaze"
-const LOGICAL_CLIPS: Array = [CLIP_SIT_CROSS, CLIP_LOUNGE, CLIP_KNEEL, CLIP_REDIRECT, CLIP_FIREFLOW, CLIP_GAZE]
+## Squatting on the heels (NpcSeatPose: a short stint, or a toilet visit
+## with nothing to sit on). Logical: the rigged body plays its work clip.
+const CLIP_SQUAT := "squat_heels"
+const LOGICAL_CLIPS: Array = [CLIP_SIT_CROSS, CLIP_LOUNGE, CLIP_KNEEL, CLIP_REDIRECT, CLIP_FIREFLOW, CLIP_GAZE,
+	CLIP_SQUAT]
 ## The ground poses (sat or knelt on the ground — the sit transitions apply).
 const GROUND_CLIPS: Array = [CLIP_SIT_CROSS, CLIP_LOUNGE, CLIP_KNEEL]
 
@@ -747,7 +751,10 @@ static func walk_speed_scale_for(clip: String, ground_speed_mps: float) -> float
 	# Ceiling is generous because this now tracks APPARENT speed: at 60x the
 	# body crosses ground 60x faster, and a gait pinned near 1x is exactly the
 	# skating the timelapse looked wrong for. Past ~12x it is a blur either way.
-	return clampf(ground_speed_mps / (cycle_m / len_s), 0.25, MAX_PLAYBACK_RATE)
+	var r := clampf(ground_speed_mps / (cycle_m / len_s), 0.25, MAX_PLAYBACK_RATE)
+	# The SHOWN cadence saturates like every body's (NpcGait): a 12x clip is a
+	# blur that reads as a stagger, a ~3 Hz one as brisk walking.
+	return r * NpcGait.display_scale(r / len_s)
 
 
 ## Deterministic gait for one agent, so a group walking together is not a

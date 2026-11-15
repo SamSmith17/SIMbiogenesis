@@ -96,6 +96,7 @@ static func summary(y: Object, design: Dictionary, res: Dictionary, ids: Diction
 	var bottlenecks: Array = []
 	for i in mini(neck.size(), 10):
 		bottlenecks.append(str(neck[i][1]))
+	var tu := time_use(y)
 	var out := {
 		"v": VERSION, "run": str(meta.get("run_id", "")), "design": str(design.get("name", "")),
 		"site": str(meta.get("site_id", "")), "start": str(design.get("_start_text", "")),
@@ -104,6 +105,8 @@ static func summary(y: Object, design: Dictionary, res: Dictionary, ids: Diction
 		"kpi": kpi, "bottlenecks": bottlenecks, "stores": stores, "machines": machines,
 		"people_blocked_h": _round_dict(p["blocked_h"]),
 		"flows": flows(y, did, days),
+		"time_use": tu,
+		"work_per_person_h_week": _r(7.0 * float((tu.get("h_per_day", {}) as Dictionary).get("work", 0.0))),
 		"monthly": monthly(y),
 		"fidelity": {"kernel": "headless", "people": str(meta.get("people_mode", "agents")),
 			"step_min": _r(float(meta.get("step_min", 6.0))),
@@ -114,6 +117,29 @@ static func summary(y: Object, design: Dictionary, res: Dictionary, ids: Diction
 		"cost": {"wall_s": _r(float(meta.get("wall_s", 0.0))), "steps": int(y.steps)},
 	}
 	return out
+
+
+## How the simulated people spent the run, hours per person per day by
+## category (NpcTimeUse), with the ATUS 2025 averages beside it. Empty when
+## nobody was simulated as agents (people as rates have no days to measure).
+static func time_use(y: Object) -> Dictionary:
+	var br: Object = y.get("bridge")
+	if br == null or not br.has_method("time_use_totals"):
+		return {}
+	var t: Dictionary = br.call("time_use_totals")
+	if float(t.get("person_h", 0.0)) < 24.0:
+		return {}
+	var per: Dictionary = t["per_day"]
+	var groups := {}
+	for g: Array in NpcTimeUse.GROUPS:
+		var h := 0.0
+		for c in g[1]:
+			h += float(per.get(c, 0.0))
+		groups[str(g[0])] = [_r(h), _r(float(g[2])) if float(g[2]) >= 0.0 else null]
+	return {"h_per_day": _round_dict(per), "person_days": _r(float(t["person_h"]) / 24.0),
+		"vs_atus": {"cols": ["group", "h_per_day", "atus_h_per_day"], "rows": groups.keys().map(
+			func(k): return [k] + groups[k])},
+		"source": NpcTimeUse.ATUS_SOURCE}
 
 
 ## What the wires carried over the run, and how much of each resource
