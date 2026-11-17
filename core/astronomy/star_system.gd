@@ -301,49 +301,69 @@ func _get_sky_material() -> ShaderMaterial:
 		return mat as ShaderMaterial
 	return null
 
+## Last value written to each sky uniform, for the material it went to: the
+## 20 Hz sky tick re-sent three textures (which rebuilds the material's
+## uniform set) and ~26 look values that only change from settings.
+var _pcache: Dictionary = {}
+var _pcache_mat_id: int = 0
+
+
+func _setp(mat: Object, param: String, value: Variant) -> void:
+	if mat == null:
+		return
+	var id := mat.get_instance_id()
+	if id != _pcache_mat_id:
+		_pcache.clear()
+		_pcache_mat_id = id
+	if _pcache.has(param) and _pcache[param] == value:
+		return
+	_pcache[param] = value
+	mat.set_shader_parameter(param, value)
+
+
 func _push_texture() -> void:
 	var mat := _get_sky_material()
 	if mat and _zodiac_texture:
-		mat.set_shader_parameter("zodiac_texture", _zodiac_texture)
+		_setp(mat, "zodiac_texture", _zodiac_texture)
 	if mat and stars_texture:
-		mat.set_shader_parameter("stars_texture", stars_texture)
-		mat.set_shader_parameter("stars_texture_soft", stars_texture)
+		_setp(mat, "stars_texture", stars_texture)
+		_setp(mat, "stars_texture_soft", stars_texture)
 		_push_registration(mat)
 
 func _push_registration(mat: ShaderMaterial) -> void:
-	mat.set_shader_parameter("stars_ra_at_u0_deg", float(registration.get("ra_deg_at_u0", 0.0)))
-	mat.set_shader_parameter("stars_ra_direction", -1.0 if int(registration.get("ra_direction", -1)) < 0 else 1.0)
-	mat.set_shader_parameter("stars_north_up", 1.0 if bool(registration.get("north_up", true)) else 0.0)
+	_setp(mat, "stars_ra_at_u0_deg", float(registration.get("ra_deg_at_u0", 0.0)))
+	_setp(mat, "stars_ra_direction", -1.0 if int(registration.get("ra_direction", -1)) < 0 else 1.0)
+	_setp(mat, "stars_north_up", 1.0 if bool(registration.get("north_up", true)) else 0.0)
 
 func _push_look(mat: ShaderMaterial) -> void:
-	mat.set_shader_parameter("stars_opacity", stars_brightness)
-	mat.set_shader_parameter("stars_twinkle", stars_twinkle)
-	mat.set_shader_parameter("stars_horizon_fade", stars_horizon_fade)
-	mat.set_shader_parameter("stars_glow", stars_glow)
-	mat.set_shader_parameter("stars_contrast", stars_contrast)
-	mat.set_shader_parameter("stars_background_cut", stars_background_cut)
-	mat.set_shader_parameter("star_trails", star_trails)
-	mat.set_shader_parameter("star_trail_length", star_trail_length)
-	mat.set_shader_parameter("stars_point_size", stars_point_size)
-	mat.set_shader_parameter("stars_saturation", stars_saturation)
-	mat.set_shader_parameter("stars_wash", stars_wash)
-	mat.set_shader_parameter("milkyway_gain", milkyway_gain)
-	mat.set_shader_parameter("milkyway_saturation", milkyway_saturation)
-	mat.set_shader_parameter("milkyway_tint", milkyway_tint)
-	mat.set_shader_parameter("stars_daylight_reveal", daylight_reveal)
+	_setp(mat, "stars_opacity", stars_brightness)
+	_setp(mat, "stars_twinkle", stars_twinkle)
+	_setp(mat, "stars_horizon_fade", stars_horizon_fade)
+	_setp(mat, "stars_glow", stars_glow)
+	_setp(mat, "stars_contrast", stars_contrast)
+	_setp(mat, "stars_background_cut", stars_background_cut)
+	_setp(mat, "star_trails", star_trails)
+	_setp(mat, "star_trail_length", star_trail_length)
+	_setp(mat, "stars_point_size", stars_point_size)
+	_setp(mat, "stars_saturation", stars_saturation)
+	_setp(mat, "stars_wash", stars_wash)
+	_setp(mat, "milkyway_gain", milkyway_gain)
+	_setp(mat, "milkyway_saturation", milkyway_saturation)
+	_setp(mat, "milkyway_tint", milkyway_tint)
+	_setp(mat, "stars_daylight_reveal", daylight_reveal)
 	# Mode 0 without the texture too: a missing overlay must never draw black-on-nothing.
 	var zmode := zodiac_mode if _zodiac_texture != null else 0
-	mat.set_shader_parameter("zodiac_mode", float(zmode))
-	mat.set_shader_parameter("zodiac_opacity", zodiac_opacity)
-	mat.set_shader_parameter("zodiac_show_lines", 1.0 if zodiac_show_lines else 0.0)
-	mat.set_shader_parameter("zodiac_show_labels", 1.0 if zodiac_show_labels else 0.0)
-	mat.set_shader_parameter("zodiac_show_ophiuchus", 1.0 if zodiac_show_ophiuchus else 0.0)
-	mat.set_shader_parameter("zodiac_show_ecliptic", 1.0 if zodiac_show_ecliptic else 0.0)
+	_setp(mat, "zodiac_mode", float(zmode))
+	_setp(mat, "zodiac_opacity", zodiac_opacity)
+	_setp(mat, "zodiac_show_lines", 1.0 if zodiac_show_lines else 0.0)
+	_setp(mat, "zodiac_show_labels", 1.0 if zodiac_show_labels else 0.0)
+	_setp(mat, "zodiac_show_ophiuchus", 1.0 if zodiac_show_ophiuchus else 0.0)
+	_setp(mat, "zodiac_show_ecliptic", 1.0 if zodiac_show_ecliptic else 0.0)
 	# Neighbour taps in the shader are in TEXELS, so an 8k and a 16k map look alike.
 	if stars_texture != null:
 		var sz := stars_texture.get_size()
 		if sz.x > 0.0 and sz.y > 0.0:
-			mat.set_shader_parameter("stars_texel", Vector2(1.0 / sz.x, 1.0 / sz.y))
+			_setp(mat, "stars_texel", Vector2(1.0 / sz.x, 1.0 / sz.y))
 
 func _push_params() -> void:
 	var mat := _get_sky_material()
@@ -360,10 +380,10 @@ func update_stars() -> void:
 		return
 
 	if stars_texture:
-		mat.set_shader_parameter("stars_texture", stars_texture)
-		mat.set_shader_parameter("stars_texture_soft", stars_texture)
+		_setp(mat, "stars_texture", stars_texture)
+		_setp(mat, "stars_texture_soft", stars_texture)
 	if _zodiac_texture:
-		mat.set_shader_parameter("zodiac_texture", _zodiac_texture)
+		_setp(mat, "zodiac_texture", _zodiac_texture)
 	daylight_reveal = 0.0
 	if bool(main_scene.get("analemma_mode")):
 		daylight_reveal = clampf(float(main_scene.get("analemma_star_reveal")), 0.0, 1.0)
@@ -380,13 +400,13 @@ func update_stars() -> void:
 
 	_push_look(mat)
 	_push_registration(mat)
-	mat.set_shader_parameter("stars_lst", lst)
+	_setp(mat, "stars_lst", lst)
 	# Equatorial basis at the observer's latitude: the shader inverts this per
 	# pixel. Pole elevation == latitude falls out of it (Polaris altitude).
 	var basis : Dictionary = StarSkyMath.equatorial_basis(float(main_scene.latitude))
-	mat.set_shader_parameter("stars_axis_pole", basis["pole"])
-	mat.set_shader_parameter("stars_axis_meridian", basis["meridian"])
-	mat.set_shader_parameter("stars_axis_east", basis["east"])
+	_setp(mat, "stars_axis_pole", basis["pole"])
+	_setp(mat, "stars_axis_meridian", basis["meridian"])
+	_setp(mat, "stars_axis_east", basis["east"])
 
 
 func set_star_trails(enabled: bool, length: float = -1.0) -> void:
@@ -432,13 +452,15 @@ func update_reference_stars() -> void:
 
 		if star_name in reference_star_directions:
 			var data : Dictionary = reference_star_directions[star_name]
-			mat.set_shader_parameter(dir_param, data.direction)
-			mat.set_shader_parameter(color_param, Vector3(data.color.r, data.color.g, data.color.b))
-			mat.set_shader_parameter(enabled_param, 1.0 if show_reference_stars and data.altitude > -5.0 else 0.0)
+			var on: bool = show_reference_stars and float(data.altitude) > -5.0
+			if on:
+				_setp(mat, dir_param, data.direction)
+				_setp(mat, color_param, Vector3(data.color.r, data.color.g, data.color.b))
+			_setp(mat, enabled_param, 1.0 if on else 0.0)
 		else:
-			mat.set_shader_parameter(dir_param, Vector3.UP)
-			mat.set_shader_parameter(color_param, Vector3(0, 1, 1))
-			mat.set_shader_parameter(enabled_param, 0.0)
+			_setp(mat, dir_param, Vector3.UP)
+			_setp(mat, color_param, Vector3(0, 1, 1))
+			_setp(mat, enabled_param, 0.0)
 
 	if show_reference_stars and _legend_label != null and is_instance_valid(_legend_label):
 		_legend_label.text = _legend_text()

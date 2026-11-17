@@ -1,5 +1,7 @@
 shader_type sky;
-render_mode use_quarter_res_pass;
+// No render mode: the quarter-resolution pass this shader once asked for was
+// never read (no AT_QUARTER_RES_PASS / QUARTER_RES_COLOR), and Godot still
+// rendered it every frame.
 
 // The aurora seen from the ground (core/globe/aurora.gdshaderinc, shared with
 // the globe; AuroraSky pushes the uniforms).

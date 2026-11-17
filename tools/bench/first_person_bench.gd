@@ -47,7 +47,11 @@ func run(main: Node, _harness: Node) -> Dictionary:
 	# Park the clock at noon of the saved date (not persisted — sandbox).
 	var clock: Object = main.get("clock")
 	if clock != null:
-		clock.set("day_time", PARK_HOUR)
+		# FPBENCH_HOUR=<h> parks at another hour (e.g. 23 to measure a night).
+		var park := PARK_HOUR
+		if OS.has_environment("FPBENCH_HOUR"):
+			park = float(OS.get_environment("FPBENCH_HOUR"))
+		clock.set("day_time", park)
 	var cam := main.get_viewport().get_camera_3d()
 	print("fpbench: graph closed, abs_h %.2f, camera %s, %s" % [
 		float(main.call("get_absolute_hours")),

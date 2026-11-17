@@ -152,12 +152,18 @@ func is_dst_active() -> bool :
 @export_range( 0.0, 1.0, 0.01 ) var clouds_cutoff : float = 0.5 :
 	set( value ) :
 		# Reject non-finite: this is pushed to the sky shader, where NaN/Inf can hang the GPU.
-		clouds_cutoff = clampf( value, 0.0, 1.0 ) if is_finite( value ) else 0.5
+		var v := clampf( value, 0.0, 1.0 ) if is_finite( value ) else 0.5
+		if v == clouds_cutoff :
+			return
+		clouds_cutoff = v
 		_update_clouds()
 
 @export_range( 0.0, 1.0, 0.01 ) var clouds_weight : float = 0.0 :
 	set( value ) :
-		clouds_weight = clampf( value, 0.0, 1.0 ) if is_finite( value ) else 0.0
+		var v := clampf( value, 0.0, 1.0 ) if is_finite( value ) else 0.0
+		if v == clouds_weight :
+			return
+		clouds_weight = v
 		_update_clouds()
 
 ## High wispy cirrus streak clouds (independent of the cumulus layer above).
@@ -165,7 +171,10 @@ func is_dst_active() -> bool :
 ## written by SolarUI from the weather (scaled by cirrus_user_scale below).
 @export_range( 0.0, 1.0, 0.01 ) var cirrus_amount : float = 0.3 :
 	set( value ) :
-		cirrus_amount = clampf( value, 0.0, 1.0 ) if is_finite( value ) else 0.0
+		var v := clampf( value, 0.0, 1.0 ) if is_finite( value ) else 0.0
+		if v == cirrus_amount :
+			return
+		cirrus_amount = v
 		_update_clouds()
 
 ## User multiplier over the weather-driven cirrus amount (gear slider). 1.0 = as the
@@ -2588,7 +2597,8 @@ func _apply_shadow_quality() -> void :
 	_moon_shadow_quality_distance_scale = profile.get( "moon_distance_scale", 1.0 )
 
 	if is_instance_valid( sun ) :
-		sun.shadow_enabled = true
+		sun.shadow_enabled = sun.light_energy > SUN_SHADOW_MIN_ENERGY
+		_sun_lit_for_shadow = 1 if sun.shadow_enabled else 0
 		sun.shadow_opacity = 0.98
 		sun.shadow_blur = profile.get( "blur", 0.55 )
 		sun.shadow_bias = profile.get( "bias", 0.03 )
@@ -3185,6 +3195,26 @@ func _update_sun() -> void :
 	# writers would fight and strobe.
 	sun_e *= _hazard_light_factor
 	sun.light_energy = clampf(sun_e, 0.0, 64.0) if is_finite(sun_e) else 0.0
+	_sync_sun_shadow_to_energy()
+
+
+## The sun keeps its shadow map while it gives light and drops it once its
+## energy is zero (below the horizon): Godot renders every cascade of a
+## shadowed light at zero energy. Edge-triggered: the flag is only written when
+## the sun crosses the threshold, so a toggle made in between (the GPU bench
+## switches the shadow off to measure it) stays.
+const SUN_SHADOW_MIN_ENERGY := 1e-3
+var _sun_lit_for_shadow := -1
+
+
+func _sync_sun_shadow_to_energy() -> void :
+	if not is_instance_valid( sun ) :
+		return
+	var lit := 1 if sun.light_energy > SUN_SHADOW_MIN_ENERGY else 0
+	if lit == _sun_lit_for_shadow :
+		return
+	_sun_lit_for_shadow = lit
+	sun.shadow_enabled = lit == 1
 
 
 ## Direct sunlight retained during eclipse (corona sliver at totality).
@@ -3309,24 +3339,55 @@ func _update_planets() -> void :
 	var glows : Array = shader_data.get( "glows", [] )
 	var glow_colors : Array = shader_data.get( "glow_colors", [] )
 	
-	var sky_material = environment.environment.sky.sky_material
-	
-	# Update each planet's shader parameters
+	var sky_material : ShaderMaterial = environment.environment.sky.sky_material
+
+	# Update each planet's shader parameters. Pushed every frame: names are
+	# built once and a uniform is written only when its value moved (a sky
+	# material write every frame kept the sky radiance dirty even when paused).
 	for i in range( min( 5, directions.size() ) ) :
-		var dir_param := "planet_direction_%d" % i
-		var color_param := "planet_color_%d" % i
-		var size_param := "planet_size_%d" % i
-		var enabled_param := "planet_enabled_%d" % i
-		var glow_param := "planet_glow_%d" % i
-		var glow_color_param := "planet_glow_color_%d" % i
-		
-		sky_material.set_shader_parameter( dir_param, directions[i] )
-		sky_material.set_shader_parameter( color_param, Vector3( colors[i].r, colors[i].g, colors[i].b ) )
-		sky_material.set_shader_parameter( size_param, sizes[i] )
-		sky_material.set_shader_parameter( enabled_param, 1.0 if enabled[i] else 0.0 )
-		sky_material.set_shader_parameter( glow_param, glows[i] if i < glows.size() else 0.0 )
+		var dir : Vector3 = directions[i]
+		var dir_key : String = _PLANET_DIR_PARAMS[i]
+		var last_dir : Variant = _sky_param_cache.get( dir_key ) if _sky_cache_valid( sky_material ) else null
+		if not ( last_dir is Vector3 ) or ( last_dir as Vector3 ).distance_squared_to( dir ) > 1e-11 :
+			_sky_set( sky_material, dir_key, dir )
+		_sky_set( sky_material, _PLANET_COLOR_PARAMS[i], Vector3( colors[i].r, colors[i].g, colors[i].b ) )
+		_sky_set( sky_material, _PLANET_SIZE_PARAMS[i], sizes[i] )
+		_sky_set( sky_material, _PLANET_ENABLED_PARAMS[i], 1.0 if enabled[i] else 0.0 )
+		_sky_set( sky_material, _PLANET_GLOW_PARAMS[i], glows[i] if i < glows.size() else 0.0 )
 		if i < glow_colors.size() :
-			sky_material.set_shader_parameter( glow_color_param, Vector3( glow_colors[i].r, glow_colors[i].g, glow_colors[i].b ) )
+			_sky_set( sky_material, _PLANET_GLOW_COLOR_PARAMS[i], Vector3( glow_colors[i].r, glow_colors[i].g, glow_colors[i].b ) )
+
+
+const _PLANET_DIR_PARAMS : Array[String] = [ "planet_direction_0", "planet_direction_1", "planet_direction_2", "planet_direction_3", "planet_direction_4" ]
+const _PLANET_COLOR_PARAMS : Array[String] = [ "planet_color_0", "planet_color_1", "planet_color_2", "planet_color_3", "planet_color_4" ]
+const _PLANET_SIZE_PARAMS : Array[String] = [ "planet_size_0", "planet_size_1", "planet_size_2", "planet_size_3", "planet_size_4" ]
+const _PLANET_ENABLED_PARAMS : Array[String] = [ "planet_enabled_0", "planet_enabled_1", "planet_enabled_2", "planet_enabled_3", "planet_enabled_4" ]
+const _PLANET_GLOW_PARAMS : Array[String] = [ "planet_glow_0", "planet_glow_1", "planet_glow_2", "planet_glow_3", "planet_glow_4" ]
+const _PLANET_GLOW_COLOR_PARAMS : Array[String] = [ "planet_glow_color_0", "planet_glow_color_1", "planet_glow_color_2", "planet_glow_color_3", "planet_glow_color_4" ]
+
+## Last value main.gd wrote to each sky uniform it owns (planets, the sizes /
+## glow / horizon look), for the sky material it was written to. Only these
+## writers go through it; another system writing the same names would not see
+## its value re-sent (none does today).
+var _sky_param_cache : Dictionary = {}
+var _sky_param_mat_id : int = 0
+
+
+func _sky_cache_valid( mat : Object ) -> bool :
+	return mat != null and mat.get_instance_id() == _sky_param_mat_id
+
+
+func _sky_set( mat : Object, param : String, value : Variant ) -> void :
+	if mat == null :
+		return
+	var id := mat.get_instance_id()
+	if id != _sky_param_mat_id :
+		_sky_param_cache.clear()
+		_sky_param_mat_id = id
+	if _sky_param_cache.has( param ) and _sky_param_cache[param] == value :
+		return
+	_sky_param_cache[param] = value
+	mat.set_shader_parameter( param, value )
 
 # ==================== UTILITY FUNCTIONS ====================
 
@@ -3378,28 +3439,28 @@ func _update_clouds() -> void :
 
 func _update_celestial_sizes() -> void :
 	if is_instance_valid( environment ) :
-		environment.environment.sky.sky_material.set_shader_parameter( "sun_size", sun_size )
-		environment.environment.sky.sky_material.set_shader_parameter( "moon_size", moon_size )
-		environment.environment.sky.sky_material.set_shader_parameter( "moon_glow", moon_glow )
-		environment.environment.sky.sky_material.set_shader_parameter( "sun_glow", sun_glow )
-		environment.environment.sky.sky_material.set_shader_parameter( "sun_glow_size", sun_glow_size )
-		environment.environment.sky.sky_material.set_shader_parameter( "sun_aureole", sun_aureole )
 		var _skym : ShaderMaterial = environment.environment.sky.sky_material
-		_skym.set_shader_parameter( "twilight_drama", twilight_drama )
-		_skym.set_shader_parameter( "twilight_length", twilight_length )
-		_skym.set_shader_parameter( "airglow_strength", airglow_strength )
-		_skym.set_shader_parameter( "airglow_color", airglow_color )
-		_skym.set_shader_parameter( "light_pollution", light_pollution )
-		_skym.set_shader_parameter( "light_pollution_color", light_pollution_color )
-		_skym.set_shader_parameter( "moon_sky_glow", moon_sky_glow )
-		_skym.set_shader_parameter( "horizon_height", sin( deg_to_rad( horizon_height_deg ) ) )
-		_skym.set_shader_parameter( "horizon_blur", sin( deg_to_rad( horizon_softness_deg ) ) )
-		_skym.set_shader_parameter( "horizon_haze", horizon_haze )
-		_skym.set_shader_parameter( "horizon_haze_height", sin( deg_to_rad( horizon_haze_height_deg ) ) )
+		_sky_set( _skym, "sun_size", sun_size )
+		_sky_set( _skym, "moon_size", moon_size )
+		_sky_set( _skym, "moon_glow", moon_glow )
+		_sky_set( _skym, "sun_glow", sun_glow )
+		_sky_set( _skym, "sun_glow_size", sun_glow_size )
+		_sky_set( _skym, "sun_aureole", sun_aureole )
+		_sky_set( _skym, "twilight_drama", twilight_drama )
+		_sky_set( _skym, "twilight_length", twilight_length )
+		_sky_set( _skym, "airglow_strength", airglow_strength )
+		_sky_set( _skym, "airglow_color", airglow_color )
+		_sky_set( _skym, "light_pollution", light_pollution )
+		_sky_set( _skym, "light_pollution_color", light_pollution_color )
+		_sky_set( _skym, "moon_sky_glow", moon_sky_glow )
+		_sky_set( _skym, "horizon_height", sin( deg_to_rad( horizon_height_deg ) ) )
+		_sky_set( _skym, "horizon_blur", sin( deg_to_rad( horizon_softness_deg ) ) )
+		_sky_set( _skym, "horizon_haze", horizon_haze )
+		_sky_set( _skym, "horizon_haze_height", sin( deg_to_rad( horizon_haze_height_deg ) ) )
 		var obs := float( _solar_eclipse.get( "obscuration", 0.0 ) )
-		environment.environment.sky.sky_material.set_shader_parameter( "eclipse_obscuration", obs )
+		_sky_set( _skym, "eclipse_obscuration", obs )
 		var tot := 1.0 if bool( _solar_eclipse.get( "is_total", false ) ) else 0.0
-		environment.environment.sky.sky_material.set_shader_parameter( "eclipse_totality", tot )
+		_sky_set( _skym, "eclipse_totality", tot )
 
 func _update_environment() -> void :
 	if not is_instance_valid( environment ) or not is_instance_valid( sun ) :
@@ -3771,9 +3832,7 @@ func _update_seasonal() -> void :
 	_snow_depth_m = SeasonModel.estimate_snow_depth_m(
 		_weather_service_node, month, day, day_time, lat
 	)
-	_snow_amount = SeasonModel.estimate_snow_cover(
-		_weather_service_node, month, day, day_time, lat
-	)
+	_snow_amount = SeasonModel.snow_cover_from_depth( _snow_depth_m )
 	_water_flow = WaterFlowModel.compute(
 		_weather_service_node, month, day, day_time, _snow_depth_m
 	)

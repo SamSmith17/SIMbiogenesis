@@ -175,10 +175,23 @@ func _perf_tick(delta: float) -> void:
 	# so planets are never stale, then ease the rendered directions toward them.
 	# main.gd pushes these to the sky shader every frame, so the motion stays
 	# continuous even at Max speed instead of jumping in coarse steps.
+	# Skipped while the clock has not moved (paused, or between ticks): the
+	# positions are a pure function of the Julian day.
 	if main_scene != null and main_scene.has_method("get_julian_day_utc"):
-		update_all_planets()
+		var jd := float(main_scene.call("get_julian_day_utc"))
+		var key := Vector3(float(main_scene.get("latitude")), float(main_scene.get("longitude")), 0.0)
+		if jd != _last_jd or key != _last_site or _force_recompute:
+			_last_jd = jd
+			_last_site = key
+			_force_recompute = false
+			update_all_planets()
 	_smooth_render_directions(delta)
 	_update_labels()
+
+
+var _last_jd := NAN
+var _last_site := Vector3.INF
+var _force_recompute := true
 
 
 # ==================== LABELS ====================
@@ -245,9 +258,16 @@ func _update_labels() -> void:
 			lbl.visible = false
 			continue
 		var col : Color = get(pname + "_color")
-		lbl.add_theme_color_override("font_color", Color(col.r, col.g, col.b, 0.9 * alpha))
-		lbl.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.85 * alpha))
-		lbl.text = "%s  %.0f°" % [PLANET_TITLES[pname], float(planet_altitudes[pname])]
+		# Theme overrides and text only when they change (each override write
+		# re-lays the label out); the position follows the camera every frame.
+		var fc := Color(col.r, col.g, col.b, 0.9 * alpha)
+		if lbl.get_meta("_fc", Color(0, 0, 0, -1)) != fc:
+			lbl.set_meta("_fc", fc)
+			lbl.add_theme_color_override("font_color", fc)
+			lbl.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.85 * alpha))
+		var txt := "%s  %.0f°" % [PLANET_TITLES[pname], float(planet_altitudes[pname])]
+		if lbl.text != txt:
+			lbl.text = txt
 		lbl.position = sp + Vector2(10.0, -9.0)
 		lbl.visible = true
 

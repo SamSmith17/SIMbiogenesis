@@ -159,6 +159,26 @@ static func estimate_snow_depth_m(ws: Object, month: int, day: int, hour: float,
 	if ws == null or not ws.has_method("temperature_c"):
 		return 0.0
 
+	# The degree-day fallback samples ~36 days at noon (about 900 weather
+	# lookups) and depends only on the date: it was recomputed 20 times a
+	# second. Kept for _FALLBACK_TTL_MS per (date, latitude, weather service).
+	var fkey := Vector4i(month, day, int(roundf(latitude * 100.0)), ws.get_instance_id())
+	var now_ms := Time.get_ticks_msec()
+	if fkey == _fallback_key and now_ms - _fallback_ms < _FALLBACK_TTL_MS:
+		return _fallback_depth
+	_fallback_key = fkey
+	_fallback_ms = now_ms
+	_fallback_depth = _degree_day_depth_m(ws, month, day)
+	return _fallback_depth
+
+
+const _FALLBACK_TTL_MS := 10000
+static var _fallback_key := Vector4i(-1, -1, -1, -1)
+static var _fallback_ms := 0
+static var _fallback_depth := 0.0
+
+
+static func _degree_day_depth_m(ws: Object, month: int, day: int) -> float:
 	var doy_now: int = int(_DAYS_BEFORE_MONTH[clampi(month, 1, 12) - 1]) + clampi(day, 1, 31)
 	var swe := 0.0 # snow water equivalent, mm
 	var start: int = doy_now - SNOW_WINDOW_DAYS
@@ -221,7 +241,11 @@ static func estimate_winter_min_c(ws: Object, latitude: float) -> float:
 
 ## Ground snow cover tint strength 0..1 from pack depth.
 static func estimate_snow_cover(ws: Object, month: int, day: int, hour: float, latitude: float) -> float:
-	var depth := estimate_snow_depth_m(ws, month, day, hour, latitude)
+	return snow_cover_from_depth(estimate_snow_depth_m(ws, month, day, hour, latitude))
+
+
+## Ground snow cover 0..1 from a pack depth already estimated.
+static func snow_cover_from_depth(depth: float) -> float:
 	if depth <= 0.0:
 		return 0.0
 	return clampf(depth / COVER_DEPTH_M, 0.0, 1.0)
