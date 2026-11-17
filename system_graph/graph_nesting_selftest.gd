@@ -12,6 +12,8 @@ var _checks := 0
 
 
 func _initialize() -> void:
+	# Every scope lookup is checked against a fresh scan (GraphModel's cache).
+	GraphModel.scope_cache_check = true
 	var fails := 0
 	fails += _test_resolve_multilevel()
 	fails += _test_flat_connections_tunnel()

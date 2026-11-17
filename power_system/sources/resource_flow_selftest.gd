@@ -20,6 +20,8 @@ var _checks: int = 0
 
 
 func _initialize() -> void:
+	# Every scope lookup is checked against a fresh scan (GraphModel's cache).
+	GraphModel.scope_cache_check = true
 	# A player's saved testing switches (user://pop_testing.cfg — "ideal
 	# supply" never starves a habitat) must not leak into the starvation pins.
 	PopTestPrefs.reset_defaults()

@@ -3595,9 +3595,39 @@ func _gravity_allows_transfer(src_item: Dictionary, tgt_item: Dictionary,
 	return {"ok": false, "delta_m": delta}
 
 
+## Spec keys a processor's working copy SHARES with the live item instead of
+## deep-copying them every step. They are the population's and the site
+## projects' state on a habitat (every agent's snapshot, chores, labour):
+## the engine never reads or changes them, and their writers (the NPC bridge,
+## the project store) replace them whole. Deep-copying them was most of a
+## habitat's step on a festival site.
+const _SHARED_SPEC_KEYS := {
+	"pop_state": true, "pop_skills": true, "site_projects": true,
+	"pop_routine": true, "pop_personas": true, "pop_duties": true,
+	"pop_oncall": true, "pop_anim_map": true,
+}
+
+
+## The working copy of a processor's specs: a deep copy of everything the
+## engine may change in place (inputs / outputs, batch and recipe state),
+## the _SHARED_SPEC_KEYS by reference. Identical to duplicate(true) for every
+## value the engine reads.
+static func _working_specs(src: Dictionary) -> Dictionary:
+	var out := src.duplicate(false)
+	for k in out:
+		if _SHARED_SPEC_KEYS.has(k):
+			continue
+		var v: Variant = out[k]
+		if v is Dictionary:
+			out[k] = (v as Dictionary).duplicate(true)
+		elif v is Array:
+			out[k] = (v as Array).duplicate(true)
+	return out
+
+
 func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 		abs_hours: float = -1.0) -> void:
-	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var specs: Dictionary = _working_specs(item.get("specs", {}) as Dictionary)
 	_rk.migrate_processor_specs(specs)
 	var abs_h: float = abs_hours if abs_hours >= 0.0 else _get_abs_hours()
 	if abs_h < 0.0:
@@ -5098,6 +5128,7 @@ func _migrate_resource_specs_if_needed(specs: Dictionary) -> void:
 
 func _refresh_ambient_cache() -> void:
 	_ambient_valid = false
+	_wx_key = []
 	_ambient_rain_mmh = _compute_rain_rate_mmh()
 	_ambient_ghi_wm2 = _compute_sun_ghi_wm2()
 	_ambient_cloud_frac = _compute_sun_cloud_frac()
@@ -5187,11 +5218,7 @@ func _compute_sun_ghi_wm2() -> float:
 			hour = float(d.get("day_time", hour))
 	var lat: float = float(main_node.get("latitude")) if main_node.get("latitude") != null else 0.0
 	var lon: float = float(main_node.get("longitude")) if main_node.get("longitude") != null else 0.0
-	var ws: Node = null
-	var tree: SceneTree = _host.get_tree() if _host != null else null
-	if tree != null:
-		ws = tree.root.get_node_or_null("WeatherService")
-	var weather := SolarIrradiance.sample_weather(lat, lon, month, day, hour, ws)
+	var weather := _weather_at(lat, lon, month, day, hour)
 	return SolarIrradiance.ghi_wm2_at_calendar(lat, lon, month, day, hour, weather, year)
 
 
@@ -5219,12 +5246,28 @@ func _compute_sun_cloud_frac() -> float:
 			hour = float(d.get("day_time", hour))
 	var lat: float = float(main_node.get("latitude")) if main_node.get("latitude") != null else 0.0
 	var lon: float = float(main_node.get("longitude")) if main_node.get("longitude") != null else 0.0
+	var weather := _weather_at(lat, lon, month, day, hour)
+	return clampf(float(weather.get("cloud", 0.0)), 0.0, 1.0)
+
+
+## SolarIrradiance.sample_weather at a site and instant, remembered for the
+## last one asked: the sunlight PBI's GHI and its cloud cover read the same
+## sample within a step. Only the very same arguments reuse it.
+var _wx_key: Array = []
+var _wx_val: Dictionary = {}
+
+
+func _weather_at(lat: float, lon: float, month: int, day: int, hour: float) -> Dictionary:
+	var key := [lat, lon, month, day, hour]
+	if key == _wx_key:
+		return _wx_val
 	var ws: Node = null
 	var tree: SceneTree = _host.get_tree() if _host != null else null
 	if tree != null:
 		ws = tree.root.get_node_or_null("WeatherService")
-	var weather := SolarIrradiance.sample_weather(lat, lon, month, day, hour, ws)
-	return clampf(float(weather.get("cloud", 0.0)), 0.0, 1.0)
+	_wx_val = SolarIrradiance.sample_weather(lat, lon, month, day, hour, ws)
+	_wx_key = key
+	return _wx_val
 
 
 ## Atmosphere sample for Wind PBI (honors selftest overrides).

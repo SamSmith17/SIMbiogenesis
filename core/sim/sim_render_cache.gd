@@ -183,7 +183,12 @@ func verify_energy_timeline(timeline: Object) -> bool:
 # ---------------------------------------------------------------------------
 
 ## Snapshot of the keyframe-worthy specs of every item: {id: {key: value}}.
-static func snapshot_items(model: Object) -> Dictionary:
+## With `prev` (the previous capture) a nested value equal to the one already
+## captured is shared instead of deep-copied again: a habitat's whole
+## population snapshot rode every keyframe as a fresh copy whether or not it
+## had moved. Shared values are never handed out raw (apply_at copies), so
+## sharing them between keyframes is safe.
+static func snapshot_items(model: Object, prev: Dictionary = {}) -> Dictionary:
 	var out: Dictionary = {}
 	if model == null:
 		return out
@@ -198,12 +203,21 @@ static func snapshot_items(model: Object) -> Dictionary:
 		var is_tank := str(item.get("type", "")) == "resource"
 		var has_timeline := is_tank and not bool(specs.get("allow_negative", false))
 		var keep: Dictionary = {}
+		var pv_item: Variant = prev.get(iid)
 		for k in specs:
 			var key := str(k)
 			if not keyframe_key(key, has_timeline):
 				continue
 			var v: Variant = specs[k]
-			keep[key] = v.duplicate(true) if (v is Dictionary or v is Array) else v
+			if v is Dictionary or v is Array:
+				if pv_item is Dictionary:
+					var pv: Variant = (pv_item as Dictionary).get(key)
+					if pv != null and typeof(pv) == typeof(v) and pv == v:
+						keep[key] = pv
+						continue
+				keep[key] = v.duplicate(true)
+			else:
+				keep[key] = v
 		if not keep.is_empty():
 			out[iid] = keep
 	return out
@@ -228,7 +242,7 @@ static func keyframe_key(key: String, has_timeline: bool) -> bool:
 ## live from exactly the state it had at that instant when the playhead
 ## leaves the range or the range is cut.
 func capture(model: Object, conn_flows: Dictionary, t: float, internal: Dictionary = {}) -> void:
-	var snap := snapshot_items(model)
+	var snap := snapshot_items(model, _last_snapshot)
 	var full := _last_snapshot.is_empty()
 	var delta: Dictionary = {}
 	if full:
@@ -242,7 +256,13 @@ func capture(model: Object, conn_flows: Dictionary, t: float, internal: Dictiona
 				continue
 			var d: Dictionary = {}
 			for k in cur:
-				if not (prev as Dictionary).has(k) or (prev as Dictionary)[k] != cur[k]:
+				if not (prev as Dictionary).has(k):
+					d[k] = cur[k]
+					continue
+				var pk: Variant = (prev as Dictionary)[k]
+				if is_same(pk, cur[k]):
+					continue  # the shared copy: unchanged by construction
+				if pk != cur[k]:
 					d[k] = cur[k]
 			if not d.is_empty():
 				delta[iid] = d

@@ -136,42 +136,20 @@ static func walk_items(model: GraphModel, scope_id: String = "root") -> Array:
 	var out: Array = []
 	if model == null or scope_id.is_empty():
 		return out
-	# Items grouped by scope in ONE pass (model.items order kept inside each
-	# scope): get_items_in_scope is a linear scan, and calling it per scope made
-	# the walk scopes x items — forty vehicle nodes made it the population
-	# tick's biggest cost.
-	var by_scope: Dictionary = {}
-	for item_v in model.items:
-		var it := item_v as Dictionary
-		var sid := str(it.get("scope_id", GraphModel.ROOT_SCOPE_ID))
-		if sid.is_empty():
-			sid = GraphModel.ROOT_SCOPE_ID
-		var bucket: Variant = by_scope.get(sid)
-		if bucket == null:
-			bucket = []
-			by_scope[sid] = bucket
-		(bucket as Array).append(it)
-	_walk_items_into(by_scope, scope_id, out, {})
+	# Items grouped by scope (model.items order kept inside each scope): the
+	# model's cached index, rebuilt once per topology revision. Grouping per
+	# call made every walk (NPC tick, ScadaHub, ledgers) a full pass.
+	_walk_items_into(model.scope_index_cached(), scope_id, out, {})
 	return out
 
 
 ## Items grouped by scope in one pass, for callers that walk many scopes in
 ## one go (the Festival board walks every camp): pair with walk_in_index.
 static func scope_index(model: GraphModel) -> Dictionary:
-	var by_scope: Dictionary = {}
 	if model == null:
-		return by_scope
-	for item_v in model.items:
-		var it := item_v as Dictionary
-		var sid := str(it.get("scope_id", GraphModel.ROOT_SCOPE_ID))
-		if sid.is_empty():
-			sid = GraphModel.ROOT_SCOPE_ID
-		var bucket: Variant = by_scope.get(sid)
-		if bucket == null:
-			bucket = []
-			by_scope[sid] = bucket
-		(bucket as Array).append(it)
-	return by_scope
+		return {}
+	# The model's cached index (read-only: callers only walk it).
+	return model.scope_index_cached()
 
 
 ## walk_items over a scope_index: the same items, the same order.

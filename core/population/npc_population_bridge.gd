@@ -983,7 +983,9 @@ func _maybe_persist_light(model, iid: String, cohort: CrowdCohort, abs_h: float)
 	var item: Dictionary = model.get_item(iid)
 	if item.is_empty():
 		return
-	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	# Only top-level keys are replaced: a shallow copy (the deep copy cloned
+	# the old pop_state, every agent's snapshot, just to throw it away).
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(false)
 	specs["pop_state"] = snap
 	specs["pop_present"] = cohort.alive_count()
 	specs["pop_morale"] = snappedf(cohort.mean_morale(), 0.01)
@@ -1618,9 +1620,15 @@ func _service_nav(main: Node, registry: SpaceRegistry, region: Dictionary) -> vo
 			# that returns 0.0 on a MISS, so every hole in collision coverage
 			# would read as a cliff, island the grid, and strand people. A
 			# flat grid is the honest answer there (and skips 78k raycasts).
-			var has_terrain := TerrainSurfaceQuery.find_terrain_loader(main) != null
+			var loader := TerrainSurfaceQuery.find_terrain_loader(main)
+			var has_terrain := loader != null
 			var height_fn := func(x: float, z: float) -> float:
 				return TerrainSurfaceQuery.ground_height_at(main, x, z)
+			if has_terrain and loader.has_method("ground_height_at"):
+				# The loader's own height function, called directly: the same
+				# number ground_height_at returns, without finding the loader
+				# again for each of the grid's (up to 810,000) cells.
+				height_fn = Callable(loader, "ground_height_at")
 			if not has_terrain:
 				height_fn = func(_x: float, _z: float) -> float: return 0.0
 			var surfaces_fn := func(x: float, z: float) -> PackedFloat32Array:
@@ -4687,7 +4695,8 @@ func _maybe_persist(model, iid: String, engine: NpcPopulationEngine, abs_h: floa
 	var item: Dictionary = model.get_item(iid)
 	if item.is_empty():
 		return
-	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	# Only top-level keys are replaced: a shallow copy (see _maybe_persist_light).
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(false)
 	specs["pop_state"] = snap
 	# Training progress accrues on the job, and skills are CONFIG — without
 	# this ride-along a reload would silently lose every part-trained

@@ -17,6 +17,8 @@ var _checks := 0
 
 
 func _init() -> void:
+	# Every scope lookup is checked against a fresh scan (GraphModel's cache).
+	GraphModel.scope_cache_check = true
 	_test_vehicle_island()
 	_test_camp_island_and_nesting()
 	_test_ac_reach_and_losses()

@@ -111,8 +111,12 @@ static func connection_losses_watts(model: GraphModel, tree: SceneTree,
 	# A wire inside a vehicle or camp carries THAT system's power: its loss is
 	# not a load on the site's inverter.
 	var islands := GraphSystems.island_scopes(model)
+	# One adjacency index for every wire's load-side question (built lazily:
+	# a graph with no electrical AC wire never pays for it). The per-wire form
+	# scanned every flat connection at every node it visited, for every wire.
+	var ix: Dictionary = {}
 	# Loss + telemetry stays on the REAL wires the player sees; only the load-side
-	# reachability BFS uses the flattened graph (via _connection_delivered_watts).
+	# reachability BFS uses the flattened graph (via the index).
 	for conn: Dictionary in model.connections:
 		if not _is_ac_power_connection(conn):
 			continue
@@ -128,7 +132,9 @@ static func connection_losses_watts(model: GraphModel, tree: SceneTree,
 			conn["carried_amps"] = 0.0
 			conn["overload_ratio"] = 0.0
 			continue
-		var delivered: float = _connection_delivered_watts(model, conn, tree, sim_host, flat_conns)
+		if ix.is_empty():
+			ix = delivered_index(model, tree, sim_host, flat_conns, true)
+		var delivered: float = delivered_watts_indexed(model, ix, conn)
 		# The chosen gauge's resistance and ampacity (ConduitSpecs); a run nobody
 		# re-sized reads the kind's own default, unchanged.
 		var meta: Dictionary = ConduitSpecs.loss_meta(type_id,
@@ -176,12 +182,19 @@ static func _connection_delivered_watts(model: GraphModel, conn: Dictionary,
 ## load's specs, which was ~130 µs a wire on a 227-wire graph.
 ## Returns an index for `delivered_watts_indexed`; same answers as
 ## `connection_delivered_watts`.
-static func delivered_index(model: GraphModel, tree: SceneTree, sim_host: Node = null) -> Dictionary:
+##
+## `block_ghosts`: a ghost (or missing) node ends the walk there, as
+## _side_summary does: the wire losses use that rule; the canvas's wire
+## widths walk through ghosts as they always have.
+static func delivered_index(model: GraphModel, tree: SceneTree, sim_host: Node = null,
+		flat_conns: Array = [], block_ghosts: bool = false) -> Dictionary:
 	if sim_host == null and tree != null:
 		sim_host = _find_sim_load_host(tree)
 	var adj := {}
 	if model != null:
-		for c: Dictionary in GraphNesting.flat_connections_cached(model):
+		var flat: Array = flat_conns if not flat_conns.is_empty() \
+				else GraphNesting.flat_connections_cached(model)
+		for c: Dictionary in flat:
 			if not _is_ac_power_connection(c) or bool(c.get("severed", false)):
 				continue
 			var cid := str(c.get("id", ""))
@@ -193,7 +206,8 @@ static func delivered_index(model: GraphModel, tree: SceneTree, sim_host: Node =
 				adj[tid] = []
 			(adj[sid] as Array).append([cid, tid])
 			(adj[tid] as Array).append([cid, sid])
-	return {"adj": adj, "w": {}, "ctrl": {}, "tree": tree, "host": sim_host}
+	return {"adj": adj, "w": {}, "ctrl": {}, "ghost": {}, "tree": tree, "host": sim_host,
+		"block_ghosts": block_ghosts}
 
 
 static func delivered_watts_indexed(model: GraphModel, ix: Dictionary, conn: Dictionary) -> float:
@@ -222,6 +236,8 @@ static func _side_summary_ix(model: GraphModel, ix: Dictionary, start_id: String
 	var adj: Dictionary = ix["adj"]
 	var memo_w: Dictionary = ix["w"]
 	var memo_c: Dictionary = ix["ctrl"]
+	var memo_g: Dictionary = ix.get("ghost", {})
+	var block := bool(ix.get("block_ghosts", false))
 	var watts := 0.0
 	var has_controller := false
 	var visited: Dictionary = {}
@@ -237,7 +253,8 @@ static func _side_summary_ix(model: GraphModel, ix: Dictionary, start_id: String
 			var item: Dictionary = model.get_item(nid)
 			var w := 0.0
 			var ctl := false
-			if not item.is_empty() and not bool(item.get("is_ghost", false)):
+			memo_g[nid] = item.is_empty() or bool(item.get("is_ghost", false))
+			if not bool(memo_g[nid]):
 				var ty := str(item.get("type", ""))
 				ctl = ty == "controller"
 				if ty == "compound":
@@ -248,6 +265,8 @@ static func _side_summary_ix(model: GraphModel, ix: Dictionary, start_id: String
 					w = _item_draw_watts(nid, item, ix["tree"], ix["host"], model)
 			memo_w[nid] = w
 			memo_c[nid] = ctl
+		if block and bool(memo_g.get(nid, false)):
+			continue
 		watts += float(memo_w[nid])
 		if bool(memo_c[nid]):
 			has_controller = true
@@ -435,7 +454,7 @@ static func _enqueue_ac_neighbors(model: GraphModel, item_id: String, queue: Arr
 	if flat_conns.is_empty():
 		flat_conns = GraphNesting.flat_connections(model)
 
-	for conn: Dictionary in flat_conns:
+	for conn: Dictionary in (_ends_index(flat_conns).get(item_id, []) as Array):
 		if not _is_ac_power_connection(conn):
 			continue
 		if bool(conn.get("severed", false)):
@@ -468,6 +487,36 @@ static func _enqueue_ac_neighbors(model: GraphModel, item_id: String, queue: Arr
 		queue.append(other)
 
 
+## Each item id -> the flat connections that end on it, in flat order (a
+## wire from an item to itself listed once). Cached for the flat array it was
+## built from: flat_connections_cached hands back the same array until the
+## graph changes, so the index is built once per change.
+static var _ends_src: Array = []
+static var _ends_n := -1
+static var _ends: Dictionary = {}
+
+
+static func _ends_index(flat_conns: Array) -> Dictionary:
+	if is_same(flat_conns, _ends_src) and _ends_n == flat_conns.size():
+		return _ends
+	var idx := {}
+	for c_v in flat_conns:
+		var c: Dictionary = c_v
+		var sid := str(c.get("source_item_id", ""))
+		var tid := str(c.get("target_item_id", ""))
+		if not idx.has(sid):
+			idx[sid] = []
+		(idx[sid] as Array).append(c)
+		if tid != sid:
+			if not idx.has(tid):
+				idx[tid] = []
+			(idx[tid] as Array).append(c)
+	_ends_src = flat_conns
+	_ends_n = flat_conns.size()
+	_ends = idx
+	return idx
+
+
 static func _is_ac_power_connection(conn: Dictionary) -> bool:
 	var pol := str(conn.get("polarity", ""))
 	if pol == "ac" or pol == "load":
@@ -479,7 +528,12 @@ static func _is_ac_power_connection(conn: Dictionary) -> bool:
 static func _find_sim_load_host(tree: SceneTree) -> Node:
 	if tree == null or tree.root == null:
 		return null
-	var sgv := tree.root.find_child("SystemGraphView", true, false)
+	# The registered view first: find_child walks the whole scene (terrain,
+	# vegetation, props) before reaching the UI, ten times a second. The
+	# search stays for scenes with no registry (selftests).
+	var sgv: Node = ServiceLocator.graph()
+	if sgv == null or not sgv.is_inside_tree():
+		sgv = tree.root.find_child("SystemGraphView", true, false)
 	if sgv == null:
 		return null
 	return sgv.get_node_or_null("GraphSimLoadHost")
@@ -529,7 +583,8 @@ static func _item_draw_watts(
 				return 0.0
 
 	var ty := str(item.get("type", ""))
-	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	# Read only below: no copy (this ran for every load, ten times a second).
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
 
 	# 2. Processors: draw is driven by the resource engine's RUNNING state (which
 	# already encodes switched-on + powered + fed), NOT the sim-load switch. A

@@ -3325,11 +3325,24 @@ func _tank_pct_bins(source : String, w : float, i0 : int, n : int) -> Dictionary
 	return TimelineBinning.from_regular(got, float(s["base_t"]), float(s["step"]), w, i0, n)
 
 
+## The system graph view: the registered one, else a search (scenes with no
+## service registry). find_child walks the whole scene before the UI layer,
+## and the load reading asked ten times a second.
+func _graph_view() -> Node:
+	var sgv: Node = ServiceLocator.graph()
+	if sgv != null and sgv.is_inside_tree():
+		return sgv
+	var tree := get_tree()
+	if tree == null or tree.root == null:
+		return null
+	return tree.root.find_child("SystemGraphView", true, false)
+
+
 func _first_water_timeline() -> Variant:
 	var tree := get_tree()
 	if tree == null:
 		return null
-	var sgv := tree.root.find_child("SystemGraphView", true, false)
+	var sgv := _graph_view()
 	if sgv == null:
 		return null
 	var flow : Variant = sgv.get("_resource_flow")
@@ -3780,7 +3793,7 @@ func _synthetic_temp_at(day_time: float) -> float:
 func _modeled_load_at(abs_hours: float) -> float:
 	var tree := get_tree()
 	if tree != null:
-		var sgv := tree.root.find_child("SystemGraphView", true, false)
+		var sgv := _graph_view()
 		if sgv != null and ("model" in sgv):
 			var m: Variant = sgv.get("model")
 			if m != null:
@@ -3857,7 +3870,7 @@ func _calculate_load_power() -> void:
 	# Authoritative load: wired + ON items on the system graph canvas only.
 	var tree := get_tree()
 	if tree != null:
-		var sgv := tree.root.find_child("SystemGraphView", true, false)
+		var sgv := _graph_view()
 		if sgv != null and ("model" in sgv):
 			var m: Variant = sgv.get("model")
 			if m != null:

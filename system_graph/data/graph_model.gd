@@ -424,13 +424,89 @@ func get_connection(conn_id: String) -> Dictionary:
 
 
 func get_items_in_scope(scope_id: String = ROOT_SCOPE_ID) -> Array:
-	var out: Array = []
+	# One cached pass over the items per topology revision (see
+	# _ensure_scope_cache) instead of a linear scan per call: the festival
+	# camps alone asked several times per camp per tick. A copy, because the
+	# callers sort and append to what they get.
 	var sid: String = scope_id if not scope_id.is_empty() else ROOT_SCOPE_ID
-	for item: Dictionary in items:
+	_ensure_scope_cache()
+	var bucket: Variant = _scope_raw.get(sid)
+	return (bucket as Array).duplicate() if bucket != null else []
+
+
+## Items grouped by scope in one pass, in model.items order inside each scope,
+## with an empty scope_id folded into root (GraphNesting.scope_index's rule).
+## SHARED: read it, never change it.
+func scope_index_cached() -> Dictionary:
+	_ensure_scope_cache()
+	return _scope_fold
+
+
+## The scope buckets are rebuilt when the topology revision moves (a scope_id
+## or child_scope_id change, an add / remove / clear / deserialize all bump
+## struct_rev), when the item count changes, or when the items array itself
+## was replaced (selftests assign it wholesale). `scope_cache_check` (selftests)
+## compares every answer with a fresh linear scan.
+var _scope_raw: Dictionary = {}
+var _scope_fold: Dictionary = {}
+var _scope_rev: int = -1
+var _scope_n: int = -1
+var _scope_src: Array = []
+static var scope_cache_check := false
+
+
+func _ensure_scope_cache() -> void:
+	if _scope_rev == struct_rev and _scope_n == items.size() and is_same(_scope_src, items):
+		if scope_cache_check:
+			_verify_scope_cache()
+		return
+	_scope_rev = struct_rev
+	_scope_n = items.size()
+	_scope_src = items
+	_scope_raw = {}
+	_scope_fold = {}
+	for item_v in items:
+		var item: Dictionary = item_v
 		var isid: String = str(item.get("scope_id", ROOT_SCOPE_ID))
-		if isid == sid:
-			out.append(item)
-	return out
+		var b: Variant = _scope_raw.get(isid)
+		if b == null:
+			b = []
+			_scope_raw[isid] = b
+		(b as Array).append(item)
+		var fsid: String = isid if not isid.is_empty() else ROOT_SCOPE_ID
+		var fb: Variant = _scope_fold.get(fsid)
+		if fb == null:
+			fb = []
+			_scope_fold[fsid] = fb
+		(fb as Array).append(item)
+
+
+func _verify_scope_cache() -> void:
+	var raw: Dictionary = {}
+	for item_v in items:
+		var item: Dictionary = item_v
+		var isid: String = str(item.get("scope_id", ROOT_SCOPE_ID))
+		if not raw.has(isid):
+			raw[isid] = []
+		(raw[isid] as Array).append(item)
+	var ok := raw.size() == _scope_raw.size()
+	if ok:
+		for k in raw:
+			var a: Array = raw[k]
+			var b: Variant = _scope_raw.get(k)
+			if b == null or (b as Array).size() != a.size():
+				ok = false
+				break
+			for i in a.size():
+				if not is_same(a[i], (b as Array)[i]):
+					ok = false
+					break
+			if not ok:
+				break
+	if not ok:
+		push_error("GraphModel scope cache is stale (an item's scope changed without a struct_rev move)")
+		_scope_rev = -1
+		_ensure_scope_cache()
 
 
 func get_connections_in_scope(scope_id: String = ROOT_SCOPE_ID) -> Array:

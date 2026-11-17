@@ -76,6 +76,11 @@ func add(id: String, abs_h: float, v: float) -> void:
 	if not is_nan(v):
 		_lo[id] = minf(float(_lo[id]), v)
 		_hi[id] = maxf(float(_hi[id]), v)
+	# Let go of the dictionary's reference first: a packed array shared by two
+	# holders is copied whole on append (copy on write), which copied up to
+	# 12,000 samples for every sample added.
+	_t[id] = PackedFloat64Array()
+	_v[id] = PackedFloat32Array()
 	ts.append(abs_h)
 	vs.append(v)
 	var cap := MAX_SAMPLES if watched.has(id) else MAX_SAMPLES_UNWATCHED
