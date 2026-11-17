@@ -212,9 +212,14 @@ static func _compute_resource_channel(model: GraphModel, resource_flow: RefCount
 	if model != null:
 		for item: Dictionary in model.items:
 			var ty: String = str(item.get("type", ""))
-			var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+			# Read only: a tank's specs get a SHALLOW copy (the migration only
+			# fills missing top-level keys); everything else is read in place.
+			# This deep-copied every item, a habitat's whole population
+			# snapshot included, twice a call (12 ms a second on Walton).
+			var specs: Dictionary = item.get("specs", {}) as Dictionary
 			if ty == "resource":
-				ResourceKinds.new().migrate_resource_specs(specs)
+				specs = specs.duplicate(false)
+				_RK.migrate_resource_specs(specs)
 				if ResourceKinds.normalize_kind(str(specs.get("resource_kind", ""))) != kind:
 					continue
 				var cap: float = float(specs.get("capacity_qty", 0.0))
@@ -301,8 +306,8 @@ static func _compute_waste_channel(model: GraphModel, resource_flow: RefCounted,
 			var ty: String = str(item.get("type", ""))
 			if ty != "resource":
 				continue
-			var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
-			ResourceKinds.new().migrate_resource_specs(specs)
+			var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(false)
+			_RK.migrate_resource_specs(specs)
 			var rk: String = ResourceKinds.normalize_kind(str(specs.get("resource_kind", "")))
 			if not WASTE_KINDS.has(rk):
 				continue
@@ -345,6 +350,10 @@ static func _compute_waste_channel(model: GraphModel, resource_flow: RefCounted,
 		"unit": "L+kg",
 		"starved": starved,
 	}
+
+
+## One ResourceKinds for the migrations (it was made per tank per call).
+static var _RK := ResourceKinds.new()
 
 
 static func _timeline_for(resource_flow: RefCounted, item_id: String) -> RefCounted:

@@ -3202,11 +3202,14 @@ func _get_terrain_loader() -> Node:
 
 
 func _get_projection_canvas() -> Node:
+	# The canvas always lives under the UI layer, our own parent (the scenes
+	# author it there, Main.ensure_projection_canvas makes it there on demand).
+	# Until it is made there is none: the whole-tree search this used to fall
+	# back to found nothing after walking every node in the world, ten times
+	# a second (~1.4 ms a frame on Walton).
 	var p := get_parent()
 	if p != null:
-		var pc := p.get_node_or_null("ProjectionCanvas")
-		if pc != null:
-			return pc
+		return p.get_node_or_null("ProjectionCanvas")
 	if get_tree() != null:
 		return get_tree().root.find_child("ProjectionCanvas", true, false)
 	return null
@@ -4762,18 +4765,30 @@ func _update_needs_strip() -> void:
 		var icon: String = str(icons.get(kind, ""))
 		var letter: String = str(letters.get(kind, kind.substr(0, 1).to_upper()))
 		var glyph: String = str(glyphs.get(st, "○"))
+		var txt := ""
+		var tip := ""
 		if st == "idle":
-			btn.text = "%s %s %s" % [icon, letter, glyph]
-			btn.tooltip_text = "%s — inactive (place a Habitat / tanks)" % kind.capitalize()
+			txt = "%s %s %s" % [icon, letter, glyph]
+			tip = "%s — inactive (place a Habitat / tanks)" % kind.capitalize()
 		else:
 			var pct := float(ch.get("closure_pct", 0.0)) * 100.0
-			btn.text = "%s %s%s" % [icon, letter, glyph]
-			btn.tooltip_text = "%s: %s · closure %.0f%% · autonomy %.1f d — click Review" % [
+			txt = "%s %s%s" % [icon, letter, glyph]
+			tip = "%s: %s · closure %.0f%% · autonomy %.1f d — click Review" % [
 					kind.capitalize(),
 					_CLOSURE_METRICS_SCRIPT.status_label(st),
 					pct,
 					float(ch.get("autonomy_days", 0.0)),
 			]
+		# Written only when they change: a new text or theme override re-lays
+		# out the whole info row, and this ran every second for every chip
+		# (duplicating the stylebox each time).
+		if btn.text != txt:
+			btn.text = txt
+		if btn.tooltip_text != tip:
+			btn.tooltip_text = tip
+		if str(btn.get_meta(&"needs_st", "")) == st:
+			continue
+		btn.set_meta(&"needs_st", st)
 		var col: Color = _CLOSURE_METRICS_SCRIPT.status_color(st)
 		btn.add_theme_color_override("font_color", col)
 		var sb: StyleBox = btn.get_theme_stylebox("normal")
@@ -4785,9 +4800,11 @@ func _update_needs_strip() -> void:
 			btn.add_theme_stylebox_override("normal", sbf)
 	if _needs_score_lbl != null:
 		var score: float = float(m.get("score", 0.0))
-		_needs_score_lbl.text = ("%.0f" % score) if score > 0.01 else "—"
-		_needs_score_lbl.add_theme_color_override("font_color",
-				C_PRIMARY if score > 0.01 else C_TEXT_M)
+		var stxt: String = ("%.0f" % score) if score > 0.01 else "—"
+		if _needs_score_lbl.text != stxt:
+			_needs_score_lbl.text = stxt
+			_needs_score_lbl.add_theme_color_override("font_color",
+					C_PRIMARY if score > 0.01 else C_TEXT_M)
 
 
 func _mk_chip_btn(txt: String, callback: Callable, tip: String = "") -> Button:
