@@ -109,8 +109,12 @@ func run(main: Node, _harness: Node) -> Dictionary:
 	print("flowbench pin: state hash %s over %d values (tanks %d, conns %d, telemetry %d)" % [
 		str(digest["hash"]), int(digest["n"]), int(digest["tanks"]), int(digest["conns"]),
 		int(digest["telemetry"])])
+	var full := _full_specs_digest(model)
+	print("flowbench pin: full specs digest %s over %d items / %d keys (detail %s)" % [
+		str(full["hash"]), int(full["items"]), int(full["keys"]), str(full["path"])])
 	pm.call("set_enabled", false)
 	return {"ok": true, "running": running, "paused": paused, "pin_hash": str(digest["hash"]),
+		"pin_full": str(full["hash"]),
 		"pin_ms_per_step": per_step_ms, "items": n_items, "connections": n_conns}
 
 
@@ -254,6 +258,76 @@ func _state_digest(model: Object) -> Dictionary:
 	var text := JSON.stringify(parts)
 	return {"hash": text.sha256_text().substr(0, 16), "n": parts.size(),
 		"tanks": n_tanks, "conns": n_conns, "telemetry": n_tel}
+
+
+## Every item's WHOLE specs and every connection, after the pin run: what a
+## sim-path optimization (a shallow copy instead of a deep one, a cache) must
+## leave exactly as it was. Keys are sorted at every depth (insertion order is
+## not part of the state) and floats are hashed by their bytes, so a change in
+## the last bit shows. One line per item key goes to a detail file under the
+## real screenshots folder, so two runs can be diffed to find a key that moves.
+func _full_specs_digest(model: Object) -> Dictionary:
+	var lines: PackedStringArray = []
+	var n_keys := 0
+	var items: Array = (model.get("items") as Array).duplicate()
+	items.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return str(a.get("id", "")) < str(b.get("id", "")))
+	for it in items:
+		var item: Dictionary = it
+		var iid := str(item.get("id", ""))
+		var keys: Array = item.keys()
+		keys.sort_custom(func(a: Variant, b: Variant) -> bool: return str(a) < str(b))
+		for k in keys:
+			if str(k) == "specs":
+				continue
+			lines.append("%s .%s %s" % [iid, str(k), _canon(item[k]).sha256_text().substr(0, 12)])
+			n_keys += 1
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		var skeys: Array = specs.keys()
+		skeys.sort_custom(func(a: Variant, b: Variant) -> bool: return str(a) < str(b))
+		for k in skeys:
+			lines.append("%s %s %s" % [iid, str(k), _canon(specs[k]).sha256_text().substr(0, 12)])
+			n_keys += 1
+	var conns: Array = (model.get("connections") as Array).duplicate()
+	conns.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return str(a.get("id", "")) < str(b.get("id", "")))
+	for c in conns:
+		lines.append("conn %s %s" % [str((c as Dictionary).get("id", "")), _canon(c).sha256_text().substr(0, 12)])
+	var text := "\n".join(lines)
+	var dir := "user://screenshots/flowbench"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var path := "%s/specs_%d.txt" % [dir, int(Time.get_unix_time_from_system())]
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f != null:
+		f.store_string(text)
+		f.close()
+	return {"hash": text.sha256_text().substr(0, 16), "items": items.size(), "keys": n_keys,
+		"path": ProjectSettings.globalize_path(path)}
+
+
+## A canonical text form: dictionary keys sorted at every depth, floats by
+## their exact bytes, packed arrays element by element.
+func _canon(v: Variant) -> String:
+	match typeof(v):
+		TYPE_DICTIONARY:
+			var d: Dictionary = v
+			var ks: Array = d.keys()
+			ks.sort_custom(func(a: Variant, b: Variant) -> bool: return str(a) < str(b))
+			var parts: PackedStringArray = []
+			for k in ks:
+				parts.append(str(k) + ":" + _canon(d[k]))
+			return "{" + ",".join(parts) + "}"
+		TYPE_ARRAY, TYPE_PACKED_FLOAT32_ARRAY, TYPE_PACKED_FLOAT64_ARRAY, \
+				TYPE_PACKED_INT32_ARRAY, TYPE_PACKED_INT64_ARRAY, TYPE_PACKED_STRING_ARRAY, \
+				TYPE_PACKED_VECTOR2_ARRAY, TYPE_PACKED_VECTOR3_ARRAY, TYPE_PACKED_COLOR_ARRAY:
+			var parts2: PackedStringArray = []
+			for e in v:
+				parts2.append(_canon(e))
+			return "[" + ",".join(parts2) + "]"
+		TYPE_FLOAT:
+			return "f" + var_to_bytes(v).hex_encode()
+		_:
+			return var_to_str(v)
 
 
 func _wait(tree: SceneTree, s: float) -> void:

@@ -49,6 +49,31 @@ func run(main: Node, _harness: Node) -> Dictionary:
 		t.sort()
 		out[str(c[0])] = t[t.size() / 2]
 		print("gvtime %-26s median %7.3f ms · max %7.3f ms" % [str(c[0]), float(t[t.size() / 2]), float(t[t.size() - 1])])
+	# Exact values an AC-load optimization must not change (printed by their
+	# bytes, so the last bit shows): the live sum, the offline sum with losses,
+	# and every wire's delivered watts.
+	var ac_live := GraphAcLoad.compute_watts(model, tree)
+	var ac_off := GraphAcLoad.compute_watts_offline(model, true)
+	print("gvtime pin ac_live %s ac_offline_losses %s" % [var_to_bytes(ac_live).hex_encode(),
+		var_to_bytes(ac_off).hex_encode()])
+	var ix := GraphAcLoad.delivered_index(model, tree)
+	var wire_text := ""
+	for c in GraphNesting.flat_connections(model):
+		var cd: Dictionary = c
+		wire_text += "%s=%s;" % [str(cd.get("id", "")),
+			var_to_bytes(GraphAcLoad.delivered_watts_indexed(model, ix, cd)).hex_encode()]
+	print("gvtime pin wires %s (%d wires)" % [wire_text.sha256_text().substr(0, 16),
+		GraphNesting.flat_connections(model).size()])
+	for c in [["ac_compute_watts", func() -> void: GraphAcLoad.compute_watts(model, tree)],
+			["ac_offline_losses", func() -> void: GraphAcLoad.compute_watts_offline(model, true)]]:
+		var tt: Array = []
+		for i in REPS:
+			var a2 := Time.get_ticks_usec()
+			(c[1] as Callable).call()
+			tt.append(float(Time.get_ticks_usec() - a2) / 1000.0)
+		tt.sort()
+		out[str(c[0])] = tt[tt.size() / 2]
+		print("gvtime %-26s median %7.3f ms · max %7.3f ms" % [str(c[0]), float(tt[tt.size() / 2]), float(tt[tt.size() - 1])])
 	# Card draw cost by type over 30 forced redraws of the freeform lens.
 	gv.call("_apply_graph_view_mode", GraphSiteLayout.VIEW_FREEFORM)
 	for _f3 in 30:
