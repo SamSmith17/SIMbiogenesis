@@ -29,9 +29,10 @@ func _initialize() -> void:
 	fails += _test_goal_compound_containing()
 	fails += _test_run_verdict()
 	fails += _test_unlock_labels()
+	fails += _test_process_track()
 	_cleanup()
 	if fails == 0:
-		print("TUTORIAL SELFTEST PASS  (17 checks)")
+		print("TUTORIAL SELFTEST PASS  (18 checks)")
 		quit(0)
 	else:
 		print("TUTORIAL SELFTEST FAIL  (%d failed)" % fails)
@@ -559,3 +560,124 @@ func _wire(model: GraphModel, src: String, src_handle: String,
 	model.add_connection({"scope_id": "root", "polarity": pol,
 		"source_item_id": src, "source_handle_id": src_handle,
 		"target_item_id": tgt, "target_handle_id": tgt_handle})
+
+
+## The Process Bootcamp track: its catalog and its goals (SCADA plan, Phase 9).
+func _test_process_track() -> int:
+	var solar := TutorialCatalog.ordered_ids()
+	var proc := TutorialCatalog.ordered_ids("process")
+	if solar.size() != 12 or proc.size() != 5:
+		push_error("tracks: %d solar, %d process levels" % [solar.size(), proc.size()])
+		return 1
+	for id in proc:
+		var def := TutorialCatalog.by_id(str(id))
+		if def == null or def.track != "process" or def.lens != "process" or TutorialCatalog.track_of(str(id)) != "process":
+			push_error("%s is not a process-track level" % str(id))
+			return 1
+		for e in def.seed:
+			if TutorialCatalog.find_preset(str(e.get("preset_label", ""))).is_empty():
+				push_error("%s: seed preset %s is not in the library" % [def.id, str(e.get("preset_label", ""))])
+				return 1
+		for w in def.seed_wires:
+			if int(w["from"]) >= def.seed.size() or int(w["to"]) >= def.seed.size():
+				push_error("%s: a seed wire points past the seeds" % def.id)
+				return 1
+		if TutorialLevelDef.from_dict(def.to_dict()).track != "process":
+			push_error("%s: track lost in a round trip" % def.id)
+			return 1
+	if TutorialCatalog.next_after(str(solar[11])) != "" or TutorialCatalog.next_after(str(proc[0])) != str(proc[1]) \
+			or TutorialCatalog.next_after(str(proc[4])) != "" or TutorialCatalog.track_of(str(solar[0])) != "solar":
+		push_error("next_after must stay inside a level's own track")
+		return 1
+	# Goals over a synthetic plant.
+	var model: GraphModel = GraphModelScript.new()
+	model.add_item({"id": "t1", "type": "resource", "x": 0.0, "y": 0.0, "scope_id": "root",
+		"specs": {"name": "Day Tank", "resource_kind": "water", "capacity_qty": 1000.0, "level": 0.2}})
+	var tag := TutorialGoals.tag_of(model, "Day Tank", "level")
+	if tag != "tank.t1.level" or absf(TutorialGoals.read_item(model, "Day Tank", "level") - 20.0) > 1e-6:
+		push_error("item readings by name: %s" % tag)
+		return 1
+	var set_level := func(f: float) -> void:
+		var it: Dictionary = model.get_item("t1")
+		(it["specs"] as Dictionary)["level"] = f
+	var gs := {}
+	var ctx := {"model": model, "gstate": gs, "now_h": 100.0}
+	var reach := {"kind": "tag_reach", "item": "Day Tank", "read": "level", "value": 50.0}
+	if bool(TutorialGoals.evaluate(reach, ctx)["met"]):
+		push_error("tag_reach met at 20 %")
+		return 1
+	set_level.call(0.55)
+	if not bool(TutorialGoals.evaluate(reach, ctx)["met"]):
+		push_error("tag_reach not met at 55 %")
+		return 1
+	# Band hold: time counts only inside the band, and restarts on leaving.
+	var band := {"kind": "tag_band_hold", "item": "Day Tank", "read": "level", "lo": 40.0, "hi": 80.0, "hold_h": 1.0}
+	if bool(TutorialGoals.evaluate(band, ctx)["met"]):
+		push_error("band hold met at once")
+		return 1
+	ctx["now_h"] = 100.6
+	if bool(TutorialGoals.evaluate(band, ctx)["met"]):
+		push_error("band hold met after 0.6 h")
+		return 1
+	set_level.call(0.9)
+	ctx["now_h"] = 100.8
+	TutorialGoals.evaluate(band, ctx)
+	set_level.call(0.6)
+	ctx["now_h"] = 101.2
+	if bool(TutorialGoals.evaluate(band, ctx)["met"]):
+		push_error("band hold kept its time across leaving the band")
+		return 1
+	ctx["now_h"] = 102.25
+	if not bool(TutorialGoals.evaluate(band, ctx)["met"]):
+		push_error("band hold not met after an hour inside")
+		return 1
+	# A scrub back restarts the count.
+	ctx["now_h"] = 90.0
+	if bool(TutorialGoals.evaluate(band, ctx)["met"]) or gs.has("since"):
+		push_error("band hold survived a scrub back")
+		return 1
+	# With a block asked for, nothing counts until it is there.
+	var with_block := band.duplicate()
+	with_block["need_block"] = "pid"
+	var gs2 := {}
+	var ctx2 := {"model": model, "gstate": gs2, "now_h": 10.0, "logic": [{"kind": "band", "pv": tag, "out": "node.v", "enabled": true}]}
+	TutorialGoals.evaluate(with_block, ctx2)
+	ctx2["now_h"] = 12.0
+	var r2 := TutorialGoals.evaluate(with_block, ctx2)
+	if bool(r2["met"]) or not str(r2["progress"]).contains("PID"):
+		push_error("a PID level was met by an on / off block: %s" % str(r2["progress"]))
+		return 1
+	ctx2["logic"] = [{"kind": "pid", "pv": tag, "out": "valve.v.open", "enabled": true}]
+	TutorialGoals.evaluate(with_block, ctx2)
+	ctx2["now_h"] = 13.5
+	if not bool(TutorialGoals.evaluate(with_block, ctx2)["met"]):
+		push_error("a PID level not met with the PID block in place for 1.5 h")
+		return 1
+	if TutorialGoals.has_block([{"kind": "pid", "pv": tag, "out": "", "enabled": true}], "pid", tag):
+		push_error("a block that drives nothing counted")
+		return 1
+	# Alarm: a rule, then raised, then acknowledged.
+	var al := {"kind": "alarm_acked", "item": "Day Tank", "read": "level"}
+	var gs3 := {}
+	var ctx3 := {"model": model, "gstate": gs3, "now_h": 1.0, "alarm_rules": [], "alarm_status": {}}
+	if bool(TutorialGoals.evaluate(al, ctx3)["met"]) or not str(TutorialGoals.evaluate(al, ctx3)["progress"]).contains("Add a high alarm"):
+		push_error("alarm goal with no rule")
+		return 1
+	ctx3["alarm_rules"] = [{"id": "a1", "tag": tag, "op": ">="}]
+	ctx3["alarm_status"] = {"a1": {"state": "normal"}}
+	if bool(TutorialGoals.evaluate(al, ctx3)["met"]):
+		push_error("alarm goal met before it ever went off")
+		return 1
+	ctx3["alarm_status"] = {"a1": {"state": "unack"}}
+	if bool(TutorialGoals.evaluate(al, ctx3)["met"]):
+		push_error("alarm goal met while unacknowledged")
+		return 1
+	ctx3["alarm_status"] = {"a1": {"state": "acked"}}
+	if not bool(TutorialGoals.evaluate(al, ctx3)["met"]):
+		push_error("alarm goal not met once acknowledged")
+		return 1
+	# A missing item never completes (and says so).
+	if bool(TutorialGoals.evaluate({"kind": "tag_reach", "item": "Nope", "value": 1.0}, ctx)["met"]):
+		push_error("a goal on a missing item was met")
+		return 1
+	return 0

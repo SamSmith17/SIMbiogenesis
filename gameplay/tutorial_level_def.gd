@@ -29,6 +29,10 @@ var run: Dictionary = {}
 ## Keep the previous level's graph instead of clearing + reseeding (levels
 ## that iterate on the system the player just built).
 var carry_graph: bool = false
+## Which bootcamp it belongs to: "solar" (the original twelve) or "process".
+var track: String = "solar"
+## Graph lens the level opens in ("" = leave it): "process" for the P&ID.
+var lens: String = ""
 
 
 static func from_dict(d: Dictionary) -> TutorialLevelDef:
@@ -45,6 +49,8 @@ static func from_dict(d: Dictionary) -> TutorialLevelDef:
 	def.unlocks = (d.get("unlocks", []) as Array).duplicate()
 	def.run = (d.get("run", {}) as Dictionary).duplicate(true)
 	def.carry_graph = bool(d.get("carry_graph", false))
+	def.track = str(d.get("track", "solar"))
+	def.lens = str(d.get("lens", ""))
 	return def
 
 
@@ -56,6 +62,7 @@ func to_dict() -> Dictionary:
 		"allowed_presets": allowed_presets.duplicate(),
 		"goal": goal.duplicate(true), "unlocks": unlocks.duplicate(),
 		"run": run.duplicate(true), "carry_graph": carry_graph,
+		"track": track, "lens": lens,
 	}
 
 

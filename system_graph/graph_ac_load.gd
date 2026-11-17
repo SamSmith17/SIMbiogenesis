@@ -129,7 +129,10 @@ static func connection_losses_watts(model: GraphModel, tree: SceneTree,
 			conn["overload_ratio"] = 0.0
 			continue
 		var delivered: float = _connection_delivered_watts(model, conn, tree, sim_host, flat_conns)
-		var meta: Dictionary = ConduitKinds.type_meta(type_id)
+		# The chosen gauge's resistance and ampacity (ConduitSpecs); a run nobody
+		# re-sized reads the kind's own default, unchanged.
+		var meta: Dictionary = ConduitSpecs.loss_meta(type_id,
+			conn.get("conduit_style", {}) as Dictionary)
 		var rep := ConduitLoss.electrical_report_for_connection(conn, meta, delivered)
 		conn["loss_w"] = float(rep.get("loss_w", 0.0))
 		conn["drop_pct"] = float(rep.get("drop_pct", 0.0))

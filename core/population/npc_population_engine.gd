@@ -1098,6 +1098,9 @@ func agent_dots() -> Array:
 			# machine reads it as an INPUT, which is what keeps the machine pure.
 			"work_pose": NpcWorkPose.family_for(chore_board.find(a.chore_id))
 				if (chore_board != null and not a.chore_id.is_empty()) else "",
+			# A tool the chore names (a hoe, a sickle), shown while DOING it.
+			"work_tool": str(chore_board.find(a.chore_id).get("tool", ""))
+				if (chore_board != null and not a.chore_id.is_empty() and a.state == NpcAgent.State.DOING) else "",
 			"carry_prop": carry_prop,
 			"fork_id": fork_id,
 			"color": color_for_agent(a.id),

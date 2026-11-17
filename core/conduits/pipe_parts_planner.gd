@@ -66,7 +66,10 @@ static func plan(sharp: PackedVector3Array, kit: PipeKit) -> Dictionary:
 			if bend_here > 0.5:
 				take_end = kit.elbow_takeout_m(bend_here)
 		var straight_end := target - dir * take_end
-		var straight_len := cursor.distance_to(straight_end)
+		# Signed: negative when the elbow takeouts at both ends of this span
+		# overlap (a span shorter than its fittings). distance_to is never
+		# negative, so the overlap test below could never fire before.
+		var straight_len := (straight_end - cursor).dot(dir)
 		if straight_len >= MIN_STRAIGHT_M:
 			parts.append({
 				"kind": "straight",

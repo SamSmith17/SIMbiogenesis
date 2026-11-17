@@ -78,6 +78,22 @@ const TYPES := {
 		"why": "Lets the flow through one way only (the arrow, a to b)."},
 	"diaphragm_valve": {"label": "Diaphragm valve", "category": "valves", "designation": "Clamp diaphragm valve",
 		"why": "A throttling valve with no crevice in the flow, for clean service."},
+	"control_valve": {"label": "Control valve", "category": "valves", "designation": "Clamp control valve with positioner",
+		"why": "A throttling valve a controller sets anywhere from shut to open. Its opening is a number a PID loop can drive."},
+	"pump":         {"label": "Pump", "category": "process", "designation": "Clamp centrifugal / positive-displacement pump",
+		"why": "Moves liquid from a (suction) to b (discharge). A centrifugal pump gives less flow against more head; a positive-displacement one gives its rated flow whatever the head. The suction must be flooded."},
+	"solenoid_valve": {"label": "Solenoid valve", "category": "valves", "designation": "Clamp solenoid valve, normally closed",
+		"why": "An on / off valve a rule or a control block opens. Shut with no power."},
+	"level_tx":     {"label": "Level transmitter", "category": "instruments", "designation": "Hydrostatic level transmitter",
+		"why": "Reads how full the vessel it is fitted to is, 0 to 100 %."},
+	"level_switch": {"label": "Level switch", "category": "instruments", "designation": "Float / fork level switch",
+		"why": "On while the liquid stands at or above the height it is fitted at. Fit one high for an overfill trip, one low for a pump's dry-run guard."},
+	"flow_meter":   {"label": "Flow meter", "category": "instruments", "designation": "In-line magnetic flow meter",
+		"why": "Reads the liquid passing through its line, L/min."},
+	"plate_exchanger": {"label": "Plate heat exchanger", "category": "process", "designation": "Brazed plate heat exchanger",
+		"why": "Liquid pumped through it gives its heat to (or takes it from) the service water on the other side. More plates = more area."},
+	"agitator":     {"label": "Agitator", "category": "process", "designation": "Top-entry agitator",
+		"why": "Stirs the vessel it is fitted to: heat moves between the wall and the liquid about three times faster, and its motor's work ends up as heat in the liquid."},
 	"relief_valve": {"label": "Pressure relief valve", "category": "valves", "designation": "Clamp safety relief valve",
 		"why": "Opens at its set pressure and vents through the side thread. Every closed pressure vessel needs one."},
 	"actuator_pneumatic": {"label": "Pneumatic actuator", "category": "actuators", "designation": "Rack & pinion pneumatic actuator",
@@ -124,12 +140,13 @@ const TYPES := {
 
 const TYPE_ORDER := ["vessel", "spool", "elbow90", "elbow45", "bend", "tee", "reducing_tee", "cross", "lateral",
 	"ferrule", "cap", "cap_npt", "reducing_cap", "reducer", "bowl_reducer", "tc_npt_m", "tc_barb",
-	"butterfly", "ball_valve", "ball_valve_3way", "check_valve", "diaphragm_valve", "relief_valve",
-	"actuator_pneumatic", "actuator_electric", "sight_glass", "thermometer", "gauge", "thermowell",
+	"butterfly", "ball_valve", "ball_valve_3way", "check_valve", "diaphragm_valve", "control_valve", "solenoid_valve", "relief_valve",
+	"actuator_pneumatic", "actuator_electric", "sight_glass", "thermometer", "gauge", "thermowell", "level_tx", "level_switch", "flow_meter",
 	"dephlegmator", "column", "bubble_plate", "inline_strainer", "y_strainer", "cartridge_housing",
-	"strainer_basket", "funnel", "spray_ball", "heating_element", "gas_holder", "dryer", "genset", "flare"]
+	"strainer_basket", "funnel", "spray_ball", "heating_element", "pump", "plate_exchanger", "agitator", "gas_holder", "dryer", "genset", "flare"]
 
 const MOUNTS := [["tc", "Clamp cap"], ["npt", "Male NPT"]]
+const PUMP_KINDS := [["centrifugal", "Centrifugal"], ["positive", "Positive displacement"]]
 const PACKINGS := [["copper_mesh", "Copper mesh"], ["raschig", "Ceramic rings"], ["none", "None"]]
 
 const STEEL := "steel"
@@ -159,11 +176,28 @@ static func param_specs(type: String) -> Array:
 			return [_bl("open", "Open", "Shown open (display only)"), _bl("manual", "Handle", "Untick when an actuator drives it")]
 		"diaphragm_valve":
 			return [_bl("manual", "Handwheel", "Untick when an actuator drives it")]
+		"control_valve":
+			return [_fl("open_pct", "Opening at the start (%)", 0.0, 100.0, 5.0)]
+		"pump":
+			return [{"key": "kind", "label": "Kind", "kind": "choice", "options": PUMP_KINDS},
+				_fl("head_m", "Shut-off head (m)", 0.5, 60.0, 0.5, "Centrifugal: the head with no flow. Positive displacement: the most it can push against."),
+				_fl("flow_lpm", "Flow (L/min)", 0.5, 400.0, 0.5, "Centrifugal: the flow with no head. Positive displacement: its rated flow."),
+				_fl("watts", "Motor (W)", 5.0, 5000.0, 5.0),
+				_bl("on", "Running at the start")]
 		"thermometer":
 			return [{"key": "mount", "label": "Mount", "kind": "choice", "options": MOUNTS},
 				{"key": "npt", "label": "Thread", "kind": "npt"}, _fl("probe_mm", "Probe", 20.0, 600.0, 5.0)]
-		"gauge":
+		"gauge", "level_tx", "level_switch":
 			return [{"key": "mount", "label": "Mount", "kind": "choice", "options": MOUNTS}, {"key": "npt", "label": "Thread", "kind": "npt"}]
+		"solenoid_valve":
+			return [_bl("open", "Open at the start")]
+		"flow_meter":
+			return [_fl("length_mm", "Length", 80.0, 400.0, 5.0)]
+		"plate_exchanger":
+			return [_fl("plates", "Plates", 6.0, 80.0, 2.0, "About 0.03 m² of surface a plate")]
+		"agitator":
+			return [_fl("watts", "Motor (W)", 10.0, 3000.0, 10.0), _fl("shaft_mm", "Shaft", 100.0, 1500.0, 10.0),
+				_bl("on", "Running at the start")]
 		"sight_glass", "thermowell":
 			return [_fl("length_mm", "Length", 40.0, 1000.0, 5.0)]
 		"dephlegmator":
@@ -234,10 +268,24 @@ static func default_params(type: String, size: String) -> Dictionary:
 			return {"open": true, "manual": true}
 		"diaphragm_valve":
 			return {"manual": true}
+		"control_valve":
+			return {"open_pct": 50.0}
+		"pump":
+			return {"kind": "centrifugal", "head_m": 8.0, "flow_lpm": 40.0, "watts": 250.0, "on": false}
 		"thermometer":
 			return {"mount": "tc", "npt": "0.5", "probe_mm": 100.0}
 		"gauge":
 			return {"mount": "tc", "npt": "0.25"}
+		"level_tx", "level_switch":
+			return {"mount": "tc", "npt": "0.5"}
+		"solenoid_valve":
+			return {"open": false}
+		"flow_meter":
+			return {"length_mm": 120.0}
+		"plate_exchanger":
+			return {"plates": 20.0}
+		"agitator":
+			return {"watts": 120.0, "shaft_mm": 400.0, "on": false}
 		"sight_glass":
 			return {"length_mm": 150.0}
 		"thermowell":
@@ -320,7 +368,7 @@ static func resolve_params(type: String, size: String, params: Dictionary) -> Di
 		"tc_barb":
 			if not str(p["barb"]) in TcStandards.BARB_SIZES:
 				p["barb"] = "0.5"
-		"thermometer", "gauge":
+		"thermometer", "gauge", "level_tx", "level_switch":
 			if not str(p["mount"]) in ["tc", "npt"]:
 				p["mount"] = "tc"
 			if not TcStandards.NPT_OD.has(str(p["npt"])):
@@ -544,6 +592,14 @@ static func build(type: String, size: String, params: Dictionary = {}) -> Dictio
 		"ball_valve_3way": r = TcSpecialty.ball_valve(g, size, true, bool(p["open"]), bool(p["manual"]))
 		"check_valve": r = TcSpecialty.check_valve(g, size)
 		"diaphragm_valve": r = TcSpecialty.diaphragm_valve(g, size, bool(p["manual"]))
+		"control_valve": r = TcSpecialty.control_valve(g, size)
+		"solenoid_valve": r = TcSpecialty.solenoid_valve(g, size)
+		"level_tx": r = TcSpecialty.transmitter(g, size, str(p["mount"]), str(p["npt"]), false)
+		"level_switch": r = TcSpecialty.transmitter(g, size, str(p["mount"]), str(p["npt"]), true)
+		"flow_meter": r = TcSpecialty.flow_meter(g, size, float(p["length_mm"]))
+		"plate_exchanger": r = TcSpecialty.plate_exchanger(g, size, float(p["plates"]))
+		"agitator": r = TcSpecialty.agitator(g, size, float(p["shaft_mm"]))
+		"pump": r = TcSpecialty.pump(g, size, str(p.get("kind", "centrifugal")))
 		"relief_valve": r = TcSpecialty.relief_valve(g, size)
 		"actuator_pneumatic": r = TcSpecialty.actuator_pneumatic(g, size)
 		"actuator_electric": r = TcSpecialty.actuator_electric(g, size)

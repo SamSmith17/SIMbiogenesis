@@ -32,11 +32,13 @@ const OVERLAY_NAME := "edit_toolbar"
 const ToolbarStateScript := preload("res://scenes/ui/toolbar/toolbar_state.gd")
 const GestureScript := preload("res://scenes/ui/toolbar/shape_gesture_controller.gd")
 const WaterToolScript := preload("res://scenes/ui/toolbar/water_tool_controller.gd")
+const RouteToolScript := preload("res://scenes/ui/toolbar/route_tool_controller.gd")
+const TerraceToolScript := preload("res://scenes/ui/toolbar/terrace_tool_controller.gd")
 
 const HIGHLIGHT_COLOR := Color(0.35, 0.85, 1.0, 0.45)
 const SHAPE_LABELS := {
 	"brush": "Brush", "circle": "Circle", "rect": "Rect",
-	"lasso": "Lasso", "polygon": "Poly", "path": "Path",
+	"lasso": "Lasso", "polygon": "Poly", "path": "Path", "hill": "Hill",
 }
 const SHAPE_TIPS := {
 	"brush": "Freehand sweep — hold LMB and drag",
@@ -45,6 +47,7 @@ const SHAPE_TIPS := {
 	"lasso": "Hold LMB and trace an outline",
 	"polygon": "Click each corner; Enter or click the first corner to close",
 	"path": "Click each bend; Enter finishes the road",
+	"hill": "Click a slope: everything above the click (within the Hill reach) is terraced",
 }
 
 ## The section key that reopens the toolbar exactly where it was closed.
@@ -54,6 +57,9 @@ var _gesture: GestureScript = GestureScript.new()
 ## The WATER section's tools live in their own controller (pin dragging,
 ## tracing, span modes); this file only delegates to it.
 var _water_tools: WaterToolScript = WaterToolScript.new()
+var _route_tools: RouteToolScript = RouteToolScript.new()
+## The Terrace tool (core/terrace/) and its editor dock.
+var _terrace_tools: TerraceToolScript = TerraceToolScript.new()
 var _loader: Node = null
 var _active := false
 
@@ -169,6 +175,7 @@ func _ready() -> void:
 	_camp_apply_timer.timeout.connect(_apply_camp_select_params)
 	add_child(_camp_apply_timer)
 	_water_tools.setup(self)
+	_route_tools.setup(self)
 	_build_ui()
 
 
@@ -184,6 +191,7 @@ func _save_prefs_now() -> void:
 
 func bind_loader(loader: Node) -> void:
 	_loader = loader
+	_terrace_tools.bind(self, loader, _state, Callable(self, "_set_status"))
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +260,8 @@ func _exit_mode() -> void:
 	if not _active:
 		return
 	_water_tools.deactivate()
+	_route_tools.deactivate()
+	_terrace_tools.deactivate()
 	_cancel_stroke()
 	_clear_veg_hover()
 	_end_detect(true)
@@ -276,6 +286,10 @@ func _exit_mode() -> void:
 ## Esc (via CursorController's overlay fallback): peel one layer per press.
 func _escape_step() -> void:
 	if _is_water_section() and _water_tools.escape():
+		return
+	if _is_route_section() and _route_tools.escape():
+		return
+	if _state.active_tool == "terrace" and not _gesture.has_pending() and _terrace_tools.escape():
 		return
 	if _stroking:
 		_cancel_stroke()
@@ -366,6 +380,7 @@ func _build_ui() -> void:
 	_build_strip_section("CAMPS", "camps")
 	_build_strip_section("PLACEMENT", "placement")
 	_build_strip_section("WATER", "water")
+	_build_strip_section("ROUTE", "route")
 
 	# Top options bar.
 	_options = PanelContainer.new()
@@ -396,7 +411,7 @@ func _build_ui() -> void:
 const TOOL_ICONS := {
 	"raise": "chevron-up", "lower": "chevron-down", "smooth": "waves",
 	"level": "minus", "ramp": "trending-up", "pond": "droplet",
-	"rain": "cloud-rain", "drain": "download", "measure": "ruler",
+	"rain": "cloud-rain", "drain": "download", "measure": "ruler", "terrace": "mountain",
 	"veg_paint": "sprout", "veg_place": "trees", "veg_clear": "eraser",
 	"veg_select": "mouse-pointer-2", "veg_detect": "sparkles",
 	"camp_paint": "tent", "camp_erase": "eraser", "camp_subdivide": "layout-grid",
@@ -405,6 +420,8 @@ const TOOL_ICONS := {
 	"fest_assign": "users", "fest_edit": "pencil",
 	"water_trace": "target", "water_draw": "pencil", "water_edit": "move",
 	"water_span": "link", "water_view": "eye",
+	"route_connect": "plug", "route_bend": "workflow", "route_height": "arrow-up",
+	"route_wall": "layers", "route_lane": "chevrons-up-down", "route_style": "sliders-horizontal",
 }
 
 var _section_headers: Dictionary = {}   # section -> Button
@@ -534,6 +551,12 @@ func _set_active_tool(id: String) -> void:
 		_water_tools.activate(id)
 	else:
 		_water_tools.deactivate()
+	if _route_tools.is_route_tool(id):
+		_route_tools.activate(id)
+	else:
+		_route_tools.deactivate()
+	if id != "terrace":
+		_terrace_tools.deactivate()
 	# Sculpting leaves painted plants hanging in the air, and this toolbar makes
 	# terrain->veg a one-click move, so re-snap them on the way in (the legacy
 	# veg dock does the same on every open).
@@ -598,6 +621,10 @@ func _rebuild_options_bar() -> void:
 		_build_placement_rows()
 	elif String(def.get("section", "")) == "water":
 		_water_tools.build_rows(_options_box)
+	elif String(def.get("section", "")) == "route":
+		_route_tools.build_rows(_options_box)
+	if _state.active_tool == "terrace":
+		_terrace_tools.build_rows(_options_box)
 	# Shape picker — only when the tool actually offers a choice.
 	var shapes: Array = def.get("shapes", [])
 	if shapes.size() > 1:
@@ -686,6 +713,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _is_water_section() and _water_tools.handle_input(event):
 		get_viewport().set_input_as_handled()
 		return
+	if _is_route_section() and _route_tools.handle_input(event):
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventKey and (event as InputEventKey).pressed:
 		var key := event as InputEventKey
 		if key.keycode == KEY_Z and key.ctrl_pressed:
@@ -718,6 +748,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				_resize_picked_plant(1.15 if key.physical_keycode == KEY_BRACKETRIGHT else 1.0 / 1.15)
 				get_viewport().set_input_as_handled()
 				return
+		if _state.active_tool == "terrace" and not _terrace_tools.selected_id().is_empty() \
+				and (key.keycode == KEY_DELETE or key.keycode == KEY_BACKSPACE):
+			_terrace_tools.delete_selected()
+			_update_undo_button()
+			get_viewport().set_input_as_handled()
+			return
 		if _state.active_tool == "camp_select" and not _picked_camp.is_empty() \
 				and (key.keycode == KEY_DELETE or key.keycode == KEY_BACKSPACE):
 			_delete_picked_camp()
@@ -783,6 +819,16 @@ func _is_water_section() -> bool:
 	return String(_state.tool_def(_state.active_tool).get("section", "")) == "water"
 
 
+## The ROUTE section (3D runs between machines).
+func _is_route_section() -> bool:
+	return String(_state.tool_def(_state.active_tool).get("section", "")) == "route"
+
+
+## The route tool, for harness checks.
+func route_tools() -> RefCounted:
+	return _route_tools
+
+
 func _is_water_tool() -> bool:
 	return _state.active_tool == "rain" or _state.active_tool == "drain" \
 		or _state.active_tool == "pond"
@@ -811,6 +857,14 @@ func _on_lmb_pressed() -> void:
 	if _state.active_tool == "camp_select":
 		_pick_camp_at(world)
 		return
+	# Terrace: a click on a field selects it; the Hill shape cuts one at once.
+	if _state.active_tool == "terrace" and not _gesture.has_pending():
+		if not bool(_loader.call("can_sculpt_detail")):
+			_set_status("Terracing needs the hi-res detail patch")
+			return
+		if _terrace_tools.on_click(world, _gesture.mode):
+			_update_undo_button()
+			return
 	if _state.active_tool == "fest_lots" or _state.active_tool == "fest_assign" \
 			or _state.active_tool == "fest_edit":
 		_pick_place_at(world)
@@ -911,6 +965,12 @@ func _lock_selection(poly: PackedVector2Array) -> void:
 			# Level applies immediately on release (draw → graded).
 			_apply_level_region()
 			_clear_locked_selection()
+		"terrace":
+			_clear_locked_selection()
+			_terrace_tools.on_region(poly)
+			_update_undo_button()
+			_queue_overlay_redraw()
+			return
 		"pond":
 			var depth := _state.get_param("depth_m", 1.2)
 			if bool(_loader.call("pond_command", _selection_poly, depth,
@@ -1234,12 +1294,17 @@ func _process(delta: float) -> void:
 		_water_tools.process(delta)
 		_update_height_readout()
 		return
+	if _is_route_section():
+		_route_tools.process(delta)
+		return
 	var mouse := get_viewport().get_mouse_position() if get_viewport() != null else Vector2.ZERO
 	var busy := _stroking or _water_modulating or _gesture.is_dragging()
 	if not busy and mouse.is_equal_approx(_last_pointer_px):
 		return
 	_last_pointer_px = mouse
 	_cursor_hit = _pick_pointer()
+	if _state.active_tool == "terrace" and not busy:
+		_terrace_tools.process(delta, _cursor_hit, _gesture.mode)
 	if _state.active_tool == "veg_select" and not busy:
 		_update_veg_hover()
 	if _water_modulating:
@@ -1310,6 +1375,9 @@ func _draw_overlay() -> void:
 		return
 	if _is_water_section():
 		_water_tools.draw(_overlay)
+		return
+	if _is_route_section():
+		_route_tools.draw(_overlay)
 		return
 	var col := _tool_color()
 	# Two-click gesture line (Ramp / Measure).
@@ -1471,6 +1539,14 @@ func _do_undo() -> void:
 		_set_status("Undid last water edit — re-carving…" if _water_tools.undo() else "Nothing to undo")
 		_update_undo_button()
 		return
+	if _is_route_section():
+		_set_status("Undid the last run edit" if _route_tools.undo() else "Nothing to undo")
+		_update_undo_button()
+		return
+	if _state.active_tool == "terrace":
+		_set_status("Undid the last terrace change" if _terrace_tools.undo() else "Nothing to undo")
+		_update_undo_button()
+		return
 	if _is_veg_tool():
 		if _loader.has_method("undo_vegetation") and bool(_loader.call("undo_vegetation")):
 			_picked_plant = {}
@@ -1505,6 +1581,11 @@ func _update_undo_button() -> void:
 	var can := false
 	if _is_water_section():
 		can = _water_tools.can_undo()
+	elif _is_route_section():
+		can = _route_tools.can_undo()
+	elif _state.active_tool == "terrace":
+		var rt: Variant = _loader.call("terraces") if _loader.has_method("terraces") else null
+		can = rt != null and bool(rt.call("can_undo"))
 	elif _is_veg_tool():
 		can = _loader.has_method("can_undo_vegetation") \
 				and bool(_loader.call("can_undo_vegetation"))

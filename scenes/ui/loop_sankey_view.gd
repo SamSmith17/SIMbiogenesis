@@ -25,6 +25,11 @@ var _fitted := false
 var _drag := false
 var _clock := 0.0
 var _last_hover := ""
+## The Column / Torus chips in the top right corner: [[rect, shape id]].
+var _shape_chips: Array = []
+## Off for an embedder that wants one fixed shape.
+var show_shape_chips := true
+var _last_input: Array = []
 
 
 func _ready() -> void:
@@ -39,11 +44,41 @@ func set_input(input: Dictionary, fmt_fn: Callable, color_fn: Callable, name_fn:
 	fmt = fmt_fn
 	color_of = color_fn
 	name_of = name_fn
+	_last_input = [input, fmt_fn, color_fn, name_fn]
 	var sig := var_to_str([input.get("nodes", []), input.get("edges", []), input.get("bin", []), input.get("bout", [])]).md5_text()
 	lens.set_input(sig, input)
 	lens.advance(10.0)
 	_fitted = false
 	queue_redraw()
+
+
+## "column" or "torus" (ToroidFlowLayout). Call before set_input.
+func set_shape(sh: String) -> void:
+	lens.set_shape(sh)
+	if _last_input.size() == 4:
+		set_input(_last_input[0], _last_input[1], _last_input[2], _last_input[3])
+	_fitted = false
+	queue_redraw()
+
+
+func _draw_shape_chips() -> void:
+	_shape_chips.clear()
+	if not show_shape_chips:
+		return
+	var f := UITheme.font("medium", true)
+	var x := size.x - 10.0
+	for i in range(GraphFlowLens.SHAPES.size() - 1, -1, -1):
+		var item: Array = GraphFlowLens.SHAPES[i]
+		var on := str(item[0]) == lens.shape
+		var w := f.get_string_size(str(item[1]), HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x + 16.0
+		var r := Rect2(Vector2(x - w, 8.0), Vector2(w, 20.0))
+		var c := Color(0.98, 0.74, 0.26)
+		GraphFastDraw.rrect(self, r, 6.0, Color(c, 0.30 if on else 0.10))
+		draw_rect(r, Color(c, 0.85 if on else 0.3), false, 1.0)
+		draw_string(f, Vector2(r.position.x + 8.0, r.position.y + 14.0), str(item[1]),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.94, 0.96, 0.99) if on else Color(0.70, 0.76, 0.84))
+		_shape_chips.append([r, str(item[0])])
+		x -= w + 6.0
 
 
 func has_picture() -> bool:
@@ -84,6 +119,7 @@ func _draw() -> void:
 		"color_of": color_of, "name_of": name_of, "fmt": fmt,
 		"node_color": func(_id: String) -> Color: return Color(0.55, 0.65, 0.85),
 	})
+	_draw_shape_chips()
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -98,6 +134,12 @@ func _gui_input(event: InputEvent) -> void:
 			queue_redraw()
 			accept_event()
 		elif mb.button_index == MOUSE_BUTTON_LEFT:
+			if mb.pressed:
+				for ch in _shape_chips:
+					if (ch[0] as Rect2).has_point(mb.position):
+						set_shape(str(ch[1]))
+						accept_event()
+						return
 			if mb.pressed and mb.double_click:
 				_fitted = false
 				queue_redraw()

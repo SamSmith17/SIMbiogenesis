@@ -83,6 +83,10 @@ static func clamped_corner_card(panel: Control, desired: Vector2,
 	panel.offset_right = -SIDE_MARGIN
 	panel.offset_bottom = -stack_clearance
 	panel.offset_top = -(stack_clearance + h)
+	# Content wider or taller than asked for grows INTO the screen (a debrief
+	# with two long buttons used to hang 12 px off the right edge).
+	panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	panel.custom_minimum_size = Vector2(w, h)
 
 

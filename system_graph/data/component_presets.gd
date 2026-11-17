@@ -1637,6 +1637,36 @@ const SHELLY4PM: Array = [
 	},
 ]
 
+## Network nodes (ScadaNet): loads with data ports. A controller board's
+## readings are heard only while it has a live path to a server, once the
+## graph has a server at all.
+const NETWORK: Array = [
+	{
+		"type": "appliance", "label": "Home Assistant Server", "icon": "🖥",
+		"width": 200.0, "height": 128.0,
+		"specs": {"name": "Home Assistant Server", "net_role": "server", "avg_watts": 15.0,
+			"rated_watts": 15.0, "max_watts": 25.0, "requested_state": "on", "cost": 120.0},
+	},
+	{
+		"type": "appliance", "label": "Network Switch (5 port)", "icon": "🔀",
+		"width": 200.0, "height": 128.0,
+		"specs": {"name": "Network Switch", "net_role": "switch", "ports": 5, "avg_watts": 4.0,
+			"rated_watts": 4.0, "max_watts": 6.0, "requested_state": "on", "cost": 20.0},
+	},
+	{
+		"type": "appliance", "label": "Network Switch (8 port)", "icon": "🔀",
+		"width": 200.0, "height": 128.0,
+		"specs": {"name": "Network Switch 8", "net_role": "switch", "ports": 8, "avg_watts": 6.0,
+			"rated_watts": 6.0, "max_watts": 9.0, "requested_state": "on", "cost": 35.0},
+	},
+	{
+		"type": "appliance", "label": "Wi-Fi Access Point", "icon": "📶",
+		"width": 200.0, "height": 128.0,
+		"specs": {"name": "Wi-Fi Access Point", "net_role": "ap", "avg_watts": 8.0,
+			"rated_watts": 8.0, "max_watts": 12.0, "requested_state": "on", "cost": 60.0},
+	},
+]
+
 const SPIDERBOX: Array = [
 	{
 		"type": "spiderbox", "label": "Spiderbox 6-way", "icon": "🕷",
@@ -1658,6 +1688,21 @@ const SPIDERBOX: Array = [
 ]
 
 const BREAKER_PANELS: Array = [
+	{
+		"type": "acbreaker", "label": "Breaker 15 A (in line)", "icon": "🔌",
+		"width": 80.0, "height": 90.0,
+		"specs": {"name": "Breaker 15 A", "rating_a": 15.0, "volts": 120.0, "closed": true, "tripped": false, "cost": 8.0},
+	},
+	{
+		"type": "acbreaker", "label": "Breaker 20 A (in line)", "icon": "🔌",
+		"width": 80.0, "height": 90.0,
+		"specs": {"name": "Breaker 20 A", "rating_a": 20.0, "volts": 120.0, "closed": true, "tripped": false, "cost": 9.0},
+	},
+	{
+		"type": "acbreaker", "label": "Fuse 10 A (in line)", "icon": "🔌",
+		"width": 80.0, "height": 90.0,
+		"specs": {"name": "Fuse 10 A", "rating_a": 10.0, "volts": 120.0, "closed": true, "tripped": false, "fuse": true, "cost": 2.0},
+	},
 	{
 		"type": "breaker_panel", "label": "Breaker Panel 4-ckt", "icon": "🔌",
 		"width": 170.0, "height": 150.0,
@@ -2785,6 +2830,101 @@ static func _def_starshade() -> Dictionary:
 
 
 # ---------------------------------------------------------------------------
+# Process control: valves and pumps that stand IN LINE between two stores
+# (FlowCtl, system_graph/data/flow_ctl.gd). rate = max_rate × open; a valve
+# flows downhill only; a pump needs AC and lifts up to max_lift_m. Rates are
+# typical product figures (a 1 in ball valve on a gravity line, a 12 V
+# transfer pump, a peristaltic dosing pump, a 1/3 hp sump pump): estimates.
+# ---------------------------------------------------------------------------
+const FLOW_CONTROLS: Array = [
+	{
+		"type": "processor", "label": "Ball Valve", "icon": "🚰",
+		"width": 130.0, "height": 110.0,
+		"specs": {
+			"name": "Ball Valve", "role": "flowctl", "ctl_kind": "valve", "ctl_resource": "water",
+			"max_rate": 1200.0, "open": 1.0, "requested_state": "on", "efficiency": 1.0,
+			"unit_ops": [],
+			"watts": 0.0, "energy_source": "", "throttle": false, "cost": 18.0,
+			"inputs": [{"kind": "water", "rate": 1200.0, "unit": "L/h"}],
+			"outputs": [{"kind": "water", "rate": 1200.0, "unit": "L/h"}],
+		},
+	},
+	{
+		"type": "processor", "label": "Control Valve", "icon": "🎚",
+		"width": 130.0, "height": 110.0,
+		"specs": {
+			"name": "Control Valve", "role": "flowctl", "ctl_kind": "valve", "ctl_resource": "water",
+			"max_rate": 1200.0, "open": 1.0, "requested_state": "on", "efficiency": 1.0,
+			"unit_ops": [],
+			"watts": 0.0, "energy_source": "", "throttle": true, "cost": 140.0,
+			"inputs": [{"kind": "water", "rate": 1200.0, "unit": "L/h"}],
+			"outputs": [{"kind": "water", "rate": 1200.0, "unit": "L/h"}],
+		},
+	},
+	{
+		"type": "processor", "label": "Check Valve", "icon": "➡",
+		"width": 130.0, "height": 110.0,
+		"specs": {
+			"name": "Check Valve", "role": "flowctl", "ctl_kind": "check", "ctl_resource": "water",
+			"max_rate": 1200.0, "open": 1.0, "requested_state": "on", "efficiency": 1.0,
+			"unit_ops": [],
+			"watts": 0.0, "energy_source": "", "throttle": false, "cost": 14.0,
+			"inputs": [{"kind": "water", "rate": 1200.0, "unit": "L/h"}],
+			"outputs": [{"kind": "water", "rate": 1200.0, "unit": "L/h"}],
+		},
+	},
+	{
+		"type": "processor", "label": "Transfer Pump", "icon": "⛽",
+		"width": 130.0, "height": 110.0,
+		"specs": {
+			"name": "Transfer Pump", "role": "flowctl", "ctl_kind": "pump", "ctl_resource": "water",
+			"max_rate": 900.0, "open": 1.0, "requested_state": "on", "efficiency": 1.0,
+			"unit_ops": [],
+			"watts": 120.0, "energy_source": "ac", "max_lift_m": 12.0, "throttle": false, "cost": 95.0,
+			"inputs": [{"kind": "water", "rate": 900.0, "unit": "L/h"}],
+			"outputs": [{"kind": "water", "rate": 900.0, "unit": "L/h"}],
+		},
+	},
+	{
+		"type": "processor", "label": "Dosing Pump", "icon": "💉",
+		"width": 130.0, "height": 110.0,
+		"specs": {
+			"name": "Dosing Pump", "role": "flowctl", "ctl_kind": "pump", "ctl_resource": "water",
+			"max_rate": 6.0, "open": 1.0, "requested_state": "on", "efficiency": 1.0,
+			"unit_ops": [],
+			"watts": 15.0, "energy_source": "ac", "max_lift_m": 5.0, "throttle": false, "cost": 60.0,
+			"inputs": [{"kind": "water", "rate": 6.0, "unit": "L/h"}],
+			"outputs": [{"kind": "water", "rate": 6.0, "unit": "L/h"}],
+		},
+	},
+	{
+		"type": "processor", "label": "Sump Pump (greywater)", "icon": "🌀",
+		"width": 130.0, "height": 110.0,
+		"specs": {
+			"name": "Sump Pump (greywater)", "role": "flowctl", "ctl_kind": "pump", "ctl_resource": "greywater",
+			"max_rate": 4000.0, "open": 1.0, "requested_state": "on", "efficiency": 1.0,
+			"unit_ops": [],
+			"watts": 250.0, "energy_source": "ac", "max_lift_m": 6.0, "throttle": false, "cost": 130.0,
+			"inputs": [{"kind": "greywater", "rate": 4000.0, "unit": "L/h"}],
+			"outputs": [{"kind": "greywater", "rate": 4000.0, "unit": "L/h"}],
+		},
+	},
+	{
+		"type": "processor", "label": "Greywater Valve", "icon": "🚰",
+		"width": 130.0, "height": 110.0,
+		"specs": {
+			"name": "Greywater Valve", "role": "flowctl", "ctl_kind": "valve", "ctl_resource": "greywater",
+			"max_rate": 1200.0, "open": 1.0, "requested_state": "on", "efficiency": 1.0,
+			"unit_ops": [],
+			"watts": 0.0, "energy_source": "", "throttle": false, "cost": 18.0,
+			"inputs": [{"kind": "greywater", "rate": 1200.0, "unit": "L/h"}],
+			"outputs": [{"kind": "greywater", "rate": 1200.0, "unit": "L/h"}],
+		},
+	},
+]
+
+
+# ---------------------------------------------------------------------------
 # Category list consumed by LibraryPanel to build the UI
 # ---------------------------------------------------------------------------
 const CATEGORIES: Array = [
@@ -2800,6 +2940,8 @@ const CATEGORIES: Array = [
 	{ "id": "habitats",    "label": "Population",             "icon": "🏠", "presets": HABITATS    },
 	{ "id": "processors",  "label": "Processors",           "icon": "🌀", "presets": PROCESSORS  },
 	{ "id": "csp",         "label": "Solar Concentrators",  "icon": "🛰", "presets": CSP_CONCENTRATORS },
+	{ "id": "process_control", "label": "Valves & Pumps",   "icon": "🚰", "presets": FLOW_CONTROLS },
+	{ "id": "network",     "label": "Network",              "icon": "🔀", "presets": NETWORK },
 	{ "id": "tools",       "label": "Tools",                "icon": "🛠", "presets": TOOLS },
 	{ "id": "resources",   "label": "Resource Containers",  "icon": "🪣", "presets": RESOURCES   },
 	{ "id": "catchments",  "label": "Rain Catchment",       "icon": "🌧", "presets": CATCHMENTS  },

@@ -44,6 +44,37 @@ func record(abs_h: float, values: Dictionary) -> void:
 	_prune()
 
 
+## Add what wires carried between the previous `record` and `abs_h`, as
+## QUANTITIES ({conn id: [quantity, key]}, the flow engine's own ledger):
+## spread evenly over that time. Call it BEFORE `record(abs_h, ...)`, and
+## leave those wires out of the sampled values, or they count twice.
+func add_quantities(abs_h: float, totals: Dictionary) -> void:
+	if is_nan(abs_h) or is_nan(_prev_h) or totals.is_empty():
+		return
+	var dt := abs_h - _prev_h
+	if dt <= 1e-9 or dt > JUMP_H:
+		return
+	var t := _prev_h
+	while t < abs_h - 1e-12:
+		var bi := int(floor(t / BIN_H))
+		var t2 := minf(float(bi + 1) * BIN_H, abs_h)
+		var share := (t2 - t) / dt
+		var b: Dictionary = bins.get(bi, {})
+		if b.is_empty():
+			b = {"hours": 0.0, "w": {}}
+			bins[bi] = b
+		var w: Dictionary = b["w"]
+		for cid in totals:
+			var q: Array = totals[cid]
+			if float(q[0]) <= 0.0:
+				continue
+			var cur: Array = w.get(cid, [0.0, str(q[1]), 0.0])
+			cur[0] = float(cur[0]) + float(q[0]) * share
+			cur[2] = maxf(float(cur[2]), float(q[0]) / dt)
+			w[cid] = cur
+		t = t2
+
+
 func _credit(h0: float, h1: float, vals: Dictionary) -> void:
 	var t := h0
 	while t < h1 - 1e-12:

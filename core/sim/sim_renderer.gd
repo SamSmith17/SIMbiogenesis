@@ -164,6 +164,8 @@ func start(end_abs: float) -> Dictionary:
 	_npc_snapshot = (_bridge.call("snapshot_all", _start_abs) as Dictionary) if _bridge != null else {}
 	_flow_snapshot = _flow.call("internal_state_snapshot") if _flow.has_method("internal_state_snapshot") else {}
 	_camp_snapshot = _gv.call("camp_power_state_snapshot") if _gv.has_method("camp_power_state_snapshot") else {}
+	if _gv.has_method("scada_logic_render_begin"):
+		_gv.call("scada_logic_render_begin", _start_abs)
 	_battery_kwh = float(_solar.call("get_battery_kwh_stored"))
 
 	# The caches start at the playhead: whatever was ahead is superseded. The
@@ -255,6 +257,8 @@ func _finish(completed: bool) -> void:
 		_bridge.call("restore_all", _npc_snapshot)
 	if _gv.has_method("restore_camp_power_state"):
 		_gv.call("restore_camp_power_state", _camp_snapshot)
+	if _gv.has_method("scada_logic_render_end"):
+		_gv.call("scada_logic_render_end")
 	_gv.call("_end_sim_writes")
 	if _gv.has_method("_flush_sim_bulk_update"):
 		_gv.call("_flush_sim_bulk_update", true)

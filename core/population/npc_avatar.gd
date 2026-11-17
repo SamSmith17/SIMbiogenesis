@@ -652,6 +652,7 @@ func _drive(dt: float, inp: Dictionary) -> void:
 		_simple.on_seat = _on_seat
 	_carry_prop_live = bool(inp.get("carry_prop_live", false))
 	_carry_heavy = bool(inp.get("carry_heavy", false))
+	_update_work_tool(str(inp.get("work_tool", "")) if not _moving else "")
 	if _machine == null:
 		_lying = _activity == "sleep"
 		return
@@ -678,6 +679,37 @@ func _drive(dt: float, inp: Dictionary) -> void:
 		_refresh_speed_scale(NpcPoseMachine._clip_file_for(
 			_clip if _rigged else _machine.clip()))
 	_update_carry_box()
+
+
+## The tool in a worker's hand (a hoe, a sickle, a shovel: FabToolCatalog),
+## on the stick figure only. Re-checked every step; built once per change.
+var _tool_id := ""
+var _tool_node: Node3D = null
+var _tool_body: NpcSimpleFigure = null
+
+
+func _update_work_tool(id: String) -> void:
+	if _simple == null or _rigged:
+		id = ""
+	if id == _tool_id and _tool_body == _simple and (id.is_empty() or is_instance_valid(_tool_node)):
+		return
+	if _tool_node != null and is_instance_valid(_tool_node):
+		if _tool_body != null and is_instance_valid(_tool_body):
+			_tool_body.detach_tool(0)
+		_tool_node.queue_free()
+	_tool_node = null
+	_tool_id = id
+	_tool_body = _simple
+	if id.is_empty() or _simple == null:
+		return
+	_tool_node = FabToolCatalog.build(id)
+	if _tool_node != null:
+		_simple.attach_tool(0, _tool_node)
+
+
+## The tool in hand right now ("" none), for probes.
+func work_tool() -> String:
+	return _tool_id if _tool_node != null else ""
 
 
 ## Rigged-body carried-crate visual. Re-derived from current state every step

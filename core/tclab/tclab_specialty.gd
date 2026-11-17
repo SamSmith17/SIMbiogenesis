@@ -277,6 +277,158 @@ static func diaphragm_valve(g: TcGeom, size: String, manual: bool) -> Dictionary
 		"volume_l": TcParts._bore_l_per_mm(size) * L}
 
 
+## A throttling valve with a positioner on top (no hand wheel): the diaphragm
+## valve's body, a yoke and the positioner's box. Its opening is the
+## process's to set (TcFlowPaths "cvalve").
+static func control_valve(g: TcGeom, size: String) -> Dictionary:
+	var r := diaphragm_valve(g, size, false)
+	var t := TcStandards.tube(size)
+	var rf := float(t["r_flange"])
+	var hub := float(TcStandards.ferrule(size)["hub"])
+	var L := hub * 2.0 + rf * 2.2
+	var top := float(t["r_out"]) * 1.3 + rf * 0.9
+	g.cylinder(STEEL, Vector3(0, top, L * 0.5), Vector3(0, top + rf * 1.1, L * 0.5), rf * 0.16, 12)
+	g.lathe("dark", _ring(0.0, rf * 0.85, 0.0, rf * 0.55), TcGeom.frame_along(Vector3(0, top + rf * 1.1, L * 0.5), Vector3.UP), 24)
+	g.box("handle", Transform3D(Basis.IDENTITY, Vector3(rf * 0.75, top + rf * 0.7, L * 0.5)), Vector3(rf * 0.3, rf * 0.42, rf * 0.34))
+	# No stem to mount an actuator on: it has its own.
+	var ports: Array = []
+	for p in r["ports"]:
+		if str(p["id"]) != "stem":
+			ports.append(p)
+	r["ports"] = ports
+	(r["capsules"] as Array).append([Vector3(0, top, L * 0.5), Vector3(0, top + rf * 1.6, L * 0.5), rf * 0.85])
+	r["mass_kg"] = float(r["mass_kg"]) + 1.2
+	return r
+
+
+## A normally-closed on / off valve: the diaphragm body with a coil on top.
+static func solenoid_valve(g: TcGeom, size: String) -> Dictionary:
+	var r := diaphragm_valve(g, size, false)
+	var t := TcStandards.tube(size)
+	var rf := float(t["r_flange"])
+	var hub := float(TcStandards.ferrule(size)["hub"])
+	var L := hub * 2.0 + rf * 2.2
+	var top := float(t["r_out"]) * 1.3 + rf * 0.9
+	g.box("dark", Transform3D(Basis.IDENTITY, Vector3(0, top + rf * 0.6, L * 0.5)), Vector3(rf * 0.55, rf * 0.6, rf * 0.55))
+	g.box("handle", Transform3D(Basis.IDENTITY, Vector3(rf * 0.7, top + rf * 0.6, L * 0.5)), Vector3(rf * 0.18, rf * 0.25, rf * 0.25))
+	var ports: Array = []
+	for p in r["ports"]:
+		if str(p["id"]) != "stem":
+			ports.append(p)
+	r["ports"] = ports
+	(r["capsules"] as Array).append([Vector3(0, top, L * 0.5), Vector3(0, top + rf * 1.2, L * 0.5), rf * 0.7])
+	r["mass_kg"] = float(r["mass_kg"]) + 0.6
+	return r
+
+
+## A level transmitter (a head on a short stem) or a level switch (a smaller
+## head with a fork into the vessel).
+static func transmitter(g: TcGeom, size: String, mount: String, npt: String, is_switch: bool) -> Dictionary:
+	var m := _mount(g, size, mount, npt)
+	var top: float = m[1]
+	var h := 26.0 if is_switch else 40.0
+	g.cylinder(STEEL, Vector3(0, 0, top), Vector3(0, 0, top + 18.0), 7.0, 12)
+	g.cylinder("dark", Vector3(0, 0, top + 18.0), Vector3(0, 0, top + 18.0 + h), 20.0 if is_switch else 27.0, 20)
+	g.box("handle", Transform3D(Basis.IDENTITY, Vector3(24.0 if is_switch else 31.0, 0, top + 18.0 + h * 0.5)), Vector3(5.0, 6.0, 6.0))
+	if is_switch:
+		g.box(STEEL, Transform3D(Basis.IDENTITY, Vector3(3.5, 0, -22.0)), Vector3(1.2, 4.0, 22.0))
+		g.box(STEEL, Transform3D(Basis.IDENTITY, Vector3(-3.5, 0, -22.0)), Vector3(1.2, 4.0, 22.0))
+	else:
+		g.cylinder(STEEL, Vector3(0, 0, 0.5), Vector3(0, 0, -30.0), 5.0, 10)
+	return {"ports": [m[0]], "capsules": [[Vector3(0, 0, top), Vector3(0, 0, top + 18.0 + h), 27.0]],
+		"mass_kg": 0.3 if is_switch else 0.5, "volume_l": 0.0}
+
+
+## An in-line flow meter: a spool with a display head.
+static func flow_meter(g: TcGeom, size: String, L: float) -> Dictionary:
+	var t := TcStandards.tube(size)
+	var rf := float(t["r_flange"])
+	var e := _ends(g, size, L)
+	var hub: float = e[2]
+	g.tube_body(Transform3D.IDENTITY, size, hub, L - hub)
+	var ro := float(t["r_out"])
+	g.cylinder("dark", Vector3(0, 0, L * 0.5 - 16.0), Vector3(0, 0, L * 0.5 + 16.0), ro + 6.0, 20)
+	g.cylinder(STEEL, Vector3(0, ro + 4.0, L * 0.5), Vector3(0, ro + 30.0, L * 0.5), 6.0, 10)
+	g.box("dark", Transform3D(Basis.IDENTITY, Vector3(0, ro + 46.0, L * 0.5)), Vector3(26.0, 18.0, 14.0))
+	g.box("dial", Transform3D(Basis.IDENTITY, Vector3(0, ro + 46.0, L * 0.5 + 14.4)), Vector3(20.0, 12.0, 0.6))
+	return {"ports": [e[0], e[1]], "capsules": [[Vector3.ZERO, Vector3(0, 0, L), rf], [Vector3(0, ro, L * 0.5), Vector3(0, ro + 60.0, L * 0.5), 26.0]],
+		"mass_kg": 1.2 + TcParts._tube_kg_per_mm(size) * L + TcParts._flange_kg(size) * 2.0, "volume_l": TcParts._bore_l_per_mm(size) * L}
+
+
+## A brazed plate heat exchanger in the line: process side a → b, the service
+## water on two ½" FNPT bosses (w1, w2), the dephlegmator's own port names.
+static func plate_exchanger(g: TcGeom, size: String, plates: float) -> Dictionary:
+	var t := TcStandards.tube(size)
+	var rf := float(t["r_flange"])
+	var pack := maxf(plates, 6.0) * 2.4 + 12.0
+	var e_hub := float(TcStandards.ferrule(size)["hub"])
+	var L := e_hub * 2.0 + pack + 40.0
+	var e := _ends(g, size, L)
+	g.tube_body(Transform3D.IDENTITY, size, e_hub, L - e_hub)
+	var hw := maxf(rf * 1.5, 38.0)     # half width
+	var hh := hw * 2.4                 # half height
+	var c := Vector3(0, hh * 0.45, L * 0.5)
+	g.box(STEEL, Transform3D(Basis.IDENTITY, c), Vector3(hw, hh, pack * 0.5))
+	g.box("dark", Transform3D(Basis.IDENTITY, c + Vector3(0, 0, pack * 0.5 + 3.0)), Vector3(hw + 4.0, hh + 4.0, 3.0))
+	g.box("dark", Transform3D(Basis.IDENTITY, c - Vector3(0, 0, pack * 0.5 + 3.0)), Vector3(hw + 4.0, hh + 4.0, 3.0))
+	var ports: Array = [e[0], e[1]]
+	var bod := TcStandards.npt_od("0.5")
+	var boss := bod * 0.5 + 4.0
+	for sp in [["w1", L * 0.5 - pack * 0.25], ["w2", L * 0.5 + pack * 0.25]]:
+		var z := float(sp[1])
+		var base := Vector3(hw - 2.0, c.y + hh * 0.6, z)
+		var face := Vector3(hw + 14.0, c.y + hh * 0.6, z)
+		g.lathe(STEEL, _ring(bod * 0.5 * 0.8, boss, 0.0, face.x - base.x), TcGeom.frame_along(base, Vector3.RIGHT), TcGeom.segs_for(boss))
+		ports.append(_p(str(sp[0]), "npt_f", "0.5", face, Vector3.RIGHT, Vector3(0, 0, 1)))
+	return {"ports": ports, "capsules": [[Vector3.ZERO, Vector3(0, 0, L), rf], [c - Vector3(0, hh * 0.6, 0), c + Vector3(0, hh * 0.6, 0), hw * 1.1]],
+		"mass_kg": 1.5 + plates * 0.12 + TcParts._flange_kg(size) * 2.0, "volume_l": TcParts._bore_l_per_mm(size) * L + plates * 0.02,
+		"jacket_l": plates * 0.02, "area_m2": plates * 0.03}
+
+
+## A top-entry agitator: gearmotor above the clamp, a shaft and a paddle
+## below it (into the vessel).
+static func agitator(g: TcGeom, size: String, shaft: float) -> Dictionary:
+	var m := _mount(g, size, "tc", "0.5")
+	var top: float = m[1]
+	g.cylinder(STEEL, Vector3(0, 0, top), Vector3(0, 0, top + 30.0), 16.0, 16)
+	g.cylinder("dark", Vector3(0, 0, top + 30.0), Vector3(0, 0, top + 150.0), 42.0, 24)
+	g.cylinder("handle", Vector3(0, 0, top + 150.0), Vector3(0, 0, top + 168.0), 44.0, 24)
+	g.cylinder(STEEL, Vector3(0, 0, 0.5), Vector3(0, 0, -shaft), 6.0, 10)
+	g.box(STEEL, Transform3D(Basis.IDENTITY, Vector3(0, 0, -shaft + 12.0)), Vector3(55.0, 2.0, 12.0))
+	g.box(STEEL, Transform3D(Basis.IDENTITY, Vector3(0, 0, -shaft * 0.55)), Vector3(2.0, 45.0, 10.0))
+	return {"ports": [m[0]], "capsules": [[Vector3(0, 0, top), Vector3(0, 0, top + 168.0), 44.0]],
+		"mass_kg": 6.0 + shaft * 0.001, "volume_l": 0.0}
+
+
+## An in-line pump: suction a, discharge b along the run, the pump head a
+## drum across the line, its motor standing up from it. A positive-
+## displacement pump is drawn with a boxed gear end.
+static func pump(g: TcGeom, size: String, kind: String) -> Dictionary:
+	var t := TcStandards.tube(size)
+	var rf := float(t["r_flange"])
+	var hub := float(TcStandards.ferrule(size)["hub"])
+	var rv := maxf(rf * 1.5, 38.0)
+	var L := hub * 2.0 + rv * 2.0 + 12.0
+	var e := _ends(g, size, L)
+	g.tube_body(Transform3D.IDENTITY, size, hub, L - hub)
+	var c := Vector3(0, 0, L * 0.5)
+	if kind == "positive":
+		g.box(STEEL, Transform3D(Basis.IDENTITY, c), Vector3(rv * 0.75, rv * 0.8, rv * 0.9))
+	else:
+		g.cylinder(STEEL, c + Vector3(-rv * 0.5, 0, 0), c + Vector3(rv * 0.5, 0, 0), rv, 28)
+	# The motor, up from the head, with its fan cowl and a terminal box.
+	var m0 := c + Vector3(0, rv * 0.7, 0)
+	var m1 := c + Vector3(0, rv * 0.7 + rv * 2.4, 0)
+	g.cylinder("dark", m0, m1, rv * 0.72, 24)
+	g.cylinder("handle", m1, m1 + Vector3(0, rv * 0.35, 0), rv * 0.76, 24)
+	g.box("dark", Transform3D(Basis.IDENTITY, c + Vector3(rv * 0.85, rv * 1.8, 0)), Vector3(rv * 0.22, rv * 0.3, rv * 0.3))
+	# A flow arrow on the discharge side.
+	g.box("handle", Transform3D(Basis.IDENTITY, Vector3(0, float(t["r_out"]) + 1.0, L - hub - 6.0)), Vector3(2.0, 0.8, 7.0))
+	return {"ports": [e[0], e[1]], "capsules": [[Vector3.ZERO, Vector3(0, 0, L), rf], [c, m1 + Vector3(0, rv * 0.35, 0), rv]],
+		"mass_kg": 4.0 + TcParts._flange_kg(size) * 2.0 + PI * rv * rv * rv * 2.4 * 2.2e-6,
+		"volume_l": TcParts._bore_l_per_mm(size) * L}
+
+
 ## Pressure relief valve on a clamp face: spring body up the axis, a ½"
 ## FNPT outlet on the side.
 static func relief_valve(g: TcGeom, size: String) -> Dictionary:

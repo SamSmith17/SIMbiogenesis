@@ -32,6 +32,9 @@ extends RefCounted
 
 var model: GraphModel = null
 var automations: AutomationSim = null
+## The site's control logic (ScadaLogic), run on this copy. Every version
+## runs the WORLD's blocks (a fork stores a graph, not its own logic).
+var logic: ScadaLogicRun = null
 var solar_ui: Node = null
 var observed: ExperimentSeries = null
 var load_mode := ExperimentEvaluator.LOAD_MODEL
@@ -82,6 +85,12 @@ static func from_graph(graph_data: Dictionary, su: Node, clock: Object) -> Exper
 	w._normalize_loads()
 	w._snapshot_resources()
 	w.automations = AutomationSim.from_model(w.model)
+	var gvn: Node = su.get_parent().get_node_or_null("SystemGraphView") if su != null and su.get_parent() != null else null
+	var hb: Node = gvn.call("scada_hub") if gvn != null and gvn.has_method("scada_hub") else null
+	if hb != null and hb.has_method("logic_data"):
+		var run := ScadaLogicRun.from_data(hb.call("logic_data"))
+		if not run.is_empty():
+			w.logic = run
 	if su != null:
 		var sa: Variant = su.get("current_aux_generation_kw")
 		w._scene_aux = maxf(float(sa), 0.0) if sa != null else 0.0
@@ -228,6 +237,11 @@ func before_step(t: float, soc_kwh: float, ac_on: bool) -> void:
 		var ctx := {"numeric": numeric, "states": _node_states, "sun": sun_times(t),
 			"weekday": weekday(t)}
 		automations.step(t0, t, ctx, apply_command)
+	if logic != null:
+		var extra := {"sensor.battery_level": 100.0 * soc_kwh / maxf(_cap, 1e-6),
+			"sensor.solar_power": _last_solar_kw * 1000.0, "sensor.load_power": _last_load_kw * 1000.0}
+		if logic.step(model, t, extra, apply_command) > 0:
+			_load_dirty = true
 	_last_t = t
 
 

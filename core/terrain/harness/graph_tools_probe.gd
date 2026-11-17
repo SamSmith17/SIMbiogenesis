@@ -191,7 +191,8 @@ func _click_canvas(canvas: Control, p: Vector2) -> void:
 
 
 ## The Globe's Connect tool with REAL clicks: a pin, a bend on the ground, the
-## other pin -> a 3D run with the bend locked as its route, measured.
+## other pin -> a 3D run through the bend (the solver's via, or a locked
+## route for kinds it does not take), measured.
 func _test_globe_connect(gv: Node) -> void:
 	gv.call("open_graph_view")
 	gv.call("_on_mode_chip_pressed", "globe")
@@ -284,8 +285,11 @@ func _test_globe_connect(gv: Node) -> void:
 		n0, model.connections.size()])
 	_check(model.connections.size() == n0 + 1, "clicking the other pin makes one connection")
 	var conn: Dictionary = model.connections[model.connections.size() - 1] if model.connections.size() > n0 else {}
+	# A run the solver takes keeps the bend as a point it passes through
+	# (route_solver "v2"); a penstock or culvert keeps it as its exact path.
 	_check(conn.get("visible_3d") == true and (conn.get("route_3d", []) as Array).size() == 1
-		and bool(conn.get("route_locked", false)), "the run is shown in 3D with its bend locked as its route")
+		and (bool(conn.get("route_locked", false)) or str(conn.get("route_solver", "")) == "v2"),
+		"the run is shown in 3D with its bend kept on its route")
 	_check(float(conn.get("route_length_m", 0.0)) > 0.0,
 		"the run is built and measured (%s)" % ConduitLength.format(float(conn.get("route_length_m", 0.0))))
 	await _shot("globe_01_connected")

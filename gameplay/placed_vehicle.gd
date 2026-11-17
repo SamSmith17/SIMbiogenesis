@@ -68,6 +68,17 @@ const PROFILES := {
 		"yaw_deg": 182.22, "radius": 3.5, "battery_wh": 0.0, "wh_per_mile": 0.0,
 		"charge_w": 0.0, "chase_m": 5.5, "chase_h": 2.0,
 	},
+	# A compact tractor: ~25 km/h on the road, a 3 m turn; the model's front
+	# (the loader) is its +X.
+	"tractor": {
+		"display_name": "Tractor", "prompt": "Drive the tractor",
+		"speed_multiplier": 0.8, "max_speed": 6.9, "max_camera_tilt": 0.0,
+		"tilt_speed": 0.0, "camera_shake_intensity": 0.012, "camera_shake_speed": 9.0,
+		"min_shake_speed": 0.3, "camera_offset": Vector3(0.0, 0.75, 0.3), "is_golf_cart": true,
+		"use_cart_steering": true, "min_turn_radius": 3.0, "max_turn_rate": 55.0,
+		"yaw_deg": 90.0, "radius": 3.5, "battery_wh": 0.0, "wh_per_mile": 0.0,
+		"charge_w": 0.0, "chase_m": 7.0, "chase_h": 2.6,
+	},
 	# A school-bus conversion: 25 mph on site roads, a wide turn, the driver's
 	# seat up front on the left (the model's front is toward -Z).
 	"bus": {

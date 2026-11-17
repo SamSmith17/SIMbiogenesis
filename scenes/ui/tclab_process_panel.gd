@@ -19,6 +19,8 @@ const ChartScript := preload("res://scenes/ui/tclab_process_chart.gd")
 const ViewScript := preload("res://scenes/ui/tclab_process_view.gd")
 const CardEditor := preload("res://scenes/ui/automation_card_editor.gd")
 const LensScript := preload("res://scenes/ui/tclab_molecule_lens.gd")
+const MimicScript := preload("res://scenes/ui/scada/mimic_canvas.gd")
+const FaceScript := preload("res://scenes/ui/scada/faceplate.gd")
 const SAMPLE_S := 60.0
 const BUDGET_US := 6000
 const PRERUN_BUDGET_US := 12000   # a pre-run may take a bigger slice of the frame
@@ -88,6 +90,13 @@ var _use_after_prerun := false
 var _use_note: Label
 var _use_btn: Button
 var lens: Control = null             # the molecule lens (tclab_molecule_lens.gd), only while shown
+var mimic: Control = null            # the P&ID picture (scenes/ui/scada/mimic_canvas.gd), made on first use
+var pid_on := false
+var _pid_btn: Button
+var _mimic_doc: Dictionary = {}
+var _mimic_key := ""
+var _face: PanelContainer = null     # scenes/ui/scada/faceplate.gd
+var _face_el: Dictionary = {}
 var _lens_btn: CheckBox
 
 
@@ -127,6 +136,14 @@ func setup(m: Control, left_parent: Control, right_parent: Control, centre_paren
 		_view_btn.pressed.connect(func() -> void: (shell as DesignerShell).toggle_flyout("view"))
 	else:
 		centre_parent.add_child(view_bar)
+	_pid_btn = Button.new()
+	_pid_btn.name = "proc_pid"
+	_pid_btn.text = "P&ID"
+	_pid_btn.toggle_mode = true
+	_pid_btn.tooltip_text = "The process as a flat picture: pipes with what flows in them, the vessel's contents, valves and heaters you can click"
+	UITheme.style_button(_pid_btn)
+	_pid_btn.toggled.connect(set_pid)
+	transport.add_child(_pid_btn)
 	set_process(false)
 
 
@@ -151,6 +168,12 @@ func enter(d: Dictionary) -> void:
 
 func exit() -> void:
 	active = false
+	if mimic != null:
+		mimic.visible = false
+	pid_on = false
+	if _pid_btn != null:
+		_pid_btn.set_pressed_no_signal(false)
+	_hide_face()
 	playing = false
 	prerunning = false
 	left_box.visible = false
@@ -182,6 +205,7 @@ func design_changed(d: Dictionary) -> void:
 		_apply_tint()
 		_refresh_use()
 		_refresh_board_note()
+		_sync_mimic_doc()
 		return
 	design = d
 	proc = new_proc
@@ -205,6 +229,7 @@ func design_changed(d: Dictionary) -> void:
 		view.set("builder", modal.call("builder"))
 		view.set("pivot_cv", sel_cv)
 		view.call("rebuild", sim, d)
+	_sync_mimic_doc()
 	if lens != null:
 		lens.call("show_cv", sim, sel_cv if sel_cv >= 0 else sim.vessel_cv)
 	_refresh_all()
@@ -217,7 +242,7 @@ func _same_run(d: Dictionary, new_proc: Dictionary) -> bool:
 		return false
 	var a := proc.duplicate(true)
 	var b := new_proc.duplicate(true)
-	for k in ["recipe", "board"]:
+	for k in ["recipe", "board", "mimic"]:
 		a.erase(k)
 		b.erase(k)
 	return TcProcSpec.key_of(a) == TcProcSpec.key_of(b)
@@ -273,6 +298,9 @@ func readings() -> Dictionary:
 
 
 func select_cv(i: int) -> void:
+	if mimic != null:
+		mimic.set("selected_cv", i)
+		mimic.queue_redraw()
 	if view != null:
 		view.set("pivot_cv", i)
 	if lens != null and sim != null and i >= 0:
@@ -319,6 +347,7 @@ func _process(delta: float) -> void:
 	_chart_acc += delta
 	if _ui_acc >= 0.12:
 		_ui_acc = 0.0
+		_refresh_mimic()
 		_refresh_tiles()
 		_refresh_card()
 		if _control_box.visible:
@@ -334,6 +363,9 @@ func _process(delta: float) -> void:
 	(_chart as Object).call("set_playhead", sim.t_s / 3600.0)
 	if view != null:
 		view.call("update_view", delta, playing or prerunning, PRERUN_RATE if prerunning else speed)
+	if mimic != null and pid_on:
+		_place_mimic()
+		mimic.call("tick", delta, playing or prerunning, PRERUN_RATE if prerunning else speed)
 	if lens != null:
 		_place_lens()
 		lens.call("update_lens", delta, playing and not prerunning, speed)
@@ -472,7 +504,7 @@ func _scenario_note() -> String:
 	for u in sim.units:
 		if str(u["kind"]) in ["engine", "flare", "holder"]:
 			burners += 1
-	if outs == 0 and burners == 0:
+	if outs == 0 and burners == 0 and sim._breathers.is_empty():
 		bits.append("Nothing lets gas out: the vessel will pressurise. Label an outlet or fit a relief valve.")
 	elif outs == 0:
 		bits.append("The gas goes to the process units on the line (a holder, genset or flare).")
@@ -835,6 +867,14 @@ func _rebuild_control() -> void:
 	UiIcons.apply(ob, "cpu", "")
 	ob.pressed.connect(open_board)
 	box.add_child(ob)
+	var lgb := Button.new()
+	lgb.name = "proc_logic_btn"
+	lgb.text = "Control blocks…"
+	lgb.tooltip_text = "PID loops, on / off bands, interlocks, timers and sequences on this design's own sensors and switches. They run inside the model, every step."
+	UITheme.style_button(lgb)
+	UiIcons.apply(lgb, "workflow", "")
+	lgb.pressed.connect(func() -> void: open_logic())
+	box.add_child(lgb)
 	var yb := Button.new()
 	yb.name = "proc_ha_yaml"
 	yb.text = "Copy the rules for Home Assistant"
@@ -998,6 +1038,48 @@ func _manual(key: String, cmd: String, v: float) -> void:
 	_next_sample = sim.t_s + SAMPLE_S
 	_refresh_events()
 	_refresh_control()
+
+
+## Everything past now describes a run without the change just made.
+func cut_run_here(text: String = "") -> void:
+	if sim == null:
+		return
+	if not text.is_empty():
+		sim.events.append({"t_s": sim.t_s, "id": "manual", "text": text})
+	var keep: Array = []
+	for k in sim.keyframes:
+		if float(k["t_s"]) <= sim.t_s + 1e-6:
+			keep.append(k)
+	sim.keyframes = keep
+	sim._next_key = (floor(sim.t_s / TcProcSim.KEYFRAME_S) + 1.0) * TcProcSim.KEYFRAME_S
+	done_s = sim.t_s
+	run_events = sim.events.duplicate(true)
+	var hk: Array = []
+	for h in history:
+		if float(h["t_h"]) * 3600.0 <= sim.t_s + 1e-6:
+			hk.append(h)
+	history = hk
+	_next_sample = sim.t_s + SAMPLE_S
+	_refresh_events()
+
+
+var _logic_host: Node = null
+
+
+## The control logic window on this design (scenes/ui/scada/logic_editor.gd
+## over a TcLogicHost). → the window.
+func open_logic(select_id: String = "") -> Node:
+	if _logic_host == null or not is_instance_valid(_logic_host):
+		_logic_host = Node.new()
+		_logic_host.set_script(load("res://scenes/ui/scada/tc_logic_host.gd"))
+		add_child(_logic_host)
+		_logic_host.call("setup", self)
+	_logic_host.call("refresh")
+	var ed := Node.new()
+	ed.set_script(load("res://scenes/ui/scada/logic_editor.gd"))
+	_logic_host.add_child(ed)
+	ed.call("open", _logic_host, _logic_host, select_id)
+	return ed
 
 
 ## Drop a probe of the chosen kind on the selected volume.
@@ -1178,6 +1260,213 @@ func _build_view_bar() -> void:
 	_lens_btn.tooltip_text = "A worked example of the main reaction in the selected volume, drawn molecule by molecule: what goes in, which bonds break, what comes out"
 	_lens_btn.toggled.connect(set_lens)
 	view_bar.add_child(_lens_btn)
+
+
+# ---------------------------------------------------------------------------
+# P&ID: the process as a flat picture (scenes/ui/scada/mimic_canvas.gd)
+# ---------------------------------------------------------------------------
+
+## The P&ID view on / off. It stands over the 3D studio (same transport,
+## same selection, same switches); the 3D view carries on underneath.
+func set_pid(on: bool) -> void:
+	pid_on = on and active
+	if _pid_btn != null:
+		_pid_btn.set_pressed_no_signal(pid_on)
+	if pid_on and mimic == null:
+		mimic = Control.new()
+		mimic.set_script(MimicScript)
+		mimic.name = "ProcessMimic"
+		mimic.top_level = true
+		mimic.z_index = 2
+		modal.add_child(mimic)
+		mimic.connect("element_clicked", _on_mimic_element)
+		mimic.connect("pipe_clicked", func(p: Dictionary) -> void:
+			_hide_face()
+			select_cv(int(p["cv"])))
+		mimic.connect("empty_clicked", _hide_face)
+		mimic.connect("element_moved", _on_mimic_moved)
+		_mimic_key = ""
+	if mimic != null:
+		mimic.visible = pid_on
+	if pid_on:
+		_place_mimic()
+		_sync_mimic_doc()
+		_refresh_mimic()
+		mimic.set("selected_cv", sel_cv)
+	else:
+		_hide_face()
+
+
+func _place_mimic() -> void:
+	var st: StudioViewport = modal.call("studio")
+	var xf := st.container.get_global_transform()
+	var sz := st.container.size * xf.get_scale()
+	if mimic.global_position != xf.origin:
+		mimic.global_position = xf.origin
+	if mimic.size != sz:
+		mimic.size = sz
+	if _face != null and _face.visible and not _face_el.is_empty():
+		_face.call("place", mimic.global_position + (mimic.call("element_rect", _face_el) as Rect2).get_center())
+
+
+## Build the picture when the design changed; always take the saved pins.
+func _sync_mimic_doc() -> void:
+	if mimic == null or sim == null:
+		return
+	var key := TcSpec.key_of(design.get("spec", {}) as Dictionary)
+	if key != _mimic_key:
+		_mimic_key = key
+		_mimic_doc = MimicTcSource.build(design, sim.net)
+		mimic.call("set_doc", _mimic_doc)
+		_hide_face()
+	var pins := {}
+	var saved: Dictionary = (proc.get("mimic", {}) as Dictionary).get("pins", {}) as Dictionary
+	for k in saved:
+		pins[str(k)] = Vector2(float(saved[k][0]), float(saved[k][1]))
+	mimic.call("set_pins", pins)
+
+
+func _refresh_mimic() -> void:
+	if mimic == null or not pid_on or sim == null or _mimic_doc.is_empty():
+		return
+	mimic.call("set_state", MimicTcSource.state(sim, _mimic_doc))
+	var signs := {}
+	for p in _mimic_doc["pipes"]:
+		signs[str(p["id"])] = MimicTcSource.flow_sign(sim, _mimic_doc, p)
+	mimic.call("set_flow_signs", signs)
+	if _face != null and _face.visible and not _face_el.is_empty():
+		var fp := _faceplate_for(_face_el)
+		_face.call("set_state", str(fp.get("state", "")), fp.get("state_color", UITheme.C_TEXT))
+
+
+## A dragged element: its offset is the picture's own layout, saved with the
+## design's process (undoable; never restarts the run).
+func _on_mimic_moved(id: String, off: Vector2) -> void:
+	var p := proc.duplicate(true)
+	var pins: Dictionary = ((p.get("mimic", {}) as Dictionary).get("pins", {}) as Dictionary).duplicate(true)
+	if off.length() < 0.5:
+		pins.erase(id)
+	else:
+		pins[id] = [snappedf(off.x, 0.1), snappedf(off.y, 0.1)]
+	p["mimic"] = {"pins": pins}
+	modal.call("set_process_block", p)
+
+
+## Put every dragged thing back where the assembly has it.
+func reset_mimic_layout() -> void:
+	var p := proc.duplicate(true)
+	p["mimic"] = {"pins": {}}
+	modal.call("set_process_block", p)
+
+
+func _on_mimic_element(e: Dictionary) -> void:
+	if int(e.get("cv", -1)) >= 0:
+		select_cv(int(e["cv"]))
+	var fp := _faceplate_for(e)
+	if fp.is_empty():
+		_hide_face()
+		return
+	if _face == null:
+		_face = PanelContainer.new()
+		_face.set_script(FaceScript)
+		_face.name = "ProcessFaceplate"
+		modal.add_child(_face)
+		_face.connect("dismissed", func() -> void: _face_el = {})
+	_face_el = e
+	_face.call("show_for", fp, mimic.global_position + (mimic.call("element_rect", e) as Rect2).get_center())
+
+
+func _hide_face() -> void:
+	if _face != null:
+		_face.call("dismiss")
+	_face_el = {}
+
+
+## Esc: put an open faceplate away. True when there was one.
+func dismiss_faceplate() -> bool:
+	if _face != null and _face.visible:
+		_hide_face()
+		return true
+	return false
+
+
+## The switch behind a picture element: its TcProcControl actuator.
+func _act_of(e: Dictionary) -> Dictionary:
+	if sim == null:
+		return {}
+	var want := ""
+	match str(e.get("kind", "")):
+		"valve": want = "valve:%s" % str(e["part"])
+		"pump": want = "pump:%s" % str(e["part"])
+		"heater": want = "heater:%s" % str(e["part"])
+		"engine": want = "engine:%s" % str(e["part"])
+		"end": want = "drain:%s" % str(e.get("ref", ""))
+	if want.is_empty():
+		return {}
+	for a in sim.control_acts:
+		if str(a["act"]) == want and str(a["kind"]) == "switch":
+			return a
+	return {}
+
+
+## What the faceplate of an element shows ({} = it has none).
+func _faceplate_for(e: Dictionary) -> Dictionary:
+	var a := _act_of(e)
+	if a.is_empty():
+		return {}
+	var on := TcProcControl.is_on(sim, str(a["act"]))
+	var kind := str(e["kind"])
+	var words := ["Open", "Closed", "Open it", "Close it"] if kind == "valve" or kind == "end" else ["On", "Off", "Switch on", "Switch off"]
+	var key := str(a["key"])
+	var lines: Array = []
+	if kind == "heater":
+		var k := sim.heater_parts.find(str(e["part"]))
+		lines.append(["Set to", "%d W" % int(float(TcProcSpec.heater(proc, str(e["part"]))["w"]))])
+		if k >= 0 and k < sim.element_t.size():
+			lines.append(["Element", "%d °C" % int(round(float(sim.element_t[k]) - 273.15))])
+	var buttons: Array = [
+		{"id": "on", "text": words[2], "disabled": on, "on_press": func() -> void: _face_cmd(key, "turn_on")},
+		{"id": "off", "text": words[3], "disabled": not on, "on_press": func() -> void: _face_cmd(key, "turn_off")}]
+	# A control valve's opening / a pump's speed: a number, stepped by tens.
+	var num_act := ""
+	if kind == "valve":
+		num_act = "cvalve:%s" % str(e["part"])
+	elif kind == "pump":
+		num_act = "pumpspeed:%s" % str(e["part"])
+		lines.append(["Moving", "%.1f L/min" % float(sim.pump_lpm.get(str(e["part"]), 0.0))])
+	for na in sim.control_acts:
+		if num_act != "" and str(na["act"]) == num_act and str(na["kind"]) == "number":
+			var cur := TcProcControl.value_of(sim, na)
+			var nkey := str(na["key"])
+			lines.append(["Opening" if kind == "valve" else "Speed", "%d %%" % int(round(cur))])
+			var down := func() -> void: _face_num(nkey, maxf(cur - 10.0, 0.0))
+			var upf := func() -> void: _face_num(nkey, minf(cur + 10.0, 100.0))
+			if kind == "valve":
+				# Its opening IS its state: no separate open / shut.
+				buttons = []
+				on = cur > 2.0
+			buttons.append({"id": "less", "text": "−10 %", "disabled": cur <= 0.0, "on_press": down})
+			buttons.append({"id": "more", "text": "+10 %", "disabled": cur >= 100.0, "on_press": upf})
+	return {"id": str(e["id"]), "title": str(a["label"]), "subtitle": key,
+		"state": words[0] if on else words[1],
+		"state_color": MimicSymbols.OPEN if on else MimicSymbols.CLOSED, "lines": lines,
+		"buttons": buttons}
+
+
+func _face_num(key: String, v: float) -> void:
+	_manual(key, "set_value", v)
+	_refresh_mimic()
+	if _face != null and not _face_el.is_empty():
+		_face.call("show_for", _faceplate_for(_face_el),
+			mimic.global_position + (mimic.call("element_rect", _face_el) as Rect2).get_center())
+
+
+func _face_cmd(key: String, cmd: String) -> void:
+	_manual(key, cmd, 0.0)
+	_refresh_mimic()
+	if _face != null and not _face_el.is_empty():
+		_face.call("show_for", _faceplate_for(_face_el),
+			mimic.global_position + (mimic.call("element_rect", _face_el) as Rect2).get_center())
 
 
 ## The molecule lens on / off (a picture-in-picture over the studio).

@@ -1216,6 +1216,12 @@ func _control_points_for_preview() -> Array:
 	# Plug pull keeps its own straight/cord handling (drapes to ground for the cord
 	# visual) — a distinct interaction, not routed through the shared dispatch.
 	if _plug_mode:
+		# Snapped to a port: the ghost IS the run the release will build (the
+		# same spec through the manager's own control points: solver, stubs,
+		# obstacles), so nothing jumps on release.
+		var snapped := _snapped_plug_control()
+		if snapped.size() >= 2:
+			return snapped
 		var step := ConduitKinds.fitting_step_deg(_type_id)
 		if step < 0.5:
 			step = 45.0
@@ -1455,22 +1461,33 @@ func _measured_length(control: Array) -> float:
 ## (approach stubs, seating, routing) — the drag ghost takes a simpler path and
 ## read ~3 % short of the committed run.
 func _snapped_plug_length() -> float:
+	var control := _snapped_plug_control()
+	if control.size() < 2:
+		return -1.0
+	return _snap_len_m
+
+
+## The committed run's control points while the plug is snapped to a port
+## (cached per target), else [].
+func _snapped_plug_control() -> Array:
 	if not _plug_mode or _plug_target.is_empty() or _manager == null \
 			or not _manager.has_method("build_control_points"):
-		return -1.0
+		return []
 	var key := "%s|%s|%s" % [str(_plug_target.get("item_id", "")),
 		str((_plug_target.get("port", {}) as Dictionary).get("handle_id", "")), _type_id]
 	if key == _snap_len_key:
-		return _snap_len_m
+		return _snap_ctrl
 	var spec := ConduitPlugLogic.build_connection_spec(_plug_src, _plug_target, _type_id, [])
 	var control: Array = _manager.call("build_control_points", spec)
 	_snap_len_key = key
+	_snap_ctrl = control
 	_snap_len_m = float(_manager.call("measure_route", spec, control, _type_id)) if control.size() >= 2 else -1.0
-	return _snap_len_m
+	return _snap_ctrl
 
 
 var _snap_len_key := ""
 var _snap_len_m := -1.0
+var _snap_ctrl: Array = []
 
 
 func _update_ui() -> void:

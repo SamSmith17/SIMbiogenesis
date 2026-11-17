@@ -30,11 +30,18 @@ static func resolve_route_ends(a: Vector3, b: Vector3, src: Dictionary, tgt: Dic
 		"a_route": a, "b_route": b,
 		"seat_a": false, "seat_b": false,
 		"out_a": Vector3.ZERO, "out_b": Vector3.ZERO,
+		"host_a": str((src.get("specs", {}) as Dictionary).get("bound_prop_id", "")),
+		"host_b": str((tgt.get("specs", {}) as Dictionary).get("bound_prop_id", "")),
+		"stub_a": 0.15, "stub_b": 0.15,
 	}
 	if ConduitKinds.supports_hang_edit(type_id):
 		return out
 	var a_bind := ConduitManager.resolve_port_binding(src, src_h, main)
 	var b_bind := ConduitManager.resolve_port_binding(tgt, tgt_h, main)
+	if not (a_bind.get("port", {}) as Dictionary).is_empty():
+		out["stub_a"] = ConnectionPortDefs.fitting_stub_m(a_bind["port"] as Dictionary)
+	if not (b_bind.get("port", {}) as Dictionary).is_empty():
+		out["stub_b"] = ConnectionPortDefs.fitting_stub_m(b_bind["port"] as Dictionary)
 	var a_stub := a_bind.get("approach", Vector3.INF) as Vector3
 	var b_stub := b_bind.get("approach", Vector3.INF) as Vector3
 	out["out_a"] = a_bind.get("outward", Vector3.ZERO) as Vector3
@@ -46,6 +53,82 @@ static func resolve_route_ends(a: Vector3, b: Vector3, src: Dictionary, tgt: Dic
 		out["b_route"] = b_stub
 		out["seat_b"] = true
 	return out
+
+
+## Does this run go through ConduitRunSolver? Rigid and routed runs (pipe,
+## conduit, NM, tube, Cat6, PV wire, conceptual flow) do; draped cords and
+## hoses, hung lights, penstocks, culverts and direct intakes keep their own
+## routes. A run pinned by hand before the solver existed (route_locked with
+## no route_solver) keeps its exact old path until the player re-routes it.
+static func uses_solver(conn: Dictionary, type_id: String) -> bool:
+	var rs := str(conn.get("route_solver", ""))
+	if rs == "legacy":
+		return false
+	if rs.is_empty() and bool(conn.get("route_locked", false)):
+		return false
+	if bool(conn.get("direct_intake", false)):
+		return false
+	var style: Dictionary = conn.get("conduit_style", {}) as Dictionary
+	var mode := ConduitKinds.normalize_route_mode(str(style.get("route_mode", "")))
+	if mode in ["contour", "culvert", "direct", "taut", "catenary", "metro_ground"]:
+		return false
+	if ConduitKinds.supports_hang_edit(type_id):
+		return false
+	return ConduitSpecs.routing_style(type_id) in ["rigid_ortho", "flex_route"]
+
+
+## Control points from ConduitRunSolver. `opts`: {field, run_height,
+## wall_hug, ground_fn, info (Dictionary filled with flags / corners)}.
+## Kit pipes get the sharp corners (the planner seats real elbows there);
+## everything else gets tangent fillets at its minimum bend radius.
+static func solver_points(ends: Dictionary, type_id: String, style_ov: Dictionary,
+		waypoints: Array, opts: Dictionary) -> Array:
+	var od := ConduitSpecs.od_m(type_id, style_ov)
+	var bend_r := ConduitSpecs.bend_radius_m(type_id, style_ov)
+	var a: Vector3 = ends.get("a", Vector3.ZERO)
+	var b: Vector3 = ends.get("b", Vector3.ZERO)
+	var na: Vector3 = ends.get("out_a", Vector3.ZERO)
+	var nb: Vector3 = ends.get("out_b", Vector3.ZERO)
+	var rh := float(style_ov.get("run_height_m", opts.get("run_height", NAN)))
+	var req := {
+		"a": a, "b": b, "na": na, "nb": nb,
+		"stub_a": float(ends.get("stub_a", 0.15)), "stub_b": float(ends.get("stub_b", 0.15)),
+		"host_a": str(ends.get("host_a", "")), "host_b": str(ends.get("host_b", "")),
+		"vias": waypoints, "od": od, "bend_r": bend_r,
+		"field": opts.get("field"), "run_height": rh,
+		"wall_hug": bool(style_ov.get("wall_hug", false)),
+		"ground_fn": opts.get("ground_fn", Callable()),
+		"allow_45": ConduitSpecs.allowed_angles(type_id).has(45.0)
+			and bool(style_ov.get("allow_45", false)),
+	}
+	var res := ConduitRunSolver.solve(req)
+	var corners: PackedVector3Array = res["corners"]
+	var info: Dictionary = opts.get("info", {}) as Dictionary
+	info["raw_corners"] = corners
+	# The bundler's lane for this run (shifted corners + concentric radii),
+	# when its lane was worked out from these same raw corners.
+	var radii := PackedFloat64Array()
+	var bundle_fn: Callable = opts.get("bundle_fn", Callable())
+	if bundle_fn.is_valid():
+		var bun: Dictionary = bundle_fn.call(corners)
+		if not bun.is_empty():
+			corners = bun["corners"] as PackedVector3Array
+			radii = bun["radii"] as PackedFloat64Array
+			info["lane"] = int(bun.get("lane", 0))
+			info["lanes"] = int(bun.get("lanes", 1))
+			info["bundle"] = str(bun.get("bundle", ""))
+	info["corners"] = corners
+	info["flags"] = res["flags"]
+	info["stub_a"] = res["stub_a"]
+	info["stub_b"] = res["stub_b"]
+	info["bend_r"] = bend_r
+	info["od"] = od
+	if ConduitKinds.uses_pipe_kit(type_id) and not ConduitKinds.uses_culvert_kit(type_id):
+		return ConduitManager._packed_to_array(corners)
+	var fil := ConduitFillet.apply(corners, bend_r, ConduitFillet.STEP_DEG, radii)
+	if not (fil["tight"] as Array).is_empty():
+		(info["flags"] as Dictionary)["tight"] = (fil["tight"] as Array).size()
+	return ConduitManager._packed_to_array(fil["points"] as PackedVector3Array)
 
 
 ## The route-mode dispatch cascade (ortho / culvert / pipes[kit|locked|fitting|A*] /

@@ -67,6 +67,8 @@ static func part_for_switch(a: Dictionary) -> String:
 	var act := str(a.get("act", ""))
 	if act == "heaters":
 		return ""                       # a group: in Home Assistant, not a pin
+	if bool(a.get("hand", false)):
+		return ""                       # a hand valve: nothing to wire a relay to
 	return "relay_1ch"
 
 

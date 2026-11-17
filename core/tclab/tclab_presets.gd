@@ -34,6 +34,10 @@ static func builtins() -> Array:
 		{"id": "tc_condenser", "name": "TC condenser (3 columns, 2\")", "blurb": "The reactor's condenser on its own: two 18\" dephlegmators down, a gas column up, drains at the bottom.", "spec": tc_condenser()},
 		{"id": "pot_still", "name": "Pot still with column", "blurb": "A dished boiler, sight glass, packed column with a window, thermometer tee, dephlegmator and product condenser.", "spec": pot_still()},
 		{"id": "brew_kettle", "name": "Brew kettle 50 L", "blurb": "A lidded kettle with a false bottom and hop basket, element, thermometer, ball-valve drain and a whirlpool port.", "spec": brew_kettle()},
+		{"id": "level_rig", "name": "Two-tank level rig (pump + control valve)", "blurb": "A supply tank, a pump and a control valve into a process tank that drains to a receiver through a hand valve. A PID loop holds the process tank at half: the place to learn level control.", "spec": level_rig()},
+		{"id": "brewhouse", "name": "Brewhouse (three vessels + chiller)", "blurb": "Hot liquor tank, stirred mash tun and kettle with a pump between each, then out through a plate chiller into the fermenter. A sequence heats the water, mashes in, rests, boils and knocks out.", "spec": brewhouse()},
+		{"id": "cip_skid", "name": "Clean-in-place skid", "blurb": "A rinse-water tank and a heated wash tank on one pump, each behind its own solenoid valve, into the vessel being cleaned, which drains to a receiver. A sequence rinses, washes hot and rinses again.", "spec": cip_skid()},
+		{"id": "water_filter_train", "name": "Water filter train", "blurb": "Raw water pumped through a cartridge filter and a flow meter into a clean tank that feeds a tap. The pump keeps the clean tank between two marks; a level switch stops it on overfill.", "spec": water_filter_train()},
 		{"id": "ring_stand_reactor", "name": "Jacketed reactor on a ring stand", "blurb": "A Ø420 dished vessel with a jacket band, a 6\" neck under a bowl reducer and valve cross, three head ports, a bottom drain, a handle ring, on a three-leg ring stand with casters.", "spec": ring_stand_reactor()},
 		{"id": "tall_tank", "name": "Tall jacketed tank on casters", "blurb": "A Ø360 × 1150 jacketed tank with a clamped dome lid: gauge, relief and valve on the lid, a side valve near the top, a drain.", "spec": tall_tank()},
 		{"id": "horizontal_receiver", "name": "Horizontal receiver on a skid", "blurb": "A Ø460 × 900 tank on its side with dished ends, a 3\" clamp port in each end, three valved ports and a gauge along the top, on a caster skid.", "spec": horizontal_receiver()},
@@ -417,6 +421,242 @@ static func brew_kettle() -> Dictionary:
 # are estimates to a few centimetres; every one is a normal design the
 # player can resize.
 # ---------------------------------------------------------------------------
+
+## Supply tank → pump → control valve → process tank → hand valve →
+## receiver. Three tanks in a row on one floor, 1½" lines near the bottom; the
+## first line needs its pump, the second runs by gravity. No loop, so every
+## part hangs off the one before it.
+static func level_rig() -> Dictionary:
+	var s := TcSpec.empty("Two-tank level rig")
+	var z := "0.5"
+	var up := {"od_mm": 560.0, "height_mm": 800.0, "bottom": "flat", "top": "open", "lid": false, "jacket": "none", "legs": "legs", "leg_count": 4, "leg_h_mm": 640.0}
+	var mid := {"od_mm": 400.0, "height_mm": 600.0, "bottom": "flat", "top": "open", "lid": false, "jacket": "none", "legs": "legs", "leg_count": 4, "leg_h_mm": 640.0}
+	var low := {"od_mm": 560.0, "height_mm": 800.0, "bottom": "flat", "top": "open", "lid": false, "jacket": "none", "legs": "none"}
+	var a: Dictionary = up.duplicate(true)
+	a["ports"] = [{"id": "out", "kind": "tc", "size": z, "face": "shell", "angle_deg": 90.0, "h_mm": 60.0, "stub_mm": 40.0}]
+	var r := TcAssembly.add_part(s, "vessel", "1.5", a, Transform3D(Basis.IDENTITY, Vector3(0, 640.0, 0)))
+	s = r[0]
+	var va: String = r[1]
+	r = _attach(s, "spool", z, {"length_mm": 150.0}, va + ":out", "a")
+	s = r[0]
+	r = _attach(s, "pump", z, {"kind": "centrifugal", "head_m": 1.0, "flow_lpm": 10.0, "watts": 60.0, "on": true}, str(r[1]) + ":b", "a", [["@up", Vector3.UP]])
+	s = r[0]
+	var pump_id: String = r[1]
+	# A pump and a valve are both LINKS in the process model: a link needs a
+	# pipe volume on each side, so a short spool stands between them.
+	r = _attach(s, "spool", z, {"length_mm": 100.0}, pump_id + ":b", "a")
+	s = r[0]
+	r = _attach(s, "control_valve", z, {"open_pct": 20.0}, str(r[1]) + ":b", "a", [["@up", Vector3.UP]])
+	s = r[0]
+	var cv_id: String = r[1]
+	r = _attach(s, "spool", z, {"length_mm": 150.0}, cv_id + ":b", "a")
+	s = r[0]
+	var b: Dictionary = mid.duplicate(true)
+	b["ports"] = [{"id": "in", "kind": "tc", "size": z, "face": "shell", "angle_deg": 270.0, "h_mm": 60.0, "stub_mm": 40.0},
+		{"id": "out", "kind": "tc", "size": z, "face": "shell", "angle_deg": 90.0, "h_mm": 60.0, "stub_mm": 40.0}]
+	r = _attach(s, "vessel", "1.5", b, str(r[1]) + ":b", "in", [["@up", Vector3.UP]])
+	s = r[0]
+	var vb: String = r[1]
+	r = _attach(s, "spool", z, {"length_mm": 100.0}, vb + ":out", "a")
+	s = r[0]
+	# The drain: a second control valve left a quarter open (the "load").
+	r = _attach(s, "control_valve", z, {"open_pct": 25.0}, str(r[1]) + ":b", "a", [["@up", Vector3.UP]])
+	s = r[0]
+	var drain_id: String = r[1]
+	r = _attach(s, "spool", z, {"length_mm": 200.0}, drain_id + ":b", "a")
+	s = r[0]
+	# The receiver stands on the floor and is filled near its top, so the
+	# process tank always drains freely.
+	var c: Dictionary = low.duplicate(true)
+	c["ports"] = [{"id": "in", "kind": "tc", "size": z, "face": "shell", "angle_deg": 270.0, "h_mm": 700.0, "stub_mm": 40.0}]
+	r = _attach(s, "vessel", "1.5", c, str(r[1]) + ":b", "in", [["@up", Vector3.UP]])
+	s = r[0]
+	s["process"] = TcProcSpec.level_rig_default(TcProcControl.slug("Two-tank level rig"), {"supply": va, "tank": vb, "pump": pump_id, "valve": cv_id, "drain": drain_id})
+	return TcSpec.resolve(s)
+
+
+## An open tank for the liquid presets: `legs_mm` 0 = on the floor.
+static func _tank(od: float, h: float, legs_mm: float, ports: Array, lid: bool = false) -> Dictionary:
+	var p := {"od_mm": od, "height_mm": h, "bottom": "flat", "top": "open", "lid": lid, "jacket": "none",
+		"legs": "legs" if legs_mm > 0.0 else "none", "leg_count": 4, "leg_h_mm": maxf(legs_mm, 100.0), "ports": ports}
+	if lid:
+		p["lid_depth_mm"] = 30.0
+	return p
+
+
+static func _shell(id: String, size: String, angle: float, h: float) -> Dictionary:
+	return {"id": id, "kind": "tc", "size": size, "face": "shell", "angle_deg": angle, "h_mm": h, "stub_mm": 40.0}
+
+
+## spool → positive-displacement pump → spool, from `from_ref`; returns
+## [spec, pump id, the last spool's id].
+static func _pump_run(s: Dictionary, from_ref: String, size: String, lpm: float, watts: float, kind: String = "positive") -> Array:
+	var r := _attach(s, "spool", size, {"length_mm": 120.0}, from_ref, "a")
+	s = r[0]
+	r = _attach(s, "pump", size, {"kind": kind, "head_m": 12.0, "flow_lpm": lpm, "watts": watts, "on": false}, str(r[1]) + ":b", "a", [["@up", Vector3.UP]])
+	s = r[0]
+	var pid: String = r[1]
+	r = _attach(s, "spool", size, {"length_mm": 120.0}, pid + ":b", "a")
+	return [r[0], pid, str(r[1])]
+
+
+## Hot liquor tank → mash tun → kettle → plate chiller → fermenter, a pump
+## between each (positive displacement: nothing creeps back when one stops).
+## All four stand on one floor.
+static func brewhouse() -> Dictionary:
+	var s := TcSpec.empty("Brewhouse")
+	var z := "1"
+	var hlt := _tank(420.0, 520.0, 0.0, [_shell("out", z, 90.0, 60.0), _shell("element", "1.5", 0.0, 90.0), _shell("level", "1.5", 180.0, 60.0)])
+	var r := TcAssembly.add_part(s, "vessel", "1.5", hlt, Transform3D.IDENTITY)
+	s = r[0]
+	var v_hlt: String = r[1]
+	r = _attach(s, "heating_element", "1.5", {"length_mm": 240.0}, v_hlt + ":element", "a")
+	s = r[0]
+	var h_hlt: String = r[1]
+	r = _attach(s, "level_tx", "1.5", {}, v_hlt + ":level", "a")
+	s = r[0]
+	var pr := _pump_run(s, v_hlt + ":out", z, 12.0, 90.0)
+	s = pr[0]
+	var p1: String = pr[1]
+	var mash := _tank(420.0, 520.0, 0.0, [_shell("in", z, 270.0, 60.0), _shell("out", z, 90.0, 60.0), _shell("stir", "1.5", 0.0, 160.0)])
+	r = _attach(s, "vessel", "1.5", mash, str(pr[2]) + ":b", "in", [["@up", Vector3.UP]])
+	s = r[0]
+	var v_mash: String = r[1]
+	# A side-entry stirrer (its shaft reaches to the middle of the tun).
+	r = _attach(s, "agitator", "1.5", {"watts": 90.0, "shaft_mm": 200.0}, v_mash + ":stir", "a")
+	s = r[0]
+	var stir: String = r[1]
+	pr = _pump_run(s, v_mash + ":out", z, 12.0, 90.0)
+	s = pr[0]
+	var p2: String = pr[1]
+	var kettle := _tank(420.0, 520.0, 0.0, [_shell("in", z, 270.0, 60.0), _shell("out", z, 90.0, 60.0), _shell("element", "1.5", 0.0, 90.0)])
+	r = _attach(s, "vessel", "1.5", kettle, str(pr[2]) + ":b", "in", [["@up", Vector3.UP]])
+	s = r[0]
+	var v_kettle: String = r[1]
+	r = _attach(s, "heating_element", "1.5", {"length_mm": 240.0}, v_kettle + ":element", "a")
+	s = r[0]
+	var h_kettle: String = r[1]
+	pr = _pump_run(s, v_kettle + ":out", z, 6.0, 60.0)
+	s = pr[0]
+	var p3: String = pr[1]
+	r = _attach(s, "plate_exchanger", z, {"plates": 30.0}, str(pr[2]) + ":b", "a", [["@up", Vector3.UP]])
+	s = r[0]
+	var hx: String = r[1]
+	r = _attach(s, "spool", z, {"length_mm": 120.0}, hx + ":b", "a")
+	s = r[0]
+	var ferm := _tank(420.0, 520.0, 0.0, [_shell("in", z, 270.0, 60.0)])
+	r = _attach(s, "vessel", "1.5", ferm, str(r[1]) + ":b", "in", [["@up", Vector3.UP]])
+	s = r[0]
+	var v_ferm: String = r[1]
+	s["process"] = TcProcSpec.brewhouse_default(TcProcControl.slug("Brewhouse"),
+		{"hlt": v_hlt, "mash": v_mash, "kettle": v_kettle, "ferm": v_ferm, "h_hlt": h_hlt, "h_kettle": h_kettle, "p1": p1, "p2": p2, "p3": p3, "stir": stir})
+	return TcSpec.resolve(s)
+
+
+## Rinse tank and heated wash tank, each behind a solenoid valve, into one
+## tee and one pump, into the vessel being cleaned (on legs), which drains
+## through a third solenoid valve into a receiver on the floor.
+static func cip_skid() -> Dictionary:
+	var s := TcSpec.empty("Clean-in-place skid")
+	var z := "1"
+	var legs := 640.0
+	var rinse := _tank(480.0, 600.0, legs, [_shell("out", z, 90.0, 60.0)])
+	var r := TcAssembly.add_part(s, "vessel", "1.5", rinse, Transform3D(Basis.IDENTITY, Vector3(0, legs, 0)))
+	s = r[0]
+	var v_rinse: String = r[1]
+	r = _attach(s, "spool", z, {"length_mm": 120.0}, v_rinse + ":out", "a")
+	s = r[0]
+	r = _attach(s, "solenoid_valve", z, {}, str(r[1]) + ":b", "a", [["@up", Vector3.UP]])
+	s = r[0]
+	var sv_rinse: String = r[1]
+	r = _attach(s, "spool", z, {"length_mm": 120.0}, sv_rinse + ":b", "a")
+	s = r[0]
+	r = _attach(s, "tee", z, {}, str(r[1]) + ":b", "a", [["c", Vector3(0, 0, 1)]])
+	s = r[0]
+	var tee: String = r[1]
+	# The wash tank hangs off the tee's branch.
+	r = _attach(s, "spool", z, {"length_mm": 160.0}, tee + ":c", "a")
+	s = r[0]
+	r = _attach(s, "solenoid_valve", z, {}, str(r[1]) + ":b", "a", [["@up", Vector3.UP]])
+	s = r[0]
+	var sv_wash: String = r[1]
+	r = _attach(s, "spool", z, {"length_mm": 160.0}, sv_wash + ":b", "a")
+	s = r[0]
+	var wash := _tank(400.0, 520.0, legs, [_shell("out", z, 270.0, 60.0), _shell("element", "1.5", 90.0, 90.0)])
+	r = _attach(s, "vessel", "1.5", wash, str(r[1]) + ":b", "out", [["@up", Vector3.UP]])
+	s = r[0]
+	var v_wash: String = r[1]
+	r = _attach(s, "heating_element", "1.5", {"length_mm": 220.0}, v_wash + ":element", "a")
+	s = r[0]
+	var h_wash: String = r[1]
+	# On from the tee: the pump, the vessel being cleaned, its drain.
+	var pr := _pump_run(s, tee + ":b", z, 20.0, 250.0, "centrifugal")
+	s = pr[0]
+	var pump: String = pr[1]
+	var target := _tank(480.0, 600.0, legs, [_shell("in", z, 270.0, 60.0), _shell("out", z, 90.0, 60.0)])
+	r = _attach(s, "vessel", "1.5", target, str(pr[2]) + ":b", "in", [["@up", Vector3.UP]])
+	s = r[0]
+	var v_target: String = r[1]
+	r = _attach(s, "spool", z, {"length_mm": 120.0}, v_target + ":out", "a")
+	s = r[0]
+	r = _attach(s, "solenoid_valve", z, {}, str(r[1]) + ":b", "a", [["@up", Vector3.UP]])
+	s = r[0]
+	var sv_drain: String = r[1]
+	r = _attach(s, "spool", z, {"length_mm": 160.0}, sv_drain + ":b", "a")
+	s = r[0]
+	var recv := _tank(600.0, 800.0, 0.0, [_shell("in", z, 270.0, 700.0)])
+	r = _attach(s, "vessel", "1.5", recv, str(r[1]) + ":b", "in", [["@up", Vector3.UP]])
+	s = r[0]
+	s["process"] = TcProcSpec.cip_default(TcProcControl.slug("Clean-in-place skid"),
+		{"rinse": v_rinse, "wash": v_wash, "target": v_target, "recv": str(r[1]), "h_wash": h_wash,
+		"sv_rinse": sv_rinse, "sv_wash": sv_wash, "sv_drain": sv_drain, "pump": pump})
+	return TcSpec.resolve(s)
+
+
+## Raw tank → pump → cartridge filter → flow meter → clean tank (level
+## switch near its top) → a part-open valve (the tap) → a tank standing for
+## what the water is used for.
+static func water_filter_train() -> Dictionary:
+	var s := TcSpec.empty("Water filter train")
+	var z := "1"
+	var legs := 640.0
+	var raw := _tank(560.0, 800.0, legs, [_shell("out", z, 90.0, 60.0)])
+	var r := TcAssembly.add_part(s, "vessel", "1.5", raw, Transform3D(Basis.IDENTITY, Vector3(0, legs, 0)))
+	s = r[0]
+	var v_raw: String = r[1]
+	var pr := _pump_run(s, v_raw + ":out", z, 14.0, 120.0, "centrifugal")
+	s = pr[0]
+	var pump: String = pr[1]
+	r = _attach(s, "inline_strainer", z, {}, str(pr[2]) + ":b", "a")
+	s = r[0]
+	r = _attach(s, "flow_meter", z, {"length_mm": 120.0}, str(r[1]) + ":b", "a", [["@up", Vector3.UP]])
+	s = r[0]
+	var meter: String = r[1]
+	r = _attach(s, "check_valve", z, {}, meter + ":b", "a")
+	s = r[0]
+	r = _attach(s, "spool", z, {"length_mm": 120.0}, str(r[1]) + ":b", "a")
+	s = r[0]
+	var clean := _tank(400.0, 600.0, legs, [_shell("in", z, 270.0, 60.0), _shell("out", z, 90.0, 60.0), _shell("high", "1.5", 0.0, 540.0)])
+	r = _attach(s, "vessel", "1.5", clean, str(r[1]) + ":b", "in", [["@up", Vector3.UP]])
+	s = r[0]
+	var v_clean: String = r[1]
+	r = _attach(s, "level_switch", "1.5", {}, v_clean + ":high", "a")
+	s = r[0]
+	var sw: String = r[1]
+	r = _attach(s, "spool", z, {"length_mm": 120.0}, v_clean + ":out", "a")
+	s = r[0]
+	r = _attach(s, "control_valve", z, {"open_pct": 5.0}, str(r[1]) + ":b", "a", [["@up", Vector3.UP]])
+	s = r[0]
+	var tap: String = r[1]
+	r = _attach(s, "spool", z, {"length_mm": 160.0}, tap + ":b", "a")
+	s = r[0]
+	var use := _tank(560.0, 800.0, 0.0, [_shell("in", z, 270.0, 700.0)])
+	r = _attach(s, "vessel", "1.5", use, str(r[1]) + ":b", "in", [["@up", Vector3.UP]])
+	s = r[0]
+	s["process"] = TcProcSpec.filter_train_default(TcProcControl.slug("Water filter train"),
+		{"raw": v_raw, "clean": v_clean, "pump": pump, "switch": sw, "meter": meter, "tap": tap})
+	return TcSpec.resolve(s)
+
 
 static func _tc(id: String, size: String, face: String, angle: float, at: float, stub: float = 40.0) -> Dictionary:
 	var q := {"id": id, "kind": "tc", "size": size, "face": face, "angle_deg": angle, "stub_mm": stub}

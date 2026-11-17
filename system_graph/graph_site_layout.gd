@@ -31,6 +31,9 @@ const VIEW_GLOBE := "globe"
 ## flows between them (LoopSankeyLayout), sources on top, returns arcing back
 ## up either side. Not a physical projection.
 const VIEW_FLOWS := "flows"
+## The scope as a process picture: stores, machines, valves and pumps on
+## their pipes (GraphProcessLens + MimicCanvas).
+const VIEW_PROCESS := "process"
 
 ## Floor on the Hydro Lab cross-section's ortho height, in metres. A CAMERA limit
 ## (5 cm frames a 25 mm nozzle), not a framing preference — it lives here because

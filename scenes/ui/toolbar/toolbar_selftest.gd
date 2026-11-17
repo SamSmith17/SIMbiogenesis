@@ -25,7 +25,7 @@ const GestureScript := preload("res://scenes/ui/toolbar/shape_gesture_controller
 ## Guard against a Godot runtime error aborting a test function early while the
 ## suite still prints PASS — the trap veg_dock_state_selftest documents.
 ## Count of every check ABOVE the guard itself. Bump it when adding checks.
-const EXPECTED_CHECKS := 630   # +42: the veg Detect tool (10 registry + 8 params × 4)
+const EXPECTED_CHECKS := 689   # +23: the Terrace tool (11 registry + 3 params × 4); +36: the six Route tools
 
 var _fails := 0
 var _checks := 0
@@ -84,15 +84,15 @@ func _test_registry_integrity() -> void:
 		_check("tool id unique: %s" % id, not seen.has(id))
 		seen[id] = true
 		var section := String(t.get("section", ""))
-		_check("%s section is terrain|veg|camps|placement|water" % id,
+		_check("%s section is terrain|veg|camps|placement|water|route" % id,
 			section == "terrain" or section == "veg" or section == "camps"
-			or section == "placement" or section == "water")
+			or section == "placement" or section == "water" or section == "route")
 		_check("%s has a label" % id, not String(t.get("label", "")).is_empty())
 		_check("%s has a tooltip" % id, not String(t.get("tooltip", "")).is_empty())
 		var shapes: Array = t.get("shapes", [])
 		for sh: Variant in shapes:
 			_check("%s shape %s is known" % [id, sh],
-				["brush", "circle", "rect", "lasso", "polygon", "path"].has(String(sh)))
+				["brush", "circle", "rect", "lasso", "polygon", "path", "hill"].has(String(sh)))
 		# The default shape is shapes[0] — an empty list means a click gesture.
 		_check("%s default shape resolves" % id,
 			st.shape_for(id) == (String(shapes[0]) if not shapes.is_empty() else ""))

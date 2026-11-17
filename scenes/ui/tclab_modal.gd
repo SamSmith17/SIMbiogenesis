@@ -1726,7 +1726,30 @@ func _input(e: InputEvent) -> void:
 			KEY_SPACE:
 				_proc.call("play", not bool(_proc.get("playing")))
 			KEY_F:
-				_frame()
+				if bool(_proc.get("pid_on")) and _proc.get("mimic") != null:
+					(_proc.get("mimic") as Control).call("fit")
+				else:
+					_frame()
+			KEY_Z:
+				# Process edits (a scenario value, a dragged picture element)
+				# are design edits: undoable here too.
+				if ke.ctrl_pressed and ke.shift_pressed:
+					_redo_step()
+				elif ke.ctrl_pressed:
+					_undo_step()
+				else:
+					handled = false
+			KEY_Y:
+				if ke.ctrl_pressed:
+					_redo_step()
+				else:
+					handled = false
+			KEY_ESCAPE:
+				# A faceplate is put away before Esc means anything else.
+				if _proc.has_method("dismiss_faceplate") and bool(_proc.call("dismiss_faceplate")):
+					pass
+				else:
+					handled = false
 			_:
 				handled = false
 		if handled:

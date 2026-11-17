@@ -12,6 +12,36 @@ const ANCHOR_GROUP := "conduit_anchor"
 const DEFAULT_APPROACH_M := 0.45
 const MIN_APPROACH_M := 0.05
 
+## What a port's connection is made with, and how much straight run that
+## fitting needs before a bend may start (m): a plug and its strain relief,
+## a threaded adaptor, a hose barb and clamp, a tri-clamp ferrule and clamp,
+## a cable gland, a bolted flange. The run solver adds the run's own bend
+## radius on top.
+const FITTING_STUB_M: Dictionary = {
+	"plug": 0.10, "threaded": 0.15, "barb": 0.12, "triclamp": 0.20,
+	"gland": 0.08, "flange": 0.25,
+}
+const FITTING_LABELS: Dictionary = {
+	"plug": "Plug / socket", "threaded": "Threaded", "barb": "Hose barb",
+	"triclamp": "Tri-clamp", "gland": "Cable gland", "flange": "Flange",
+}
+
+
+## The port's fitting: its own `fitting`, else a cable gland for power and
+## data, else a threaded connection.
+static func fitting_of(port: Dictionary) -> String:
+	var f := str(port.get("fitting", ""))
+	if FITTING_STUB_M.has(f):
+		return f
+	var pol := str(port.get("polarity", ""))
+	if pol in ["resource", ""]:
+		return "threaded"
+	return "gland"
+
+
+static func fitting_stub_m(port: Dictionary) -> float:
+	return float(FITTING_STUB_M.get(fitting_of(port), 0.15))
+
 
 static func catalog_path(model_id: String) -> String:
 	var safe := model_id.replace("/", "_").replace(":", "_").replace("\\", "_")
@@ -27,21 +57,37 @@ static func load_catalog_ports(model_id: String) -> Array:
 	return default_ports_for_model(model_id)
 
 
+## Parsed catalog files by model id. The conduit follow tick resolves every
+## drawn run's two ports ten times a second, which used to re-read and
+## re-parse this JSON each time. Cleared by save_catalog_ports.
+static var _file_cache: Dictionary = {}
+## Bumped whenever a port catalog changes.
+static var revision: int = 0
+static var _service_script: Script = null
+
+
+static func invalidate_cache() -> void:
+	_file_cache.clear()
+	revision += 1
+
+
 static func _load_catalog_file(model_id: String) -> Array:
+	if _file_cache.has(model_id):
+		return (_file_cache[model_id] as Array).duplicate(true)
+	var out: Array = []
 	var path := catalog_path(model_id)
-	if not FileAccess.file_exists(path):
-		return []
-	var f := FileAccess.open(path, FileAccess.READ)
-	if f == null:
-		return []
-	var text := f.get_as_text()
-	f.close()
-	var parsed: Variant = JSON.parse_string(text)
-	if parsed is Dictionary:
-		return (parsed.get("ports", []) as Array).duplicate(true)
-	if parsed is Array:
-		return (parsed as Array).duplicate(true)
-	return []
+	if FileAccess.file_exists(path):
+		var f := FileAccess.open(path, FileAccess.READ)
+		if f != null:
+			var text := f.get_as_text()
+			f.close()
+			var parsed: Variant = JSON.parse_string(text)
+			if parsed is Dictionary:
+				out = (parsed.get("ports", []) as Array).duplicate(true)
+			elif parsed is Array:
+				out = (parsed as Array).duplicate(true)
+	_file_cache[model_id] = out
+	return out.duplicate(true)
 
 
 ## Built-in inlet/outlet ports for procedural twins (catalog file may override).
@@ -201,6 +247,7 @@ static func save_catalog_ports(model_id: String, ports: Array) -> bool:
 		return false
 	f.store_string(JSON.stringify(payload, "\t"))
 	f.close()
+	invalidate_cache()
 	return true
 
 
@@ -254,12 +301,11 @@ static func resolve_ports_for_item(item: Dictionary, main: Node) -> Array:
 static func _read_prop_record(main: Node, prop_id: String) -> Dictionary:
 	if main == null or prop_id.is_empty():
 		return {}
-	var script: Variant = load("res://core/placed_models/placed_prop_service.gd")
-	if script == null:
+	if _service_script == null:
+		_service_script = load("res://core/placed_models/placed_prop_service.gd") as Script
+	if _service_script == null:
 		return {}
-	if script.has_method("get_prop_record"):
-		return script.call("get_prop_record", main, prop_id) as Dictionary
-	return {}
+	return _service_script.call("get_prop_record", main, prop_id) as Dictionary
 
 
 static func find_port_for_handle(ports: Array, handle_id: String) -> Dictionary:

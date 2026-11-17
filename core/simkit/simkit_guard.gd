@@ -19,9 +19,13 @@ const MAX_STRING := 4000
 const MAX_DEPTH := 6
 const MAX_WIRES := 1500
 const MAX_SPACES := 120
+const MAX_LOGIC := 40
+const MAX_ALARMS := 60
+const ALARM_OPS := [">=", "<=", "on", "off", "lost"]
+const LOGIC_KINDS := ["band", "pid", "interlock", "timer", "counter", "sequence", "duty"]
 
 const TOP_KEYS := ["name", "people", "start", "days", "step_min", "start_soc", "infinite_labor",
-	"nodes", "solar", "dc", "ac", "wires", "spaces", "note", "description", "world", "base"]
+	"nodes", "solar", "dc", "ac", "wires", "spaces", "note", "description", "world", "base", "logic", "alarms"]
 const NODE_KEYS := ["id", "preset", "count", "set", "state", "recipe", "recipe_file",
 	"recipe_def", "automations", "pos", "sync_reset_level", "note"]
 const ACTION_KINDS := ["scene_node", "delay"]
@@ -38,6 +42,24 @@ const _ID_RE := "^[A-Za-z0-9_]{1,48}$"
 
 static func check_design(d: Dictionary) -> Array:
 	var out: Array = []
+	if d.has("logic"):
+		if not (d["logic"] is Array) or (d["logic"] as Array).size() > MAX_LOGIC:
+			out.append("logic must be a list of at most %d blocks" % MAX_LOGIC)
+		else:
+			for b in d["logic"]:
+				if not (b is Dictionary) or not (str((b as Dictionary).get("kind", "")) in LOGIC_KINDS) \
+						or str((b as Dictionary).get("id", "")).is_empty():
+					out.append("logic: every block needs an id and a kind (%s)" % ", ".join(LOGIC_KINDS))
+					break
+	if d.has("alarms"):
+		if not (d["alarms"] is Array) or (d["alarms"] as Array).size() > MAX_ALARMS:
+			out.append("alarms must be a list of at most %d rules" % MAX_ALARMS)
+		else:
+			for r in d["alarms"]:
+				if not (r is Dictionary) or str((r as Dictionary).get("id", "")).is_empty() or str((r as Dictionary).get("tag", "")).is_empty() \
+						or not (str((r as Dictionary).get("op", ">=")) in ALARM_OPS):
+					out.append("alarms: every rule needs an id, a tag and an op (%s)" % ", ".join(ALARM_OPS))
+					break
 	var size := JSON.stringify(d).length()
 	if size > 600000:
 		out.append("the design is %d bytes (limit 600000)" % size)

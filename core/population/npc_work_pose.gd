@@ -82,6 +82,10 @@ const GATE_HOURS := 0.06
 static func family_for(chore: Dictionary) -> String:
 	if chore.is_empty():
 		return DIG
+	# 0. The chore names its own pose (a terrace crew stoops in the paddy
+	#    whatever its crew size).
+	if chore.has("pose") and FAMILIES.has(str(chore["pose"])):
+		return str(chore["pose"])
 
 	# 1. A relay post. Subsumes the pose machine's old `carrying` special case:
 	#    a DOING agent flagged carrying IS the brigade station worker, since

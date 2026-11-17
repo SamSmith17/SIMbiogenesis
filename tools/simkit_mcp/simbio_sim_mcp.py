@@ -46,7 +46,9 @@ PROJECT_NAME = "SIMbiogenesis"
 
 # Kept in step with core/simkit/simkit_guard.gd (the kernel checks again).
 TOP_KEYS = {"name", "people", "start", "days", "step_min", "start_soc", "infinite_labor",
-            "nodes", "solar", "dc", "ac", "wires", "spaces", "note", "description", "world", "base"}
+            "nodes", "solar", "dc", "ac", "wires", "spaces", "note", "description", "world", "base", "logic", "alarms"}
+LOGIC_KINDS = {"band", "pid", "interlock", "timer", "counter", "sequence", "duty"}
+ALARM_OPS = {">=", "<=", "on", "off", "lost"}
 NODE_KEYS = {"id", "preset", "count", "set", "state", "recipe", "recipe_file", "recipe_def",
              "automations", "pos", "sync_reset_level", "note"}
 SUMMARY_PARTS = ["summary", "checks", "kpi", "stores", "machines", "monthly", "daily", "bottlenecks", "all"]
@@ -195,6 +197,18 @@ def check_design(d) -> list:
     if len(raw) > MAX_DESIGN_BYTES:
         return [f"the design is {len(raw)} bytes (limit {MAX_DESIGN_BYTES})"]
     out = [f"unknown top-level key '{k}'" for k in d if k not in TOP_KEYS and not str(k).startswith("_")]
+    if "logic" in d:
+        lg = d["logic"]
+        if not isinstance(lg, list) or len(lg) > 40:
+            out.append("logic must be a list of at most 40 blocks")
+        elif any(not isinstance(b, dict) or b.get("kind") not in LOGIC_KINDS or not b.get("id") for b in lg):
+            out.append("logic: every block needs an id and a kind (" + ", ".join(sorted(LOGIC_KINDS)) + ")")
+    if "alarms" in d:
+        al = d["alarms"]
+        if not isinstance(al, list) or len(al) > 60:
+            out.append("alarms must be a list of at most 60 rules")
+        elif any(not isinstance(r, dict) or not r.get("id") or not r.get("tag") or r.get("op", ">=") not in ALARM_OPS for r in al):
+            out.append("alarms: every rule needs an id, a tag and an op (" + ", ".join(sorted(ALARM_OPS)) + ")")
     nodes = d.get("nodes", [])
     if not isinstance(nodes, list):
         return out + ["nodes must be a list"]

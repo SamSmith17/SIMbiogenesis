@@ -29,6 +29,10 @@ var model: GraphModel
 var flow: Object
 var bridge: Object
 var automations: AutomationSim
+## The design's control logic (opts.logic: blocks already on graph ids).
+var logic: ScadaLogicRun
+## The design's alarm rules (opts.alarms), judged with nobody to acknowledge.
+var alarms: ScadaAlarmRun
 
 var step_h := 0.1
 var start_abs := 0.0
@@ -118,6 +122,8 @@ func begin(p_main: Node, p_sgv: Node, opts: Dictionary) -> String:
 	ac_on = soc > shutdown_kwh + 1e-6
 
 	automations = AutomationSim.from_model(model)
+	logic = ScadaLogicRun.from_data({"blocks": opts.get("logic", [])})
+	alarms = ScadaAlarmRun.from_rules(opts.get("alarms", []))
 	# The bridge makes a habitat's people on its first tick, so "has anybody"
 	# is asked of the model, not of the bridge.
 	for it: Dictionary in model.items_of_type("processor"):
@@ -256,6 +262,14 @@ func _step() -> void:
 		var ctx := {"numeric": numeric, "states": states,
 			"sun": Vector2(6.0, 18.0), "weekday": AutomationSim.weekday_of(t1)}
 		auto_log_n += automations.step(t0, t1, ctx, _apply_command)
+
+	var site_tags := {"sensor.battery_level": 100.0 * soc / cap_kwh,
+		"sensor.solar_power": solar_kw * 1000.0, "sensor.load_power": load_kw * 1000.0}
+	if logic != null and not logic.is_empty():
+		logic.step(model, t1, site_tags, _apply_command)
+	if alarms != null and not alarms.is_empty():
+		alarms.step(func(tag: String) -> float:
+			return logic.read(model, tag, site_tags) if logic != null else ScadaLogicRun.read_model(model, tag), t1)
 
 	# 5. The view's machine ticks (rates the flow engine reads).
 	if steps % _machine_tick_every == 0:

@@ -41,6 +41,7 @@ const PORT_COLORS := {
 	"smart_battery":Color(0.063, 0.722, 0.506, 1.0),  # smart green
 	"resource":     Color(0.580, 0.639, 0.722, 1.0),  # resource grey-blue
 	"pv":           Color(0.961, 0.620, 0.043, 1.0),  # PV amber
+	"data":         Color(0.357, 0.827, 0.745, 1.0),  # network teal (ScadaNet)
 }
 
 # Node border colours by type
@@ -490,6 +491,8 @@ var _ortho_drag_start_graph: Vector2             = Vector2.ZERO
 signal item_selected(item_id: String)
 signal item_double_tapped(item_id: String)
 signal items_multi_selected(item_ids: Array)
+## The Flows lens's "Group" chip (or its Ctrl+G): group the selection.
+signal group_selection_requested()
 signal connection_selected(conn_id: String)
 signal compound_open_requested(item_id: String)
 ## Zoom-out past a floor while inside a sub-canvas — pop up to the parent scope.
@@ -765,6 +768,29 @@ var _flows_fitted := false
 ## Lens choices that survive a reload (the view saves them with the graph).
 var flows_channel: String = ""
 var flows_window: String = "now"
+## "column" (a loop Sankey) or "torus" (the same flows as a field round a
+## central energy axis: ToroidFlowLayout).
+var flows_shape: String = "column"
+## The lens input is rebuilt at most this often (it estimates every wire):
+## it used to be rebuilt on every draw, 20 times a second while flow moved.
+const FLOWS_INPUT_MS := 700
+var _flows_inp: Array = []
+var _flows_inp_key: String = ""
+var _flows_inp_ms: int = -1000000
+## A node being dragged in the lens: its id, where it was grabbed (graph
+## units from its centre) and whether the pointer has moved yet.
+var _flows_node_drag: String = ""
+## Flows lens multi-select: the other selected nodes a drag carries along
+## ({id: offset from the pointer}), the marquee (Shift / Ctrl + drag on the
+## background), and pictures still being drawn (a redraw is due).
+var _flows_group_grab: Dictionary = {}
+var _flows_marquee := false
+var _flows_marquee_from := Vector2.ZERO
+var _flows_marquee_to := Vector2.ZERO
+var _flows_marquee_add := false
+var _flows_icon_wait := false
+var _flows_node_grab := Vector2.ZERO
+var _flows_node_moved := false
 ## Per-draw caches (valid while _draw_cache_active): each card asked for its
 ## resolved handles and scanned EVERY wire for its wired ports, several times
 ## a card — O(items × wires) per draw.
@@ -1001,6 +1027,92 @@ func _restore_view_cam(mode: String) -> bool:
 ## each keep their own zoom/pan: opening the Lab used to overwrite the freeform
 ## camera (it parked the canvas in VIEW_FREEFORM, then framed it), which is why
 ## returning from the Lab landed on an empty, absurdly-zoomed graph.
+## The Process lens (system_graph/graph_process_lens.gd), made on first use.
+var _process_lens: Control = null
+
+
+func process_lens() -> Control:
+	return _process_lens
+
+
+## Show / hide the Process lens with the view mode. `view` = the graph view.
+func sync_process_lens(view: Node) -> void:
+	var on := view_mode == GraphSiteLayout.VIEW_PROCESS
+	if on and _process_lens == null:
+		_process_lens = Control.new()
+		_process_lens.set_script(load("res://system_graph/graph_process_lens.gd"))
+		add_child(_process_lens)
+		_process_lens.call("setup", self, view)
+		if not _process_pins_pending.is_empty():
+			_process_lens.call("set_pins_data", _process_pins_pending)
+			_process_pins_pending = {}
+		if not _process_layers_pending.is_empty():
+			_process_lens.call("set_layers_data", _process_layers_pending)
+			_process_layers_pending = []
+		if not _process_screens_pending.is_empty():
+			_process_lens.call("set_screens_data", _process_screens_pending)
+			_process_screens_pending = {}
+		if not _process_icons_pending.is_empty():
+			_process_lens.call("set_icons_data", _process_icons_pending)
+			_process_icons_pending = {}
+	if _process_lens != null and bool(_process_lens.call("is_active")) != on:
+		_process_lens.call("set_active", on)
+
+
+var _process_pins_pending: Dictionary = {}
+var _process_layers_pending: Array = []
+var _process_screens_pending: Dictionary = {}
+var _process_icons_pending: Dictionary = {}
+
+
+## How the Process lens draws equipment: {view, per: {node id: view}}.
+func process_icons_data() -> Dictionary:
+	return _process_lens.call("icons_data") if _process_lens != null else _process_icons_pending
+
+
+func set_process_icons_data(data: Variant) -> void:
+	if _process_lens != null:
+		_process_lens.call("set_icons_data", data)
+	elif data is Dictionary:
+		_process_icons_pending = (data as Dictionary).duplicate(true)
+
+
+## The Process lens's widgets and screens, per scope (MimicWidgets).
+func process_screens_data() -> Dictionary:
+	return _process_lens.call("screens_data") if _process_lens != null else _process_screens_pending
+
+
+func set_process_screens_data(data: Variant) -> void:
+	if _process_lens != null:
+		_process_lens.call("set_screens_data", data)
+	elif data is Dictionary:
+		_process_screens_pending = (data as Dictionary).duplicate(true)
+
+
+func process_layers_data() -> Array:
+	return _process_lens.call("layers_data") if _process_lens != null else _process_layers_pending
+
+
+func set_process_layers_data(data: Variant) -> void:
+	if not (data is Array):
+		return
+	if _process_lens != null:
+		_process_lens.call("set_layers_data", data)
+	else:
+		_process_layers_pending = (data as Array).duplicate()
+
+
+func process_pins_data() -> Dictionary:
+	return _process_lens.call("pins_data") if _process_lens != null else _process_pins_pending
+
+
+func set_process_pins_data(data: Variant) -> void:
+	if _process_lens != null:
+		_process_lens.call("set_pins_data", data)
+	elif data is Dictionary:
+		_process_pins_pending = (data as Dictionary).duplicate(true)
+
+
 func set_view_mode(mode: String) -> void:
 	if mode.is_empty() or mode == view_mode:
 		return
@@ -1358,6 +1470,10 @@ func _gui_input(event: InputEvent) -> void:
 	if view_mode == GraphSiteLayout.VIEW_FLOWS:
 		if _handle_flows_input(event):
 			accept_event()
+		return
+	# The Process lens is its own child control: whatever reaches the canvas
+	# underneath it is not the graph's to act on.
+	if view_mode == GraphSiteLayout.VIEW_PROCESS:
 		return
 
 	# Elevation soil probe: track the pointer (the readout is drawn over the
@@ -2225,6 +2341,10 @@ func fit_items_to_view(ids: Array, pad_frac: float = 0.18) -> bool:
 		return false
 	if view_mode == GraphSiteLayout.VIEW_FLOWS:
 		flows_fit()
+		return true
+	if view_mode == GraphSiteLayout.VIEW_PROCESS:
+		if _process_lens != null:
+			_process_lens.call("fit")
 		return true
 	if view_mode != GraphSiteLayout.VIEW_FREEFORM:
 		return frame_site_items(ids)
@@ -5496,6 +5616,17 @@ func _estimate_connection_flow_now(
 	var titem: Dictionary = model.get_item(tid)
 	if sitem.is_empty() or titem.is_empty():
 		return {"watts": WIRE_FLOW_FLOOR, "reverse": false, "active": false, "shed": false}
+	# A hydro turbine's DC leads (+ / −) carry what it makes, whatever they
+	# land on (a processor wired to a controller would otherwise read as an
+	# AC load below).
+	if pol == "positive" or pol == "negative":
+		for gi: Dictionary in [sitem, titem]:
+			var gsp0: Dictionary = gi.get("specs", {}) as Dictionary
+			if str(gi.get("type", "")) == "processor" and (str(gsp0.get("role", "")) in ["siphon_hydro", "hydro"]
+					or not str(gsp0.get("turbine_kind", "")).is_empty()):
+				var gw0: float = maxf(0.0, float(gsp0.get("live_power_w", float(gsp0.get("current_output_kw", 0.0)) * 1000.0)))
+				return {"watts": maxf(gw0, 5.0), "reverse": gi == titem, "active": gw0 > WIRE_DEAD_W}
+
 	if _ac_shed_active and _connection_is_ac_power(conn, sitem, titem, pol):
 		return {"watts": WIRE_FLOW_FLOOR, "reverse": false, "active": false, "shed": true}
 	var st: String = sitem.get("type", "") as String
@@ -5565,8 +5696,11 @@ func _estimate_connection_flow_now(
 			if dc_o is Dictionary and str((dc_o as Dictionary).get("kind", "")) == "dc_electricity":
 				has_dc_out = true
 				break
-		if has_dc_out:
-			var gw2: float = maxf(0.0, float(gsp2.get("current_output_kw", 0.0)) * 1000.0)
+		# A hydro turbine's DC leads carry what it makes (`live_power_w`).
+		var turbine := str(gsp2.get("role", "")) in ["siphon_hydro", "hydro"] or not str(gsp2.get("turbine_kind", "")).is_empty()
+		if has_dc_out or turbine:
+			var gw2: float = maxf(0.0, float(gsp2.get("live_power_w",
+				float(gsp2.get("current_output_kw", 0.0)) * 1000.0)))
 			return {"watts": maxf(gw2, 5.0), "reverse": false, "active": gw2 > WIRE_DEAD_W}
 
 	# PV string → controller: only animate when panels are actually producing
@@ -5598,7 +5732,10 @@ func _estimate_connection_flow_now(
 		# over the |net|*0.95 heuristic.
 		var bat_w := hint_battery_w(net)
 		var w_b: float  = minf(12000.0, maxf(WIRE_FLOW_FLOOR, absf(bat_w)))
-		var rev:  bool  = (bat_w < 0.0) # discharge: power runs battery → controller
+		# Discharge runs battery → controller, charge the other way, whichever
+		# end the wire was drawn from.
+		var bat_is_src := _is_battery_type(st) or sid == "virtual_battery"
+		var rev:  bool  = (bat_w < 0.0) != bat_is_src
 		var virtual_pair := sid.begins_with("virtual_") or tid.begins_with("virtual_")
 		var active_b: bool = ((w_b > WIRE_DEAD_W * 2.0) or solar_w > WIRE_DEAD_W) \
 			and dc_circuit_live(live_power_hint, sid, tid, virtual_pair)
@@ -6129,6 +6266,22 @@ func _flow_is_store(item: Dictionary) -> bool:
 ## off its imbalance per resource) and a signature that only moves when the
 ## topology or a flow changes by ~25 %.
 func _flows_input() -> Array:
+	var wire := wire_style_override if not wire_style_override.is_empty() else "bezier"
+	var ckey := "%d|%d|%s|%s|%s|%s|%s|%s" % [model.struct_rev if model != null else 0,
+		model.user_rev if model != null else 0, active_scope_id, flows_channel, flows_window,
+		flows_shape, wire, str(flow_style.hash())]
+	var now_ms := Time.get_ticks_msec()
+	if not _flows_inp.is_empty() and ckey == _flows_inp_key and now_ms - _flows_inp_ms < FLOWS_INPUT_MS:
+		return _flows_inp
+	PerfSpan.begin("gv_flows_input")
+	_flows_inp = _flows_input_build(wire)
+	PerfSpan.end("gv_flows_input")
+	_flows_inp_key = ckey
+	_flows_inp_ms = now_ms
+	return _flows_inp
+
+
+func _flows_input_build(wire: String) -> Array:
 	var items: Array = _compute_visible_items()
 	var conns: Array = _compute_visible_connections()
 	var solar_w: float = _solar_array_output_w() + _renewable_output_w()
@@ -6138,12 +6291,29 @@ func _flows_input() -> Array:
 	if use_hist:
 		var span := 24.0 if flows_window == "24h" else 168.0
 		hist = flow_history.window(flow_now_abs_h - span, flow_now_abs_h)
+	var by_id := {}
+	for it0: Dictionary in items:
+		by_id[str(it0.get("id", ""))] = it0
 	var edges: Array = []
 	var keys := {}
 	var in_by := {}
 	var out_by := {}
 	var touched := {}
 	var sig_parts: PackedStringArray = []
+	var topo_parts: PackedStringArray = []
+	# A DC pair (+ and −) carries ONE flow: the second wire between the same
+	# two things joins the first edge instead of doubling it.
+	var edge_of_pair := {}
+	# What each converter gives out on its AC wires (its display number).
+	var ac_out := {}
+	var ac_wired := {}
+	for conn: Dictionary in conns:
+		var pol := str(conn.get("polarity", ""))
+		if pol in ["ac", "load", "ac_240"]:
+			for side in ["source_item_id", "target_item_id"]:
+				var sid := str(conn.get(side, ""))
+				if str((by_id.get(sid, {}) as Dictionary).get("type", "")) == "controller":
+					ac_wired[sid] = true
 	for conn: Dictionary in conns:
 		var cid := str(conn.get("id", ""))
 		var est := _estimate_connection_flow(conn, solar_w, load_w)
@@ -6164,6 +6334,17 @@ func _flows_input() -> Array:
 			var t := a
 			a = b
 			b = t
+		if not bool(fv.get("resource", false)):
+			var pk := "%s|%s|%s" % [a if a < b else b, b if a < b else a, key]
+			if edge_of_pair.has(pk):
+				((edges[int(edge_of_pair[pk])] as Dictionary)["conn_ids"] as Array).append(cid)
+				continue
+			edge_of_pair[pk] = edges.size()
+		var pol2 := str(conn.get("polarity", ""))
+		if pol2 in ["ac", "load", "ac_240"]:
+			for end in [a, b]:
+				if ac_wired.has(end):
+					ac_out[end] = float(ac_out.get(end, 0.0)) + v
 		edges.append({"id": cid, "a": a, "b": b, "key": key, "value": v, "conn_ids": [cid]})
 		touched[a] = true
 		touched[b] = true
@@ -6171,23 +6352,58 @@ func _flows_input() -> Array:
 		var kb := "%s|%s" % [b, key]
 		out_by[ka] = float(out_by.get(ka, 0.0)) + v
 		in_by[kb] = float(in_by.get(kb, 0.0)) + v
-		sig_parts.append("%s:%s:%s>%s:%d" % [cid, key, a, b, int(round(log(v) / log(1.25)))])
+		# WHAT flows (the topology) and, coarsely, HOW MUCH: the lens lays
+		# itself out again soon after the first changes and rarely for the second.
+		topo_parts.append("%s:%s:%s>%s" % [cid, key, a, b])
+		sig_parts.append("%s:%d" % [cid, int(round(log(v) / log(1.6)))])
 	var nodes: Array = []
 	var idle: Array = []
 	var labels := {}
 	var types := {}
-	var by_id := {}
+	var visuals := {}
+	var info := {}
 	for it: Dictionary in items:
 		var iid := str(it.get("id", ""))
 		if iid.is_empty():
 			continue
-		by_id[iid] = it
+		var it_type := str(it.get("type", ""))
+		var it_sp: Dictionary = it.get("specs", {}) as Dictionary
+		if it_type == "resource":
+			visuals[iid] = {"kind": "store", "level": clampf(float(it_sp.get("level", 0.0)), 0.0, 1.0),
+				"color": ResourceKinds.wire_color(str(it_sp.get("resource_kind", "water")))}
+		elif _is_battery_type(it_type):
+			var soc := clampf(float(it_sp.get("soc", 0.5)), 0.0, 1.0)
+			visuals[iid] = {"kind": "battery", "level": soc,
+				"color": GraphTheme.WARN if soc <= 0.2 else GraphTheme.OK}
 		labels[iid] = _flow_node_name(it)
-		types[iid] = _type_title(str(it.get("type", "")), it.get("specs", {}) as Dictionary).capitalize()
-		if touched.has(iid):
-			nodes.append({"id": iid, "label": labels[iid]})
-		else:
+		types[iid] = _type_title(it_type, it_sp).capitalize()
+		if not touched.has(iid):
 			idle.append(iid)
+			continue
+		var nd := {"id": iid, "label": labels[iid]}
+		var tier := _flows_tier(it)
+		if tier >= 0:
+			nd["tier"] = tier
+		var inf := {}
+		if flows_is_array(it):
+			var asz := _flows_array_size(it)
+			nd["w"] = asz.x
+			nd["h"] = asz.y
+			inf["media"] = "array"
+			topo_parts.append("%s=%dx%d" % [iid, int(asz.x), int(asz.y)])
+		elif it_type == "panel":
+			# One panel: drawn as a module (its model seen side-on is a sliver).
+			nd["w"] = FLOWS_ICON_W
+			nd["h"] = FLOWS_ICON_H
+			inf["media"] = "panel"
+			topo_parts.append("%s=panel" % iid)
+		elif not visuals.has(iid) and not str(_flows_model_of(it)[0]).is_empty():
+			nd["w"] = FLOWS_ICON_W
+			nd["h"] = FLOWS_ICON_H
+			topo_parts.append("%s=pic" % iid)
+		inf["value"] = _flows_value_text(it, iid, in_by, out_by, ac_out, ac_wired)
+		info[iid] = inf
+		nodes.append(nd)
 	# Boundaries: per node and resource, what does not balance.
 	var bin: Array = []
 	var bout: Array = []
@@ -6205,16 +6421,38 @@ func _flows_input() -> Array:
 		var scale := maxf(float(out_by.get(k, 0.0)), float(in_by.get(k, 0.0)))
 		if absf(d) <= scale * 0.02:
 			continue
-		var store := _flow_is_store(by_id[nid])
+		var bit: Dictionary = by_id[nid]
+		var bt := str(bit.get("type", ""))
+		var store := _flow_is_store(bit)
+		var battery := _is_battery_type(bt)
 		if d > 0.0:
-			bin.append({"node": nid, "key": key2, "value": d, "label": "from store" if store else "made"})
+			# Where it comes from: the sun, the wind, falling water; a store's
+			# own stock is not drawn (its card says it is giving).
+			var src := _flows_source_word(bit)
+			var bd := {"node": nid, "key": key2, "value": d, "label": src if src != "" else "made"}
+			if src == "sunlight":
+				bd["sun"] = true
+			if store:
+				bd["label"] = "from its charge" if battery else "from its stock"
+				bd["hide"] = true
+			elif bt == "controller":
+				bd["label"] = "from other sources"
+			bin.append(bd)
 		else:
-			bout.append({"node": nid, "key": key2, "value": -d, "label": "into store" if store else "used"})
+			var bd2 := {"node": nid, "key": key2, "value": -d, "label": "used"}
+			if store:
+				bd2["label"] = "into its charge" if battery else "into its stock"
+				bd2["hide"] = true
+			elif bt == "controller":
+				bd2["label"] = "losses"
+			bout.append(bd2)
 	sig_parts.sort()
-	var sig := "%s|%s|%s|%s|%d|%d|%d|%d" % [active_scope_id, flows_channel, flows_window,
-		",".join(sig_parts), int(round(float(flow_style.get("thickness", 22.0)))),
+	topo_parts.sort()
+	var topo := "%s|%s|%s|%s|%s|%s|%d|%d|%d|%d" % [active_scope_id, flows_channel, flows_window,
+		flows_shape, wire, ",".join(topo_parts), int(round(float(flow_style.get("thickness", 22.0)))),
 		int(round(float(flow_style.get("lens_gap", 74.0)))), int(round(float(flow_style.get("lens_node_w", 170.0)))),
 		int(round(float(flow_style.get("lens_return_gap", 46.0))))]
+	var sig := topo + "#" + ",".join(sig_parts)
 	var kl: Array = keys.keys()
 	kl.sort_custom(func(x, y) -> bool:
 		if str(x) == "electricity":
@@ -6223,11 +6461,86 @@ func _flows_input() -> Array:
 			return false
 		return str(x) < str(y))
 	return [sig, {"nodes": nodes, "edges": edges, "bin": bin, "bout": bout, "idle": idle,
-		"labels": labels, "types": types, "keys": kl,
+		"labels": labels, "types": types, "keys": kl, "topo": topo, "visuals": visuals, "info": info,
 		"opts": {"style": flow_style, "thickness": float(flow_style.get("thickness", 22.0)) * FLOWS_THICK_MULT,
-			"layer_gap": float(flow_style.get("lens_gap", 74.0)), "node_h": 40.0,
+			"wire": wire, "ring_gap": float(flow_style.get("lens_return_gap", 46.0)) * 0.44,
+			"layer_gap": float(flow_style.get("lens_gap", 74.0)), "node_h": FLOWS_NODE_H,
 			"min_node_w": float(flow_style.get("lens_node_w", 170.0)),
 			"return_gap": float(flow_style.get("lens_return_gap", 46.0))}}]
+
+
+const FLOWS_NODE_H := 48.0
+const FLOWS_ICON_H := 68.0
+const FLOWS_ICON_W := 236.0
+
+
+## The Flows lens's reading order (LoopSankeyLayout tiers): what makes
+## electricity on top, the converters (controllers, inverters) under it, the
+## batteries under those. -1 = no rule.
+func _flows_tier(it: Dictionary) -> int:
+	var t := str(it.get("type", ""))
+	var sp: Dictionary = it.get("specs", {}) as Dictionary
+	if _is_generator_type(t) or flows_is_array(it):
+		return 0
+	if t == "processor" and (str(sp.get("role", "")) in ["siphon_hydro", "hydro"]
+			or not str(sp.get("turbine_kind", "")).is_empty()):
+		return 0
+	if t == "controller":
+		return 1
+	if _is_battery_type(t) or (t == "compound" and _compound_displays_as_battery(sp)):
+		return 2
+	return -1
+
+
+## What a source takes its flow from, in words ("" = it simply makes it).
+func _flows_source_word(it: Dictionary) -> String:
+	var t := str(it.get("type", ""))
+	var sp: Dictionary = it.get("specs", {}) as Dictionary
+	if t == "panel" or flows_is_array(it):
+		return "sunlight"
+	if t == "pbi" and str(sp.get("pbi_kind", sp.get("resource_kind", ""))).contains("sun"):
+		return "sunlight"
+	if t == "wind":
+		return "wind"
+	if t == "hydro" or (t == "processor" and (str(sp.get("role", "")) in ["siphon_hydro", "hydro"]
+			or not str(sp.get("turbine_kind", "")).is_empty())):
+		return "falling water"
+	return ""
+
+
+## The number a Flows lens card shows: what the node is doing right now.
+## A controller with AC wired shows its AC output (its DC charging is the
+## battery's to show).
+func _flows_value_text(it: Dictionary, iid: String, in_by: Dictionary, out_by: Dictionary,
+		ac_out: Dictionary, ac_wired: Dictionary) -> String:
+	var t := str(it.get("type", ""))
+	var kk := ""
+	for kx in ["electricity"] + in_by.keys().map(func(x): return str(x).get_slice("|", 1)) \
+			+ out_by.keys().map(func(x): return str(x).get_slice("|", 1)):
+		if in_by.has("%s|%s" % [iid, kx]) or out_by.has("%s|%s" % [iid, kx]):
+			kk = str(kx)
+			break
+	var vi := float(in_by.get("%s|%s" % [iid, kk], 0.0))
+	var vo := float(out_by.get("%s|%s" % [iid, kk], 0.0))
+	if t == "controller" and ac_wired.has(iid):
+		return "AC out %s" % _flow_fmt("electricity", float(ac_out.get(iid, 0.0)))
+	if _is_battery_type(t) or (t == "compound" and _compound_displays_as_battery(it.get("specs", {}) as Dictionary)):
+		if vi > vo + 1.0:
+			return "charging %s" % _flow_fmt(kk, vi - vo)
+		if vo > vi + 1.0:
+			return "giving %s" % _flow_fmt(kk, vo - vi)
+		return "holding"
+	if t == "resource":
+		if vi > vo:
+			return "filling %s" % _flow_fmt(kk, vi - vo)
+		if vo > vi:
+			return "emptying %s" % _flow_fmt(kk, vo - vi)
+		return "steady"
+	if _flows_tier(it) == 0 or vi <= 0.0:
+		return "making %s" % _flow_fmt(kk, vo) if vo > 0.0 else ""
+	if vo <= 0.0 or t in ["appliance", "acload"] or _is_load_group_item(it):
+		return "using %s" % _flow_fmt(kk, vi)
+	return "%s in · %s out" % [_flow_fmt(kk, vi), _flow_fmt(kk, vo)]
 
 
 func _draw_flows_lens() -> void:
@@ -6236,6 +6549,7 @@ func _draw_flows_lens() -> void:
 	_cached_visible_connections = _compute_visible_connections()
 	_flow_lens.channel = flows_channel
 	_flow_lens.window = flows_window
+	_flow_lens.set_shape(flows_shape)
 	var fill := Color(C_CANVAS_BG.r, C_CANVAS_BG.g, C_CANVAS_BG.b, C_CANVAS_BG.a * canvas_bg_alpha)
 	draw_rect(Rect2(Vector2.ZERO, size), fill)
 	_draw_dot_grid()
@@ -6253,6 +6567,13 @@ func _draw_flows_lens() -> void:
 	if not _flows_fitted:
 		flows_fit()
 	_flow_lens.draw(self, size * 0.5, _pan, _zoom, _flows_draw_opts())
+	if _flows_marquee:
+		var mr := Rect2(_flows_marquee_from, Vector2.ZERO).expand(_flows_marquee_to)
+		draw_rect(mr, Color(UITheme.C_PRIMARY, 0.10))
+		draw_rect(mr, Color(UITheme.C_PRIMARY, 0.85), false, 1.5)
+	if _flows_icon_wait:
+		_flows_icon_wait = false
+		get_tree().create_timer(0.5).timeout.connect(queue_redraw, CONNECT_ONE_SHOT)
 	# The Sankey scale bar, one row per resource on screen, under the header.
 	_flow_legend_rows.clear()
 	var refs: Dictionary = _flow_lens.cur.get("refs", {})
@@ -6269,6 +6590,9 @@ func _flows_draw_opts() -> Dictionary:
 		"flowing": _flow_live and _sim_flow_mult > 0.0,
 		"blur": _high_speed_lod,
 		"selected": selected_item_id,
+		"selected_set": _flows_selected_set(),
+		"icon_of": Callable(self, "_flows_icon_of"),
+		"draw_media": Callable(self, "_flows_draw_media"),
 		"font": UITheme.font("semibold"),
 		"color_of": Callable(self, "_flow_key_color"),
 		"name_of": Callable(self, "_flow_key_name"),
@@ -6276,6 +6600,139 @@ func _flows_draw_opts() -> Dictionary:
 		"node_color": Callable(self, "_flows_node_color"),
 		"label_scale": float(flow_style.get("lens_label", 1.0)),
 	}
+
+
+## What a controller gives out on its AC wires (W); -1 when no AC wire
+## touches it (a plain charge controller).
+func controller_ac_out_w(item: Dictionary) -> float:
+	if model == null:
+		return -1.0
+	var iid := str(item.get("id", ""))
+	var any := false
+	var w := 0.0
+	var sums := _flow_sums()
+	for c in model.connections:
+		var cd: Dictionary = c
+		if str(cd.get("source_item_id", "")) != iid and str(cd.get("target_item_id", "")) != iid:
+			continue
+		if not (str(cd.get("polarity", "")) in ["ac", "load", "ac_240"]):
+			continue
+		any = true
+		var est := _estimate_connection_flow(cd, sums.x + sums.y, sums.z)
+		if bool(est.get("active", false)) and not bool(est.get("shed", false)):
+			w += maxf(0.0, float(est.get("watts", 0.0)))
+	return w if any else -1.0
+
+
+func _flows_selected_set() -> Dictionary:
+	var d := {}
+	for sid in selected_item_ids:
+		d[str(sid)] = true
+	if not selected_item_id.is_empty():
+		d[selected_item_id] = true
+	return d
+
+
+## A node's picture in the Flows lens: the same stylized model picture the
+## Process lens draws ([texture, true]), else a pictogram ([texture, false]),
+## else []. A picture still being drawn asks for a redraw.
+func _flows_icon_of(item_id: String) -> Array:
+	var it := model.get_item(item_id) if model != null else {}
+	if it.is_empty():
+		return []
+	var view := MimicIcons.VIEW_SIDE
+	if _process_lens != null and is_instance_valid(_process_lens):
+		view = str(_process_lens.call("icon_view_of", item_id))
+	if view == MimicIcons.VIEW_BOXES:
+		return []
+	var m := _flows_model_of(it)
+	if not str(m[0]).is_empty() and model_preview_service != null and is_instance_valid(model_preview_service) \
+			and model_preview_service.has_method("get_icon"):
+		var tex := model_preview_service.call("get_icon", str(m[0]), view, m[1]) as Texture2D
+		if tex != null:
+			_flows_last_pic[item_id] = tex
+			return [tex, true]
+		_flows_icon_wait = true
+		if _flows_last_pic.has(item_id):
+			return [_flows_last_pic[item_id], true]
+	var g := MimicIcons.glyph_for(it)
+	if not g.is_empty():
+		return [UiIcons.icon(g, 96, 1.75), false]
+	return []
+
+
+var _flows_last_pic: Dictionary = {}
+var _flows_prop_models: Dictionary = {}
+var _flows_prop_models_rev := -1
+
+
+## [model id, build extras] of a node: its own `model_id`, else its placed
+## prop's; ["", {}] when it has none.
+func _flows_model_of(it: Dictionary) -> Array:
+	var sp: Dictionary = it.get("specs", {}) as Dictionary
+	var mid := str(sp.get("model_id", ""))
+	if not mid.is_empty():
+		return [mid, {}]
+	var pid := str(sp.get("bound_prop_id", it.get("bound_prop_id", "")))
+	if pid.is_empty():
+		return ["", {}]
+	var rev := model.struct_rev if model != null else 0
+	if rev != _flows_prop_models_rev:
+		_flows_prop_models_rev = rev
+		_flows_prop_models = {}
+	if _flows_prop_models.has(pid):
+		return _flows_prop_models[pid]
+	var res := ["", {}]
+	var gv: Node = ServiceLocator.graph()
+	var main: Node = gv.call("_get_scene_main_node") if gv != null and gv.has_method("_get_scene_main_node") else null
+	var loader: Node = gv.call("_find_terrain_loader", main) if main != null and gv.has_method("_find_terrain_loader") else null
+	if loader != null and loader.has_method("get_prop_record"):
+		var rec: Dictionary = loader.call("get_prop_record", pid)
+		if not rec.is_empty() and not str(rec.get("model_id", "")).is_empty():
+			res = [str(rec["model_id"]), PlacedPropRuntime.model_extras(rec)]
+	_flows_prop_models[pid] = res
+	return res
+
+
+## An array's panels in the Flows lens (its card's picture zone).
+func _flows_draw_media(item_id: String, zone: Rect2) -> void:
+	var it := model.get_item(item_id) if model != null else {}
+	if it.is_empty():
+		return
+	var sp: Dictionary = it.get("specs", {}) as Dictionary
+	draw_array_cells(zone, sp, it, GraphTheme.accent("panel"), false)
+
+
+## A solar array (an "array" or a Solar designer group) in the Flows lens.
+static func flows_is_array(it: Dictionary) -> bool:
+	if str(it.get("type", "")) != "compound":
+		return false
+	var ck := str((it.get("specs", {}) as Dictionary).get("compound_kind", ""))
+	return ck == "array" or ck == "pv_design"
+
+
+## The card an array gets in the Flows lens: wide enough to show every
+## panel, as tall as its picture's shape needs, plus a name strip.
+func _flows_array_size(it: Dictionary) -> Vector2:
+	var sp: Dictionary = it.get("specs", {}) as Dictionary
+	var cells: Dictionary = sp.get("array_cells", {}) if sp.get("array_cells") is Dictionary else {}
+	if cells.is_empty():
+		cells = GraphSolarArrays.cells_for_specs(sp)
+	var w_m := float(cells.get("w_m", 0.0))
+	var h_m := float(cells.get("h_m", 0.0))
+	var n := (cells.get("cells", []) as Array).size()
+	if w_m <= 0.0 or h_m <= 0.0:
+		return Vector2(260.0, 120.0)
+	var aspect := clampf(w_m / h_m, 0.25, 8.0)
+	# More panels, a bigger card (each panel still a few units across).
+	var area := clampf(2600.0 * sqrt(float(maxi(n, 1))), 22000.0, 160000.0)
+	var ph := clampf(sqrt(area / aspect), 70.0, 300.0)
+	var pw := clampf(ph * aspect, 200.0, 620.0)
+	ph = clampf(pw / aspect, 60.0, 300.0)
+	return Vector2(roundf(pw + 16.0), roundf(ph + FLOWS_CARD_HEAD + 10.0))
+
+
+const FLOWS_CARD_HEAD := 30.0
 
 
 func _flows_node_color(item_id: String) -> Color:
@@ -6302,19 +6759,61 @@ func flows_lens() -> GraphFlowLens:
 
 func set_flows_channel(key: String) -> void:
 	flows_channel = key
+	_flow_lens.force_next()
 	_flows_fitted = false
 	queue_redraw()
 
 
 func set_flows_window(w: String) -> void:
 	flows_window = w
+	_flow_lens.force_next()
 	_flows_fitted = false
 	queue_redraw()
 
 
-## Pointer input in the Flows lens: wheel zoom, drag to pan, click a node to
-## select it, double-click a group to go inside, click a chip to filter.
-## Nodes never move here: the lens is a way of looking.
+## "column" or "torus".
+func set_flows_shape(sh: String) -> void:
+	sh = "torus" if sh == "torus" else "column"
+	if sh == flows_shape:
+		return
+	flows_shape = sh
+	_flow_lens.set_shape(sh)
+	_flows_fitted = false
+	queue_redraw()
+
+
+## Torus: swap the lobes (saved with the graph).
+func set_flows_mirror(on: bool) -> void:
+	_flow_lens.set_mirror(on)
+	_flows_inp = []
+	_flows_fitted = false
+	queue_redraw()
+
+
+func flows_mirror() -> bool:
+	return _flow_lens.mirror
+
+
+## Where the player moved nodes in the lens (saved with the graph).
+func flows_pins_data() -> Dictionary:
+	return _flow_lens.pins_to_data()
+
+
+func set_flows_pins_data(data: Variant) -> void:
+	_flow_lens.pins_from_data(data)
+	queue_redraw()
+
+
+## Canvas position → the lens's graph units.
+func _flows_world(pos: Vector2) -> Vector2:
+	return (pos - size * 0.5 - _pan) / maxf(_zoom, 1e-6)
+
+
+## Pointer input in the Flows lens: wheel zoom, drag the background to pan,
+## click a node to select it, DRAG a node to move it (its ribbons follow;
+## right-click puts it back), double-click a group to go inside, click a
+## chip to filter or to switch between the column and the torus. A moved
+## node is the lens's own: the graph's x / y are never written.
 func _handle_flows_input(event: InputEvent) -> bool:
 	var center := size * 0.5
 	if event is InputEventMouseButton:
@@ -6330,14 +6829,58 @@ func _handle_flows_input(event: InputEvent) -> bool:
 			if mb.pressed:
 				var chip := _flow_lens.pick_chip(mb.position)
 				if not chip.is_empty() and mb.button_index == MOUSE_BUTTON_LEFT:
-					if str(chip["kind"]) == "channel":
-						set_flows_channel(str(chip["value"]))
-					else:
-						set_flows_window(str(chip["value"]))
+					match str(chip["kind"]):
+						"channel":
+							set_flows_channel(str(chip["value"]))
+						"shape":
+							set_flows_shape(str(chip["value"]))
+						"reset":
+							_flow_lens.clear_pins()
+							queue_redraw()
+						"swap":
+							set_flows_mirror(not _flow_lens.mirror)
+						"group":
+							group_selection_requested.emit()
+						_:
+							set_flows_window(str(chip["value"]))
 					layout_changed.emit()
 					return true
+				# Right-click a moved node: back to where the layout had it.
+				if mb.button_index == MOUSE_BUTTON_RIGHT:
+					var rid := _flow_lens.pick_node(mb.position, center, _pan, _zoom)
+					if rid != "" and _flow_lens.pins().has(rid):
+						_flow_lens.clear_pin(rid)
+						layout_changed.emit()
+						queue_redraw()
+						return true
 				var nid := _flow_lens.pick_node(mb.position, center, _pan, _zoom) \
 					if mb.button_index == MOUSE_BUTTON_LEFT else ""
+				var multi := mb.button_index == MOUSE_BUTTON_LEFT and (mb.shift_pressed or mb.ctrl_pressed or mb.meta_pressed)
+				if nid != "" and multi and not mb.double_click:
+					# Shift / Ctrl + click: add or take away one node.
+					_flows_toggle_select(nid)
+					return true
+				if nid == "" and multi:
+					# Shift / Ctrl + drag on the background: a selection box.
+					_flows_marquee = true
+					_flows_marquee_add = true
+					_flows_marquee_from = mb.position
+					_flows_marquee_to = mb.position
+					return true
+				if nid != "" and not mb.double_click:
+					# A press on a node: a drag moves it, a click selects it.
+					_flows_node_drag = nid
+					_flow_lens.dragging = true
+					_flows_node_moved = false
+					_flows_node_grab = _flow_lens.node_center(nid) - _flows_world(mb.position)
+					_flows_press_pos = mb.position
+					# A node in a multi-selection carries the others with it.
+					_flows_group_grab = {}
+					if selected_item_ids.size() > 1 and selected_item_ids.has(nid):
+						for sid in selected_item_ids:
+							if str(sid) != nid and (_flow_lens.cur.get("nodes", {}) as Dictionary).has(str(sid)):
+								_flows_group_grab[str(sid)] = _flow_lens.node_center(str(sid)) - _flows_world(mb.position)
+					return true
 				if nid != "":
 					if mb.double_click:
 						var it := model.get_item(nid) if model != null else {}
@@ -6354,6 +6897,21 @@ func _handle_flows_input(event: InputEvent) -> bool:
 				_flows_press_pos = mb.position
 				return true
 			else:
+				if _flows_marquee and mb.button_index == MOUSE_BUTTON_LEFT:
+					_flows_marquee = false
+					_flows_finish_marquee()
+					return true
+				if _flows_node_drag != "" and mb.button_index == MOUSE_BUTTON_LEFT:
+					if _flows_node_moved:
+						layout_changed.emit()
+					elif not _flows_group_grab.is_empty():
+						pass   # a click on a node of the selection keeps the selection
+					else:
+						_select_item(_flows_node_drag)
+					_flows_node_drag = ""
+					_flows_group_grab = {}
+					_flow_lens.dragging = false
+					return true
 				if _flows_drag and not _flows_drag_moved and mb.button_index == MOUSE_BUTTON_LEFT:
 					var ri := _flow_lens.pick_ribbon(mb.position, center, _pan, _zoom)
 					var rb := _flow_lens.ribbon(ri)
@@ -6366,6 +6924,21 @@ func _handle_flows_input(event: InputEvent) -> bool:
 				return true
 	if event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
+		if _flows_node_drag != "":
+			if not _flows_node_moved and mm.position.distance_to(_flows_press_pos) > 4.0:
+				_flows_node_moved = true
+			if _flows_node_moved:
+				var w := _flows_world(mm.position)
+				var pins := {_flows_node_drag: w + _flows_node_grab}
+				for sid in _flows_group_grab:
+					pins[sid] = w + (_flows_group_grab[sid] as Vector2)
+				_flow_lens.set_pins(pins)
+				queue_redraw()
+			return true
+		if _flows_marquee:
+			_flows_marquee_to = mm.position
+			queue_redraw()
+			return true
 		if _flows_drag:
 			if mm.position.distance_to(_flows_press_pos) > 3.0:
 				_flows_drag_moved = true
@@ -6390,6 +6963,46 @@ func _handle_flows_input(event: InputEvent) -> bool:
 			flows_fit()
 			return true
 	return false
+
+
+func _flows_toggle_select(nid: String) -> void:
+	var ids: Array[String] = selected_item_ids.duplicate()
+	if ids.is_empty() and not selected_item_id.is_empty():
+		ids.append(selected_item_id)
+	if ids.has(nid):
+		ids.erase(nid)
+	else:
+		ids.append(nid)
+	_flows_set_selection(ids)
+
+
+func _flows_set_selection(ids: Array[String]) -> void:
+	if ids.size() == 1:
+		_select_item(ids[0])
+		return
+	if ids.is_empty():
+		_select_item("")
+		return
+	selected_item_ids = ids
+	selected_item_id = ""
+	selected_connection_id = ""
+	items_multi_selected.emit(ids.duplicate())
+	queue_redraw()
+
+
+## The Flows lens's selection box: every node it touches joins the selection.
+func _flows_finish_marquee() -> void:
+	var r := Rect2(_flows_marquee_from, Vector2.ZERO).expand(_flows_marquee_to)
+	var ids: Array[String] = selected_item_ids.duplicate()
+	if ids.is_empty() and not selected_item_id.is_empty():
+		ids.append(selected_item_id)
+	if r.size.length() > 4.0:
+		for nid in (_flow_lens.cur.get("nodes", {}) as Dictionary):
+			var nr := _flow_lens.node_rect(str(nid), size * 0.5, _pan, _zoom)
+			if nr.intersects(r) and not ids.has(str(nid)):
+				ids.append(str(nid))
+	_flows_set_selection(ids)
+	queue_redraw()
 
 
 ## Draw one wire as a flow ribbon (GraphFlowRibbons) under the graph's style.
@@ -8990,6 +9603,12 @@ func _draw() -> void:
 	# Flows: the scope as a loop Sankey (GraphFlowLens) — its own pass.
 	if view_mode == GraphSiteLayout.VIEW_FLOWS:
 		_draw_flows_lens()
+		if pm != null:
+			pm.end("gv_draw")
+		return
+	# Process: the picture is a child control (GraphProcessLens) over this.
+	if view_mode == GraphSiteLayout.VIEW_PROCESS:
+		draw_rect(Rect2(Vector2.ZERO, size), MimicSymbols.BG)
 		if pm != null:
 			pm.end("gv_draw")
 		return
@@ -13815,10 +14434,11 @@ static func _route_entry_world(e: Variant) -> Vector3:
 	return Vector3.INF
 
 
-## The bends the player can edit: the locked route, else none (an auto-routed
-## run's shape belongs to the router until a bend is added).
+## The bends the player can edit: the locked route, a solver run's own bend
+## points, else none (an auto-routed run's shape belongs to the router until
+## a bend is added).
 func _run_route(conn: Dictionary) -> Array:
-	if not bool(conn.get("route_locked", false)):
+	if not bool(conn.get("route_locked", false)) and str(conn.get("route_solver", "")) != "v2":
 		return []
 	return (conn.get("route_3d", []) as Array).duplicate(true)
 

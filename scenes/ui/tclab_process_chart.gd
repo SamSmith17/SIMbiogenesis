@@ -88,7 +88,7 @@ func _draw() -> void:
 	while t <= _t_end_h + 1e-6:
 		var x := _x_of(t, r)
 		draw_line(Vector2(x, r.position.y), Vector2(x, r.end.y), C_GRID, 1.0)
-		draw_string(font, Vector2(x - 8.0, size.y - 3.0), ("%.0f h" % t) if step >= 1.0 else ("%.2g" % t), HORIZONTAL_ALIGNMENT_LEFT, -1, fs, C_TEXT)
+		draw_string(font, Vector2(x - 8.0, size.y - 3.0), ("%.0f h" % t) if step >= 1.0 else ("%d min" % int(round(t * 60.0))), HORIZONTAL_ALIGNMENT_LEFT, -1, fs, C_TEXT)
 		t += step
 	for li in _lanes.size():
 		var lane: Dictionary = _lanes[li]

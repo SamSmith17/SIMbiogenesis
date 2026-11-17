@@ -528,6 +528,8 @@ func _rebuild_for_item(item: Dictionary) -> void:
 				_build_pp_sheet_press_section(specs)
 			elif str(specs.get("role", "")) == "cartesian_machine":
 				_build_cartesian_machine_section(item, specs)
+			elif str(specs.get("role", "")) == FlowCtl.ROLE:
+				_build_flowctl_section(specs)
 			else:
 				_build_processor_energy_picker(specs)
 				_num_field("Power Draw (W)",     specs.get("watts", 0.0),       "specs/watts",       0, 100000, 10.0)
@@ -538,7 +540,7 @@ func _rebuild_for_item(item: Dictionary) -> void:
 					_readonly_field("Daily design", daily_note)
 			var _role := str(specs.get("role", ""))
 			if _role != "cartesian_machine" and _role != "pp_sheet_press" \
-					and _role != "siphon_hydro":
+					and _role != "siphon_hydro" and _role != FlowCtl.ROLE:
 				_build_process_recipe_section(specs)
 			elif _role == "pp_sheet_press":
 				pass  # recipe picker lives in _build_pp_sheet_press_section
@@ -3097,6 +3099,23 @@ func _find_owner_graph_view() -> Node:
 	while n != null and not n.has_method("npc_population_summary"):
 		n = n.get_parent()
 	return n
+
+
+## A valve or pump in a line (FlowCtl): what it is doing and its few numbers.
+func _build_flowctl_section(specs: Dictionary) -> void:
+	var kind := FlowCtl.kind_of(specs)
+	var unit := ResourceKinds.default_unit(str(specs.get("ctl_resource", "water")))
+	_readonly_field("Carries", ResourceKinds.display_name(str(specs.get("ctl_resource", "water"))))
+	_readonly_field("Now", FlowCtl.state_words(specs))
+	_num_field("Full flow (%s/h)" % unit, float(specs.get("max_rate", 0.0)), "specs/max_rate", 0, 1000000, 10.0)
+	if bool(specs.get("throttle", false)):
+		_num_field("Opening (0 to 1)", float(specs.get("open", 1.0)), "specs/open", 0.0, 1.0, 0.05)
+	if kind == FlowCtl.KIND_PUMP:
+		_num_field("Power draw (W)", float(specs.get("watts", 0.0)), "specs/watts", 0, 100000, 5.0)
+		_num_field("Highest lift (m)", float(specs.get("max_lift_m", 0.0)), "specs/max_lift_m", 0, 500, 0.5)
+		_readonly_field("Wiring", "Give it AC power, a store on its way in and a store on its way out.")
+	else:
+		_readonly_field("Wiring", "Put it between two stores. Water runs downhill through it; uphill needs a pump.")
 
 
 func _build_biodigester_section(specs: Dictionary) -> void:

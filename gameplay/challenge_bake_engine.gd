@@ -197,6 +197,8 @@ func _begin_attempt() -> void:
 	_stepper.flow = _flow
 	_stepper.bridge = _bridge
 	_stepper.gv = _gv
+	if _gv != null and _gv.has_method("scada_logic_render_begin"):
+		_gv.call("scada_logic_render_begin", float(_main.call("get_absolute_hours")))
 	_stepper.main = _main
 	_stepper.model = _gv.get("model")
 	_stepper.series = _series
@@ -520,6 +522,8 @@ func _restore_snapshots() -> void:
 
 
 func _release_world() -> void:
+	if _gv != null and _gv.has_method("scada_logic_render_end"):
+		_gv.call("scada_logic_render_end")
 	if _solar_ui != null:
 		if _solar_ui.has_method("release_challenge_series"):
 			_solar_ui.call("release_challenge_series")

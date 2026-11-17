@@ -14,6 +14,10 @@ const STYLE_KEYS := [
 	"fitting_color", "plug_emissive", "jacket_emissive", "use_flow_shader",
 	"flow_color", "flow_strength_default", "route_mode", "elbow_radius_frac",
 	"end_slack_m", "pipe_size_in", "fitting_step_deg",
+	# Size / rating and the run solver's per-run keys (conduit_run_solver.gd).
+	# pipe_sdr was read by ConduitKinds.pipe_sdr but dropped by every save.
+	"pipe_sdr", "size_in", "run_height_m", "wall_hug", "lane_index",
+	"lane_free", "bend_radius_m", "awg", "allow_45",
 ]
 
 static var _cache: Dictionary = {}

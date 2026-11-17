@@ -411,27 +411,39 @@ static func _build_tube_mesh(path: PackedVector3Array, radius: float,
 	var uvs := PackedVector2Array()
 	var idx := PackedInt32Array()
 	var ring_count: int = path.size()
+	var frames := tube_frames(path)
 	for ring: int in range(ring_count):
 		var p: Vector3 = path[ring]
-		var forward: Vector3
-		if ring == 0:
-			forward = (path[1] - path[0]).normalized()
-		elif ring == ring_count - 1:
-			forward = (path[ring] - path[ring - 1]).normalized()
-		else:
-			forward = (path[ring + 1] - path[ring - 1]).normalized()
-		if forward.length_squared() < 1e-8:
-			forward = Vector3.UP
-		var right: Vector3 = forward.cross(Vector3.UP)
-		if right.length_squared() < 1e-8:
-			right = forward.cross(Vector3.RIGHT)
-		right = right.normalized()
-		var up: Vector3 = right.cross(forward).normalized()
+		var fr: Array = frames[ring]
+		var forward: Vector3 = fr[0]
+		var right: Vector3 = fr[1]
+		var up: Vector3 = fr[2]
+		# Miter: at a joint the ring stands on the bisector plane, which cuts the
+		# tube at an angle; stretch it across the bend by 1 / cos(half the turn)
+		# so the tube keeps its full bore through the corner instead of pinching.
+		var miter_dir := Vector3.ZERO
+		var miter_k := 0.0
+		if ring > 0 and ring < ring_count - 1:
+			var d_in := path[ring] - path[ring - 1]
+			var d_out := path[ring + 1] - path[ring]
+			if d_in.length_squared() > 1e-12 and d_out.length_squared() > 1e-12:
+				d_in = d_in.normalized()
+				d_out = d_out.normalized()
+				var cos_t := clampf(d_in.dot(d_out), -1.0, 1.0)
+				var half_cos := sqrt(maxf((1.0 + cos_t) * 0.5, 1e-6))
+				var bend := d_out - d_in
+				bend = bend - forward * bend.dot(forward)
+				if bend.length_squared() > 1e-10 and half_cos < 0.999:
+					miter_dir = bend.normalized()
+					miter_k = minf(1.0 / half_cos, MITER_MAX) - 1.0
 		for seg: int in range(radial_segments):
 			var ang: float = TAU * float(seg) / float(radial_segments)
 			var offset: Vector3 = right * cos(ang) * radius + up * sin(ang) * radius
+			var normal := offset.normalized()
+			if miter_k > 0.0:
+				offset += miter_dir * offset.dot(miter_dir) * miter_k
 			verts.append(p + offset)
-			norms.append(offset.normalized())
+			norms.append(normal)
 			var u: float = float(ring) / float(maxi(ring_count - 1, 1))
 			uvs.append(Vector2(float(seg) / float(radial_segments), u))
 	for ring: int in range(ring_count - 1):
@@ -442,8 +454,10 @@ static func _build_tube_mesh(path: PackedVector3Array, radius: float,
 			var c: int = (ring + 1) * radial_segments + seg
 			var d: int = (ring + 1) * radial_segments + sn
 			idx.append_array([a, c, b, b, c, d])
-	_add_cap(mesh, path, 0, radius, radial_segments, true, verts, norms, uvs, idx)
-	_add_cap(mesh, path, ring_count - 1, radius, radial_segments, false, verts, norms, uvs, idx)
+	_add_cap(mesh, path, 0, radius, radial_segments, true, verts, norms, uvs, idx,
+		frames[0])
+	_add_cap(mesh, path, ring_count - 1, radius, radial_segments, false, verts, norms,
+		uvs, idx, frames[ring_count - 1])
 	var arrays: Array = []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = verts
@@ -454,38 +468,110 @@ static func _build_tube_mesh(path: PackedVector3Array, radius: float,
 	return mesh
 
 
+## Largest miter stretch (a 140-degree turn); sharper joints are left to pinch
+## rather than throw a spike.
+const MITER_MAX := 2.9
+
+
+## One [forward, right, up] frame per path point, rotation-minimising (the
+## double-reflection method, Wang et al. 2008, "Computation of rotation
+## minimizing frames"). The old frame was forward x UP at every ring, which
+## spun the tube half a turn wherever a run went vertical and twisted its
+## texture and seams along every riser.
+static func tube_frames(path: PackedVector3Array) -> Array:
+	var n := path.size()
+	var tangents: Array = []
+	for i: int in range(n):
+		var t: Vector3
+		if i == 0:
+			t = path[1] - path[0]
+		elif i == n - 1:
+			t = path[i] - path[i - 1]
+		else:
+			var a := path[i] - path[i - 1]
+			var b := path[i + 1] - path[i]
+			t = (a.normalized() if a.length_squared() > 1e-12 else Vector3.ZERO) \
+				+ (b.normalized() if b.length_squared() > 1e-12 else Vector3.ZERO)
+		if t.length_squared() < 1e-12:
+			t = tangents[i - 1] if i > 0 else Vector3.UP
+		tangents.append(t.normalized())
+	var out: Array = []
+	var t0: Vector3 = tangents[0]
+	var r: Vector3 = t0.cross(Vector3.UP)
+	if r.length_squared() < 1e-8:
+		r = t0.cross(Vector3.RIGHT)
+	r = r.normalized()
+	out.append([t0, r, r.cross(t0).normalized()])
+	for i: int in range(1, n):
+		var ti: Vector3 = tangents[i]
+		var tp: Vector3 = tangents[i - 1]
+		var v1 := path[i] - path[i - 1]
+		var c1 := v1.dot(v1)
+		var r_l := r
+		var t_l := tp
+		if c1 > 1e-12:
+			r_l = r - v1 * (2.0 / c1 * v1.dot(r))
+			t_l = tp - v1 * (2.0 / c1 * v1.dot(tp))
+		var v2 := ti - t_l
+		var c2 := v2.dot(v2)
+		if c2 > 1e-12:
+			r = r_l - v2 * (2.0 / c2 * v2.dot(r_l))
+		else:
+			r = r_l
+		# Re-orthogonalise against drift on long paths.
+		r = (r - ti * r.dot(ti))
+		if r.length_squared() < 1e-10:
+			r = ti.cross(Vector3.UP)
+			if r.length_squared() < 1e-8:
+				r = ti.cross(Vector3.RIGHT)
+		r = r.normalized()
+		out.append([ti, r, r.cross(ti).normalized()])
+	return out
+
+
 static func _add_cap(_mesh: ArrayMesh, path: PackedVector3Array, ring_idx: int,
 		radius: float, radial_segments: int, flip: bool,
 		verts: PackedVector3Array, norms: PackedVector3Array,
-		uvs: PackedVector2Array, idx: PackedInt32Array) -> void:
+		uvs: PackedVector2Array, idx: PackedInt32Array, frame: Array = []) -> void:
 	if path.is_empty():
 		return
 	var center: Vector3 = path[ring_idx]
 	var forward: Vector3
-	if ring_idx == 0:
-		forward = (path[1] - path[0]).normalized()
-	elif ring_idx == path.size() - 1:
-		forward = (path[ring_idx] - path[ring_idx - 1]).normalized()
+	var right: Vector3
+	var up: Vector3
+	if frame.size() == 3:
+		forward = frame[0]
+		right = frame[1]
+		up = frame[2]
 	else:
-		forward = (path[ring_idx + 1] - path[ring_idx - 1]).normalized()
-	if forward.length_squared() < 1e-8:
-		forward = Vector3.UP
+		if ring_idx == 0:
+			forward = (path[1] - path[0]).normalized()
+		elif ring_idx == path.size() - 1:
+			forward = (path[ring_idx] - path[ring_idx - 1]).normalized()
+		else:
+			forward = (path[ring_idx + 1] - path[ring_idx - 1]).normalized()
+		if forward.length_squared() < 1e-8:
+			forward = Vector3.UP
+		right = forward.cross(Vector3.UP)
+		if right.length_squared() < 1e-8:
+			right = forward.cross(Vector3.RIGHT)
+		right = right.normalized()
+		up = right.cross(forward).normalized()
+	# The cap's normal faces out of the tube end; the rim reuses the ring's own
+	# frame so the cap lines up with the last ring exactly.
+	var cap_n := -forward if flip else forward
 	if not flip:
-		forward = -forward
-	var right: Vector3 = forward.cross(Vector3.UP)
-	if right.length_squared() < 1e-8:
-		right = forward.cross(Vector3.RIGHT)
-	right = right.normalized()
-	var up: Vector3 = right.cross(forward).normalized()
+		# Same mirrored rim as before so the index winding below still faces out.
+		right = -right
 	var base: int = verts.size()
 	verts.append(center)
-	norms.append(forward)
+	norms.append(cap_n)
 	uvs.append(Vector2(0.5, 0.5))
 	for seg: int in range(radial_segments):
 		var ang: float = TAU * float(seg) / float(radial_segments)
 		var offset: Vector3 = right * cos(ang) * radius + up * sin(ang) * radius
 		verts.append(center + offset)
-		norms.append(forward)
+		norms.append(cap_n)
 		uvs.append(Vector2(cos(ang) * 0.5 + 0.5, sin(ang) * 0.5 + 0.5))
 	for seg: int in range(radial_segments):
 		var sn: int = (seg + 1) % radial_segments

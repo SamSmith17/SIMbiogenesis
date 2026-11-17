@@ -44,6 +44,12 @@ func run() -> Dictionary:
 		{"id": "work_planner", "open": func() -> void: gv.call("open_work_planner", "", "")},
 	]
 	entries.append({"id": "scad_store", "open": func() -> void: main.call("open_scad_store")})
+	# The process (SCADA) windows, all opened from the graph view.
+	for sc in [["scada_tags", "open_tag_browser"], ["scada_logic", "open_logic_editor"], ["scada_alarms", "open_alarm_panel"],
+			["scada_hardware", "open_outputs_panel"], ["scada_trends", "open_trend_window"], ["scada_templates", "open_process_library"]]:
+		var fn := str(sc[1])
+		if gv != null and gv.has_method(fn):
+			entries.append({"id": str(sc[0]), "open": func() -> void: gv.call(fn)})
 	entries.append({"id": "packing_lab", "open": func() -> void:
 		load("res://scenes/ui/packing_lab_modal.gd").call("open_site_cargo", get_tree())})
 	entries.append({"id": "earthshiplab", "open": func() -> void:

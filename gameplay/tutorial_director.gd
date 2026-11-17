@@ -45,6 +45,8 @@ var _celebrate_t := 0.0
 ## The last run's verdict line; the HUD keeps showing it until the next run
 ## (the 0.5 s goal check used to overwrite it with "Press ▶ Run").
 var _last_verdict := ""
+## State a timed goal keeps while its level is up (TutorialGoals process goals).
+var _goal_state: Dictionary = {}
 
 
 func bind_graph_view(gv: Control) -> void:
@@ -68,18 +70,19 @@ func toggle() -> void:
 		start()
 
 
-## Enter the bootcamp at `level_id` (or the first incomplete level).
-func start(level_id: String = "") -> void:
+## Enter the bootcamp at `level_id` (or the first incomplete level of
+## `track`: "solar" | "process").
+func start(level_id: String = "", track: String = "solar") -> void:
 	if _gv == null or is_active():
 		return
 	var lid := level_id
 	if lid.is_empty():
-		lid = ProgressStore.first_incomplete_level(TutorialCatalog.ordered_ids())
+		lid = ProgressStore.first_incomplete_level(TutorialCatalog.ordered_ids(track))
 	if lid.is_empty():
-		lid = str(TutorialCatalog.ordered_ids()[0])  # all done — replay from 1
+		lid = str(TutorialCatalog.ordered_ids(track)[0])  # all done — replay from 1
 	var def := TutorialCatalog.by_id(lid)
 	if def == null:
-		def = TutorialCatalog.by_id(str(TutorialCatalog.ordered_ids()[0]))
+		def = TutorialCatalog.by_id(str(TutorialCatalog.ordered_ids(track)[0]))
 		if def == null:
 			return
 	if not bool(_gv.call("begin_tutorial_sandbox")):
@@ -157,6 +160,7 @@ func _load_level(def: TutorialLevelDef) -> void:
 	_eval_acc = 0.0
 	_celebrate_t = 0.0
 	_last_verdict = ""
+	_goal_state = {}
 	# Nothing from the previous level may survive into this one: a card queued
 	# behind the last debrief used to open over this level's brief and block
 	# the first wire drag.
@@ -183,6 +187,10 @@ func _load_level(def: TutorialLevelDef) -> void:
 	# content (a fresh seed, or the graph carried from the last level) would
 	# not be on screen.
 	_gv.call("tutorial_frame_if_needed")
+	if def.lens == "process" and _gv.has_method("_apply_graph_view_mode"):
+		# Deferred: clearing the graph queued a switch back to the saved lens,
+		# and this one must land after it.
+		_gv.call_deferred("_apply_graph_view_mode", GraphSiteLayout.VIEW_PROCESS)
 	if _hud != null:
 		_hud.call("show_level", def.index, def.title, _objective_line(def),
 			def.is_run_level())
@@ -192,6 +200,14 @@ func _load_level(def: TutorialLevelDef) -> void:
 
 func _objective_line(def: TutorialLevelDef) -> String:
 	match str(def.goal.get("kind", "")):
+		"tag_reach":
+			return "Fill the %s to %.0f %%." % [str(def.goal.get("item", "")), float(def.goal.get("value", 0.0))]
+		"tag_band_hold":
+			var hh := float(def.goal.get("hold_h", 1.0))
+			return "Keep the %s between %.0f and %.0f %% for %s." % [str(def.goal.get("item", "")), float(def.goal.get("lo", 0.0)),
+				float(def.goal.get("hi", 100.0)), ("%d min" % int(round(hh * 60.0))) if hh < 1.0 else ("%s h" % str(snappedf(hh, 0.1)))]
+		"alarm_acked":
+			return "Get a high alarm on the %s, let it go off, acknowledge it." % str(def.goal.get("item", ""))
 		"fault_observed":
 			return "Follow the briefing — failure is the objective."
 		"run_clean":
@@ -239,9 +255,12 @@ func _on_brief_done() -> void:
 func _on_start_over() -> void:
 	if _gv == null:
 		return
-	ProgressStore.reset_tutorial_progress()
+	var track := _level.track if _level != null else "solar"
+	# The process lessons hold no unlocks: replaying them resets nothing.
+	if track == "solar":
+		ProgressStore.reset_tutorial_progress()
 	exit_tutorial()
-	start(str(TutorialCatalog.ordered_ids()[0]))
+	start(str(TutorialCatalog.ordered_ids(track)[0]), track)
 
 
 func _on_fault_observed(reason: String, _item_id: String) -> void:
@@ -275,6 +294,14 @@ func _process(delta: float) -> void:
 	if model == null:
 		return
 	var ctx := TutorialGoals.build_ctx(model, _faults_seen)
+	ctx["gstate"] = _goal_state
+	var mn := _main_node()
+	ctx["now_h"] = float(mn.call("get_absolute_hours")) if mn != null else NAN
+	var hub: Node = _gv.call("scada_hub") if _gv.has_method("scada_hub") else null
+	if hub != null:
+		ctx["logic"] = hub.call("logic_blocks")
+		ctx["alarm_rules"] = hub.call("alarm_rules")
+		ctx["alarm_status"] = hub.call("alarm_status")
 	var res := TutorialGoals.evaluate(_level.goal, ctx)
 	if _hud != null:
 		var line := str(res.get("progress", ""))

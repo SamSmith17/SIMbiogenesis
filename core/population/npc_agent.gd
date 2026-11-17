@@ -760,6 +760,11 @@ func _step_chore(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 		retry_at[CHORE_ACTIVITY] = abs_hours + RETRY_BACKOFF_H
 		_finish(ctx, false)
 		return {}
+	if (chore.get("row_spine", []) as Array).size() >= 2:
+		# The line moves down the plot as the work gets done.
+		var was := pos
+		_row_place(chore, board.worker_index(chore_id, id))
+		pos = was.move_toward(target_pos, dt_hours * 3600.0 * ROW_PACE_MPS)
 	var effective := dt_hours * NpcMorale.productivity(morale) \
 			* NpcWeatherGate.productivity(weather, exposure)
 	var applied: float = board.credit(chore_id, effective, abs_hours)
@@ -2074,10 +2079,29 @@ func _begin_chore(abs_hours: float, ctx: Dictionary) -> bool:
 			# the route's far end and not this worker's own post.
 			face_anchor = to
 			target_pos = from.lerp(to, (float(slot) + 0.5) / float(slots))
+	# A crew working a plot in a line (NpcRowWork): this worker's place across
+	# it, at the share of its length the job has reached.
+	if (chore.get("row_spine", []) as Array).size() >= 2:
+		_row_place(chore, board.worker_index(cid, id))
 	# Work sites are not tagged spaces, so this never keys the shared cache.
 	_request_path(ctx, target_pos, "", "")
 	state = State.TRAVELING
 	return true
+
+
+## Walking pace of a crew moving down a row while it works (m/s).
+const ROW_PACE_MPS := 0.5
+
+
+## Put this worker at their place in a row chore's line (target_pos and the
+## face anchor; pos is moved by the caller).
+func _row_place(chore: Dictionary, slot_i: int) -> void:
+	var spine: Array = chore.get("row_spine", []) as Array
+	var p := clampf(float(chore.get("progress_h", 0.0))
+		/ maxf(float(chore.get("chore_hours", 1.0)), 0.001), 0.0, 1.0)
+	target_pos = NpcRowWork.slot(spine, float(chore.get("row_half_w", 2.0)), maxi(slot_i, 0),
+		maxi(int(chore.get("max_workers", 1)), 1), p)
+	face_anchor = NpcRowWork.facing(spine, p)
 
 
 func _has_free_time(ctx: Dictionary) -> bool:

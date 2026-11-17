@@ -12,6 +12,7 @@ static func all_challenges() -> Array:
 		dry_week(),
 		close_the_loop(),
 		close_the_loop_prebake(),
+		operators_watch(),
 	]
 
 
@@ -77,6 +78,24 @@ static func close_the_loop_prebake() -> ChallengeDef:
 		"require_no_starvation": true,
 		"fail_on_collapse": true,
 		"fail_on_kinds": ["water"],
+	})
+
+
+## Run the plant for a day like an operator: alarms on the stores, none left
+## flashing, no watched store empty or brim-full for long (ProcessChallenge).
+static func operators_watch() -> ChallengeDef:
+	return ChallengeDef.from_dict({
+		"id": "operators_watch",
+		"title": "Operator's Watch",
+		"description": "Run your plant for 24 hours as its operator. You need at least two alarm rules on your stores (Process lens, Alarms). No alarm may flash unacknowledged for more than 30 minutes, and no store you watch may sit below 10 % or above 95 % for more than 15 minutes. Control blocks may do the work for you.",
+		"duration_hours": 24.0,
+		"occupants": 1,
+		"use_current_date": true,
+		"fail_on_starvation": false,
+		"require_no_starvation": false,
+		"track_ac_availability": false,
+		"fail_on_kinds": [],
+		"process": {"min_alarm_rules": 2, "max_unacked_alarm_h": 0.5, "watch_lo": 10.0, "watch_hi": 95.0, "watch_grace_h": 0.25},
 	})
 
 

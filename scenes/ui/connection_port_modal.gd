@@ -35,6 +35,7 @@ var _handles: Array = []
 var _ports: Array = []  ## 3D port defs bound to handle_ids
 var _selected_handle_id: String = ""
 var _selected_port_idx: int = -1
+var _fitting_opt: OptionButton = null
 
 var _built := false
 ## The kit: DesignerShell (the graph's ports on the left, the model's studio
@@ -202,6 +203,15 @@ func _build_ui() -> void:
 	UITheme.style_button(unbind_btn)
 	unbind_btn.pressed.connect(_on_clear_selected_bind)
 	_shell.left.add_child(unbind_btn)
+	var suggest_btn := Button.new()
+	suggest_btn.name = "SuggestPorts"
+	suggest_btn.text = "Suggest places"
+	suggest_btn.tooltip_text = ("Put every port not yet on the model where it usually goes: water low on "
+		+ "the sides, power low on the back, data high, gas on top")
+	suggest_btn.focus_mode = Control.FOCUS_NONE
+	UITheme.style_button(suggest_btn)
+	suggest_btn.pressed.connect(_on_suggest_ports)
+	_shell.left.add_child(suggest_btn)
 
 	# Centre: the model, with the socket's approach controls under it.
 	_studio_view = StudioViewport.create({"ground": false, "size": Vector2i(900, 700), "fov": 45.0})
@@ -263,6 +273,14 @@ func _build_ui() -> void:
 	OPTS.fill_types(_wire_type_opt, "")
 	_wire_type_opt.item_selected.connect(_on_selected_type_changed)
 	_io_settings_box.add_child(FormRow.make(OPTS.LABEL_TYPE, _wire_type_opt, "", "", "wire_type"))
+	_fitting_opt = OptionButton.new()
+	for fk: String in ConnectionPortDefs.FITTING_LABELS:
+		_fitting_opt.add_item("%s · %d cm straight out" % [str(ConnectionPortDefs.FITTING_LABELS[fk]),
+			int(round(float(ConnectionPortDefs.FITTING_STUB_M[fk]) * 100.0))])
+		_fitting_opt.set_item_metadata(_fitting_opt.item_count - 1, fk)
+	_fitting_opt.item_selected.connect(_on_fitting_changed)
+	_io_settings_box.add_child(FormRow.make("Fitting", _fitting_opt,
+		"What the socket is: sets how far a run leaves straight out before its first bend", "", "fitting"))
 	_pipe_size_opt = OptionButton.new()
 	OPTS.fill_sizes(_pipe_size_opt, "")
 	_pipe_size_opt.item_selected.connect(func(_i: int) -> void: _write_selected_style_prefs())
@@ -571,6 +589,12 @@ func _sync_io_controls_from_selection() -> void:
 			if absf(float(_pipe_size_opt.get_item_metadata(i)) - sz) < 0.01:
 				_pipe_size_opt.select(i)
 				break
+	if _fitting_opt != null and not port.is_empty():
+		var fk := ConnectionPortDefs.fitting_of(port)
+		for i: int in _fitting_opt.item_count:
+			if str(_fitting_opt.get_item_metadata(i)) == fk:
+				_fitting_opt.select(i)
+				break
 	if _approach_slider != null:
 		_approach_slider.set_value_no_signal(
 			ConnectionPortDefs.approach_m_for_port(port) if not port.is_empty() \
@@ -587,7 +611,78 @@ func _refresh_approach_label() -> void:
 		return
 	var n := ConnectionPortDefs.local_outward(port)
 	var m := ConnectionPortDefs.approach_m_for_port(port)
-	_approach_lbl.text = "Outward (%.2f, %.2f, %.2f) · length %.2f m" % [n.x, n.y, n.z, m]
+	var p := Vector3(float(port.get("x", 0.0)), float(port.get("y", 0.0)), float(port.get("z", 0.0)))
+	if PortSuggest.exit_inside(p, n, m, _model_box()):
+		_approach_lbl.text = "Points into the model: the run will leave further out. Aim it out (or Flip)."
+		_approach_lbl.add_theme_color_override("font_color", UITheme.C_WARN)
+	else:
+		_approach_lbl.text = "Out %s · %.2f m straight before it bends" % [_axis_words(n), m]
+		_approach_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+
+
+## "along +X" for an axis, "at an angle" otherwise.
+static func _axis_words(n: Vector3) -> String:
+	for pair: Array in [[Vector3.RIGHT, "+X"], [Vector3.LEFT, "-X"], [Vector3.UP, "up"], [Vector3.DOWN, "down"],
+			[Vector3.BACK, "+Z"], [Vector3.FORWARD, "-Z"]]:
+		if n.normalized().dot(pair[0] as Vector3) > 0.999:
+			return "along %s" % str(pair[1])
+	return "at an angle"
+
+
+## The model's bounding box in its own frame (from local transforms, so it
+## works before the studio is drawn).
+func _model_box() -> AABB:
+	var box := AABB()
+	var first := true
+	if _model_inst == null:
+		return AABB(Vector3(-0.5, 0.0, -0.5), Vector3.ONE)
+	var stack: Array = [[_model_inst, Transform3D.IDENTITY]]
+	while not stack.is_empty():
+		var e: Array = stack.pop_back()
+		var node: Node = e[0]
+		var xf: Transform3D = e[1]
+		if node is MeshInstance3D and (node as MeshInstance3D).mesh != null:
+			var bb := xf * (node as MeshInstance3D).mesh.get_aabb()
+			box = bb if first else box.merge(bb)
+			first = false
+		for ch: Node in node.get_children():
+			if ch is Node3D:
+				stack.append([ch, xf * (ch as Node3D).transform])
+	return box if not first else AABB(Vector3(-0.5, 0.0, -0.5), Vector3.ONE)
+
+
+func _on_fitting_changed(i: int) -> void:
+	var idx := _port_index_for_handle(_selected_handle_id)
+	if idx < 0:
+		_status_lbl.text = "Bind the port to the model first"
+		return
+	var p: Dictionary = (_ports[idx] as Dictionary).duplicate(true)
+	p["fitting"] = str(_fitting_opt.get_item_metadata(i))
+	_ports[idx] = p
+	_refresh_approach_label()
+	_rebuild_gizmos()
+	_status_lbl.text = "Fitting set"
+
+
+## Every port not yet on the model, placed where it usually goes.
+func _on_suggest_ports() -> void:
+	var todo: Array = []
+	for h: Variant in _handles:
+		if _port_for_handle(str((h as Dictionary).get("id", ""))).is_empty():
+			todo.append(h)
+	if todo.is_empty():
+		_status_lbl.text = "Every port already has a place"
+		return
+	for s: Dictionary in PortSuggest.suggest(todo, _model_box()):
+		var hid := str(s["handle_id"])
+		var h := _handle_by_id(hid)
+		_ports.append(ConnectionPortDefs.make_port("", str(h.get("label", hid)), s["pos"] as Vector3,
+			s["normal"] as Vector3, hid, str(h.get("polarity", "")), str(h.get("resource_kind", "")),
+			"", ConnectionPortDefs.DEFAULT_APPROACH_M, "", {}))
+	_refresh_handle_list()
+	_rebuild_gizmos()
+	_update_pending_banner()
+	_status_lbl.text = "%s placed: check them, then Save" % UiText.count(todo.size(), "port")
 
 
 func _on_selected_type_changed(idx: int) -> void:
@@ -916,6 +1011,10 @@ func _aim_outward_at_screen(local_pos: Vector2) -> void:
 	if world_out.length_squared() < 1e-8:
 		return
 	var local_out: Vector3 = _model_inst.global_transform.basis.inverse() * world_out.normalized()
+	# Square when within a few degrees of an axis (Shift: always).
+	var ppos := Vector3(float(port.get("x", 0.0)), float(port.get("y", 0.0)), float(port.get("z", 0.0)))
+	local_out = PortSuggest.clean_normal(local_out, ppos + local_out, AABB(ppos, Vector3.ZERO),
+		Input.is_key_pressed(KEY_SHIFT), 8.0)
 	_set_selected_outward(local_out)
 
 
@@ -993,6 +1092,9 @@ func _place_bind(handle_id: String, hit: Dictionary) -> void:
 	var world_n: Vector3 = hit["normal"] as Vector3
 	var local_p: Vector3 = _model_inst.to_local(world_pos)
 	var local_n: Vector3 = (_model_inst.global_transform.basis.inverse() * world_n).normalized()
+	# Straight out of the face: an inside-out triangle turned round, and a
+	# nearly square face snapped to its axis (Shift: always an axis).
+	local_n = PortSuggest.clean_normal(local_n, local_p, _model_box(), Input.is_key_pressed(KEY_SHIFT))
 	var label := str(h.get("label", handle_id))
 	var existing_i := _port_index_for_handle(handle_id)
 	var keep_approach := ConnectionPortDefs.DEFAULT_APPROACH_M
@@ -1011,6 +1113,8 @@ func _place_bind(handle_id: String, hit: Dictionary) -> void:
 		label, local_p, local_n, handle_id,
 		str(h.get("polarity", "")), str(h.get("resource_kind", "")),
 		"", keep_approach, keep_type, keep_style)
+	if existing_i >= 0 and (_ports[existing_i] as Dictionary).has("fitting"):
+		port["fitting"] = (_ports[existing_i] as Dictionary)["fitting"]
 	if existing_i >= 0:
 		_ports[existing_i] = port
 	else:

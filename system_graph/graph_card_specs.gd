@@ -54,7 +54,7 @@ static func for_item(item: Dictionary, ctx: Dictionary) -> Dictionary:
 		"battery", "smartbattery":
 			_battery(spec, specs, ctx)
 		"controller":
-			_controller(spec, specs)
+			_controller(spec, specs, ctx)
 		"appliance", "acload":
 			_load(spec, specs)
 		"wind":
@@ -180,7 +180,7 @@ static func _battery(spec: Dictionary, specs: Dictionary, ctx: Dictionary) -> vo
 		spec["footer_color"] = GraphTheme.WARN if low else GraphTheme.TEXT_DIM
 
 
-static func _controller(spec: Dictionary, specs: Dictionary) -> void:
+static func _controller(spec: Dictionary, specs: Dictionary, ctx: Dictionary = {}) -> void:
 	var name := str(specs.get("name", "")).to_lower()
 	spec["chip"] = "MPPT" if name.contains("mppt") else ("PWM" if name.contains("pwm") else "CONTROLLER")
 	var delivered := maxf(0.0, float(specs.get("dc_delivered_w", 0.0)))
@@ -219,6 +219,16 @@ static func _controller(spec: Dictionary, specs: Dictionary) -> void:
 	else:
 		spec["footer"] = "Wire a battery to the bottom terminals"
 		spec["footer_color"] = GraphTheme.TEXT_MUTED
+	# An inverter (AC wired out of it) shows what it gives the AC loads; its
+	# DC side is what the battery's card shows.
+	var ac := float(ctx.get("ac_out_w", -1.0))
+	if ac >= 0.0:
+		spec["chip"] = "INVERTER" if spec["chip"] == "CONTROLLER" else spec["chip"]
+		spec["hero"] = UiText.num(ac, "W")
+		spec["sub"] = "AC out · solar in %s" % UiText.num(delivered, "W")
+		var rating := float(specs.get("overload_watts", specs.get("max_ac_watts", 0.0)))
+		if rating > 0.0:
+			spec["bar"] = {"frac": clampf(ac / rating, 0.0, 1.0), "color": GraphTheme.accent("controller")}
 
 
 static func _load(spec: Dictionary, specs: Dictionary) -> void:
@@ -317,6 +327,24 @@ static func _machine(spec: Dictionary, item: Dictionary, specs: Dictionary, ctx:
 		return
 	if role == DesignGap.ROLE:
 		_gap(spec, specs)
+		return
+	if role == FlowCtl.ROLE:
+		var ck := FlowCtl.kind_of(specs)
+		spec["chip"] = {"pump": "PUMP", "check": "CHECK"}.get(ck, "VALVE")
+		spec["icon"] = "droplet"
+		spec["accent"] = ResourceKinds.wire_color(str(specs.get("ctl_resource", "water")))
+		spec["hero"] = FlowCtl.state_words(specs)
+		spec["sub"] = "up to %s/h" % UiText.num(float(specs.get("max_rate", 0.0)) * FlowCtl.opening(specs),
+			ResourceKinds.default_unit(str(specs.get("ctl_resource", "water"))))
+		var flowing := FlowCtl.is_on(specs) and float(specs.get("ctl_rate", 0.0)) > 0.0
+		if not flowing:
+			spec["hero_color"] = GraphTheme.TEXT_MUTED
+		if str(specs.get("ctl_block", "")) != "":
+			spec["footer"] = "Needs a pump: the far store is higher" if str(specs["ctl_block"]) == FlowCtl.BLOCK_UPHILL \
+				else "The far store is higher than it can lift"
+			spec["footer_color"] = GraphTheme.WARN
+		elif ck == FlowCtl.KIND_PUMP:
+			spec["footer"] = "%s while pumping" % UiText.num(float(specs.get("watts", 0.0)), "W")
 		return
 	if role == "csp_concentrator":
 		spec["chip"] = "CSP"

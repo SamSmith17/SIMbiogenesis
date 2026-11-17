@@ -86,7 +86,8 @@ func run(main: Node, harness: Node) -> Dictionary:
 	if not OS.get_environment("SYSDESIGN_DAYS").is_empty():
 		days = float(OS.get_environment("SYSDESIGN_DAYS"))
 	var y := Year.new()
-	var err := y.begin(main, sgv, {"start_abs": start_abs, "days": days,
+	var err := y.begin(main, sgv, {"logic": ScadaLogicRun.remap(design.get("logic", []) as Array, built["ids"] as Dictionary),
+		"start_abs": start_abs, "days": days,
 		"step_min": float(design.get("step_min", 6.0)),
 		"start_soc": float(design.get("start_soc", 0.8))})
 	if not err.is_empty():

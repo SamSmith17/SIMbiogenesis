@@ -154,7 +154,17 @@ patch can change.
 ### The design format
 
 A design is data: library presets by label, inspector fields under `set`, wires
-by kind, automations as WHEN / IF / THEN cards that switch nodes. See the
+by kind, automations as WHEN / IF / THEN cards that switch nodes, and
+`logic`: a list of control blocks (on / off band, PID, interlock, timer,
+counter, sequence, duty pair) whose tags name design nodes
+(`tank.<node id>.level`, `node.<node id>`, `valve.<node id>.open`); the
+report's `logic` rows say what each ended on, how often it switched and, for a
+band or a PID, `in_band_pct` (the share of the run its reading spent between
+its marks, or within 5 % of its setpoint). `alarms`: a list of limit rules
+(`{id, name, tag, op ">=" | "<=" | "on" | "off" | "lost", limit, deadband,
+delay_s}`) on the same tags; the report's `alarms` rows say how many times each
+went off and for how many hours. Valves and pumps are library presets like any
+other node ("Ball Valve", "Control Valve", "Transfer Pump"). See the
 built-in `core/simkit/designs/bombay_ten.json`. The engine rules a design must
 respect (proportional processors, batches need a stop rule, wire every port, a
 rain catchment needs the Rain source) are in `tools/sysdesign/README.md`.

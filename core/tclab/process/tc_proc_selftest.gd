@@ -18,7 +18,7 @@ extends SceneTree
 ## (Bridgwater 2012: char ~35 %, liquids ~30 %, gas ~35 %), tar cracking,
 ## plastic half-lives, O2-limited combustion and the desiccant.
 
-const EXPECTED_CHECKS := 486
+const EXPECTED_CHECKS := 583
 
 var _pass := 0
 var _fail := 0
@@ -57,6 +57,8 @@ func _initialize() -> void:
 	_test_units()
 	_test_results_and_board()
 	_test_scenarios()
+	_test_liquid_lines()
+	_test_liquid_plant()
 	var total := _pass + _fail
 	print("tc_proc selftest: %d passed, %d failed (%d checks)" % [_pass, _fail, total])
 	if EXPECTED_CHECKS > 0 and total != EXPECTED_CHECKS:
@@ -1109,3 +1111,404 @@ func _test_scenarios() -> void:
 	_ok(ow > 2.0, "the condensers drop oil and wax (%.2f kg)" % ow)
 	_ok(float(tot["char_kg"]) < 1e-6, "and plastic leaves no char")
 	_ledgers_close(sim, "plastic retort")
+
+
+## Liquid lines between vessels: a pump's curve, a control valve's opening,
+## gravity, one-way parts, and the level rig's PID holding its tank.
+func _test_liquid_lines() -> void:
+	var spec := TcPresets.builtin("level_rig")
+	_ok(not spec.is_empty(), "the level rig preset builds")
+	var d := TcDesign.solve(spec)
+	_ok((d.get("clashes", []) as Array).is_empty(), "the rig has no clash")
+	var err := 0
+	for c in d.get("checks", []):
+		if str(c.get("level", "")) == "error":
+			err += 1
+	_ok(err == 0, "the rig has no error-level check")
+	var proc: Dictionary = (d["spec"] as Dictionary)["process"]
+	var no_logic: Dictionary = proc.duplicate(true)
+	no_logic["logic"] = []
+	var sim := TcProcSim.create(d, no_logic)
+	_ok(sim.lines.size() == 2, "two liquid lines between the three tanks (%d)" % sim.lines.size())
+	var kinds := {}
+	for l in sim.net["links"]:
+		kinds[str(l["kind"])] = int(kinds.get(str(l["kind"]), 0)) + 1
+	_ok(int(kinds.get("pump", 0)) == 1 and int(kinds.get("valve", 0)) == 2, "one pump and two control valves are links (%s)" % [kinds])
+	var acts := TcProcControl.actuators(sim, d, sim.proc)
+	var keys := {}
+	for a in acts:
+		keys[str(a["act"]).get_slice(":", 0)] = true
+	_ok(keys.has("pump") and keys.has("pumpspeed") and keys.has("cvalve"), "the pump's switch and speed and the valves' openings are actuators")
+	var sens := TcProcControl.sensors(sim, d, sim.proc)
+	var n_level := 0
+	var n_flow := 0
+	for sx in sens:
+		if str(sx["key"]).ends_with("_level"):
+			n_level += 1
+		if str(sx["key"]).ends_with("_flow"):
+			n_flow += 1
+	_ok(n_level == 3 and n_flow == 1, "a level per tank and a flow per pump are sensors (%d, %d)" % [n_level, n_flow])
+	var l0: Dictionary = sim.lines[0]
+	var l1: Dictionary = sim.lines[1]
+	var a_cv := int(l0["a"])
+	var b_cv := int(l0["b"])
+	var c_cv := int(l1["b"])
+	var pump_id := ""
+	var valve_id := ""
+	var drain_id := ""
+	for li in l0["links"]:
+		var lk: Dictionary = sim.net["links"][li]
+		if str(lk["kind"]) == "pump":
+			pump_id = str(lk["part"])
+		elif str(lk["kind"]) == "valve":
+			valve_id = str(lk["part"])
+	for li2 in l1["links"]:
+		if str(sim.net["links"][li2]["kind"]) == "valve":
+			drain_id = str(sim.net["links"][li2]["part"])
+	var total0 := 0.0
+	var h0 := 0.0
+	for i in sim.n_cv:
+		total0 += sim._liq_volume(sim.liq[i])
+		h0 += sim.h_liq[i]
+	_ok(sim._liq_volume(sim.liq[a_cv]) > 0.1 and sim._liq_volume(sim.liq[b_cv]) < 1e-6, "the charge is in the supply tank")
+	# The pump's operating point by hand: valve wide open, drain shut.
+	sim.set_actuator("cvalve:%s" % drain_id, 0.0)
+	sim.set_actuator("cvalve:%s" % valve_id, 100.0)
+	var sa := sim.liquid_surface_m(a_cv)
+	var zb := float(l0["zb"])
+	var area := PI * float(l0["r_m"]) * float(l0["r_m"])
+	var kk := (TcProcSim.LINE_K_ENDS + TcProcSim.LINE_F * float(l0["len_m"]) / (2.0 * float(l0["r_m"])) + TcProcSim.LINE_K_VALVE) / (2.0 * TcProcSim.GRAV * area * area)
+	var qm := 10.0 / 60000.0
+	var want := sqrt((sa - zb + 1.0) / (kk + 1.0 / (qm * qm))) * 60000.0
+	sim.step(1.0)
+	_near(float(sim.pump_lpm[pump_id]), want, want * 0.01, "the pump moves what its curve and the line's friction give (%.2f L/min)" % want)
+	_ok(want < 10.0 and want > 1.0, "less than its free flow, more than a trickle")
+	# Half speed: a quarter of the head, half the free flow.
+	sim.set_actuator("pumpspeed:%s" % pump_id, 50.0)
+	sim.step(1.0)
+	var sa2 := sim.liquid_surface_m(a_cv)
+	var sb2 := maxf(sim.liquid_surface_m(b_cv), zb)
+	var want2 := sqrt((sa2 - sb2 + 0.25) / (kk + 0.25 / (qm * 0.5 * qm * 0.5))) * 60000.0
+	_near(float(sim.pump_lpm[pump_id]), want2, want2 * 0.02, "at half speed: a quarter of the head, half the free flow (%.2f L/min)" % want2)
+	sim.set_actuator("pumpspeed:%s" % pump_id, 100.0)
+	# The valve nearly shut moves far less; shut, nothing.
+	sim.set_actuator("cvalve:%s" % valve_id, 10.0)
+	sim.step(1.0)
+	var q10 := float(sim.pump_lpm[pump_id])
+	_ok(q10 < want * 0.6 and q10 > 0.0, "the valve at 10 %% throttles it (%.2f L/min)" % q10)
+	sim.set_actuator("cvalve:%s" % valve_id, 0.0)
+	var vb := sim._liq_volume(sim.liq[b_cv])
+	sim.run_for(30.0, 1.0)
+	_near(sim._liq_volume(sim.liq[b_cv]), vb, 2e-6, "shut, nothing passes (to 2 mL: the open tank evaporates a little)")
+	_near(float(sim.pump_lpm[pump_id]), 0.0, 1e-9, "and the pump moves nothing")
+	# Pump off, valve open: the supply still runs through the stopped pump by
+	# gravity while it stands higher, and nothing ever comes back.
+	sim.set_actuator("pump:%s" % pump_id, false)
+	sim.set_actuator("cvalve:%s" % valve_id, 100.0)
+	sim.run_for(600.0, 1.0)
+	var sa3 := sim.liquid_surface_m(a_cv)
+	var sb3 := sim.liquid_surface_m(b_cv)
+	_ok(sim._liq_volume(sim.liq[b_cv]) > vb + 1e-4, "with the pump stopped the higher tank still runs into the lower one")
+	_ok(sb3 <= sa3 + 0.002, "and never past level (%.3f m vs %.3f m)" % [sb3, sa3])
+	# The drain: gravity out of the process tank into the receiver's top.
+	sim.set_actuator("cvalve:%s" % valve_id, 0.0)
+	sim.set_actuator("cvalve:%s" % drain_id, 25.0)
+	var vb4 := sim._liq_volume(sim.liq[b_cv])
+	sim.step(1.0)
+	var head := sim.liquid_surface_m(b_cv) - float(l1["zb"])
+	var kd := (TcProcSim.LINE_K_ENDS + TcProcSim.LINE_F * float(l1["len_m"]) / (2.0 * float(l1["r_m"])) + TcProcSim.LINE_K_VALVE / (0.25 * 0.25)) / (2.0 * TcProcSim.GRAV * area * area)
+	_near(absf(float(l1["lpm"])), sqrt(head / kd) * 60000.0, 0.05, "the drain runs by Torricelli through the valve's K (%.2f L/min)" % absf(float(l1["lpm"])))
+	sim.run_for(7200.0, 5.0)
+	_ok(sim.liquid_surface_m(b_cv) <= float(l1["za"]) + 0.004, "the tank drains down to its nozzle and stops")
+	_ok(sim._liq_volume(sim.liq[c_cv]) > vb4 * 0.5, "into the receiver")
+	var total1 := 0.0
+	var h1 := 0.0
+	for i2 in sim.n_cv:
+		total1 += sim._liq_volume(sim.liq[i2])
+		h1 += sim.h_liq[i2]
+	_near(total1, total0, total0 * 2e-4, "no liquid is made or lost moving it (%.2f L)" % (total1 * 1000.0))
+	_ok(absf(h1 - h0) < maxf(absf(h0) * 0.02, 5.0e4), "its heat goes with it (%.0f → %.0f J)" % [h0, h1])
+	var pa_a := float(sim.cv_state(a_cv)["p_kpa_g"])
+	var pa_c := float(sim.cv_state(c_cv)["p_kpa_g"])
+	_ok(absf(pa_a) < 1.0 and absf(pa_c) < 1.0, "the open tanks breathe: no vacuum over the one emptied, no pressure over the one filled (%.2f, %.2f kPa)" % [pa_a, pa_c])
+	var ml := sim.mass_ledger()
+	_ok(absf(float(ml["error_kg"])) < 0.01, "the mass ledger closes with the air breathed (%.4f kg)" % float(ml["error_kg"]))
+	# A positive-displacement pump: its rated flow whatever the valve.
+	var sp2: Dictionary = spec.duplicate(true)
+	for p in sp2["parts"]:
+		if str(p["id"]) == pump_id:
+			p["params"]["kind"] = "positive"
+			p["params"]["flow_lpm"] = 4.0
+	var d2 := TcDesign.solve(TcSpec.resolve(sp2))
+	var sim2 := TcProcSim.create(d2, no_logic)
+	sim2.set_actuator("cvalve:%s" % valve_id, 30.0)
+	sim2.step(1.0)
+	_near(float(sim2.pump_lpm[pump_id]), 4.0, 1e-6, "a positive-displacement pump gives its rated flow against a throttled valve")
+	sim2.set_actuator("pump:%s" % pump_id, false)
+	var vb5 := sim2._liq_volume(sim2.liq[int(sim2.lines[0]["b"])])
+	sim2.run_for(60.0, 1.0)
+	_near(sim2._liq_volume(sim2.liq[int(sim2.lines[0]["b"])]), vb5, 2e-6, "stopped, it passes nothing")
+	# The loop: the PID holds the process tank at half while the supply lasts.
+	var sim3 := TcProcSim.create(d, proc)
+	var slug := TcProcControl.slug(str((d["spec"] as Dictionary).get("name", "")))
+	sim3.run_for(1200.0, 5.0)
+	var tank_part := str(sim3.net["cvs"][b_cv].get("vessel_part", ""))
+	var rd := TcProcControl.read_all(sim3, sim3.control_sensors)
+	var lvl := float((rd.get("numeric_values", rd) as Dictionary).get("sensor.%s_%s_level" % [slug, tank_part], 0.0))
+	_near(lvl, 50.0, 1.0, "the PID holds the tank at half (%.1f %%)" % lvl)
+	var frac := 0.0
+	for li3 in (sim3.net["links"] as Array).size():
+		if str(sim3.net["links"][li3]["part"]) == valve_id:
+			frac = float(sim3.link_frac[li3])
+	_ok(frac > 0.03 and frac < 0.6, "with the valve part open (%.0f %%)" % (frac * 100.0))
+	# Scrub: a restore brings the valve and the levels back.
+	var snap := sim3.snapshot()
+	var vkeep := sim3._liq_volume(sim3.liq[b_cv])
+	sim3.set_actuator("cvalve:%s" % valve_id, 100.0)
+	sim3.run_for(60.0, 5.0)
+	sim3.restore(snap)
+	_near(sim3._liq_volume(sim3.liq[b_cv]), vkeep, 1e-12, "a restore puts the level back")
+	var frac2 := 0.0
+	for li4 in (sim3.net["links"] as Array).size():
+		if str(sim3.net["links"][li4]["part"]) == valve_id:
+			frac2 = float(sim3.link_frac[li4])
+	_near(frac2, frac, 1e-12, "and the valve's opening")
+	# A design with one vessel has no lines and is untouched.
+	var one := TcProcSim.create(TcDesign.solve(TcPresets.builtin("brew_kettle")))
+	_ok(one.lines.is_empty() and one.pump_on.is_empty(), "a one-vessel design has no liquid lines")
+
+func _imbalance(sim: TcProcSim) -> float:
+	var el := sim.energy_ledger()
+	return float(el["in"]) - float(el["stored"]) - float(el["loss"]) - float(el["coolant"]) - float(el["reaction"]) - float(el["out"])
+
+
+func _vessel_cv_of(sim: TcProcSim, part: String) -> int:
+	for i in sim.n_cv:
+		if str(sim.net["cvs"][i]["role"]) == "vessel" and str(sim.net["cvs"][i].get("vessel_part", "")) == part:
+			return i
+	return -1
+
+
+func _read(sim: TcProcSim, key: String) -> float:
+	var rd := TcProcControl.read_all(sim, sim.control_sensors)
+	return float((rd.get("numeric_values", rd) as Dictionary).get(key, NAN))
+
+
+## The rest of the liquid plant: heaters and pools in several vessels, an
+## agitator, a plate chiller, a jacket fed with hot water, branched lines,
+## level switch / transmitter / flow meter parts, and the three presets.
+func _test_liquid_plant() -> void:
+	# ---- brewhouse: a sequence through four vessels ----
+	var d := TcDesign.solve(TcPresets.builtin("brewhouse"))
+	_ok((d.get("clashes", []) as Array).is_empty(), "the brewhouse has no clash")
+	var sim := TcProcSim.create(d)
+	var slug := TcProcControl.design_slug(d)
+	_ok(sim.lines.size() == 3, "three lines between its four vessels (%d)" % sim.lines.size())
+	_ok(sim.heater_parts.size() == 2 and sim.n_bed_heaters == 1, "an element in the liquor tank and one in the kettle")
+	var cvs_h := {}
+	for hp in sim.heater_parts:
+		cvs_h[int(sim.heater_cv[hp])] = true
+	_ok(cvs_h.size() == 2, "each in its own vessel")
+	_ok(sim.agit.size() == 1 and sim._plate_hx.size() == 1, "one agitator and one plate exchanger are in the model")
+	var acts := {}
+	for a in sim.control_acts:
+		acts[str(a["act"]).get_slice(":", 0)] = int(acts.get(str(a["act"]).get_slice(":", 0), 0)) + 1
+	_ok(acts.has("agitator") and int(acts.get("pump", 0)) == 3, "the agitator and three pumps are switches (%s)" % [acts])
+	var ferm := int(sim.lines[2]["b"])
+	var kettle := int(sim.lines[2]["a"])
+	var hot := 0.0
+	var stirred := false
+	for k in 30:
+		sim.run_for(300.0, 5.0)
+		hot = maxf(hot, sim.liq_t(kettle) - 273.15 if sim._liq_volume(sim.liq[kettle]) > 0.001 else 0.0)
+		for ap in sim.agit_on.keys():
+			stirred = stirred or bool(sim.agit_on[ap])
+	var st: Dictionary = sim.logic_status.get("b1", {})
+	_ok(str(st.get("run", "")) == "done", "the brew-day sequence runs to its end by itself (%s)" % str(st.get("text", "")))
+	_ok(hot > 99.0, "the kettle's own element brought it to the boil (%.1f °C)" % hot)
+	_ok(stirred, "the sequence ran the stirrer during the rest")
+	var vf := sim._liq_volume(sim.liq[ferm]) * 1000.0
+	var tf := sim.liq_t(ferm) - 273.15
+	_ok(vf > 8.0, "wort reached the fermenter (%.1f L)" % vf)
+	_ok(tf < 30.0, "through the chiller it arrives cool (%.1f °C from a %.0f °C kettle)" % [tf, hot])
+	_ok(absf(_imbalance(sim)) < float(sim.energy_ledger()["in"]) * 0.002, "the energy ledger closes with boiling, pumps, stirrer and chiller (%.0f J of %.0f)" % [_imbalance(sim), float(sim.energy_ledger()["in"])])
+	_ok(absf(float(sim.mass_ledger()["error_kg"])) < 0.01, "and the mass ledger")
+	_ok(not is_nan(_read(sim, "sensor.%s_%s_liquid_temp" % [slug, str(sim.net["cvs"][ferm].get("vessel_part", ""))])), "every vessel on a line has a liquid temperature sensor")
+	# The chiller by hand: counter-flow effectiveness for the knock-out flow.
+	var c_h := 6.0 / 60.0 * 4186.0
+	var c_c := 8.0 / 60.0 * 4186.0
+	var ntu := TcProcSim.U_PLATE * 0.9 / c_h
+	var cr := c_h / c_c
+	var eff := (1.0 - exp(-ntu * (1.0 - cr))) / (1.0 - cr * exp(-ntu * (1.0 - cr)))
+	_ok(eff > 0.9 and tf < 12.0 + (100.0 - 12.0) * (1.0 - eff) + 8.0, "as the effectiveness of 30 plates says (ε %.3f)" % eff)
+	# A snapshot keeps the new switches.
+	var ap0 := str(sim.agit_on.keys()[0])
+	sim.set_actuator("agitator:%s" % ap0, true)
+	var snap := sim.snapshot()
+	sim.set_actuator("agitator:%s" % ap0, false)
+	sim.restore(snap)
+	_ok(bool(sim.agit_on[ap0]), "a restore brings the agitator's switch back")
+
+	# ---- CIP skid: a tee, two sources on one pump ----
+	var d2 := TcDesign.solve(TcPresets.builtin("cip_skid"))
+	_ok((d2.get("clashes", []) as Array).is_empty(), "the CIP skid has no clash")
+	var s2 := TcProcSim.create(d2)
+	_ok(s2.lines.size() == 4, "the tee gives four lines: rinse → vessel, wash → vessel, rinse ↔ wash, vessel → receiver (%d)" % s2.lines.size())
+	var ids2: Dictionary = {}
+	for ln in s2.lines:
+		ids2[int(ln["a"])] = true
+		ids2[int(ln["b"])] = true
+	var recv := -1
+	var total0 := 0.0
+	for i in ids2.keys():
+		total0 += s2._liq_volume(s2.liq[int(i)])
+		if s2._liq_volume(s2.liq[int(i)]) < 1e-6 and float(s2._vessel_floor[int(i)]) < 0.1:
+			recv = int(i)
+	_ok(recv >= 0, "the receiver stands on the floor, empty")
+	# Both solenoids shut at the start: nothing moves.
+	var no_logic: Dictionary = ((d2["spec"] as Dictionary)["process"] as Dictionary).duplicate(true)
+	no_logic["logic"] = []
+	var s2b := TcProcSim.create(d2, no_logic)
+	var before: Array = []
+	for i2 in ids2.keys():
+		before.append(s2b._liq_volume(s2b.liq[int(i2)]))
+	for a2 in s2b.control_acts:
+		if str(a2["act"]).begins_with("pump:"):
+			s2b.set_actuator(str(a2["act"]), true)
+	s2b.run_for(120.0, 5.0)
+	var moved := 0.0
+	var kk := 0
+	for i3 in ids2.keys():
+		moved += absf(s2b._liq_volume(s2b.liq[int(i3)]) - float(before[kk]))
+		kk += 1
+	_ok(moved < 1e-4, "with the solenoid valves shut the pump moves nothing (%.3f L)" % (moved * 1000.0))
+	var wash_hot := 0.0
+	for k2 in 18:
+		s2.run_for(300.0, 5.0)
+	for i4 in ids2.keys():
+		wash_hot = maxf(wash_hot, s2.liq_t(int(i4)) - 273.15)
+	var st2: Dictionary = s2.logic_status.get("b2", {})
+	_ok(str(st2.get("run", "")) == "done", "the clean-in-place sequence runs to its end (%s)" % str(st2.get("text", "")))
+	_ok(wash_hot > 58.0 and wash_hot < 70.0, "the band held the wash tank near 60–65 °C (%.1f °C)" % wash_hot)
+	_ok(s2._liq_volume(s2.liq[recv]) * 1000.0 > 55.0, "two rinses and a wash ended in the receiver (%.0f L)" % (s2._liq_volume(s2.liq[recv]) * 1000.0))
+	var total1 := 0.0
+	for i5 in ids2.keys():
+		total1 += s2._liq_volume(s2.liq[int(i5)])
+	_ok(absf(total1 - total0) < total0 * 0.01, "no liquid made or lost on the way (%.1f → %.1f L)" % [total0 * 1000.0, total1 * 1000.0])
+	_ok(absf(_imbalance(s2)) < float(s2.energy_ledger()["in"]) * 0.002, "its energy ledger closes")
+
+	# ---- water filter train: band + level switch + flow meter ----
+	var d3 := TcDesign.solve(TcPresets.builtin("water_filter_train"))
+	_ok((d3.get("clashes", []) as Array).is_empty(), "the filter train has no clash")
+	var s3 := TcProcSim.create(d3)
+	var slug3 := TcProcControl.design_slug(d3)
+	var clean := int(s3.lines[0]["b"])
+	var clean_part := str(s3.net["cvs"][clean].get("vessel_part", ""))
+	var sw_key := ""
+	var fm_key := ""
+	for e in s3.control_sensors:
+		var src: Dictionary = e["src"]
+		if str(src["kind"]) == "level_switch":
+			sw_key = str(e["key"])
+		elif str(src["kind"]) == "line_flow":
+			fm_key = str(e["key"])
+	_ok(sw_key != "" and fm_key != "", "the level switch and the flow meter are sensors")
+	var lo := 100.0
+	var hi := 0.0
+	var starts := 0
+	var was_on := false
+	var metered := 0.0
+	var pump3 := str(s3.pump_on.keys()[0])
+	for k3 in 300:
+		s3.run_for(5.0, 5.0)
+		var lv := _read(s3, "sensor.%s_%s_level" % [slug3, clean_part])
+		if s3.t_s > 420.0 and s3.liquid_surface_m(int(s3.lines[0]["a"])) > float(s3.lines[0]["za"]) + 0.05:
+			lo = minf(lo, lv)
+			hi = maxf(hi, lv)
+		var on := bool(s3.pump_on[pump3])
+		if on and not was_on:
+			starts += 1
+		was_on = on
+		metered = maxf(metered, _read(s3, fm_key))
+	_ok(lo > 33.0 and hi < 86.0 and hi > lo + 15.0, "the band keeps the clean tank between its marks while the raw tank lasts (%.0f to %.0f %%)" % [lo, hi])
+	_ok(starts >= 2, "the pump cycles (%d starts)" % starts)
+	_ok(metered > 3.0, "the flow meter reads the pump's flow (%.1f L/min at most)" % metered)
+	_near(_read(s3, sw_key), 0.0, 1e-9, "the high level switch is dry at 80 %")
+	# Fill past the switch: it reads wet, and the interlock holds the pump off.
+	s3.logic_blocks = [s3.logic_blocks[1]]
+	for a3 in s3.control_acts:
+		if str(a3["act"]).begins_with("cvalve:"):
+			s3.set_actuator(str(a3["act"]), 0.0)
+	s3._fill_liquid(clean, {"mass_kg": 60.0}, TcProcSpec.FEEDS["water"], 293.15)
+	s3.set_actuator("pump:%s" % pump3, true)
+	s3.run_for(20.0, 5.0)
+	_near(_read(s3, sw_key), 1.0, 1e-9, "filled past it the switch reads wet")
+	_ok(not bool(s3.pump_on[pump3]), "and the interlock holds the pump off")
+
+	# ---- a jacket fed with hot water ----
+	var dj := TcDesign.solve(TcPresets.builtin("biochar_reactor"))
+	var pj: Dictionary = TcProcSpec.kettle_default()
+	pj["charge"]["mass_kg"] = 30.0
+	pj["heaters"]["default_w"] = 0.0
+	var vpart := ""
+	for p in dj["spec"]["parts"]:
+		if str(p["type"]) == "vessel":
+			vpart = str(p["id"])
+	pj["jackets"] = {vpart: {"t_c": 80.0, "lpm": 12.0, "on": true}}
+	var sj := TcProcSim.create(dj, pj)
+	_ok(sj.jacket.size() == 1, "a jacketed vessel takes a service medium")
+	var jacts := 0
+	for a4 in sj.control_acts:
+		if str(a4["act"]).begins_with("jacket"):
+			jacts += 1
+	_ok(jacts == 2, "its jacket has a switch and a water temperature")
+	sj.run_for(3.0 * 3600.0, 10.0)
+	var tj := sj.liq_t(sj.vessel_cv) - 273.15
+	_ok(tj > 70.0 and tj < 80.5, "hot water round the vessel warms the liquid toward its own 80 °C (%.1f °C after 3 h)" % tj)
+	_ok(absf(_imbalance(sj)) < absf(float(sj.energy_ledger()["coolant"])) * 0.01 + 1.0, "booked as heat from the medium, the ledger closes")
+	sj.set_actuator("jackett:%s" % vpart, 10.0)
+	sj.run_for(3.0 * 3600.0, 10.0)
+	_ok(sj.liq_t(sj.vessel_cv) - 273.15 < 25.0, "cold water in the jacket cools it again (%.1f °C)" % (sj.liq_t(sj.vessel_cv) - 273.15))
+
+	# ---- design rules ----
+	var bad := TcSpec.empty("bad")
+	var r := TcAssembly.add_part(bad, "spool", "1.5", {"length_mm": 100.0}, Transform3D.IDENTITY)
+	bad = r[0]
+	r = TcAssembly.add_part(bad, "pump", "1.5", {}, Transform3D.IDENTITY)
+	bad = r[0]
+	var pmp: String = r[1]
+	r = TcAssembly.add_part(bad, "control_valve", "1.5", {}, Transform3D.IDENTITY)
+	bad = r[0]
+	(bad["joints"] as Array).append({"a": pmp + ":b", "b": str(r[1]) + ":a", "roll_deg": 0.0, "gasket": "epdm", "clamp": "single_pin"})
+	var db := TcDesign.solve(TcSpec.resolve(bad))
+	var warned := false
+	for c in db.get("checks", []):
+		if str(c.get("text", "")).contains("clamped straight to"):
+			warned = true
+	_ok(warned, "a pump clamped straight to a valve is flagged")
+	var clean_presets := true
+	for id in ["level_rig", "brewhouse", "cip_skid", "water_filter_train", "biochar_reactor"]:
+		for c2 in TcDesign.solve(TcPresets.builtin(id)).get("checks", []):
+			if str(c2.get("text", "")).contains("clamped straight to"):
+				clean_presets = false
+	_ok(clean_presets, "none of the built-ins is")
+	var dk := TcDesign.solve(TcPresets.builtin("brew_kettle"))
+	var sk := TcProcSim.create(dk)
+	var hand := 0
+	for a5 in sk.control_acts:
+		if bool(a5.get("hand", false)):
+			hand += 1
+	_ok(hand == 1, "the kettle's ball valve is a hand valve (no actuator on its stem)")
+	var rows := TcProcBoard.rows(sk, sk.proc)
+	var relay_for_hand := false
+	for rw2 in rows:
+		for a6 in sk.control_acts:
+			if bool(a6.get("hand", false)) and str(rw2.get("key", "")) == str(a6["key"]) and str(rw2.get("part", "")) != "":
+				relay_for_hand = true
+	_ok(not relay_for_hand, "the controller board gives a hand valve no relay")
+	var s2c := TcProcSim.create(d2)
+	var driven := 0
+	for a7 in s2c.control_acts:
+		if a7.has("hand") and not bool(a7["hand"]):
+			driven += 1
+	_ok(driven == 3, "the skid's three solenoid valves are driven (%d)" % driven)

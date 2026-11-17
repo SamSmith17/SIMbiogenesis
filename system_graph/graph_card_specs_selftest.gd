@@ -4,7 +4,7 @@ extends SceneTree
 ## GraphCard.layout). Offline; carries EXPECTED_CHECKS.
 ##   godot --headless --path . --script system_graph/graph_card_specs_selftest.gd
 
-const EXPECTED_CHECKS := 45
+const EXPECTED_CHECKS := 47
 
 var _checks := 0
 var _fails := 0
@@ -82,6 +82,12 @@ func _test_controller() -> void:
 	_ok(str(s["footer"]).begins_with("Clipping 180 W") and str(s["footer"]).contains("12 V × 10 A"),
 		"the clipped share is a number on the card (%s)" % s["footer"])
 	_ok(float((s["bar"] as Dictionary)["ghost"]) == 1.0, "the bar shows what was offered as a ghost band")
+	# An inverter (AC wired out of it): its AC output is the card's number.
+	var inv := {"id": "i", "type": "controller", "specs": {"name": "EG4 6000XP Hybrid", "dc_delivered_w": 3400.0,
+		"dc_array_w": 3400.0, "overload_watts": 6000.0}}
+	var si := GraphCardSpecs.for_item(inv, {"ac_out_w": 2500.0})
+	_ok(si["hero"] == "2.5 kW" and str(si["sub"]).begins_with("AC out"), "an inverter shows its AC output (%s · %s)" % [si["hero"], si["sub"]])
+	_ok(GraphCardSpecs.for_item(inv, {})["hero"] == "3.4 kW", "no AC wired: the controller still shows what it delivers")
 
 
 ## The 2026-10-14 bootcamp report: after a run, battery full at noon, six

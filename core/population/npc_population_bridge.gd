@@ -29,6 +29,8 @@ var _all_hands: Dictionary = {}
 ## the routine says. Released by _prune_project_pins once every project on
 ## the list has left the "active" state (or is gone).
 var _project_pins: Dictionary = {}
+## Camps pinned by an owner with standing work: {iid: {owner: true}}.
+var _work_pins: Dictionary = {}
 ## Camps whose people have not arrived yet (iid -> the hour their first
 ## vehicle parks): a camp whose living vehicles are still driving in through
 ## the gate (VehicleDrive) is not on site. It is not stepped, consumes
@@ -355,7 +357,7 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		# the focus policy says — only a full engine has a board, and the
 		# board is where the work is.
 		_prune_project_pins()
-		for iid in _all_hands.keys() + _project_pins.keys():
+		for iid in _all_hands.keys() + _project_pins.keys() + _work_pins.keys():
 			if _tiers.has(iid):
 				_tiers[iid] = CrowdFocus.TIER_FULL
 
@@ -2641,7 +2643,23 @@ func all_hands_ids() -> Array:
 
 ## True while the camp is pinned by the deploy director or by a project.
 func is_all_hands(iid: String) -> bool:
-	return _all_hands.has(iid) or _project_pins.has(iid)
+	return _all_hands.has(iid) or _project_pins.has(iid) or _work_pins.has(iid)
+
+
+## Pin a camp ALL HANDS while `owner` has work for it (terrace fields): on
+## until the owner says it has none. Never saved; the owner re-asserts it.
+func pin_for_work(iid: String, owner: String, on: bool) -> void:
+	if iid.is_empty() or owner.is_empty():
+		return
+	var d: Dictionary = _work_pins.get(iid, {})
+	if on:
+		d[owner] = true
+	else:
+		d.erase(owner)
+	if d.is_empty():
+		_work_pins.erase(iid)
+	else:
+		_work_pins[iid] = d
 
 
 ## Pin the camp ALL HANDS until `project_id` is no longer active.

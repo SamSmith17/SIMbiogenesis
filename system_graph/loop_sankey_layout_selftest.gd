@@ -14,7 +14,7 @@ extends SceneTree
 ## function while the suite still prints PASS.
 ##   godot --headless --path . --script system_graph/loop_sankey_layout_selftest.gd
 
-const EXPECTED_CHECKS := 31
+const EXPECTED_CHECKS := 41
 
 var _checks := 0
 var _fails := 0
@@ -28,6 +28,7 @@ func _init() -> void:
 	_test_determinism()
 	_test_fci()
 	_test_boundaries()
+	_test_tiers()
 	_test_budget()
 	if _checks != EXPECTED_CHECKS:
 		_fails += 1
@@ -215,6 +216,62 @@ func _test_boundaries() -> void:
 	_ok(ok_dir, "boundary flows come down from above and leave downward")
 	_ok(float(r["nodes"]["a"]["rect"].position.y) >= LoopSankeyLayout.BAND_H - 0.01,
 		"room is kept above the top layer for inputs")
+
+
+## Tiers (the Flows lens's reading order): panels over the inverter over
+## the battery whatever the battery is doing; a discharging battery feeds the
+## inverter above it with a short UP ribbon from its top to the inverter's
+## bottom; per-node sizes; a store's own stock (hide) draws no stub but still
+## counts in the metrics; a sunlight flag reaches its ribbon.
+func _test_tiers() -> void:
+	var nodes := [{"id": "pv", "label": "Array", "tier": 0, "w": 300.0, "h": 120.0},
+		{"id": "inv", "label": "Inverter", "tier": 1}, {"id": "bat", "label": "Battery", "tier": 2},
+		{"id": "load", "label": "Load"}]
+	# Evening: the array makes a little, the battery makes up the rest.
+	var edges := [{"id": "e1", "a": "pv", "b": "inv", "key": "electricity", "value": 300.0},
+		{"id": "e2", "a": "bat", "b": "inv", "key": "electricity", "value": 900.0},
+		{"id": "e3", "a": "inv", "b": "load", "key": "electricity", "value": 1100.0}]
+	var bin := [{"node": "pv", "key": "electricity", "value": 300.0, "label": "sunlight", "sun": true},
+		{"node": "bat", "key": "electricity", "value": 900.0, "label": "from its charge", "hide": true}]
+	var lay := LoopSankeyLayout.layout(nodes, edges, bin, [], {"node_h": 40.0})
+	var ly := func(id: String) -> int: return int(lay["nodes"][id]["layer"])
+	_ok(ly.call("pv") < ly.call("inv") and ly.call("inv") < ly.call("bat"),
+		"tiers: array %d over inverter %d over battery %d" % [ly.call("pv"), ly.call("inv"), ly.call("bat")])
+	var up := {}
+	var sun := {}
+	var n_in := 0
+	for rb in lay["ribbons"]:
+		if str(rb["kind"]) == LoopSankeyLayout.KIND_UP:
+			up = rb
+		if str(rb["kind"]) == LoopSankeyLayout.KIND_IN:
+			n_in += 1
+			if bool(rb.get("sun", false)):
+				sun = rb
+	_ok(not up.is_empty() and str(up["a"]) == "bat" and str(up["b"]) == "inv", "tiers: the battery feeds its inverter UP")
+	var bat_r: Rect2 = lay["nodes"]["bat"]["rect"]
+	var inv_r: Rect2 = lay["nodes"]["inv"]["rect"]
+	var p: PackedVector2Array = up.get("path", PackedVector2Array())
+	_ok(p.size() > 2 and absf(p[0].y - bat_r.position.y) < 0.01 and absf(p[p.size() - 1].y - inv_r.end.y) < 0.01,
+		"tiers: the up ribbon runs from the battery's top to the inverter's bottom")
+	var mono := true
+	for i in range(1, p.size()):
+		if p[i].y > p[i - 1].y + 0.01:
+			mono = false
+	_ok(mono, "tiers: the up ribbon only rises")
+	_ok(int(lay.get("returns", -1)) == 0, "tiers: no return round the side for it")
+	var pv_r: Rect2 = lay["nodes"]["pv"]["rect"]
+	_ok(absf(pv_r.size.x - 300.0) < 0.01 and absf(pv_r.size.y - 120.0) < 0.01, "sizes: the array card is its own size")
+	_ok(inv_r.position.y >= pv_r.end.y, "sizes: the next layer starts under the tall card")
+	_ok(n_in == 1 and not sun.is_empty(), "boundaries: the battery's own stock draws no stub; the sunlight does")
+	_ok(float((lay["metrics"] as Dictionary)["electricity"].get("boundary_in", 0.0)) >= 1199.0,
+		"boundaries: hidden stock still counts in the metrics (%s)" % str((lay["metrics"] as Dictionary)["electricity"]))
+	# Midday: charging is an ordinary flow down; the battery is still under the inverter.
+	var edges2 := [{"id": "e1", "a": "pv", "b": "inv", "key": "electricity", "value": 3000.0},
+		{"id": "e2", "a": "inv", "b": "bat", "key": "electricity", "value": 1000.0},
+		{"id": "e3", "a": "inv", "b": "load", "key": "electricity", "value": 1900.0}]
+	var lay2 := LoopSankeyLayout.layout(nodes, edges2, [], [], {})
+	_ok(int(lay2["nodes"]["bat"]["layer"]) == int(lay2["nodes"]["inv"]["layer"]) + 1
+		and int(lay2.get("ups", -1)) == 0, "tiers: charging flows down into the battery under the inverter")
 
 
 func _test_budget() -> void:

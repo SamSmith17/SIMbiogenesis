@@ -13,29 +13,46 @@ const PWM := "Trainer PWM 10A"
 const MPPT := "Trainer MPPT 150/30"
 
 
-static func all_levels() -> Array:
+const TRACKS := ["solar", "process"]
+const TRACK_NAMES := {"solar": "Solar Bootcamp", "process": "Process Bootcamp"}
+
+
+static func _raw(track: String) -> Array:
+	return _PROCESS_LEVELS if track == "process" else _LEVELS
+
+
+static func all_levels(track: String = "solar") -> Array:
 	var out: Array = []
-	for d in _LEVELS:
+	for d in _raw(track):
 		out.append(TutorialLevelDef.from_dict(d))
 	return out
 
 
 static func by_id(level_id: String) -> TutorialLevelDef:
-	for d in _LEVELS:
-		if str((d as Dictionary).get("id", "")) == level_id:
-			return TutorialLevelDef.from_dict(d)
+	for tr in TRACKS:
+		for d in _raw(tr):
+			if str((d as Dictionary).get("id", "")) == level_id:
+				return TutorialLevelDef.from_dict(d)
 	return null
 
 
-static func ordered_ids() -> Array:
+static func track_of(level_id: String) -> String:
+	for d in _PROCESS_LEVELS:
+		if str((d as Dictionary).get("id", "")) == level_id:
+			return "process"
+	return "solar"
+
+
+static func ordered_ids(track: String = "solar") -> Array:
 	var out: Array = []
-	for d in _LEVELS:
+	for d in _raw(track):
 		out.append(str((d as Dictionary).get("id", "")))
 	return out
 
 
+## The level after this one IN ITS OWN TRACK.
 static func next_after(level_id: String) -> String:
-	var ids := ordered_ids()
+	var ids := ordered_ids(track_of(level_id))
 	var i := ids.find(level_id)
 	if i < 0 or i + 1 >= ids.size():
 		return ""
@@ -362,5 +379,86 @@ const _LEVELS: Array = [
 			"Laptop", "Patio String Lights"],
 		"goal": {"kind": "compound_containing", "types": ["controller", "battery"]},
 		"unlocks": ["unlock_all"],
+	},
+]
+
+
+# ── Process Bootcamp (SCADA plan, Phase 9) ──────────────────────────────────
+# Five short lessons in the Process lens: a valve, a band by hand, a band by
+# a rule, a PID, an alarm. Seeds take `set` (spec values) and wires `resource`.
+
+const TANK := "Water Tank (250 gal)"
+const VALVE := "Ball Valve"
+const CVALVE := "Control Valve"
+
+const _P_CISTERN := {"preset_label": TANK, "x": -360.0, "y": 0.0, "set": {"name": "Cistern", "capacity_qty": 20000.0, "capacity_unit": "L", "level": 0.9}}
+const _P_FILL := {"preset_label": VALVE, "x": -180.0, "y": 0.0, "set": {"name": "Fill valve", "max_rate": 600.0, "requested_state": "off"}}
+const _P_DAY := {"preset_label": TANK, "x": 0.0, "y": 0.0, "set": {"name": "Day Tank", "capacity_qty": 1000.0, "capacity_unit": "L", "level": 0.5}}
+const _P_OUT := {"preset_label": VALVE, "x": 180.0, "y": 0.0, "set": {"name": "Outlet", "max_rate": 200.0, "requested_state": "on"}}
+const _P_DRAIN := {"preset_label": TANK, "x": 360.0, "y": 0.0, "set": {"name": "Drain", "capacity_qty": 50000.0, "capacity_unit": "L", "level": 0.0}}
+const _P_WIRES := [
+	{"from": 0, "to": 1, "resource": "water"}, {"from": 1, "to": 2, "resource": "water"},
+	{"from": 2, "to": 3, "resource": "water"}, {"from": 3, "to": 4, "resource": "water"},
+]
+
+const _PROCESS_LEVELS: Array = [
+	{
+		"id": "process_01_valve", "index": 1, "title": "Open the Valve", "track": "process", "lens": "process",
+		"brief_bbcode": "This is a [b]process picture[/b]: tanks, pipes and a valve, drawn the way a plant operator sees them.\n\n" +
+			"The [b]Day Tank[/b] is nearly empty and the [b]Fill valve[/b] is shut. Click the valve and press [b]Open it[/b], " +
+			"then let time run (the play button on the timeline; a faster speed helps).\n\nFill the Day Tank to [b]50 %[/b].",
+		"debrief_bbcode": "Water only moves where a path is open. The card you clicked is a [b]faceplate[/b]: every valve, pump and machine " +
+			"in the picture has one, and it does the same thing a rule or a real relay would do.\n\n" +
+			"Every reading you saw (the tank's level, the valve's state) is a [b]tag[/b]. Everything that follows is built on tags.",
+		"seed": [_P_CISTERN, _P_FILL, {"preset_label": TANK, "x": 0.0, "y": 0.0, "set": {"name": "Day Tank", "capacity_qty": 1000.0, "capacity_unit": "L", "level": 0.1}}],
+		"seed_wires": [{"from": 0, "to": 1, "resource": "water"}, {"from": 1, "to": 2, "resource": "water"}],
+		"goal": {"kind": "tag_reach", "item": "Day Tank", "read": "level", "value": 50.0},
+	},
+	{
+		"id": "process_02_by_hand", "index": 2, "title": "Hold It by Hand", "track": "process", "lens": "process",
+		"brief_bbcode": "Now the Day Tank has an [b]Outlet[/b] that is always running, and you are the controller.\n\n" +
+			"Open and close the [b]Fill valve[/b] to keep the level between [b]40 % and 80 %[/b] for [b]one hour[/b] of site time, without a break.",
+		"debrief_bbcode": "You just did by hand what the simplest controller does: [b]on below a low mark, off above a high one[/b]. " +
+			"It works, and it needs somebody watching all day.\n\nNext: hand the job to a rule.",
+		"seed": [_P_CISTERN, _P_FILL, _P_DAY, _P_OUT, _P_DRAIN], "seed_wires": _P_WIRES,
+		"goal": {"kind": "tag_band_hold", "item": "Day Tank", "read": "level", "lo": 40.0, "hi": 80.0, "hold_h": 1.0},
+	},
+	{
+		"id": "process_03_band", "index": 3, "title": "Let a Rule Do It", "track": "process", "lens": "process",
+		"brief_bbcode": "Same plant. Press [b]Logic[/b] in the bar under the picture and add [b]Hold a level (on / off)[/b].\n\n" +
+			"Set what it [b]reads[/b] to the Day Tank's level and what it [b]drives[/b] to the Fill valve. " +
+			"Then let it hold the level between [b]30 % and 80 %[/b] for [b]three hours[/b].",
+		"debrief_bbcode": "That block is an [b]on / off band[/b] (hysteresis). The gap between its two marks is what stops the valve chattering.\n\n" +
+			"Watch the level: it saws up and down between the marks forever. For a tank that is fine. For a temperature or a pressure you often want it [i]still[/i].",
+		"seed": [_P_CISTERN, _P_FILL, _P_DAY, _P_OUT, _P_DRAIN], "seed_wires": _P_WIRES,
+		"goal": {"kind": "tag_band_hold", "item": "Day Tank", "read": "level", "lo": 30.0, "hi": 80.0, "hold_h": 3.0, "need_block": "band"},
+	},
+	{
+		"id": "process_04_pid", "index": 4, "title": "Hold It Still", "track": "process", "lens": "process",
+		"brief_bbcode": "The Fill valve is now a [b]control valve[/b]: it can stand anywhere between shut and open.\n\n" +
+			"In [b]Logic[/b], add [b]Hold a level (PID)[/b], reading the Day Tank's level and driving the Fill valve's [b]opening[/b]. " +
+			"Hold the level between [b]48 % and 52 %[/b] for [b]one hour[/b].",
+		"debrief_bbcode": "A [b]PID loop[/b] moves its output a little at a time: more the further the reading is from the setpoint (P), " +
+			"and more the longer it has been off (I). The valve settles at the opening that exactly matches the outlet.\n\n" +
+			"Its faceplate has [b]Auto / Manual[/b], and the Logic window can [b]suggest gains from a step test[/b].",
+		"seed": [_P_CISTERN, {"preset_label": CVALVE, "x": -180.0, "y": 0.0, "set": {"name": "Fill valve", "max_rate": 600.0, "requested_state": "on", "open": 0.0}},
+			{"preset_label": TANK, "x": 0.0, "y": 0.0, "set": {"name": "Day Tank", "capacity_qty": 1000.0, "capacity_unit": "L", "level": 0.35}}, _P_OUT, _P_DRAIN],
+		"seed_wires": _P_WIRES,
+		"goal": {"kind": "tag_band_hold", "item": "Day Tank", "read": "level", "lo": 48.0, "hi": 52.0, "hold_h": 1.0, "need_block": "pid"},
+	},
+	{
+		"id": "process_05_alarm", "index": 5, "title": "When It Goes Wrong", "track": "process", "lens": "process",
+		"brief_bbcode": "Somebody left the Fill valve open and the Outlet shut. The Day Tank is going to overflow.\n\n" +
+			"Press [b]Alarms[/b], then [b]Suggest for this site[/b] to get a high-level alarm on the Day Tank. " +
+			"Let time run until it goes off, then [b]Acknowledge[/b] it.",
+		"debrief_bbcode": "An alarm [b]flashes until somebody has seen it[/b] and stays listed while its cause lasts. Too many alarms and people stop reading them: " +
+			"keep them for things that need a person.\n\n" +
+			"An alarm is also a tag, so an [b]interlock[/b] can act on it (\"Stop on overfill\" in Logic). " +
+			"From here: [b]Widgets[/b] for gauges and buttons, [b]Trends[/b] for history, and [b]Hardware[/b] to drive real devices.",
+		"seed": [_P_CISTERN, {"preset_label": VALVE, "x": -180.0, "y": 0.0, "set": {"name": "Fill valve", "max_rate": 600.0, "requested_state": "on"}},
+			{"preset_label": TANK, "x": 0.0, "y": 0.0, "set": {"name": "Day Tank", "capacity_qty": 1000.0, "capacity_unit": "L", "level": 0.7}},
+			{"preset_label": VALVE, "x": 180.0, "y": 0.0, "set": {"name": "Outlet", "max_rate": 200.0, "requested_state": "off"}}, _P_DRAIN],
+		"seed_wires": _P_WIRES,
+		"goal": {"kind": "alarm_acked", "item": "Day Tank", "read": "level"},
 	},
 ]

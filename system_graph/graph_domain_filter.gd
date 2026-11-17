@@ -23,12 +23,14 @@ const FUEL := "fuel"
 const MATERIALS := "materials"
 const AMBIENT := "ambient"
 const OTHER := "other"
+## Information: data wires (polarity "data": Ethernet, Wi-Fi, buses).
+const DATA := "data"
 
 ## Display order + labels for the menu and the chip.
-const DOMAINS := [POWER, WATER, FOOD, FUEL, MATERIALS, OTHER]
+const DOMAINS := [POWER, WATER, FOOD, FUEL, MATERIALS, DATA, OTHER]
 const LABELS := {
 	POWER: "Power", WATER: "Water", FOOD: "Food & waste", FUEL: "Fuel & heat",
-	MATERIALS: "Materials", AMBIENT: "Sun & wind", OTHER: "Other",
+	MATERIALS: "Materials", AMBIENT: "Sun & wind", OTHER: "Other", DATA: "Network",
 }
 
 ## Resource kind -> domain. Kinds not listed (user kinds, money, chore hours)
@@ -61,12 +63,16 @@ static func kind_domain(kind: String) -> String:
 static func handle_domain(h: Dictionary) -> String:
 	if str(h.get("polarity", "")) == "resource":
 		return kind_domain(str(h.get("resource_kind", "")))
+	if str(h.get("polarity", "")) == "data":
+		return DATA
 	return POWER
 
 
 static func conn_domain(conn: Dictionary) -> String:
 	if str(conn.get("polarity", "")) == "resource":
 		return kind_domain(str(conn.get("resource_type", "")))
+	if str(conn.get("polarity", "")) == "data":
+		return DATA
 	return POWER
 
 
@@ -173,6 +179,8 @@ static func preset(id: String) -> Dictionary:
 			return {FOOD: true, MATERIALS: true}
 		"fuel":
 			return {FUEL: true}
+		"data":
+			return {DATA: true}
 	return {}
 
 

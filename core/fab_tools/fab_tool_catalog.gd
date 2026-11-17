@@ -39,6 +39,11 @@ const TOOLS := {
 	"pot": {"label": "Stock pot", "ops": ["carry_pot"]},
 	"sponge": {"label": "Sponge", "ops": ["wash"]},
 	"crate": {"label": "Produce crate", "ops": ["carry_crate"]},
+	# Field work (terraces: TerraceRuntime puts the tool on the chore).
+	"hoe": {"label": "Hoe", "ops": ["prep", "tend"]},
+	"shovel": {"label": "Shovel", "ops": ["dig"]},
+	"sickle": {"label": "Sickle", "ops": ["harvest"]},
+	"seedlings": {"label": "Seedlings", "ops": ["plant"]},
 }
 
 const STEEL := Color(0.72, 0.74, 0.77)
@@ -153,6 +158,28 @@ static func sockets(id: String) -> Dictionary:
 				"tip": Transform3D(Basis(), Vector3.ZERO),
 				"spin_node": "", "spin_axis": Vector3(0, 1, 0),
 			}
+		"hoe", "shovel":
+			# Long handle up +Y from the head at the origin; held near the top.
+			var top := 1.1 if id == "hoe" else 0.95
+			return {
+				"grip": Transform3D(hand_basis(Vector3(0, 1, 0), Vector3(0, 0, -1)), Vector3(0, top, 0)),
+				"grip2": Transform3D(hand_basis(Vector3(0, 1, 0), Vector3(0, 0, -1)), Vector3(0, top - 0.4, 0)),
+				"tip": Transform3D(Basis(), Vector3.ZERO),
+				"spin_node": "", "spin_axis": Vector3(0, 1, 0),
+			}
+		"sickle":
+			# A short handle down -Y, the hooked blade above it.
+			return {
+				"grip": Transform3D(hand_basis(Vector3(0, 1, 0), Vector3(0, 0, -1)), Vector3(0, -0.07, 0)),
+				"tip": Transform3D(Basis(), Vector3(0, 0.18, 0.12)),
+				"spin_node": "", "spin_axis": Vector3(0, 1, 0),
+			}
+		"seedlings":
+			return {
+				"grip": Transform3D(hand_basis(Vector3(0, 1, 0), Vector3(0, 0, -1)), Vector3(0, 0.06, 0)),
+				"tip": Transform3D(Basis(), Vector3.ZERO),
+				"spin_node": "", "spin_axis": Vector3(0, 1, 0),
+			}
 		"sponge":
 			return {
 				"grip": Transform3D(hand_basis(Vector3(1, 0, 0), Vector3(0, 1, -0.3)), Vector3(0, 0.04, 0)),
@@ -197,6 +224,27 @@ static func build(id: String, allow_override: bool = true) -> Node3D:
 			_box(root, Vector3(0.1, 0.012, 0.07), Vector3(0, 0.002, 0), Color(0.2, 0.55, 0.3))
 		"crate":
 			_build_crate(root)
+		"hoe":
+			_cyl(root, 0.016, 1.25, Vector3(0, 0.66, 0), Vector3.UP, WOOD)
+			_box(root, Vector3(0.16, 0.11, 0.008), Vector3(0, 0.03, 0.05), STEEL)
+			_box(root, Vector3(0.03, 0.03, 0.08), Vector3(0, 0.07, 0.02), DARK)
+		"shovel":
+			_cyl(root, 0.017, 0.95, Vector3(0, 0.6, 0), Vector3.UP, WOOD)
+			_box(root, Vector3(0.12, 0.025, 0.025), Vector3(0, 1.08, 0), DARK)
+			_box(root, Vector3(0.22, 0.28, 0.006), Vector3(0, 0.0, 0.0), STEEL)
+		"sickle":
+			_cyl(root, 0.018, 0.13, Vector3(0, -0.07, 0), Vector3.UP, WOOD)
+			for k in 7:
+				var a := float(k) / 6.0 * PI * 0.85
+				var c := Vector3(0, 0.02 + sin(a) * 0.16, cos(a) * 0.12 - 0.0)
+				var seg := _box(root, Vector3(0.004, 0.035, 0.06), c, STEEL)
+				seg.basis = Basis(Vector3(1, 0, 0), -a)
+		"seedlings":
+			for k in 9:
+				var ang := float(k) * 2.4
+				var off := Vector3(cos(ang), 0, sin(ang)) * 0.015 * sqrt(float(k))
+				_cyl(root, 0.003, 0.32, off + Vector3(0, 0.12, 0), Vector3(off.x * 3.0, 1, off.z * 3.0), Color(0.36, 0.62, 0.22), 0.0, 5)
+			_cyl(root, 0.022, 0.03, Vector3(0, 0.05, 0), Vector3.UP, Color(0.75, 0.68, 0.45), 0.0, 10)
 		_:
 			return null
 	_add_markers(root, s)

@@ -128,6 +128,25 @@ static func resolved_handles(item: Dictionary, static_handles: Dictionary) -> Ar
 	if itype == "pbi":
 		var kind: String = str(specs.get("resource_kind", "water"))
 		return GraphHubPorts.default_pbi_handles(kind)
+	if itype == "plant" and specs.has("terrace_id"):
+		# A terraced field (TerraceField): water in at the top, the harvest
+		# (food, or biomass for reeds / coppice), its straw, and the overflow
+		# off the lowest paddies.
+		var food := TerraceField.makes_food(specs)
+		var th: Array = [
+			{"id": "water_in", "polarity": "resource", "resource_kind": "water", "rx": 0.25, "ry": 0.0},
+			{"id": "sunlight_in", "polarity": "resource", "resource_kind": "sunlight", "rx": 0.6, "ry": 0.0},
+			{"id": "harvest_out", "polarity": "resource", "resource_kind": "food" if food else "biomass",
+				"rx": 0.22, "ry": 1.0},
+			{"id": "water_out", "polarity": "resource", "resource_kind": "water", "rx": 0.78, "ry": 1.0},
+		]
+		if food:
+			th.append({"id": "residue_out", "polarity": "resource", "resource_kind": "biomass",
+				"rx": 0.5, "ry": 1.0})
+		if TerraceField.wants_fuel(specs):
+			th.append({"id": "fuel_in", "polarity": "resource", "resource_kind": "diesel",
+				"rx": 0.85, "ry": 0.0})
+		return th
 	if itype == "plant" and float(specs.get("food_fraction", 0.0)) > 0.0:
 		# A kitchen garden's product is FOOD: its output port takes a food
 		# store (ResourceFlowEngine._process_plant credits the edible share).
@@ -142,6 +161,16 @@ static func resolved_handles(item: Dictionary, static_handles: Dictionary) -> Ar
 		out.append({"id": "residue_out", "polarity": "resource", "resource_kind": "biomass",
 			"rx": 0.7, "ry": 1.0})
 		return out
+	# A network node (switch, access point, server, controller board) has its
+	# type's own ports plus its data ports (ScadaNet).
+	var net_role := ScadaNet.role_of(item)
+	if not net_role.is_empty():
+		var with_data: Array = (static_handles.get(itype, []) as Array).duplicate()
+		# The type's bottom port would sit under the data ports.
+		with_data = with_data.filter(func(h: Variant) -> bool:
+			return not (h is Dictionary and is_equal_approx(float((h as Dictionary).get("ry", 0.0)), 1.0)))
+		with_data.append_array(ScadaNet.data_handles(net_role, specs))
+		return with_data
 	return static_handles.get(itype, []) as Array
 
 

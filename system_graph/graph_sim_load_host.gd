@@ -208,6 +208,13 @@ func is_load_on(item_id: String) -> bool:
 	return false
 
 
+## The load proxy of a graph item (null = none): what a rule or a tag command
+## switches.
+func proxy_for(item_id: String) -> Node:
+	var node: Node = _loads.get(item_id, null)
+	return node if node != null and is_instance_valid(node) else null
+
+
 func has_sim_load(item_id: String) -> bool:
 	var node: Node = _loads.get(item_id, null)
 	return node != null and is_instance_valid(node)

@@ -40,8 +40,8 @@ extends RefCounted
 
 const VOLUME_ROLES := ["pipe", "junction", "vessel", "jacket", "condenser", "coolant", "column", "plate", "sight", "filter",
 	"holder", "dryer", "engine", "flare"]
-const LINK_ROLES := ["valve", "check", "relief"]
-const ATTACH_ROLES := ["blind", "probe_t", "probe_p", "probe_well", "heater", "basket", "spray", "feed"]
+const LINK_ROLES := ["valve", "check", "relief", "pump"]
+const ATTACH_ROLES := ["blind", "probe_t", "probe_p", "probe_well", "probe_l", "probe_ls", "heater", "basket", "spray", "feed", "agitator"]
 
 ## Every part type → how its circuits are made. The selftest fails on a
 ## type in TcParts.TYPES missing here (the PackedSpec coverage rule).
@@ -52,7 +52,9 @@ const TYPE_RULES := {
 	"tc_npt_m": "pipe", "tc_barb": "pipe",
 	"vessel": "vessel",
 	"butterfly": "valve", "ball_valve": "valve", "ball_valve_3way": "valve3", "check_valve": "check",
-	"diaphragm_valve": "valve", "relief_valve": "relief",
+	"diaphragm_valve": "valve", "control_valve": "cvalve", "pump": "pump", "relief_valve": "relief",
+	"solenoid_valve": "valve", "level_tx": "probe_l", "level_switch": "probe_ls", "flow_meter": "pipe",
+	"plate_exchanger": "plate_hx", "agitator": "agitator",
 	"actuator_pneumatic": "none", "actuator_electric": "none",
 	"sight_glass": "sight", "thermometer": "probe_t", "gauge": "probe_p", "thermowell": "probe_well",
 	"dephlegmator": "dephlegmator", "column": "column", "bubble_plate": "plate",
@@ -182,6 +184,19 @@ static func circuits(built: Dictionary) -> Array:
 			c4["open"] = bool(p.get("open", true))
 			c4["l_port"] = true
 			return [c4]
+		"cvalve":
+			# A valve whose opening is a number (0..1), set by the process.
+			var cc := _circuit("main", ["a", "b"], "valve", size, vol, [_line(_pos(P["a"]), _pos(P["b"]))])
+			cc["throttle"] = true
+			cc["open_frac"] = clampf(float(p.get("open_pct", 50.0)) / 100.0, 0.0, 1.0)
+			cc["open"] = float(cc["open_frac"]) > 0.02
+			return [cc]
+		"pump":
+			# Liquid goes a → b only; what it does to it is the model's.
+			var pc := _circuit("main", ["a", "b"], "pump", size, vol, [_line(_pos(P["a"]), _pos(P["b"]))])
+			pc["pump"] = {"kind": str(p.get("kind", "centrifugal")), "head_m": float(p.get("head_m", 8.0)),
+				"flow_lpm": float(p.get("flow_lpm", 40.0)), "watts": float(p.get("watts", 250.0)), "on": bool(p.get("on", false))}
+			return [pc]
 		"check":
 			return [_circuit("main", ["a", "b"], "check", size, vol, [_line(_pos(P["a"]), _pos(P["b"]))])]
 		"relief":
@@ -199,8 +214,22 @@ static func circuits(built: Dictionary) -> Array:
 			w["jacket_len_mm"] = L
 			w["shell"] = str(p.get("shell", ""))
 			return [prod, w]
-		"probe_t", "probe_p", "probe_well", "heater", "basket", "spray", "feed", "blind":
+		"plate_hx":
+			# The dephlegmator's two circuits with a plate pack's area: liquid
+			# pumped through gives its heat to the wall, the wall to the water.
+			var hp := _circuit("product", ["a", "b"], "condenser", size, vol, [_line(_pos(P["a"]), _pos(P["b"]))])
+			hp["cooled_by"] = "coolant"
+			hp["area_m2"] = float(built.get("area_m2", 0.6))
+			var hw2 := _circuit("coolant", ["w1", "w2"], "coolant", "0.5", float(built.get("jacket_l", 0.4)),
+				[_line(_pos(P["w1"]), _pos(P["w2"]))])
+			hw2["cools"] = "product"
+			hw2["area_m2"] = float(built.get("area_m2", 0.6))
+			return [hp, hw2]
+		"probe_t", "probe_p", "probe_well", "probe_l", "probe_ls", "heater", "basket", "spray", "feed", "blind", "agitator":
 			var c6 := _circuit("main", ["a"], rule, size, 0.0, [])
+			if rule == "agitator":
+				c6["watts"] = float(p.get("watts", 120.0))
+				c6["on"] = bool(p.get("on", false))
 			if rule == "heater":
 				c6["reach_mm"] = float(built.get("reach_mm", p.get("length_mm", 300.0)))
 			if rule == "probe_t":

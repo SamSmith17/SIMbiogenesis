@@ -88,6 +88,101 @@ static func kettle_default() -> Dictionary:
 	return d
 
 
+## Two-tank level rig: 150 L of water in the supply tank, nothing heated, an
+## hour's run. `ids` = {supply, tank, pump, valve} part ids and `slug` the
+## design's slug: a PID holds the middle tank at half by the control valve.
+static func level_rig_default(slug: String, ids: Dictionary) -> Dictionary:
+	var d := defaults()
+	d["charge"] = {"feed": "water", "mass_kg": 150.0, "moisture": 0.0, "bulk_kg_m3": 0.0}
+	d["heaters"]["default_w"] = 0.0
+	d["duration_h"] = 0.5
+	d["logic"] = [{"id": "b1", "kind": "pid", "name": "Hold the process tank at half", "enabled": true,
+		"pv": "sensor.%s_%s_level" % [slug, str(ids.get("tank", ""))],
+		"out": "number.%s_%s_opening" % [slug, str(ids.get("valve", ""))],
+		"sp": 50.0, "kp": 4.0, "ti_min": 2.0, "td_min": 0.0, "out_min": 0.0, "out_max": 100.0, "reverse": false,
+		"mode": "auto", "manual_out": 0.0, "bias": 0.0}]
+	return d
+
+
+## Brewhouse: 40 L of water in the hot liquor tank and a sequence that runs
+## the brew day in small (about two hours): heat the liquor, mash in, rest
+## with the stirrer... there is no malt in the model: it is water all the way,
+## which is what a wet test of a real brewhouse is.
+static func brewhouse_default(slug: String, ids: Dictionary) -> Dictionary:
+	var d := defaults()
+	d["charge"] = {"feed": "water", "mass_kg": 40.0, "moisture": 0.0, "bulk_kg_m3": 0.0}
+	d["heaters"]["default_w"] = 3000.0
+	d["heaters"]["by_part"] = {str(ids["h_hlt"]): {"w": 3000.0, "on": false}, str(ids["h_kettle"]): {"w": 3500.0, "on": false}}
+	d["cooling"] = {"t_c": 12.0, "lpm": 8.0}
+	d["duration_h"] = 2.5
+	var sw := func(k: String) -> String: return "switch.%s_%s" % [slug, str(ids[k])]
+	var lvl := func(k: String) -> String: return "sensor.%s_%s_level" % [slug, str(ids[k])]
+	var tmp := func(k: String) -> String: return "sensor.%s_%s_liquid_temp" % [slug, str(ids[k])]
+	d["logic"] = [{"id": "b1", "kind": "sequence", "name": "Brew day", "enabled": true, "repeat": false, "autostart": true, "steps": [
+		{"name": "Heat the liquor to 70 °C", "set": [{"tag": sw.call("h_hlt"), "value": 1.0}],
+			"until": {"tag": tmp.call("hlt"), "op": ">=", "value": 70.0}, "min_s": 0.0, "timeout_s": 7200.0},
+		{"name": "Mash in", "set": [{"tag": sw.call("h_hlt"), "value": 0.0}, {"tag": sw.call("p1"), "value": 1.0}],
+			"until": {"tag": lvl.call("hlt"), "op": "<=", "value": 14.0}, "min_s": 0.0, "timeout_s": 1800.0},
+		{"name": "Mash rest, stirred", "set": [{"tag": sw.call("p1"), "value": 0.0}, {"tag": sw.call("stir"), "value": 1.0}], "until": {}, "min_s": 1200.0, "timeout_s": 0.0},
+		{"name": "Run off to the kettle", "set": [{"tag": sw.call("stir"), "value": 0.0}, {"tag": sw.call("p2"), "value": 1.0}],
+			"until": {"tag": lvl.call("mash"), "op": "<=", "value": 14.0}, "min_s": 0.0, "timeout_s": 1800.0},
+		{"name": "Bring to the boil", "set": [{"tag": sw.call("p2"), "value": 0.0}, {"tag": sw.call("h_kettle"), "value": 1.0}],
+			"until": {"tag": tmp.call("kettle"), "op": ">=", "value": 99.0}, "min_s": 0.0, "timeout_s": 7200.0},
+		{"name": "Boil", "set": [], "until": {}, "min_s": 600.0, "timeout_s": 0.0},
+		{"name": "Knock out through the chiller", "set": [{"tag": sw.call("h_kettle"), "value": 0.0}, {"tag": sw.call("p3"), "value": 1.0}],
+			"until": {"tag": lvl.call("kettle"), "op": "<=", "value": 14.0}, "min_s": 0.0, "timeout_s": 3600.0},
+		{"name": "Done", "set": [{"tag": sw.call("p3"), "value": 0.0}], "until": {}, "min_s": 1.0, "timeout_s": 0.0}]}]
+	return d
+
+
+## Clean-in-place: 100 L of rinse water, 50 L in the wash tank held hot, a
+## sequence: rinse, hot wash, rinse, each drained to the receiver.
+static func cip_default(slug: String, ids: Dictionary) -> Dictionary:
+	var d := defaults()
+	d["charge"] = {"feed": "water", "mass_kg": 100.0, "moisture": 0.0, "bulk_kg_m3": 0.0}
+	d["liquids"] = [{"part": str(ids["wash"]), "litres": 50.0, "feed": "water", "t_c": 20.0}]
+	d["heaters"]["default_w"] = 0.0
+	d["heaters"]["by_part"] = {str(ids["h_wash"]): {"w": 3000.0, "on": true}}
+	d["duration_h"] = 1.5
+	var sw := func(k: String) -> String: return "switch.%s_%s" % [slug, str(ids[k])]
+	var lvl := func(k: String) -> String: return "sensor.%s_%s_level" % [slug, str(ids[k])]
+	var wash_t := "sensor.%s_%s_liquid_temp" % [slug, str(ids["wash"])]
+	var fill := func(name: String, valve: String, mark: float) -> Dictionary:
+		return {"name": name, "set": [{"tag": sw.call("sv_drain"), "value": 0.0}, {"tag": sw.call(valve), "value": 1.0}, {"tag": sw.call("pump"), "value": 1.0}],
+			"until": {"tag": lvl.call("target"), "op": ">=", "value": mark}, "min_s": 0.0, "timeout_s": 900.0}
+	var drain := func(name: String, valve: String) -> Dictionary:
+		return {"name": name, "set": [{"tag": sw.call(valve), "value": 0.0}, {"tag": sw.call("pump"), "value": 0.0}, {"tag": sw.call("sv_drain"), "value": 1.0}],
+			"until": {"tag": lvl.call("target"), "op": "<=", "value": 11.0}, "min_s": 60.0, "timeout_s": 1800.0}
+	d["logic"] = [
+		{"id": "b1", "kind": "band", "name": "Hold the wash at 60–65 °C", "enabled": true, "pv": wash_t,
+			"out": "switch.%s_%s" % [slug, str(ids["h_wash"])], "low": 60.0, "high": 65.0, "direction": "fill"},
+		{"id": "b2", "kind": "sequence", "name": "Clean in place", "enabled": true, "repeat": false, "autostart": true, "steps": [
+			fill.call("Pre-rinse", "sv_rinse", 30.0), drain.call("Drain the rinse", "sv_rinse"),
+			{"name": "Wait for the wash to reach 60 °C", "set": [], "until": {"tag": wash_t, "op": ">=", "value": 60.0}, "min_s": 0.0, "timeout_s": 3600.0},
+			fill.call("Hot wash", "sv_wash", 30.0),
+			{"name": "Soak", "set": [{"tag": sw.call("sv_wash"), "value": 0.0}, {"tag": sw.call("pump"), "value": 0.0}], "until": {}, "min_s": 300.0, "timeout_s": 0.0},
+			drain.call("Drain the wash", "sv_wash"),
+			fill.call("Final rinse", "sv_rinse", 30.0), drain.call("Drain", "sv_rinse"),
+			{"name": "Done", "set": [{"tag": sw.call("sv_drain"), "value": 0.0}], "until": {}, "min_s": 1.0, "timeout_s": 0.0}]}]
+	return d
+
+
+## Water filter train: 180 L of raw water; the pump keeps the clean tank
+## between 40 and 80 %, and the high level switch stops it whatever asks.
+static func filter_train_default(slug: String, ids: Dictionary) -> Dictionary:
+	var d := defaults()
+	d["charge"] = {"feed": "water", "mass_kg": 180.0, "moisture": 0.0, "bulk_kg_m3": 0.0}
+	d["heaters"]["default_w"] = 0.0
+	d["duration_h"] = 0.5
+	var pump := "switch.%s_%s" % [slug, str(ids["pump"])]
+	d["logic"] = [
+		{"id": "b1", "kind": "band", "name": "Keep the clean tank between 40 and 80 %", "enabled": true,
+			"pv": "sensor.%s_%s_level" % [slug, str(ids["clean"])], "out": pump, "low": 40.0, "high": 80.0, "direction": "fill"},
+		{"id": "b2", "kind": "interlock", "name": "Stop the pump on overfill", "enabled": true, "match": "any", "latch": false,
+			"when": [{"tag": "sensor.%s_%s" % [slug, str(ids["switch"])], "op": ">=", "value": 0.5}], "out": pump, "safe": 0.0}]
+	return d
+
+
 ## Plastic retort: 8 kg of polypropylene pellets round the two 600 W
 ## elements. The pellets melt, the melt cracks (~430 °C) into light gas, oil
 ## and wax; the condensers drop the oil and wax.
@@ -129,7 +224,16 @@ static func resolve(raw: Variant) -> Dictionary:
 	d["jacket_fill"] = "insulation" if str(src.get("jacket_fill", "air")) == "insulation" else "air"
 	d["duration_h"] = _num(src.get("duration_h", 8.0), 8.0, 0.1, 72.0)
 	d["start_hour"] = _num(src.get("start_hour", 8.0), 8.0, 0.0, 23.99)
-	for k in ["sensors", "actuators", "automations"]:
+	# Jackets fed by a medium: {vessel part: {t_c, lpm, on}}.
+	var jk := {}
+	var rj: Variant = src.get("jackets", {})
+	if rj is Dictionary:
+		for kj in rj:
+			if rj[kj] is Dictionary:
+				jk[str(kj)] = {"t_c": _num(rj[kj].get("t_c", 60.0), 60.0, 0.0, 99.0), "lpm": _num(rj[kj].get("lpm", 10.0), 10.0, 0.0, 200.0),
+					"on": bool(rj[kj].get("on", false))}
+	d["jackets"] = jk
+	for k in ["sensors", "actuators", "automations", "logic", "liquids"]:
 		var a: Variant = src.get(k, [])
 		d[k] = (a as Array).duplicate(true) if a is Array else []
 	# Engines (TcUnits.genset) start off unless the design says on.
@@ -150,6 +254,16 @@ static func resolve(raw: Variant) -> Dictionary:
 	# A lab run fitted for the world's graph (TcProcSummary); a placed
 	# assembly's node runs it.
 	d["recipe"] = (src["recipe"] as Dictionary).duplicate(true) if src.get("recipe") is Dictionary else {}
+	# The P&ID picture's own layout (MimicCanvas): where the player dragged
+	# things, {pins: {element id: [dx, dy]}} in picture mm. Never restarts a run.
+	var mi: Variant = src.get("mimic", {})
+	var mp := {}
+	if mi is Dictionary and (mi as Dictionary).get("pins") is Dictionary:
+		for k4 in mi["pins"]:
+			var pv: Variant = mi["pins"][k4]
+			if pv is Array and (pv as Array).size() >= 2:
+				mp[str(k4)] = [float(pv[0]), float(pv[1])]
+	d["mimic"] = {"pins": mp}
 	return d
 
 

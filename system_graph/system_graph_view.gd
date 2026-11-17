@@ -53,6 +53,7 @@ const _BRIDGE_SCRIPT         := preload("res://system_graph/solar_bridge.gd")
 const _HISTORY_PLAYER_SCRIPT := preload("res://system_graph/history_player.gd")
 const _HISTORY_SCRIPT   := preload("res://system_graph/history_manager.gd")
 const _LINKER_SCRIPT    := preload("res://system_graph/ha_entity_linker.gd")
+const _SCADA_HUB_SCRIPT := preload("res://core/scada/scada_hub.gd")
 const _SIM_LOAD_HOST_SCRIPT := preload("res://system_graph/graph_sim_load_host.gd")
 const _RESOURCE_FLOW_SCRIPT := preload("res://system_graph/resource_flow_engine.gd")
 const _CLOSURE_METRICS_SCRIPT := preload("res://system_graph/closure_metrics.gd")
@@ -232,6 +233,8 @@ var _conduit_route_wired: bool = false
 
 ## Home Assistant entity linker (Node — keeps a signal connection to HAClient).
 var _ha_linker: Node = null
+## The site's tag list + history (core/scada/scada_hub.gd).
+var _scada_hub: Node = null
 
 ## Undo/redo history (snapshot-based).
 var _history: RefCounted = null
@@ -430,6 +433,7 @@ const VIEW_MODE_FLOW_STYLE := 191
 const VIEW_MODE_FLOW_PRESET_BASE := 192
 ## 192..199 are the flow presets.
 const VIEW_MODE_CIRCLE_PACK := 200
+const VIEW_MODE_TAGS := 210
 const DESIGNATE_OFF := 200
 const DESIGNATE_CATCHMENT := 201
 const DESIGNATE_CROP := 202
@@ -590,6 +594,12 @@ func _ready() -> void:
 	_ha_linker.name = "HAEntityLinker"
 	add_child(_ha_linker)
 	_ha_linker.call("setup", model)
+	_scada_hub = _SCADA_HUB_SCRIPT.new()
+	_scada_hub.name = "ScadaHub"
+	add_child(_scada_hub)
+	_scada_hub.call("setup", model)
+	_scada_hub.connect("alarms_changed", _ensure_alarm_chip)
+	_scada_hub.connect("outputs_changed", _ensure_armed_chip)
 	_init_sim_load_host()
 	_init_resource_flow()
 	_init_model_preview()
@@ -1158,7 +1168,333 @@ func get_automation_resource_context() -> Dictionary:
 		states["node.%s" % hid] = "starved"
 	for bid: String in (snap.get("blocked", {}) as Dictionary):
 		states["node.%s" % bid] = "blocked"
+	# Placed boards' readings (ScadaHub), under their entity ids. The graph's
+	# own keys above win on a clash.
+	if _scada_hub != null:
+		var ex: Dictionary = _scada_hub.call("extra_context")
+		for k in (ex.get("numeric_values", {}) as Dictionary):
+			if not numeric.has(k):
+				numeric[k] = ex["numeric_values"][k]
+		for k in (ex.get("device_states", {}) as Dictionary):
+			if not states.has(k):
+				states[k] = ex["device_states"][k]
 	return {"numeric_values": numeric, "device_states": states}
+
+
+## The tag browser window (scenes/ui/scada/tag_browser.gd); `opts` as its open.
+func open_tag_browser(opts: Dictionary = {}) -> Node:
+	var br := Node.new()
+	br.set_script(load("res://scenes/ui/scada/tag_browser.gd"))
+	add_child(br)
+	br.call("open", _scada_hub, opts)
+	return br
+
+
+## The Process Bootcamp: five lessons in the Process lens (TutorialCatalog's
+## "process" track). `level_id` "" = the first one not done yet.
+func start_process_bootcamp(level_id: String = "") -> void:
+	var director := _ensure_tutorial_director()
+	if director == null:
+		return
+	if bool(director.call("is_active")):
+		director.call("exit_tutorial")
+	if operator_mode():
+		set_operator_mode(false)
+	director.call("start", level_id, "process")
+
+
+## Process templates (ProcessPack): the window, cutting one out of the
+## graph, dropping one in.
+func open_process_library() -> Node:
+	var w := Node.new()
+	w.set_script(load("res://scenes/ui/scada/process_library_window.gd"))
+	add_child(w)
+	w.call("open", self)
+	return w
+
+
+## The selected parts of the open scope (everything in it when nothing is
+## selected) as a pack, with the blocks, alarms and widgets that are theirs.
+func process_capture(pack_name: String, ids: Array = []) -> Dictionary:
+	if _graph_canvas == null or model == null:
+		return ProcessPack.empty(pack_name)
+	var items: Array = _graph_canvas.call("_compute_visible_items")
+	var conns: Array = _graph_canvas.call("_compute_visible_connections")
+	var want: Array = ids.duplicate()
+	if want.is_empty():
+		for sid in (_graph_canvas.get("selected_item_ids") as Array):
+			want.append(str(sid))
+	if want.is_empty():
+		for it in items:
+			want.append(str((it as Dictionary).get("id", "")))
+	var widgets: Array = []
+	var scope := str(_graph_canvas.get("active_scope_id"))
+	var sd: Dictionary = (_graph_canvas.call("process_screens_data") as Dictionary).get(scope, {}) as Dictionary
+	for s in sd.get("screens", []):
+		widgets.append_array((s as Dictionary).get("widgets", []))
+	return ProcessPack.capture(pack_name, items, conns, want,
+		_scada_hub.call("logic_blocks") if _scada_hub != null else [], _scada_hub.call("alarm_rules") if _scada_hub != null else [], widgets)
+
+
+## Drop a pack into the open scope (one undo step for its parts and pipes;
+## its control blocks and alarms are added to the site's).
+## → {ok, why, ids {pack id: new id}, items, logic, alarms, widgets}
+func process_insert(pack: Dictionary, at: Vector2 = Vector2.INF, quiet: bool = false) -> Dictionary:
+	if model == null or _graph_canvas == null:
+		return {"ok": false, "why": "The graph is not ready."}
+	if _sandbox_active and _tutorial_director != null and is_instance_valid(_tutorial_director) and bool(_tutorial_director.call("is_active")):
+		return {"ok": false, "why": "Finish or leave the lesson first."}
+	var c := ProcessPack.clean(pack)
+	if not bool(c["ok"]):
+		return {"ok": false, "why": str(c["why"])}
+	var scope := str(_graph_canvas.get("active_scope_id"))
+	var centre: Vector2 = at
+	if centre == Vector2.INF:
+		centre = _graph_canvas.call("_screen_to_graph", (_graph_canvas as Control).size * 0.5)
+	var used_b := {}
+	var used_a := {}
+	var used_w := {}
+	if _scada_hub != null:
+		for b in _scada_hub.call("logic_blocks"):
+			used_b[str(b["id"])] = true
+		for r in _scada_hub.call("alarm_rules"):
+			used_a[str(r["id"])] = true
+	var screens: Dictionary = (_graph_canvas.call("process_screens_data") as Dictionary).duplicate(true)
+	for sc in screens:
+		for s in (screens[sc] as Dictionary).get("screens", []):
+			for w in (s as Dictionary).get("widgets", []):
+				used_w[str(w["id"])] = true
+	var next := func(used: Dictionary, prefix: String) -> String:
+		var n := 1
+		while used.has("%s%d" % [prefix, n]):
+			n += 1
+		used["%s%d" % [prefix, n]] = true
+		return "%s%d" % [prefix, n]
+	var inst := ProcessPack.instantiate(c["pack"], centre, scope,
+		func() -> String: return model.generate_item_id(),
+		func() -> String: return next.call(used_b, "b"),
+		func() -> String: return next.call(used_a, "a"),
+		func() -> String: return next.call(used_w, "w"))
+	_history_suppress = true
+	for it in inst["items"]:
+		var preset_dims := Vector2(float(it.get("width", 0.0)), float(it.get("height", 0.0)))
+		if preset_dims.x <= 0.0 or preset_dims.y <= 0.0:
+			var sz: Vector2 = ComponentPresets.spawn_dimensions({"type": str(it["type"])})
+			it["width"] = sz.x
+			it["height"] = sz.y
+		model.add_item(it)
+	for w in inst["conns"]:
+		model.add_connection(w)
+	_history_suppress = false
+	_push_history()
+	_mark_dirty_for_autosave()
+	if _scada_hub != null:
+		if not (inst["logic"] as Array).is_empty():
+			var blocks: Array = (_scada_hub.call("logic_blocks") as Array).duplicate(true)
+			blocks.append_array(inst["logic"])
+			_scada_hub.call("set_logic_blocks", blocks)
+		if not (inst["alarms"] as Array).is_empty():
+			var rules: Array = (_scada_hub.call("alarm_rules") as Array).duplicate(true)
+			rules.append_array(inst["alarms"])
+			_scada_hub.call("set_alarm_rules", rules)
+		_scada_hub.call("refresh")
+	if not (inst["widgets"] as Array).is_empty():
+		# The widgets go on this scope's first screen, in a row above the picture.
+		var sd: Dictionary = MimicWidgets.clean(screens.get(scope, {}))
+		var lens: Control = _graph_canvas.call("process_lens")
+		var top := -320.0
+		var left := -200.0
+		if lens != null and lens.get("mimic") != null:
+			var b: Rect2 = ((lens.get("mimic") as Control).get("doc") as Dictionary).get("bounds", Rect2(-200, -100, 400, 200))
+			top = b.position.y - 60.0
+			left = b.position.x
+		var x := left
+		for w in inst["widgets"]:
+			w["x"] = x + float(w["w"]) * 0.5
+			w["y"] = top - float(w["h"]) * 0.5
+			x += float(w["w"]) + 24.0
+			(sd["screens"][0]["widgets"] as Array).append(w)
+		screens[scope] = sd
+		_graph_canvas.call("set_process_screens_data", screens)
+	if _graph_canvas.has_method("queue_redraw"):
+		_graph_canvas.call("queue_redraw")
+	if not quiet:
+		_show_toast("Added \"%s\": %s." % [str(c["pack"]["name"]), ProcessPack.describe(c["pack"])], 3.5)
+	return {"ok": true, "why": "", "ids": inst["ids"], "items": (inst["items"] as Array).size(), "logic": (inst["logic"] as Array).size(),
+		"alarms": (inst["alarms"] as Array).size(), "widgets": (inst["widgets"] as Array).size()}
+
+
+## The Trends window (any tags over time on one chart). `add_tag` = a pen
+## to add on the way in.
+func open_trend_window(add_tag: String = "") -> Node:
+	if _scada_hub != null and not add_tag.is_empty():
+		var pens: Array = _scada_hub.call("trend_pens")
+		if not pens.has(add_tag):
+			pens.append(add_tag)
+			_scada_hub.call("set_trend_pens", pens)
+	var w := Node.new()
+	w.set_script(load("res://scenes/ui/scada/trend_window.gd"))
+	add_child(w)
+	w.call("open", self, _scada_hub)
+	return w
+
+
+## The alarm window (active alarms, the rules, the journal):
+## scenes/ui/scada/alarm_panel.gd. One at a time.
+var _alarm_panel: Node = null
+
+func open_alarm_panel(tab: String = "") -> Node:
+	if _alarm_panel != null and is_instance_valid(_alarm_panel) and bool(_alarm_panel.call("is_open")):
+		if not tab.is_empty():
+			_alarm_panel.call("show_tab", tab)
+		return _alarm_panel
+	_alarm_panel = Node.new()
+	_alarm_panel.set_script(load("res://scenes/ui/scada/alarm_panel.gd"))
+	add_child(_alarm_panel)
+	_alarm_panel.call("open", self, _scada_hub, tab)
+	return _alarm_panel
+
+
+## The first-person HUD's alarm chip (scenes/ui/scada/alarm_chip.gd), made the
+## first time the site has an alarm rule.
+var _alarm_chip: Control = null
+
+func _ensure_alarm_chip() -> void:
+	if _alarm_chip != null and is_instance_valid(_alarm_chip):
+		return
+	if _scada_hub == null or (_scada_hub.call("alarm_rules") as Array).is_empty() or get_parent() == null:
+		return
+	_alarm_chip = Control.new()
+	_alarm_chip.set_script(load("res://scenes/ui/scada/alarm_chip.gd"))
+	_alarm_chip.name = "ScadaAlarmChip"
+	_alarm_chip.set("view", self)
+	get_parent().add_child.call_deferred(_alarm_chip)
+
+
+func alarm_chip() -> Control:
+	return _alarm_chip
+
+
+## A raised alarm, said once: in the graph's own toast while it is up, else
+## the world's.
+func scada_alarm_toast(e: Dictionary) -> void:
+	var text := "Alarm: %s %s" % [str(e.get("name", "")), str(e.get("text", ""))]
+	var lvl := ToastUI.Level.ERROR if str(e.get("priority", "")) == "high" else ToastUI.Level.WARN
+	if visible:
+		_show_toast(text, 4.0, lvl)
+		return
+	var m := _get_scene_main_node()
+	if m != null and m.has_method("show_toast"):
+		m.call("show_toast", text, lvl)
+
+
+## Operator mode: the Process lens alone, full width (sidebars folded and
+## held), edits locked, touch-sized faceplates. Esc leaves it. `--operator`
+## on the command line opens a world straight into it.
+var _operator_mode := false
+var _operator_was: Array = []
+
+func operator_mode() -> bool:
+	return _operator_mode
+
+
+func set_operator_mode(on: bool) -> void:
+	if on == _operator_mode:
+		return
+	if on:
+		if not visible:
+			open_graph_view()
+		_operator_was = [_sidebar_l_open, _sidebar_r_open, _graph_view_mode]
+		if _graph_view_mode != GraphSiteLayout.VIEW_PROCESS:
+			_on_mode_chip_pressed(GraphSiteLayout.VIEW_PROCESS)
+		_sidebar_l_open = false
+		_sidebar_r_open = false
+	_operator_mode = on
+	if not on and _operator_was.size() == 3:
+		_sidebar_l_open = bool(_operator_was[0])
+		_sidebar_r_open = bool(_operator_was[1])
+	_apply_layout()
+	var lens: Node = _graph_canvas.call("process_lens") if _graph_canvas != null and _graph_canvas.has_method("process_lens") else null
+	if lens != null and lens.has_method("set_operator"):
+		lens.call("set_operator", on)
+	_show_toast("Operator mode: nothing can be moved or rewired. Esc leaves it." if on else "Operator mode off.", 3.0)
+
+
+## Real outputs (ScadaHub, SCADA plan Phase 7): the Hardware window.
+var _outputs_panel: Node = null
+
+func open_outputs_panel() -> Node:
+	if _outputs_panel != null and is_instance_valid(_outputs_panel) and bool(_outputs_panel.call("is_open")):
+		return _outputs_panel
+	_outputs_panel = Node.new()
+	_outputs_panel.set_script(load("res://scenes/ui/scada/outputs_panel.gd"))
+	add_child(_outputs_panel)
+	_outputs_panel.call("open", self, _scada_hub)
+	return _outputs_panel
+
+
+## The ARMED chip on the first-person HUD, made the first time the outputs
+## are armed; it shows only while they are.
+var _armed_chip: Control = null
+
+func _ensure_armed_chip() -> void:
+	if _armed_chip != null and is_instance_valid(_armed_chip):
+		return
+	if _scada_hub == null or not bool(_scada_hub.call("outputs_armed")) or get_parent() == null:
+		return
+	_armed_chip = Control.new()
+	_armed_chip.set_script(load("res://scenes/ui/scada/armed_chip.gd"))
+	_armed_chip.name = "ScadaArmedChip"
+	_armed_chip.set("view", self)
+	get_parent().add_child.call_deferred(_armed_chip)
+
+
+func armed_chip() -> Control:
+	return _armed_chip
+
+
+func scada_output_toast(text: String, armed_now: bool) -> void:
+	var lvl := ToastUI.Level.WARN if armed_now else ToastUI.Level.INFO
+	if visible:
+		_show_toast(text, 4.0, lvl)
+		return
+	var m := _get_scene_main_node()
+	if m != null and m.has_method("show_toast"):
+		m.call("show_toast", text, lvl)
+
+
+## The pre-render and the challenge bake run the control logic too
+## (ScadaHub.logic_step_at), and put its state back when they hand the world
+## back.
+func scada_logic_step(abs_h: float) -> void:
+	if _scada_hub != null:
+		_scada_hub.call("logic_step_at", abs_h)
+
+
+func scada_logic_render_begin(abs_h: float) -> void:
+	if _scada_hub != null:
+		_scada_hub.call("logic_render_begin", abs_h)
+
+
+func scada_logic_render_end() -> void:
+	if _scada_hub != null:
+		_scada_hub.call("logic_render_end")
+
+
+## The control logic window (bands, PID loops, interlocks, timers,
+## sequences): scenes/ui/scada/logic_editor.gd. `select_id` opens on a block.
+func open_logic_editor(select_id: String = "") -> Node:
+	var ed := Node.new()
+	ed.set_script(load("res://scenes/ui/scada/logic_editor.gd"))
+	add_child(ed)
+	ed.call("open", self, _scada_hub, select_id)
+	return ed
+
+
+## The site's tag list and history (ScadaHub): `book()`, `history()`,
+## `command(id, v)`, `watch(id)`.
+func scada_hub() -> Node:
+	return _scada_hub
 
 
 func _init_sim_load_host() -> void:
@@ -1771,6 +2107,9 @@ func tutorial_seed_level(seed: Array, seed_wires: Array = []) -> Array:
 			ids.append("")
 			continue
 		var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
+		# A level's own values (a name, a size, a starting level).
+		for sk in (e.get("set", {}) as Dictionary):
+			specs[sk] = e["set"][sk]
 		var dims := ComponentPresets.spawn_dimensions(preset)
 		var item_id: String = model.generate_item_id()
 		model.add_item({
@@ -1791,6 +2130,14 @@ func tutorial_seed_level(seed: Array, seed_wires: Array = []) -> Array:
 		var b := int(wd.get("to", -1))
 		if a < 0 or b < 0 or a >= ids.size() or b >= ids.size() \
 				or str(ids[a]).is_empty() or str(ids[b]).is_empty():
+			continue
+		if wd.has("resource"):
+			# A pipe: a store's way out / way in, a valve's or pump's ports.
+			var ia: Dictionary = model.get_item(str(ids[a]))
+			var ib: Dictionary = model.get_item(str(ids[b]))
+			model.add_connection({"scope_id": "root", "polarity": "resource", "resource_type": str(wd["resource"]),
+				"source_item_id": str(ids[a]), "source_handle_id": str(wd.get("from_handle", "output" if str(ia.get("type", "")) == "resource" else "res_out_0")),
+				"target_item_id": str(ids[b]), "target_handle_id": str(wd.get("to_handle", "input" if str(ib.get("type", "")) == "resource" else "res_in_0"))})
 			continue
 		var from_handle := str(wd.get("from_handle", "positive"))
 		var pol := "negative" if from_handle.to_lower().contains("neg") else "positive"
@@ -1995,6 +2342,9 @@ func _connect_canvas_signals(gc: Node) -> void:
 	if gc.has_signal("items_multi_selected"):
 		if not gc.is_connected("items_multi_selected", _on_canvas_items_multi_selected):
 			gc.connect("items_multi_selected", _on_canvas_items_multi_selected)
+	if gc.has_signal("group_selection_requested"):
+		if not gc.is_connected("group_selection_requested", _on_group_selected_pressed):
+			gc.connect("group_selection_requested", _on_group_selected_pressed)
 	if gc.has_signal("connection_selected"):
 		if not gc.is_connected("connection_selected", _on_canvas_connection_selected):
 			gc.connect("connection_selected", _on_canvas_connection_selected)
@@ -2645,6 +2995,7 @@ func _build_topbar() -> Control:
 	_back_btn.pressed.connect(_on_back_scope_pressed)
 	struct_row.add_child(_enter_btn)
 	struct_row.add_child(_back_btn)
+	_build_connect_btn(struct_row)
 	_update_special_group_buttons()
 
 	# ── CENTER: flexible fill ──────────────────────────────────────────────
@@ -2705,9 +3056,17 @@ func _build_topbar() -> Control:
 		["globe", "Globe",
 				"Globe — orbit the Sphere of Influence as a snowglobe "
 				+ "(drag to orbit, wheel to zoom, double-click to re-fit)."],
+		["process", "Process",
+				"Process — this part of the graph as a process picture: stores "
+				+ "with their levels, machines, valves and pumps on their pipes, "
+				+ "flow moving left to right. Click a valve, pump or machine to "
+				+ "switch it; drag things to arrange them; double-click a group "
+				+ "to go in."],
 		["flows", "Flows",
 				"Flows — the graph as a loop Sankey: sources on top, flow runs "
-				+ "down, and what cycles back returns up the sides. Hover a "
+				+ "down, and what cycles back returns up the sides. Switch it to "
+				+ "Torus to see energy run down a central axis while the loops it "
+				+ "drives turn on either side. Drag a node to move it; hover a "
 				+ "return to light its whole loop; double-click a group to go in."],
 	]:
 		var b := _make_mode_chip(str(pair[0]), str(pair[1]))
@@ -2759,6 +3118,9 @@ func _build_topbar() -> Control:
 	vmp.add_item("Nesting as circles…", VIEW_MODE_CIRCLE_PACK)
 	vmp.set_item_tooltip(vmp.get_item_index(VIEW_MODE_CIRCLE_PACK),
 		"Every group, camp, vehicle and array as circles inside circles, sized by count, power or mass; also what the stores hold and what the site is built from")
+	vmp.add_item("Tags…", VIEW_MODE_TAGS)
+	vmp.set_item_tooltip(vmp.get_item_index(VIEW_MODE_TAGS),
+		"Every live value on the site (tank levels, machine switches, pipe flows, board sensors): search them, switch machines, add one to the timeline")
 	vmp.add_separator()
 	vmp.add_check_item("SoI bubble (freeform)", VIEW_MODE_SOI_BUBBLE)
 	vmp.add_check_item("Node cards (no 3D previews)", VIEW_MODE_NODE_CARDS)
@@ -3141,6 +3503,8 @@ func _set_wire_style_override(style: String) -> void:
 		_graph_canvas.set("wire_style_override", "")
 	else:
 		_graph_canvas.set("wire_style_override", style)
+	# The Flows lens draws its ribbons in the same wire style.
+	(_graph_canvas.call("flows_lens") as GraphFlowLens).force_next()
 	_graph_canvas.call("queue_redraw")
 	_sync_wire_style_menu_checks()
 	_schedule_graph_autosave()
@@ -3233,6 +3597,7 @@ func _topbar_compactables() -> Array:
 	out.append([_topbar_review_btn, "zap", 3])
 	out.append([_enter_btn, "chevron-right", 3])
 	out.append([_back_btn, "chevron-left", 3])
+	out.append([_connect_btn, "plug", 2])
 	return out
 
 
@@ -3417,6 +3782,9 @@ func _on_view_mode_menu_id(id: int) -> void:
 		return
 	if id == VIEW_MODE_CIRCLE_PACK:
 		open_circle_pack("systems", "")
+		return
+	if id == VIEW_MODE_TAGS:
+		open_tag_browser()
 		return
 	if id >= VIEW_MODE_FLOW_PRESET_BASE and id < VIEW_MODE_FLOW_PRESET_BASE + GraphFlowStyle.PRESETS.size():
 		set_flow_style({"preset": str(GraphFlowStyle.PRESETS[id - VIEW_MODE_FLOW_PRESET_BASE])})
@@ -3608,6 +3976,8 @@ func _on_mode_chip_pressed(mode_id: String) -> void:
 			_apply_graph_view_mode(GraphSiteLayout.VIEW_GLOBE)
 		"flows":
 			_apply_graph_view_mode(GraphSiteLayout.VIEW_FLOWS)
+		"process":
+			_apply_graph_view_mode(GraphSiteLayout.VIEW_PROCESS)
 
 
 ## Full-screen globe (the map pin's view). It renders through the ROOT viewport,
@@ -3726,6 +4096,7 @@ func _apply_graph_view_mode(mode: String, opts: Dictionary = {}) -> void:
 		# freeform camera to overwrite. Do NOT zero _pan on Elevation entry either
 		# — frame_elevation_window already does, and the elevation slot owns it.
 		_graph_canvas.call("set_view_mode", mode)
+		_graph_canvas.call("sync_process_lens", self)
 		_graph_canvas.call("queue_redraw")
 	_sync_view_mode_menu_checks()
 	_sync_elev_slice_row()
@@ -4989,6 +5360,8 @@ func _sync_view_mode_menu_checks() -> void:
 				on = _graph_view_mode == GraphSiteLayout.VIEW_ELEVATION
 			"flows":
 				on = _graph_view_mode == GraphSiteLayout.VIEW_FLOWS
+			"process":
+				on = _graph_view_mode == GraphSiteLayout.VIEW_PROCESS
 			"globe":
 				on = _graph_view_mode == GraphSiteLayout.VIEW_GLOBE
 		btn.set_pressed_no_signal(on)
@@ -5288,7 +5661,6 @@ func _build_globe_row(parent: Control) -> void:
 	full.pressed.connect(_open_full_snowglobe)
 	_globe_row.add_child(full)
 	parent.add_child(_globe_row)
-	_build_connect_btn(parent)
 	_globe_radius_timer = Timer.new()
 	_globe_radius_timer.one_shot = true
 	_globe_radius_timer.wait_time = 0.15
@@ -9969,12 +10341,21 @@ func _writeback_pond_twins_from_mesh(tag: String, info: Dictionary) -> void:
 		if is_tank:
 			if not is_nan(stock_l):
 				specs["stock_l"] = stock_l
-			if not is_nan(frac) and str(specs.get("fill_mode", "auto")) != "manual":
-				specs["level"] = frac
 			var terrain_cap := float(info.get("terrain_capacity_l", capacity_l))
-			if terrain_cap > 1e-3 and str(specs.get("capacity_mode", "auto")) != "manual":
-				# Always prefer DEM bathymetry so Lab fill can reach the basin lip.
-				specs["capacity_qty"] = maxf(terrain_cap, capacity_l)
+			var auto_cap := terrain_cap > 1e-3 and str(specs.get("capacity_mode", "auto")) != "manual"
+			# With Auto capacity the tank holds what the BASIN holds now. The
+			# pond record's own capacity can be older than the ground (a
+			# channel carved into the bank after load shrank Mount Vernon's
+			# basin 3.6 %): against it a brim-full pond read 96.4 % here while
+			# the tank's timeline said 100 %, and the level flipped between
+			# the two on every seek.
+			var tank_frac := frac
+			if auto_cap and not is_nan(stock_l):
+				tank_frac = clampf(stock_l / terrain_cap, 0.0, 1.0)
+			if not is_nan(tank_frac) and str(specs.get("fill_mode", "auto")) != "manual":
+				specs["level"] = tank_frac
+			if auto_cap:
+				specs["capacity_qty"] = terrain_cap
 				specs["capacity"] = "%.0f L" % float(specs["capacity_qty"])
 			elif capacity_l > 1e-3 and str(specs.get("capacity_mode", "auto")) != "manual":
 				specs["capacity_qty"] = capacity_l
@@ -10611,6 +10992,252 @@ func remove_greenhouse_system(prop_id: String) -> void:
 	_sim_bulk_update = was_bulk
 	_on_model_changed("remove_item")
 	_schedule_graph_autosave()
+
+
+# ---------------------------------------------------------------------------
+# Terraced fields (core/terrace/): one plant node per field
+# ---------------------------------------------------------------------------
+
+## The record keys a terrace node carries (the engine's TerraceField.resolve
+## reads them straight off the specs).
+const TERRACE_SPEC_KEYS := ["crop", "flooded", "bund_h", "inflow_mode", "inflow_lph",
+	"perc_mm_d", "plant_abs_h", "labour", "build_mode"]
+
+
+## Make or update the graph node of a terrace field (identity
+## specs.terrace_id). Keeps its place on the canvas, its wires and its water.
+func sync_terrace_node(rec: Dictionary, table: Array, heads: Array, floor_m2: float,
+		world_centre: Vector3) -> String:
+	if model == null:
+		return ""
+	var tid := str(rec.get("id", ""))
+	if tid.is_empty():
+		return ""
+	var r := TerraceField.resolve(rec)
+	var site := Vector2.ZERO
+	var soi := get_node_or_null("/root/SoiService")
+	if soi != null and soi.has_method("world_center"):
+		site = GraphSiteLayout.world_xz_to_site(Vector2(world_centre.x, world_centre.z),
+			soi.call("world_center") as Vector3)
+	var cinfo := TerraceField.crop_info(str(r["crop"]))
+	var existing := terrace_node_id(tid)
+	var specs: Dictionary = {}
+	if not existing.is_empty():
+		specs = (model.get_item(existing).get("specs", {}) as Dictionary).duplicate(true)
+	var old_ports := "%s|%s" % [TerraceField.makes_food(specs), TerraceField.wants_fuel(specs)]
+	specs["name"] = str(r["name"])
+	specs["terrace_id"] = tid
+	for k in TERRACE_SPEC_KEYS:
+		specs[k] = r[k]
+	specs["area_m2"] = snappedf(floor_m2, 0.1)
+	specs["use_soi_area"] = false
+	specs["lue_g_per_mj"] = float(cinfo["lue"])
+	specs["food_fraction"] = float(cinfo["food"])
+	specs["terrace_table"] = table.duplicate(true)
+	specs["terrace_heads"] = heads.duplicate()
+	specs["map_display_scale"] = 1.0
+	_history_suppress = true
+	if existing.is_empty():
+		var pos := _free_system_card_pos(site, Vector2(180.0, 140.0))
+		existing = model.generate_item_id()
+		model.add_item({"id": existing, "type": "plant", "x": pos.x, "y": pos.y,
+			"width": 180.0, "height": 140.0, "scope_id": "root",
+			"site_x_m": site.x, "site_z_m": site.y, "elevation_m": world_centre.y,
+			"specs": specs, "is_virtual": false})
+	else:
+		var upd := {"specs": specs, "site_x_m": site.x, "site_z_m": site.y, "elevation_m": world_centre.y}
+		if old_ports != "%s|%s" % [TerraceField.makes_food(specs), TerraceField.wants_fuel(specs)]:
+			upd["handles"] = []
+		model.update_item(existing, upd)
+	_history_suppress = false
+	_schedule_graph_autosave()
+	return existing
+
+
+func remove_terrace_node(tid: String) -> void:
+	var gid := terrace_node_id(tid)
+	if gid.is_empty():
+		return
+	_history_suppress = true
+	model.remove_item(gid)
+	_history_suppress = false
+	_schedule_graph_autosave()
+
+
+func terrace_node_id(tid: String) -> String:
+	if model == null or tid.is_empty():
+		return ""
+	for it in model.items_of_type("plant"):
+		var d: Dictionary = it
+		if str((d.get("specs", {}) as Dictionary).get("terrace_id", "")) == tid:
+			return str(d.get("id", ""))
+	return ""
+
+
+func terrace_node_specs(tid: String) -> Dictionary:
+	var gid := terrace_node_id(tid)
+	if gid.is_empty():
+		return {}
+	return model.get_item(gid).get("specs", {}) as Dictionary
+
+
+## Fill (1) or empty (0) every paddy of a field at once (the editor's "Fill
+## now" / "Drain"): the engine takes it on its next step.
+func set_terrace_fill(tid: String, frac: float) -> void:
+	var gid := terrace_node_id(tid)
+	if gid.is_empty():
+		return
+	var specs: Dictionary = (model.get_item(gid).get("specs", {}) as Dictionary).duplicate(true)
+	var n := (specs.get("terrace_table", []) as Array).size()
+	var arr: Array = []
+	for i in n:
+		arr.append(clampf(frac, 0.0, 1.0))
+	specs["terrace_fill_set"] = arr
+	_begin_sim_writes()
+	model.update_item(gid, {"specs": specs})
+	_end_sim_writes()
+
+
+## How far the crews have got with each of a terrace field's jobs
+## ({"<paddy>": [job seq, 0..1]}, TerraceRuntime): the engine moves the jobs
+## on from it. A sim write (the crews' work, not the player's edit).
+func set_terrace_credit(tid: String, credit: Dictionary) -> void:
+	var gid := terrace_node_id(tid)
+	if gid.is_empty():
+		return
+	var specs: Dictionary = model.get_item(gid).get("specs", {}) as Dictionary
+	if specs.get("terrace_credit", {}) == credit:
+		return
+	specs = specs.duplicate(true)
+	specs["terrace_credit"] = credit.duplicate(true)
+	_begin_sim_writes()
+	model.update_item(gid, {"specs": specs})
+	_end_sim_writes()
+
+
+## Stores a terrace could be wired to on a port: [{id, name, kind, dist_m,
+## wired}] nearest first. water_in / water_out take water stores, harvest_out
+## takes food (biomass for a non-food crop), residue_out biomass.
+func terrace_store_choices(tid: String, port: String) -> Array:
+	var gid := terrace_node_id(tid)
+	if gid.is_empty():
+		return []
+	var node := model.get_item(gid)
+	var specs: Dictionary = node.get("specs", {}) as Dictionary
+	var want: Array = ["water", "irrigation_water", "rainwater", "greywater"]
+	if port == "harvest_out":
+		want = ["food"] if float(TerraceField.crop_info(str(specs.get("crop", "fallow")))["food"]) > 0.0 else ["biomass"]
+	elif port == "residue_out":
+		want = ["biomass"]
+	elif port == "fuel_in":
+		want = ["diesel"]
+	var wired := _terrace_wired_to(gid, port)
+	var here := GraphSiteLayout.site_xz(node)
+	var out: Array = []
+	for it in model.items_of_type("resource"):
+		var d: Dictionary = it
+		var sp: Dictionary = d.get("specs", {}) as Dictionary
+		var kind := ResourceKinds.normalize_kind(str(sp.get("resource_kind", "")))
+		if not want.has(kind):
+			continue
+		var dist := -1.0
+		if GraphSiteLayout.has_site_coords(d):
+			dist = GraphSiteLayout.site_xz(d).distance_to(here)
+		out.append({"id": str(d["id"]), "name": str(sp.get("name", ResourceKinds.display_name(kind))),
+			"kind": kind, "dist_m": dist, "wired": str(d["id"]) == wired})
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var da := float(a["dist_m"])
+		var db := float(b["dist_m"])
+		if da < 0.0:
+			da = 1e9
+		if db < 0.0:
+			db = 1e9
+		return da < db)
+	return out
+
+
+func _terrace_wired_to(gid: String, port: String) -> String:
+	for c in model.connections:
+		var cd: Dictionary = c
+		if port.ends_with("_in"):
+			if str(cd.get("target_item_id", "")) == gid and str(cd.get("target_handle_id", "")) == port:
+				return str(cd.get("source_item_id", ""))
+		elif str(cd.get("source_item_id", "")) == gid and str(cd.get("source_handle_id", "")) == port:
+			return str(cd.get("target_item_id", ""))
+	return ""
+
+
+## Take diesel for a terrace's machines from the store on its fuel_in port:
+## {litres (taken), wired (a store is on the port), name}. Nothing wired: the
+## fuel is bought in (the caller counts it).
+func terrace_take_fuel(tid: String, litres: float) -> Dictionary:
+	var gid := terrace_node_id(tid)
+	if gid.is_empty() or litres <= 0.0:
+		return {"litres": 0.0, "wired": false}
+	var sid := _terrace_wired_to(gid, "fuel_in")
+	if sid.is_empty():
+		return {"litres": 0.0, "wired": false}
+	var item := model.get_item(sid)
+	var sp2: Dictionary = (item.get("specs", {}) as Dictionary).duplicate(true)
+	var name := str(sp2.get("name", "Diesel"))
+	if bool(sp2.get("unlimited_capacity", false)):
+		return {"litres": litres, "wired": true, "name": name}
+	var cap := maxf(float(sp2.get("capacity_qty", 0.0)), 0.0)
+	if cap <= 0.0:
+		return {"litres": 0.0, "wired": true, "name": name}
+	var h := 0.0
+	var main := _get_scene_main_node()
+	if main != null and main.has_method("get_absolute_hours"):
+		h = float(main.call("get_absolute_hours"))
+	var tl: ResourceTimeline = _resource_flow.get_timeline(sid) if _resource_flow != null else null
+	var lvl := tl.level_at(h) if tl != null else float(sp2.get("level", 0.0))
+	var take := minf(litres, maxf(lvl, 0.0) * cap)
+	if take > 0.0:
+		var nl := maxf(lvl - take / cap, 0.0)
+		sp2["level"] = nl
+		_begin_sim_writes()
+		model.update_item(sid, {"specs": sp2})
+		_end_sim_writes()
+		if tl != null:
+			tl.set_current_level(h, nl)
+	return {"litres": take, "wired": true, "name": name}
+
+
+## Wire a terrace's port to a store ("" = unwire). One undo step.
+func terrace_wire(tid: String, port: String, tank_id: String) -> bool:
+	var gid := terrace_node_id(tid)
+	if gid.is_empty():
+		return false
+	var drop: Array = []
+	for c in model.connections:
+		var cd: Dictionary = c
+		if port.ends_with("_in"):
+			if str(cd.get("target_item_id", "")) == gid and str(cd.get("target_handle_id", "")) == port:
+				drop.append(str(cd["id"]))
+		elif str(cd.get("source_item_id", "")) == gid and str(cd.get("source_handle_id", "")) == port:
+			drop.append(str(cd["id"]))
+	for cid in drop:
+		model.remove_connection(str(cid))
+	if not tank_id.is_empty():
+		var tank := model.get_item(tank_id)
+		if tank.is_empty():
+			return false
+		var kind := ResourceKinds.normalize_kind(str((tank.get("specs", {}) as Dictionary).get("resource_kind", "water")))
+		var c2 := {"polarity": "resource", "resource_type": kind, "scope_id": "root"}
+		if port.ends_with("_in"):
+			c2["source_item_id"] = tank_id
+			c2["source_handle_id"] = "output"
+			c2["target_item_id"] = gid
+			c2["target_handle_id"] = port
+		else:
+			c2["source_item_id"] = gid
+			c2["source_handle_id"] = port
+			c2["target_item_id"] = tank_id
+			c2["target_handle_id"] = "input"
+		model.add_connection(c2)
+	_push_history()
+	_schedule_graph_autosave()
+	return true
 
 
 func greenhouse_system_item_id(prop_id: String) -> String:
@@ -15632,6 +16259,8 @@ func _process_frame(delta: float) -> void:
 	PerfSpan.begin("gv_dcthrottle")
 	_tick_dc_throttle(delta, _ambient_flow_suspended or _replaying)
 	PerfSpan.end("gv_dcthrottle")
+	if not (_ambient_flow_suspended or _replaying):
+		_tick_breakers(delta)
 	# Graph DC generation (hydro, graph-only wind, fuel generators wired into a
 	# battery) must reach SolarUI with the graph CLOSED and while the Hydro Lab
 	# owns the view — both early-return below, and the battery then never saw a
@@ -15814,9 +16443,13 @@ func _input(event: InputEvent) -> void:
 				# Delete / Ctrl+Z / Ctrl+Y from the 3D tools (edit toolbar, Light
 				# Studio) and edited a graph nobody was looking at.
 				# C: the Globe / Site Plan connect tool.
-				if visible and ke.keycode == KEY_C and not ke.ctrl_pressed and not ke.meta_pressed \
-						and _connect_tool_lens():
-					set_connect_tool(not _connect_tool_on)
+				if visible and ke.keycode == KEY_C and not ke.ctrl_pressed and not ke.meta_pressed:
+					if _connect_tool_lens():
+						set_connect_tool(not _connect_tool_on)
+					elif _graph_view_mode != GraphSiteLayout.VIEW_PROCESS:
+						route_in_world()
+					else:
+						return
 					get_viewport().set_input_as_handled()
 					return
 				# The loop closer's ghost: Tab accepts it, Esc dismisses it.
@@ -15858,6 +16491,15 @@ func _input(event: InputEvent) -> void:
 					get_viewport().set_input_as_handled()
 					return
 				# Esc closes the full-screen Festival board before anything else.
+				if visible and ke.keycode == KEY_ESCAPE and _graph_canvas != null \
+						and _graph_canvas.call("process_lens") != null \
+						and bool((_graph_canvas.call("process_lens") as Object).call("dismiss_faceplate")):
+					get_viewport().set_input_as_handled()
+					return
+				if visible and ke.keycode == KEY_ESCAPE and _operator_mode:
+					set_operator_mode(false)
+					get_viewport().set_input_as_handled()
+					return
 				if visible and ke.keycode == KEY_ESCAPE and board_fullscreen_open():
 					toggle_board_fullscreen()
 					get_viewport().set_input_as_handled()
@@ -17544,6 +18186,11 @@ func _sync_graph_energy_from_solar() -> void:
 		var load_kw := maxf(0.0, float(_solar_ui.get("current_load_kw") if _solar_ui.get("current_load_kw") != null else 0.0))
 		var aux_kw := maxf(0.0, float(_solar_ui.get("current_aux_generation_kw") if _solar_ui.get("current_aux_generation_kw") != null else 0.0))
 		var graph_dc_kw := maxf(0.0, float(_solar_ui.get("current_graph_dc_kw") if _solar_ui.get("current_graph_dc_kw") != null else 0.0))
+		# With the AC shed (the battery at its floor) nothing is drawn: what
+		# the turbines and panels make goes INTO the battery.
+		var apb := get_node_or_null("/root/AcPowerBus")
+		if apb != null and "ac_output_enabled" in apb and not bool(apb.get("ac_output_enabled")):
+			load_kw = 0.0
 		_graph_canvas.set("live_power_hint", {
 			"battery_w": (solar_kw + aux_kw + graph_dc_kw - load_kw) * 1000.0,
 			"solar_w": solar_kw * 1000.0,
@@ -17800,6 +18447,16 @@ func collect_save_state() -> Dictionary:
 		"flow_style": _flow_style.duplicate(),
 		"flows_channel": str(_graph_canvas.get("flows_channel")) if _graph_canvas != null else "",
 		"flows_window": str(_graph_canvas.get("flows_window")) if _graph_canvas != null else "now",
+		"flows_shape": str(_graph_canvas.get("flows_shape")) if _graph_canvas != null else "column",
+		"flows_pins": (_graph_canvas.call("flows_pins_data") as Dictionary) if _graph_canvas != null else {},
+		"process_pins": (_graph_canvas.call("process_pins_data") as Dictionary) if _graph_canvas != null else {},
+		"process_layers": (_graph_canvas.call("process_layers_data") as Array) if _graph_canvas != null else [],
+		"process_screens": (_graph_canvas.call("process_screens_data") as Dictionary) if _graph_canvas != null else {},
+		"process_icons": (_graph_canvas.call("process_icons_data") as Dictionary) if _graph_canvas != null else {},
+		"scada_trends": (_scada_hub.call("trend_data") as Dictionary) if _scada_hub != null else {},
+		"scada_logic": (_scada_hub.call("logic_data") as Dictionary) if _scada_hub != null else {},
+		"scada_alarms": (_scada_hub.call("alarm_data") as Dictionary) if _scada_hub != null else {},
+		"flows_mirror": bool(_graph_canvas.call("flows_mirror")) if _graph_canvas != null else true,
 		"element_lens": _element_lens,
 		"elevation_3d_section": _elevation_3d_section,
 		"elevation_heading_rad": float(_graph_canvas.get("elevation_heading_rad")) if _graph_canvas != null else 0.0,
@@ -18023,6 +18680,17 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 	if _graph_canvas != null:
 		_graph_canvas.set("flows_channel", str(data.get("flows_channel", "")))
 		_graph_canvas.set("flows_window", str(data.get("flows_window", "now")))
+		_graph_canvas.call("set_flows_shape", str(data.get("flows_shape", "column")))
+		_graph_canvas.call("set_flows_mirror", bool(data.get("flows_mirror", true)))
+		_graph_canvas.call("set_flows_pins_data", data.get("flows_pins", {}))
+		_graph_canvas.call("set_process_pins_data", data.get("process_pins", {}))
+		_graph_canvas.call("set_process_layers_data", data.get("process_layers", []))
+		_graph_canvas.call("set_process_screens_data", data.get("process_screens", {}))
+		_graph_canvas.call("set_process_icons_data", data.get("process_icons", {}))
+	if _scada_hub != null:
+		_scada_hub.call("set_logic_data", data.get("scada_logic", {}))
+		_scada_hub.call("set_alarm_data", data.get("scada_alarms", {}))
+		_scada_hub.call("set_trend_data", data.get("scada_trends", {}))
 	var lens_id := str(data.get("element_lens", ""))
 	set_element_lens(lens_id if ElementLens.is_lens(lens_id) else "", false)
 	_elevation_3d_section = bool(data.get("elevation_3d_section", true))
@@ -18180,6 +18848,73 @@ const _DC_THROTTLE_INTERVAL := 0.25
 ## levels 3–7 (120 W / 360 W / 720 W / 1200 W all emerge from this math).
 ## Runs ambient (graph open or closed); telemetry writes are change-gated and
 ## wrapped in history/bulk suppression so they never pollute undo or autosave.
+var _breaker_acc := 0.0
+var _breaker_ids: Array = []
+var _breaker_key := -1
+
+
+## In-line AC breakers (BreakerTrip): what each carries, and the trip. Runs
+## with the graph closed. A trip is the simulation's write; a reset is the
+## player's.
+func _tick_breakers(delta: float) -> void:
+	_breaker_acc += delta
+	if _breaker_acc < 0.5 or model == null:
+		return
+	_breaker_acc = 0.0
+	if int(model.struct_rev) != _breaker_key:
+		_breaker_key = int(model.struct_rev)
+		_breaker_ids = []
+		for it in model.items:
+			if BreakerTrip.is_breaker(it):
+				_breaker_ids.append(str(it.get("id", "")))
+	if _breaker_ids.is_empty():
+		return
+	var main := _get_scene_main_node()
+	if main == null or not main.has_method("get_absolute_hours"):
+		return
+	var now_h := float(main.call("get_absolute_hours"))
+	var ix: Dictionary = GraphAcLoad.delivered_index(model, get_tree())
+	var conns: Array = GraphNesting.flat_connections_cached(model)
+	var patches := {}
+	for bid in _breaker_ids:
+		var it: Dictionary = model.get_item(bid)
+		if it.is_empty():
+			continue
+		var specs: Dictionary = it.get("specs", {}) as Dictionary
+		var watts := 0.0
+		if BreakerTrip.is_closed(specs):
+			for c: Dictionary in conns:
+				if str(c.get("source_item_id", "")) == bid and str(c.get("polarity", "")) in ["ac", "load", "ac_240"]:
+					watts += GraphAcLoad.delivered_watts_indexed(model, ix, c)
+		var patch := BreakerTrip.step(specs, watts, now_h)
+		if not patch.is_empty():
+			patches[bid] = patch
+	if patches.is_empty():
+		return
+	_begin_sim_writes()
+	for bid in patches:
+		var specs2: Dictionary = (model.get_item(bid).get("specs", {}) as Dictionary).duplicate(true)
+		specs2.merge(patches[bid] as Dictionary, true)
+		model.update_item(bid, {"specs": specs2})
+		if bool((patches[bid] as Dictionary).get("tripped", false)):
+			_show_toast("%s %s: %s A on a %s A rating." % [str(specs2.get("name", "Breaker")),
+				"blew" if bool(specs2.get("fuse", false)) else "tripped",
+				UiText.num(float(specs2.get("trip_amps", 0.0)), "", 2), UiText.num(BreakerTrip.rating_a(specs2), "", 2)], 5.0)
+	_end_sim_writes()
+
+
+## Close a tripped breaker again (the player's edit).
+func reset_breaker(item_id: String) -> void:
+	if model == null:
+		return
+	var it: Dictionary = model.get_item(item_id)
+	if it.is_empty() or not BreakerTrip.is_breaker(it):
+		return
+	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	specs.merge(BreakerTrip.reset(), true)
+	model.update_item(item_id, {"specs": specs})
+
+
 func _tick_dc_throttle(delta: float, display_only: bool = false) -> void:
 	if model == null:
 		return
@@ -22938,7 +23673,27 @@ func _record_flow_history() -> void:
 	if _graph_canvas == null or not _graph_canvas.has_method("flow_values_now"):
 		return
 	var now_h := _closure_abs_hours()
-	_flow_history.record(now_h, _graph_canvas.call("flow_values_now") as Dictionary)
+	var sampled: Dictionary = _graph_canvas.call("flow_values_now") as Dictionary
+	# Resource wires: the engine's own ledger of what crossed each wire
+	# (exact at any speed, and it has the charges a batch takes in one step,
+	# which no sample of the wires ever sees). Power is still sampled: its
+	# watts are estimated by the canvas.
+	if _resource_flow != null and _resource_flow.has_method("take_conn_quantities"):
+		var totals: Dictionary = _resource_flow.call("take_conn_quantities")
+		var keyed := {}
+		for cid in totals:
+			var q: Array = totals[cid]
+			var kind := ResourceKinds.normalize_kind(str(q[1]))
+			if kind.is_empty() and model != null:
+				kind = ResourceKinds.normalize_kind(str(model.get_connection(str(cid)).get("resource_type", "")))
+			keyed[cid] = [float(q[0]), GraphFlowStyle.scale_key(true, kind)]
+		_flow_history.add_quantities(now_h, keyed)
+		var power := {}
+		for cid2 in sampled:
+			if str((sampled[cid2] as Dictionary).get("key", "")) == "electricity":
+				power[cid2] = sampled[cid2]
+		sampled = power
+	_flow_history.record(now_h, sampled)
 	_graph_canvas.set("flow_history", _flow_history)
 	_graph_canvas.set("flow_now_abs_h", now_h)
 
@@ -23455,21 +24210,44 @@ var _connect_btn: Button = null
 var _connect_tool_on := false
 
 
+## Route (C): 3D runs of pipe and cable, from any lens. In the Globe and Site
+## Plan it is the lens's own connect tool (click a node, the ground for bend
+## points, the other node). Elsewhere it goes to the world with the edit
+## toolbar's Route tools: on the selected wire when there is one.
 func _build_connect_btn(parent: Control) -> void:
 	_connect_btn = Button.new()
-	_connect_btn.text = "Connect (C)"
+	_connect_btn.name = "RouteBtn"
+	_connect_btn.text = "Route"
+	_connect_btn.set_meta("full_text", "Route")
 	_connect_btn.toggle_mode = true
 	_connect_btn.focus_mode = Control.FOCUS_NONE
-	_connect_btn.tooltip_text = ("Draw a 3D run between two nodes: click a node, click the ground for "
-		+ "bends, click the other node. The run is routed over the terrain and measured — "
-		+ "the same run first-person plugging makes. RMB takes a bend back · Esc cancels.")
 	_apply_topbar_btn_style(_connect_btn)
 	UiIcons.apply(_connect_btn, "plug")
-	_connect_btn.visible = false
 	_connect_btn.toggled.connect(func(on: bool) -> void:
-		if on != _connect_tool_on:
+		if not _connect_tool_lens():
+			_connect_btn.set_pressed_no_signal(false)
+			route_in_world()
+		elif on != _connect_tool_on:
 			set_connect_tool(on))
 	parent.add_child(_connect_btn)
+	_sync_connect_btn()
+
+
+## Route from a lens with no ground to click on: the selected wire's run in
+## the world (route_run_in_world), else the Route section's Connect tool.
+func route_in_world() -> void:
+	var cid := str(_graph_canvas.get("selected_connection_id")) if _graph_canvas != null else ""
+	if not cid.is_empty() and model != null and not model.get_connection(cid).is_empty() \
+			and model.connection_is_3d_routable(model.get_connection(cid)):
+		route_run_in_world(cid)
+		return
+	var main := _get_scene_main_node()
+	var loader := _find_terrain_loader(main) if main != null else null
+	if loader == null or not loader.has_method("open_route_tools_on"):
+		_show_toast("Routing runs needs a generated map")
+		return
+	close_graph_view()
+	loader.call_deferred("open_route_tools_on", "", "route_connect")
 
 
 func _connect_tool_lens() -> bool:
@@ -23481,7 +24259,10 @@ func _sync_connect_btn() -> void:
 	if _connect_btn == null:
 		return
 	var lens_ok := _connect_tool_lens()
-	_connect_btn.visible = lens_ok
+	_connect_btn.tooltip_text = ("Draw a 3D run: click a node, the ground for bend points, then the other node. "
+		+ "Routed round what stands in the way, with real bends. Esc cancels.  (C)") if lens_ok \
+		else ("Route pipes and cables in the world: the selected wire's run, else the Connect tool "
+		+ "(click a port, then a port).  (C)")
 	if not lens_ok and _connect_tool_on:
 		set_connect_tool(false)
 
@@ -23546,9 +24327,14 @@ func _on_world_connect_requested(src_item: String, src_handle: String, dst_item:
 			route.append({"x": (w as Vector3).x, "y": (w as Vector3).y, "z": (w as Vector3).z})
 	var patch := {"conduit_type": ConduitKinds.derive_type_for_connection(model.get_connection(cid)),
 		"visible_3d": true}
+	# A run the solver can take is routed by it, through the clicked points;
+	# anything else (a penstock, a culvert) keeps them as its exact path.
+	var on_solver := _run_takes_solver(model.get_connection(cid), str(patch["conduit_type"]))
+	if on_solver:
+		patch["route_solver"] = "v2"
 	if not route.is_empty():
 		patch["route_3d"] = route
-		patch["route_locked"] = true
+		patch["route_locked"] = not on_solver
 	model.update_connection(cid, patch)
 	var mgr := _get_conduit_manager()
 	if mgr != null and mgr.has_method("force_remesh"):
@@ -23578,7 +24364,11 @@ func _on_world_route_edited(conn_id: String, route: Array) -> void:
 		return
 	var was := _history_suppress
 	_history_suppress = true
-	model.update_connection(conn_id, {"route_3d": route, "route_locked": not route.is_empty()})
+	var c0 := model.get_connection(conn_id)
+	if _run_takes_solver(c0, ConduitKinds.derive_type_for_connection(c0)):
+		model.update_connection(conn_id, {"route_3d": route, "route_locked": false, "route_solver": "v2"})
+	else:
+		model.update_connection(conn_id, {"route_3d": route, "route_locked": not route.is_empty()})
 	var mgr := _get_conduit_manager()
 	if mgr != null and mgr.has_method("force_remesh"):
 		mgr.call("force_remesh", conn_id)
@@ -23597,6 +24387,209 @@ func _on_world_route_edited(conn_id: String, route: Array) -> void:
 	if len_m > 0.0:
 		_show_toast("Run re-routed · " + ConduitLength.describe(len_m,
 			ConduitKinds.derive_type_for_connection(conn)), 2.0)
+
+
+## Would the run solver route this run if asked (its kind and routing style
+## allow it: not a penstock, culvert, siphon intake, light string)?
+func _run_takes_solver(conn: Dictionary, type_id: String) -> bool:
+	var probe := conn.duplicate()
+	probe["route_solver"] = "v2"
+	probe["route_locked"] = false
+	return ConduitRouteDispatch.uses_solver(probe, type_id)
+
+
+## The Route tool's edits (bend points, preferred height, along a wall): the
+## run's vias and any route keys of its style, as ONE undo step. The run goes
+## on the solver ("v2"): its vias are points it passes through, not a frozen
+## path. A style value of null erases that key.
+func set_run_route(conn_id: String, vias: Array, style_patch: Dictionary = {}) -> void:
+	if model == null or model.get_connection(conn_id).is_empty():
+		return
+	var conn := model.get_connection(conn_id)
+	var style: Dictionary = (conn.get("conduit_style", {}) as Dictionary).duplicate(true)
+	for k: Variant in style_patch:
+		if style_patch[k] == null:
+			style.erase(k)
+		else:
+			style[k] = style_patch[k]
+	var was := _history_suppress
+	_history_suppress = true
+	model.update_connection(conn_id, {"route_3d": vias, "route_locked": false,
+		"route_solver": "v2", "visible_3d": true, "conduit_style": style})
+	var mgr := _get_conduit_manager()
+	if mgr != null and mgr.has_method("force_remesh"):
+		mgr.call("force_remesh", conn_id)
+	_history_suppress = was
+	_push_history()
+	_update_undo_redo_btns()
+	_schedule_graph_autosave()
+	if MultiplayerSession != null and MultiplayerSession.has_method("is_active") \
+			and MultiplayerSession.is_active() and MultiplayerSession.has_method("notify_graph_edited"):
+		MultiplayerSession.notify_graph_edited("update_connection")
+	if _graph_canvas != null and str(_graph_canvas.get("selected_connection_id")) == conn_id \
+			and _inspector_panel != null and _inspector_panel.has_method("inspect_connection"):
+		_inspector_panel.call("inspect_connection", model.get_connection(conn_id), model)
+
+
+## Runs whose path the player pinned before the solver existed (route_locked,
+## no route_solver) and that the solver could take: pipes and cables shown in
+## 3D, never penstocks, culverts, siphon intakes or hanging strings.
+func pinned_runs_to_reroute() -> Array:
+	var out: Array = []
+	if model == null:
+		return out
+	for c: Variant in model.connections:
+		var conn: Dictionary = c
+		if not bool(conn.get("route_locked", false)) or not bool(conn.get("visible_3d", false)):
+			continue
+		if not str(conn.get("route_solver", "")).is_empty():
+			continue
+		if _run_takes_solver(conn, ConduitKinds.derive_type_for_connection(conn)):
+			out.append(str(conn.get("id", "")))
+	return out
+
+
+## "Re-route pinned runs": each run goes on the solver, its pinned points kept
+## as points it passes through (with their heights). ONE undo step.
+func reroute_pinned_runs(ids: Array) -> int:
+	if model == null or ids.is_empty():
+		return 0
+	var was := _history_suppress
+	_history_suppress = true
+	var n := 0
+	var mgr := _get_conduit_manager()
+	for cid: Variant in ids:
+		var conn := model.get_connection(str(cid))
+		if conn.is_empty():
+			continue
+		model.update_connection(str(cid), {"route_solver": "v2", "route_locked": false})
+		if mgr != null:
+			mgr.force_remesh(str(cid))
+		n += 1
+	_history_suppress = was
+	if n > 0:
+		_push_history()
+		_update_undo_redo_btns()
+		_schedule_graph_autosave()
+	return n
+
+
+## The Lane tool: a bundle's runs in the order the player dragged them into
+## (each run's lane_index), and any run's "pulled out" flag, as ONE undo step.
+## `free_patch` = {conn_id: {"lane_free": bool, "route_3d": Array}}.
+func set_lane_order(order: Array, free_patch: Dictionary = {}) -> void:
+	if model == null:
+		return
+	var was := _history_suppress
+	_history_suppress = true
+	var touched: Array = []
+	for i: int in range(order.size()):
+		var cid := str(order[i])
+		var conn := model.get_connection(cid)
+		if conn.is_empty():
+			continue
+		var st: Dictionary = (conn.get("conduit_style", {}) as Dictionary).duplicate(true)
+		st["lane_index"] = i
+		model.update_connection(cid, {"conduit_style": st})
+		touched.append(cid)
+	for cid: Variant in free_patch:
+		var conn2 := model.get_connection(str(cid))
+		if conn2.is_empty():
+			continue
+		var p: Dictionary = free_patch[cid]
+		var st2: Dictionary = (conn2.get("conduit_style", {}) as Dictionary).duplicate(true)
+		if bool(p.get("lane_free", false)):
+			st2["lane_free"] = true
+			st2.erase("lane_index")
+		else:
+			st2.erase("lane_free")
+		var upd := {"conduit_style": st2}
+		if p.has("route_3d"):
+			upd["route_3d"] = p["route_3d"]
+			upd["route_solver"] = "v2"
+			upd["route_locked"] = false
+		model.update_connection(str(cid), upd)
+		touched.append(str(cid))
+	var mgr := _get_conduit_manager()
+	if mgr != null:
+		for cid: String in touched:
+			mgr.force_remesh(cid)
+	_history_suppress = was
+	_push_history()
+	_update_undo_redo_btns()
+	_schedule_graph_autosave()
+
+
+## The Route tool's "Open in Process": the graph opens in the Process lens on
+## the scope the run is in, with the run selected.
+func open_run_in_process(conn_id: String) -> void:
+	if model == null:
+		return
+	var conn := model.get_connection(conn_id)
+	if conn.is_empty():
+		return
+	# The edit toolbar (the Route tools) is a first-person tool: put it away.
+	var ldr := _terrain_loader_for_inventory()
+	var etb: Node = ldr.call("edit_toolbar") if ldr != null and ldr.has_method("edit_toolbar") else null
+	if etb != null and bool(etb.call("is_panel_open")):
+		etb.call("_exit_mode")
+	if not visible:
+		open_graph_view()
+	var src := model.get_item(str(conn.get("source_item_id", "")))
+	if not src.is_empty():
+		_set_scope_trail(_trail_to_scope(str(src.get("scope_id", "root"))), "")
+	if _graph_view_mode != GraphSiteLayout.VIEW_PROCESS:
+		_on_mode_chip_pressed(GraphSiteLayout.VIEW_PROCESS)
+	select_connection_by_id(conn_id)
+	var lens: Node = _graph_canvas.call("process_lens") if _graph_canvas != null \
+		and _graph_canvas.has_method("process_lens") else null
+	if lens != null and lens.has_method("select_pipe"):
+		lens.call("select_pipe", conn_id)
+
+
+## Graph → 3D for a run: the graph closes, the player stands within sight of
+## the run (moved only when far from it) facing its middle, and the edit
+## toolbar opens on Route with the run picked, so it can be bent there.
+func route_run_in_world(conn_id: String) -> bool:
+	var main := _get_scene_main_node()
+	var mgr := _get_conduit_manager()
+	if main == null or mgr == null or model == null or model.get_connection(conn_id).is_empty():
+		return false
+	var pts: PackedVector3Array = mgr.get_sample_points(conn_id)
+	if pts.size() < 2:
+		var conn := model.get_connection(conn_id)
+		if not model.connection_is_3d_routable(conn):
+			_show_toast("This line has no place in the 3D world: place both ends first")
+			return false
+		model.update_connection(conn_id, {"visible_3d": true})
+		mgr.force_remesh(conn_id)
+		pts = mgr.get_sample_points(conn_id)
+		if pts.size() < 2:
+			_show_toast("This run could not be drawn in 3D")
+			return false
+	var mid := pts[pts.size() / 2]
+	var player := main.get_node_or_null("Player") as Node3D
+	if player != null:
+		var away := Vector2(player.global_position.x - mid.x, player.global_position.z - mid.z)
+		if away.length() > 18.0 or away.length() < 0.5:
+			var dir2 := away.normalized() if away.length() > 0.5 else Vector2(0, 1)
+			var pos := Vector3(mid.x + dir2.x * 7.0, 0.0, mid.z + dir2.y * 7.0)
+			pos.y = TerrainSurfaceQuery.ground_height_at(main, pos.x, pos.z) + 1.0
+			player.global_position = pos
+			if player is CharacterBody3D:
+				(player as CharacterBody3D).velocity = Vector3.ZERO
+			if "fall_start_height" in player:
+				player.set("fall_start_height", pos.y)
+				player.set("highest_point_during_fall", pos.y)
+		var d := Vector2(mid.x - player.global_position.x, mid.z - player.global_position.z)
+		if d.length() > 0.01:
+			player.rotation.y = atan2(-d.x, -d.y)
+	close_graph_view()
+	var loader := _find_terrain_loader(main)
+	if loader != null and loader.has_method("open_route_tools_on"):
+		loader.call_deferred("open_route_tools_on", conn_id, "route_bend")
+	mgr.set_focus_highlight(conn_id)
+	return true
 
 
 ## The lens's "Place it here" for a node with no 3D twin: its model (a grey

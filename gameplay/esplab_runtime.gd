@@ -70,6 +70,7 @@ func probe() -> EspWorldProbe:
 
 
 func _ready() -> void:
+	add_to_group("esplab_runtimes")  # ScadaHub.ESP_GROUP
 	call_deferred("_bind")
 
 
@@ -174,6 +175,13 @@ func _refresh() -> void:
 		out[str(e["entity_id"])] = {"text": EspSim.format(e, r), "value": r["value"], "available": r["available"]}
 	latest = out
 	_update_label()
+
+
+## The graph node this board is (its load), "" when it has none.
+func graph_item_id() -> String:
+	var main := _main()
+	var rec := PlacedPropService.get_prop_record(main, _prop_id) if main != null else {}
+	return str(rec.get("graph_item_id", ""))
 
 
 func _is_powered(main: Node, rec: Dictionary) -> bool:

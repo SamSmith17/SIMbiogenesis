@@ -61,6 +61,10 @@ static func _stats(res: Dictionary, bom: Dictionary) -> Dictionary:
 		"open_ports": (res.get("open", []) as Array).size()}
 
 
+## Flow-path rules that are LINKS in the process model (TcFlowPaths).
+const LINK_RULES := ["valve", "valve3", "cvalve", "check", "relief", "pump"]
+
+
 ## {level error | warn | info, text, why, ids (part ids to show)}.
 static func _checks(s: Dictionary, res: Dictionary, clashes: Array) -> Array:
 	var out: Array = []
@@ -111,6 +115,20 @@ static func _checks(s: Dictionary, res: Dictionary, clashes: Array) -> Array:
 					"why": "Typical ranges — PTFE or silicone take steam and hot vapour.",
 					"ids": [TcAssembly.split_ref(str(jd["a"]))[0]]})
 				break
+	# A pump and a valve (or two valves) clamped face to face: the process
+	# model needs a length of pipe between them.
+	var type_of := {}
+	for pt in s.get("parts", []):
+		type_of[str(pt.get("id", ""))] = str(pt.get("type", ""))
+	for jd2 in s.get("joints", []):
+		var pa := str(TcAssembly.split_ref(str(jd2["a"]))[0])
+		var pb := str(TcAssembly.split_ref(str(jd2["b"]))[0])
+		var la := str(TcFlowPaths.TYPE_RULES.get(str(type_of.get(pa, "")), ""))
+		var lb := str(TcFlowPaths.TYPE_RULES.get(str(type_of.get(pb, "")), ""))
+		if la in LINK_RULES and lb in LINK_RULES and not str(jd2["a"]).ends_with(":stem") and not str(jd2["b"]).ends_with(":stem"):
+			out.append({"level": "warn", "text": "%s is clamped straight to %s." % [TcParts.label_of(str(type_of[pa])), TcParts.label_of(str(type_of[pb])).to_lower()],
+				"why": "Process mode needs a length of pipe between a pump and a valve, or between two valves: put a short spool between them, or neither will carry anything there.",
+				"ids": [pa, pb]})
 	var n_open := (res.get("open", []) as Array).size()
 	if n_open > 0:
 		out.append({"level": "info", "text": "%s still open." % UiText.count(n_open, "port"),

@@ -5,6 +5,9 @@ extends SceneTree
 
 var _failures: int = 0
 var _checks: int = 0
+## A runtime error aborts a test function while PASS still prints: the count
+## is the guard.
+const EXPECTED_CHECKS := 449
 
 
 func _initialize() -> void:
@@ -12,6 +15,7 @@ func _initialize() -> void:
 	_test_conduit_kinds()
 	_test_graph_migration()
 	_test_mesh_builder()
+	_test_rmf_no_flip()
 	_test_determinism()
 	_test_new_kinds()
 	_test_electrical_loss()
@@ -47,6 +51,9 @@ func _initialize() -> void:
 	_test_size_driven_tube_radius()
 	_test_penstock_spec_and_design()
 	_test_conduit_length()
+	if _checks != EXPECTED_CHECKS:
+		print("  FAIL: ran %d checks, expected %d" % [_checks, EXPECTED_CHECKS])
+		_failures += 1
 	if _failures == 0:
 		print("CONDUIT SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -129,6 +136,35 @@ func _test_mesh_builder() -> void:
 	var samples: PackedVector3Array = ConduitMeshBuilder.sample_path(
 		control, cord_style, 6)
 	_check("samples count", samples.size() >= 7, "n=%d" % samples.size())
+
+
+## Rotation-minimising frames: along a run that goes up a riser and back
+## level, consecutive ring frames never flip (the old forward x UP frame
+## spun half a turn at every vertical leg).
+func _test_rmf_no_flip() -> void:
+	var path := PackedVector3Array([
+		Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(2, 0, 0),
+		Vector3(2, 0.5, 0), Vector3(2, 1.5, 0), Vector3(2, 2.5, 0),
+		Vector3(2.5, 2.5, 0.5), Vector3(3, 2.5, 1), Vector3(3, 2.5, 3),
+	])
+	var frames := ConduitMeshBuilder.tube_frames(path)
+	_check("rmf one frame per point", frames.size() == path.size())
+	var worst := 1.0
+	var ortho_ok := true
+	for i: int in range(frames.size()):
+		var f: Array = frames[i]
+		var t: Vector3 = f[0]
+		var r: Vector3 = f[1]
+		var u: Vector3 = f[2]
+		if absf(t.dot(r)) > 1e-4 or absf(t.dot(u)) > 1e-4 or absf(r.dot(u)) > 1e-4:
+			ortho_ok = false
+		if i > 0:
+			worst = minf(worst, (frames[i - 1][1] as Vector3).dot(r))
+	_check("rmf orthonormal", ortho_ok)
+	_check("rmf never flips", worst > 0.0, "worst right.dot = %.3f" % worst)
+	var built: Dictionary = ConduitMeshBuilder.build(
+		[Vector3(0, 0, 0), Vector3(0, 3, 0), Vector3(2, 3, 0)], "pvc_pipe", 4)
+	_check("rmf riser mesh builds", built.get("mesh") != null)
 
 
 func _test_determinism() -> void:
@@ -1503,7 +1539,7 @@ func _test_hang_edit() -> void:
 func _test_pipe_kit_meta() -> void:
 	_check("abs_dwv uses pipe kit", ConduitKinds.uses_pipe_kit("abs_dwv"))
 	_check("pvc_pipe uses pipe kit", ConduitKinds.uses_pipe_kit("pvc_pipe"))
-	_check("abs kit id 2.5", ConduitKinds.pipe_kit_id("abs_dwv") == "us_sch40_2_5")
+	_check("abs kit id 2", ConduitKinds.pipe_kit_id("abs_dwv") == "us_sch40_2")
 	_check("pvc kit id size",
 		ConduitKinds.pipe_kit_id("pvc_pipe", {"pipe_size_in": 4.0}) == "us_sch40_4")
 	_check("abs sharp elbow frac", is_equal_approx(

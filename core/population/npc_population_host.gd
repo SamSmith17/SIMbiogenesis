@@ -1232,6 +1232,7 @@ func _pose_avatar(av: NpcAvatar, aid: String, dot: Dictionary, delta: float) -> 
 		# Two or more sets of hands on one load = the low team-lift posture.
 		"carry_heavy": int(_carry_group_of.get(aid, 0)) >= 2 and not on_fork,
 		"work_pose": str(dot.get("work_pose", "")),
+		"work_tool": str(dot.get("work_tool", "")),
 	})
 
 

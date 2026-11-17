@@ -86,6 +86,31 @@ var vel_link := PackedFloat64Array()   # m/s
 var cv_flow := PackedFloat64Array()    # mol/s through a CV (for views)
 var react_rate := []                   # per CV: {kind: rate} this step (for the molecule lens)
 var link_open: Array = []
+## Per link: how far open (0..1). 1 for everything but a control valve.
+var link_frac: Array = []
+## Pumps (TcParts "pump"), by part id.
+var pump_on: Dictionary = {}
+var pump_speed: Dictionary = {}     # 0..1
+var pump_lpm: Dictionary = {}       # what it moves now, L/min
+var pump_kwh := 0.0
+## Liquid lines between vessels: [{a, b, links, len_m, r_m, za, zb, lpm}]
+## (lpm > 0 = a → b). See _lines_step.
+var lines: Array = []
+var _vessel_floor: Dictionary = {}  # cv → floor height, m
+var _breathers: Array = []          # open-topped vessels on a line
+var _pump_dst: Dictionary = {}      # pump part → the vessel it is filling
+## Every heater's vessel (heater_parts lists the charge vessel's first:
+## the first n_bed_heaters sit in the charge).
+var heater_cv: Dictionary = {}
+var n_bed_heaters := 0
+## Agitators: part → {cv, w}; agit_on: part → bool.
+var agit: Dictionary = {}
+var agit_on: Dictionary = {}
+var _agit_cv: Dictionary = {}       # cv → true while stirred this step
+## A vessel's jacket fed by a medium: cv → {part, t_c, lpm, on}.
+var jacket: Dictionary = {}
+## Plate exchangers: process-side cv → its service-water cv.
+var _plate_hx: Dictionary = {}
 var relief_open: Array = []
 var drain_open := {}       # boundary index → bool
 var heater_w := {}         # part → watts asked
@@ -147,6 +172,13 @@ const SORB_MAX_K := 353.15              # sorbents stop taking water up above ~8
 var control_sensors: Array = []
 var control_acts: Array = []
 var automations: AutomationSim = null
+## Control blocks (ScadaLogic) of the design (`process.logic`), run every
+## step on the lab's clock. Tags are this design's own sensor / switch keys.
+var logic_blocks: Array = []
+var logic_state: Dictionary = {}
+var logic_status: Dictionary = {}
+var _logic_need: Dictionary = {}
+var _logic_vals: Dictionary = {}
 var _auto_need := {}
 var _auto_acc := 0.0
 var _base_lpm := 2.0
@@ -243,6 +275,7 @@ func _setup(d: Dictionary, n: Dictionary, pr: Dictionary) -> void:
 				hh["reach_mm"] = 60.0
 			heaters.append(hh)
 			heater_parts.append(str(h["part"]))
+			heater_cv[str(h["part"])] = vessel_cv
 			var hs := TcProcSpec.heater(proc, str(h["part"]))
 			heater_w[str(h["part"])] = float(hs["w"])
 			heater_on[str(h["part"])] = bool(hs["on"])
@@ -255,6 +288,52 @@ func _setup(d: Dictionary, n: Dictionary, pr: Dictionary) -> void:
 			v_free[vessel_cv] = maxf(float(vcv["volume_m3"]) - bed.solid_volume_m3, 1e-4)
 		else:
 			_fill_liquid(vessel_cv, ch, fd, ta)
+	n_bed_heaters = heater_parts.size()
+	# Elements in the other vessels heat whatever liquid stands in them.
+	for i3 in n_cv:
+		if i3 == vessel_cv or str(cvs[i3]["role"]) != "vessel":
+			continue
+		for h3 in cvs[i3]["heaters"]:
+			var hp := str(h3["part"])
+			heater_parts.append(hp)
+			heater_cv[hp] = i3
+			var hs3 := TcProcSpec.heater(proc, hp)
+			heater_w[hp] = float(hs3["w"])
+			heater_on[hp] = bool(hs3["on"])
+			element_t.append(ta)
+	for i4 in n_cv:
+		for at4 in cvs[i4].get("attach", []):
+			if str(at4.get("role", "")) == "agitator":
+				agit[str(at4["part"])] = {"cv": i4, "w": float(at4.get("watts", 120.0))}
+				agit_on[str(at4["part"])] = bool(at4.get("start_on", false))
+	var types := {}
+	for sp0 in (d.get("spec", {}) as Dictionary).get("parts", []):
+		types[str(sp0.get("id", ""))] = str(sp0.get("type", ""))
+	for th1 in net["thermal"]:
+		if str(th1["kind"]) != "condenser":
+			continue
+		var pc := int(th1["b"])
+		for pp0 in cvs[pc].get("parts", []):
+			if str(types.get(str(pp0), "")) == "plate_exchanger":
+				_plate_hx[pc] = int(th1["a"])
+	var jk: Variant = proc.get("jackets", {})
+	if jk is Dictionary:
+		for th0 in net["thermal"]:
+			if str(th0["kind"]) != "jacket":
+				continue
+			for vi in [int(th0["a"]), int(th0["b"])]:
+				if str(cvs[vi]["role"]) == "vessel" and (jk as Dictionary).has(str(cvs[vi].get("vessel_part", ""))):
+					var js: Dictionary = jk[str(cvs[vi].get("vessel_part", ""))]
+					jacket[vi] = {"part": str(cvs[vi].get("vessel_part", "")), "t_c": float(js.get("t_c", 60.0)),
+						"lpm": float(js.get("lpm", 10.0)), "on": bool(js.get("on", false))}
+	# Liquid in other vessels: process.liquids = [{part, litres, feed, t_c}].
+	for lq in proc.get("liquids", []):
+		if not (lq is Dictionary):
+			continue
+		for i in n_cv:
+			if str(cvs[i]["role"]) == "vessel" and str(cvs[i].get("vessel_part", "")) == str(lq.get("part", "")):
+				var lfd: Dictionary = TcProcSpec.FEEDS.get(str(lq.get("feed", "water")), {})
+				_fill_liquid(i, {"mass_kg": float(lq.get("litres", 0.0))}, lfd, float(lq.get("t_c", proc.get("ambient_c", 20.0))) + 273.15)
 	# Air everywhere at 1 atm; coolant circuits hold water, not gas.
 	for i in n_cv:
 		var role := str(cvs[i]["role"])
@@ -274,6 +353,12 @@ func _setup(d: Dictionary, n: Dictionary, pr: Dictionary) -> void:
 	for li in links.size():
 		var l: Dictionary = links[li]
 		link_open.append(bool(l["open"]))
+		link_frac.append(clampf(float(l.get("frac", 1.0)), 0.0, 1.0) if bool(l.get("throttle", false)) else 1.0)
+		if str(l["kind"]) == "pump":
+			var pm: Dictionary = l.get("pump", {})
+			pump_on[str(l["part"])] = bool(pm.get("on", false))
+			pump_speed[str(l["part"])] = 1.0
+			pump_lpm[str(l["part"])] = 0.0
 		relief_open.append(false)
 		var a := int(l["a"])
 		var b := int(l["b"])
@@ -340,6 +425,7 @@ func _setup(d: Dictionary, n: Dictionary, pr: Dictionary) -> void:
 		elif pot[b] > pot[a] + 0.5:
 			(_down[b] as Array).append([li, a])
 	_setup_units()
+	_build_lines(d)
 	_setup_control(d)
 	zero_ledger()
 	_mass0 = _mass_now()
@@ -458,6 +544,30 @@ func set_actuator(id: String, value: Variant) -> void:
 			for li in (net["links"] as Array).size():
 				if str(net["links"][li]["part"]) == key:
 					link_open[li] = bool(value) if value is bool else float(value) > 0.05
+		"cvalve":
+			# A control valve's opening, 0..100 %.
+			for li in (net["links"] as Array).size():
+				if str(net["links"][li]["part"]) == key:
+					link_frac[li] = clampf(float(value) / 100.0, 0.0, 1.0)
+					link_open[li] = float(link_frac[li]) > 0.02
+		"pump":
+			if pump_on.has(key):
+				pump_on[key] = bool(value) if value is bool else float(value) > 0.0
+		"pumpspeed":
+			if pump_speed.has(key):
+				pump_speed[key] = clampf(float(value) / 100.0, 0.0, 1.0)
+		"agitator":
+			if agit_on.has(key):
+				agit_on[key] = bool(value) if value is bool else float(value) > 0.0
+		"jacket", "jackett", "jacketf":
+			for jc in jacket.keys():
+				if str(jacket[jc]["part"]) == key:
+					if kind == "jacket":
+						jacket[jc]["on"] = bool(value) if value is bool else float(value) > 0.0
+					elif kind == "jackett":
+						jacket[jc]["t_c"] = clampf(float(value), 0.0, 99.0)
+					else:
+						jacket[jc]["lpm"] = clampf(float(value), 0.0, 200.0)
 		"cooling":
 			for i in cool_lpm.keys():
 				if key == "" or str(i) == key:
@@ -502,7 +612,7 @@ func step(dt: float = DT_DEFAULT) -> void:
 	# 1. The charge.
 	if bed != null and not bed.is_empty() and vessel_cv >= 0:
 		var hw: Array = []
-		for k in heater_parts.size():
+		for k in n_bed_heaters:
 			var pid: String = heater_parts[k]
 			var w := float(heater_w.get(pid, 0.0)) if bool(heater_on.get(pid, true)) and not bool(heater_fused.get(pid, false)) else 0.0
 			hw.append(w)
@@ -541,7 +651,7 @@ func step(dt: float = DT_DEFAULT) -> void:
 					e_react -= mol * _latent(idx)
 		gas[vessel_cv] = g
 		react_rate[vessel_cv] = {"drying": steam / dt, "pyrolysis": made / dt}
-		for k in heater_parts.size():
+		for k in n_bed_heaters:
 			var pid2: String = heater_parts[k]
 			if k >= element_t.size():
 				continue
@@ -554,16 +664,20 @@ func step(dt: float = DT_DEFAULT) -> void:
 		if _bed_events_due:
 			_bed_events_due = false
 			_bed_events(r)
+		_pool_heaters(dt, n_bed_heaters)
 	else:
-		# Heaters in a pool (or dry-firing into the vessel's gas).
-		for pid in heater_parts:
-			var w2 := float(heater_w.get(pid, 0.0)) if bool(heater_on.get(pid, true)) else 0.0
-			e_in += w2 * dt
-			if vessel_cv >= 0 and _liq_volume(liq[vessel_cv]) > 0.002:
-				h_liq[vessel_cv] += w2 * dt
-			elif vessel_cv >= 0:
-				t_wall[vessel_cv] += w2 * dt / c_wall[vessel_cv]
-				_event("dry_fire", "An element is heating an empty vessel (dry firing).")
+		_pool_heaters(dt, 0)
+	# Agitators: the motor's work ends up as heat in the liquid.
+	_agit_cv = {}
+	for ap in agit.keys():
+		if not bool(agit_on.get(ap, false)):
+			continue
+		var ac := int(agit[ap]["cv"])
+		if _liq_volume(liq[ac]) > 0.001:
+			_agit_cv[ac] = true
+			var aw := float(agit[ap]["w"]) * dt
+			e_in += aw
+			h_liq[ac] += aw
 	_prof_mark(1)
 	# 2. Pools: boiling.
 	for i in n_cv:
@@ -610,11 +724,15 @@ func step(dt: float = DT_DEFAULT) -> void:
 	_unit_step(dt)
 	# 7. Liquids.
 	_drain_step(dt)
+	if not lines.is_empty():
+		_lines_step(dt)
 	_prof_mark(7)
 	t_s += dt
 	_auto_acc += dt
 	if automations != null and _auto_acc >= TcProcControl.AUTO_EVERY_S - 1e-9:
 		_run_automations()
+	if not logic_blocks.is_empty():
+		_run_logic()
 	if t_s >= _next_key:
 		keyframes.append({"t_s": t_s, "state": snapshot()})
 		_next_key += KEYFRAME_S
@@ -815,6 +933,16 @@ func _setup_control(d: Dictionary) -> void:
 		if automations.is_empty():
 			automations = null
 	_auto_need = TcProcControl.needed(autos)
+	logic_blocks = []
+	for b in proc.get("logic", []):
+		if b is Dictionary and str((b as Dictionary).get("kind", "")) in ScadaLogic.KINDS:
+			logic_blocks.append((b as Dictionary).duplicate(true))
+	logic_state = {}
+	logic_status = {}
+	_logic_need = {}
+	for b in logic_blocks:
+		for t in ScadaLogic.tags_used(b)["reads"]:
+			_logic_need[str(t)] = true
 
 
 ## The rules over the last AUTO_EVERY_S, on the lab's clock (absolute hours
@@ -841,6 +969,69 @@ func _run_automations() -> void:
 var _pending_auto_text: Array = []
 
 
+## The control blocks at this instant (every model step: a PID needs it).
+func _run_logic() -> void:
+	_logic_vals = TcProcControl.read_all(self, control_sensors, _logic_need) if not _logic_need.is_empty() else {}
+	var r := ScadaLogic.step(logic_blocks, logic_state, _logic_read, float(proc.get("start_hour", 8.0)) + t_s / 3600.0)
+	logic_state = r["state"]
+	logic_status = r["status"]
+	var writes: Dictionary = r["writes"]
+	for tag in writes:
+		_logic_write(str(tag), float(writes[tag]))
+
+
+func _logic_act(tag: String) -> Dictionary:
+	for a in control_acts:
+		if str(a["key"]) == tag:
+			return a
+	return {}
+
+
+func _logic_read(tag: String) -> float:
+	if tag.begins_with("logic."):
+		for r in ScadaLogic.tags(logic_blocks, logic_status):
+			if str(r["id"]) == tag:
+				return float(r["value"])
+		return NAN
+	if _logic_vals.has(tag):
+		return float(_logic_vals[tag])
+	var a := _logic_act(tag)
+	if a.is_empty():
+		return NAN
+	if str(a["kind"]) == "switch":
+		return 1.0 if TcProcControl.is_on(self, str(a["act"])) else 0.0
+	return logic_percent(a)
+
+
+## A number actuator as the 0..100 % a PID drives: an element's share of its
+## rated watts, cooling water's share of the actuator's top flow.
+func logic_percent(a: Dictionary) -> float:
+	return 100.0 * TcProcControl.value_of(self, a) / maxf(_logic_full(a), 1e-6)
+
+
+func _logic_full(a: Dictionary) -> float:
+	var act := str(a["act"])
+	if act.begins_with("heater:"):
+		return float(_base_w.get(act.substr(7), 600.0))
+	return float(a.get("max", 100.0))
+
+
+func _logic_write(tag: String, value: float) -> void:
+	var a := _logic_act(tag)
+	if a.is_empty():
+		return
+	if str(a["kind"]) == "switch":
+		var want := value >= 0.5
+		if TcProcControl.is_on(self, str(a["act"])) == want:
+			return
+		TcProcControl._switch(self, str(a["act"]), want, _base_lpm, _base_w)
+		events.append({"t_s": t_s, "id": "auto", "text": "Logic: %s %s." % [str(a["label"]), "on" if want else "off"]})
+		return
+	var v := _logic_full(a) * clampf(value, 0.0, 100.0) / 100.0
+	if absf(TcProcControl.value_of(self, a) - v) > 1e-3 * _logic_full(a):
+		set_actuator(str(a["act"]), v)
+
+
 ## Section timing (µs, summed): prof[k] = time from mark k to mark k + 1.
 static var prof := PackedInt64Array([0, 0, 0, 0, 0, 0, 0, 0])
 var _prof_t := 0
@@ -860,6 +1051,27 @@ var _bed_events_due := false
 
 ## A share of the bed step's output (the extensive numbers scale; the
 ## element temperatures do not).
+## Heaters in a pool (or dry-firing into the vessel's wall), from the k-th.
+func _pool_heaters(dt: float, from_k: int) -> void:
+	for k in range(from_k, heater_parts.size()):
+		var pid: String = heater_parts[k]
+		var hc := int(heater_cv.get(pid, vessel_cv))
+		if hc < 0:
+			continue
+		var w2 := float(heater_w.get(pid, 0.0)) if bool(heater_on.get(pid, true)) else 0.0
+		e_in += w2 * dt
+		if _liq_volume(liq[hc]) > 0.002:
+			h_liq[hc] += w2 * dt
+		elif w2 > 0.0:
+			t_wall[hc] += w2 * dt / c_wall[hc]
+			_event("dry_fire", "An element is heating an empty vessel (dry firing).")
+		if from_k > 0 or hc != vessel_cv:
+			# No charge round it: the sheath runs a little over the liquid.
+			if element_t.size() <= k:
+				element_t.resize(k + 1)
+			element_t[k] = (liq_t(hc) if _liq_volume(liq[hc]) > 0.002 else t_wall[hc]) + w2 / 60.0
+
+
 static func _bed_scaled(r: Dictionary, f: float) -> Dictionary:
 	if r.is_empty():
 		return {"to_wall_j": 0.0, "to_gas_j": 0.0, "steam_mol": 0.0, "steam_j": 0.0, "volatiles": {}, "volatiles_j": 0.0,
@@ -998,7 +1210,7 @@ func _wall_step(i: int, dt: float, ta: float) -> void:
 	var cl := _cp_liq_total(liq[i])
 	if cl > 1e-9:
 		var tl := liq_t(i)
-		var ual := 300.0 * area * 0.3
+		var ual := 300.0 * area * 0.3 * (AGIT_H_GAIN if _agit_cv.has(i) else 1.0)
 		var tau2 := ual * dt * (1.0 / cl + 1.0 / c_wall[i])
 		var d2 := (tl - t_wall[i]) * (1.0 - exp(-tau2))
 		var q2 := d2 / (1.0 / cl + 1.0 / c_wall[i])
@@ -1016,6 +1228,18 @@ func _wall_step(i: int, dt: float, ta: float) -> void:
 			t_wall[i] -= q3 / c_wall[i]
 			t_cool[w] += q3 / mw
 			return
+	# A jacket fed by a medium (hot or cold water round the vessel): the wall
+	# trades heat with the stream (effectiveness of a one-stream exchanger)
+	# and the room no longer sees the wall.
+	if role == "vessel" and jacket.has(i) and bool(jacket[i]["on"]) and float(jacket[i]["lpm"]) > 0.0:
+		var cm := float(jacket[i]["lpm"]) / 60.0 * 4186.0
+		var eff := 1.0 - exp(-H_JACKET * area * 0.7 / cm)
+		var qj := eff * cm * (float(jacket[i]["t_c"]) + 273.15 - t_wall[i]) * dt
+		var cap := absf(float(jacket[i]["t_c"]) + 273.15 - t_wall[i]) * c_wall[i]
+		qj = clampf(qj, -cap, cap)
+		t_wall[i] += qj / c_wall[i]
+		e_cool -= qj
+		return
 	# Wall → room (through a jacket gap and insulation on a vessel).
 	var u := H_OUT
 	if role == "vessel":
@@ -1274,7 +1498,7 @@ func _flow_step(dt: float) -> void:
 			pbv = float(_boundary_p[bi])
 		pb[li] = pbv
 		var kind := str(l["kind"])
-		if kind == "check" and pa < pbv:
+		if kind in ["check", "pump"] and pa < pbv:
 			continue
 		if kind == "relief":
 			var gauge := pa - TcSpecies.P_ATM
@@ -1633,6 +1857,362 @@ func _drain_step(_dt: float) -> void:
 
 
 # ---------------------------------------------------------------------------
+# Liquid lines between vessels (pumps, control valves, gravity)
+# ---------------------------------------------------------------------------
+#
+# A LINE is the pipework from one vessel's nozzle to another's with no branch
+# on the way. Each step the flow along it is the one that balances
+#     static head + pump head = friction
+# where
+#   static head  = the source's liquid surface above the far end (the other
+#                  vessel's surface, or its nozzle when that is above its
+#                  liquid: a free fall into the vessel);
+#   pump head    = H0 (1 − (Q / Qmax)²) for a running centrifugal pump at
+#                  speed n (H0 ∝ n², Qmax ∝ n: the affinity laws); a positive-
+#                  displacement pump gives its rated flow × n up to its head;
+#   friction     = K Q² / (2 g A²), K = entrance + exit (1.5) + Darcy f L / D
+#                  (f = 0.03, a constant) + each valve (0.3 / open²: a full
+#                  bore open, ∝ 1 / open² as it shuts, an inherent-linear
+#                  trim) + a stopped centrifugal pump (4).
+# The source's nozzle must be under its liquid (a flooded suction); a check
+# valve and a pump pass one way only; a stopped positive-displacement pump
+# passes nothing. The pipes' own hold-up is ignored: liquid leaves one vessel
+# and arrives in the other in the same step.
+#
+# K values after Crane TP-410 (entrance 0.5, exit 1.0, full-bore valve
+# ~0.2–0.3); the 1 / open² law and the stopped-pump K are estimates.
+
+const LINE_F := 0.03
+## Liquid pumped through an exchanger ↔ its wall, W/m²·K (plate exchangers
+## run 2–6 kW/m²·K water to water; the wall then gives it to the service
+## side at H_COOLANT, so this is one film of two).
+const H_LIQ_WALL := 2500.0
+## A stirred vessel's wall film against a still one's (estimate; Perry's
+## gives 3–5× for a paddle in water).
+const AGIT_H_GAIN := 3.0
+## A brazed plate exchanger's overall coefficient, water to water, W/m²·K
+## (makers quote 3–7 kW/m²·K; the low end, for a small pump's flow).
+const U_PLATE := 3000.0
+## A water jacket ↔ the vessel wall, W/m²·K (estimate).
+const H_JACKET := 600.0
+const LINE_K_ENDS := 1.5
+const LINE_K_VALVE := 0.3
+const LINE_K_PUMP_OFF := 4.0
+const GRAV := 9.80665
+
+
+func _build_lines(d: Dictionary) -> void:
+	lines = []
+	_vessel_floor = {}
+	_breathers = []
+	var cvs: Array = net["cvs"]
+	var parts: Dictionary = (d.get("res", {}) as Dictionary).get("parts", {}) as Dictionary
+	var vessels: Array = []
+	for i in n_cv:
+		if str(cvs[i]["role"]) == "vessel":
+			vessels.append(i)
+			var vp := str(cvs[i].get("vessel_part", ""))
+			var fy := float(cvs[i].get("y_low_mm", 0.0)) * 0.001
+			if parts.has(vp):
+				fy = ((parts[vp]["xf"] as Transform3D).origin.y) * 0.001
+			_vessel_floor[i] = fy
+	if vessels.size() < 2:
+		return
+	# Every simple path from one vessel to another through the pipework
+	# (tees included). Paths that share a pipe each count its friction on
+	# their own: an approximation, exact when the valves pick one route.
+	for a in vessels:
+		_walk_line(a, a, -1, [], [], [], 0.0, INF, {})
+	# A tank with no lid breathes: its gas stays at the room's pressure as
+	# its level moves (a lidded one is the gas model's business).
+	for ln2 in lines:
+		for v in [int(ln2["a"]), int(ln2["b"])]:
+			if not bool(cvs[v].get("has_lid", false)) and not _breathers.has(v):
+				_breathers.append(v)
+
+
+const MAX_LINES := 64
+
+func _walk_line(a: int, cur: int, prev: int, path: Array, signs: Array, through: Array, length: float, r_min: float, seen: Dictionary) -> void:
+	if lines.size() >= MAX_LINES or path.size() > 80:
+		return
+	var links: Array = net["links"]
+	var cvs: Array = net["cvs"]
+	for lj in _cv_links[cur]:
+		var li := int(lj)
+		if li == prev:
+			continue
+		var l: Dictionary = links[li]
+		if int(l["b"]) < 0:
+			continue
+		var nxt := int(l["b"]) if int(l["a"]) == cur else int(l["a"])
+		if seen.has(nxt) or nxt == a:
+			continue
+		var p2: Array = path.duplicate()
+		p2.append(li)
+		var s2: Array = signs.duplicate()
+		s2.append(1.0 if int(l["a"]) == cur else -1.0)
+		var rm := minf(r_min, float(l.get("r_in_m", 0.02)))
+		if str(cvs[nxt]["role"]) == "vessel":
+			if nxt > a:
+				lines.append({"a": a, "b": nxt, "links": p2, "signs": s2, "cvs": through.duplicate(), "len_m": length,
+					"r_m": maxf(rm, 0.003),
+					"za": float((links[p2[0]]["at_mm"] as Vector3).y) * 0.001,
+					"zb": float((links[li]["at_mm"] as Vector3).y) * 0.001, "lpm": 0.0})
+			continue
+		var r_cv := maxf(float(cvs[nxt].get("r_in_m", 0.02)), 0.002)
+		var t2: Array = through.duplicate()
+		t2.append(nxt)
+		var sn: Dictionary = seen.duplicate()
+		sn[nxt] = true
+		_walk_line(a, nxt, li, p2, s2, t2, length + float(cvs[nxt]["volume_m3"]) / (PI * r_cv * r_cv), minf(rm, r_cv), sn)
+
+
+func _vessel_area(i: int) -> float:
+	var r := maxf(float(net["cvs"][i].get("r_in_m", 0.15)), 0.01)
+	return PI * r * r
+
+
+## A vessel's liquid surface, m (world height).
+func liquid_surface_m(i: int) -> float:
+	return float(_vessel_floor.get(i, 0.0)) + _liq_volume(liq[i]) / _vessel_area(i)
+
+
+func _lines_step(dt: float) -> void:
+	var links: Array = net["links"]
+	var cvs: Array = net["cvs"]
+	for k in pump_lpm.keys():
+		pump_lpm[k] = 0.0
+	for ln in lines:
+		ln["lpm"] = 0.0
+		var a := int(ln["a"])
+		var b := int(ln["b"])
+		var area := PI * float(ln["r_m"]) * float(ln["r_m"])
+		# What stands in the line, as seen walking a → b.
+		var k_fwd := LINE_K_ENDS + LINE_F * float(ln["len_m"]) / (2.0 * float(ln["r_m"]))
+		var blocked := false
+		var fwd_ok := true
+		var rev_ok := true
+		var pumps: Array = []      # [part, forward: bool, spec]
+		var enter := a
+		for li in ln["links"]:
+			var l: Dictionary = links[li]
+			var other := int(l["b"]) if int(l["a"]) == enter else int(l["a"])
+			var kind := str(l["kind"])
+			if not bool(link_open[li]):
+				blocked = true
+			if kind == "valve":
+				var f := float(link_frac[li])
+				if f < 0.02:
+					blocked = true
+				else:
+					k_fwd += LINE_K_VALVE / (f * f)
+			elif kind == "check":
+				if int(l.get("from", -1)) == enter:
+					rev_ok = false
+				else:
+					fwd_ok = false
+			elif kind == "pump":
+				var fw := int(l.get("from", -1)) == enter
+				pumps.append([str(l["part"]), fw, l.get("pump", {})])
+			enter = other
+		if blocked:
+			continue
+		var sa := liquid_surface_m(a)
+		var sb := liquid_surface_m(b)
+		var za := float(ln["za"])
+		var zb := float(ln["zb"])
+		for dirn in [1, -1]:
+			if (dirn == 1 and not fwd_ok) or (dirn == -1 and not rev_ok):
+				continue
+			var src := a if dirn == 1 else b
+			var dst := b if dirn == 1 else a
+			var s_src := sa if dirn == 1 else sb
+			var s_dst := sb if dirn == 1 else sa
+			var z_src := za if dirn == 1 else zb
+			var z_dst := zb if dirn == 1 else za
+			if s_src <= z_src + 0.003:
+				continue   # the suction is dry
+			var dz := s_src - maxf(s_dst, z_dst)
+			var kq := k_fwd
+			var h0 := 0.0
+			var qm := INF
+			var pd_q := -1.0
+			var stop := false
+			var running: Array = []
+			for pw in pumps:
+				var part := str(pw[0])
+				var with_flow: bool = bool(pw[1]) == (dirn == 1)
+				var sp: Dictionary = pw[2]
+				var on := bool(pump_on.get(part, false)) and float(pump_speed.get(part, 1.0)) > 0.01
+				var n := float(pump_speed.get(part, 1.0))
+				var positive := str(sp.get("kind", "centrifugal")) == "positive"
+				if not with_flow:
+					# Against a pump: a running one, or any positive one, passes nothing.
+					if on or positive:
+						stop = true
+					else:
+						kq += LINE_K_PUMP_OFF
+					continue
+				if not on:
+					if positive:
+						stop = true
+					else:
+						kq += LINE_K_PUMP_OFF
+					continue
+				running.append(part)
+				if positive:
+					if dz + float(sp.get("head_m", 8.0)) > 0.0:
+						pd_q = float(sp.get("flow_lpm", 40.0)) / 60000.0 * n
+					else:
+						stop = true
+				else:
+					h0 += float(sp.get("head_m", 8.0)) * n * n
+					qm = minf(qm, float(sp.get("flow_lpm", 40.0)) / 60000.0 * n)
+			if stop:
+				continue
+			var q := 0.0
+			var kk := kq / (2.0 * GRAV * area * area)
+			if pd_q >= 0.0:
+				q = pd_q
+			elif h0 > 0.0:
+				if dz + h0 <= 0.0:
+					continue
+				q = sqrt((dz + h0) / (kk + h0 / (qm * qm)))
+			else:
+				if dz <= 1e-5:
+					continue
+				q = sqrt(dz / kk)
+			var dv := q * dt
+			# No more than stands above the nozzle, than the far vessel has
+			# room for, or (with no pump) than half-way to level surfaces.
+			dv = minf(dv, (s_src - z_src) * _vessel_area(src))
+			dv = minf(dv, maxf(float(cvs[dst]["volume_m3"]) - _liq_volume(liq[dst]), 0.0))
+			if running.is_empty() and s_dst > z_dst:
+				dv = minf(dv, 0.5 * (s_src - s_dst) / (1.0 / _vessel_area(src) + 1.0 / _vessel_area(dst)))
+			if dv <= 1e-12:
+				continue
+			# Through an exchanger on the way: the slug gives heat to (or
+			# takes it from) each exchanger's wall.
+			var q_hx := 0.0
+			var vol_src := _liq_volume(liq[src])
+			var c_stream := dv / maxf(vol_src, 1e-12) * _cp_liq_total(liq[src])
+			if c_stream > 1e-9:
+				var t_stream := liq_t(src)
+				for cq0 in ln["cvs"]:
+					var hx := int(cq0)
+					if not _is_condenser[hx]:
+						continue
+					if _plate_hx.has(hx) and float(cool_lpm.get(int(_plate_hx[hx]), 0.0)) > 0.0:
+						# A plate pack runs counter-flow: the stream trades
+						# heat with the service water straight through the
+						# plates (effectiveness–NTU; Incropera 11.4).
+						var wcv := int(_plate_hx[hx])
+						var c_h := c_stream / dt
+						var c_c := float(cool_lpm[wcv]) / 60.0 * 4186.0
+						var c_min := minf(c_h, c_c)
+						var cr := c_min / maxf(c_h, c_c)
+						var ntu := U_PLATE * maxf(float(cvs[hx]["wall_area_m2"]), 1e-4) / c_min
+						var ef := ntu / (1.0 + ntu) if cr > 0.999 else (1.0 - exp(-ntu * (1.0 - cr))) / (1.0 - cr * exp(-ntu * (1.0 - cr)))
+						var qp := ef * c_min * (t_stream - (float(proc["cooling"]["t_c"]) + 273.15)) * dt
+						t_cool[wcv] += qp / (maxf(float(cvs[wcv]["volume_m3"]) * 1000.0, 0.01) * 4186.0)
+						t_stream -= qp / c_stream
+						q_hx += qp
+						continue
+					var ua := H_LIQ_WALL * maxf(float(cvs[hx]["wall_area_m2"]), 1e-4) * dt
+					var qx := (1.0 - exp(-ua / c_stream)) * c_stream * (t_stream - t_wall[hx])
+					var qmax := (t_stream - t_wall[hx]) / (1.0 / c_stream + 1.0 / c_wall[hx])
+					if absf(qx) > absf(qmax):
+						qx = qmax
+					t_wall[hx] += qx / c_wall[hx]
+					t_stream -= qx / c_stream
+					q_hx += qx
+			_move_liquid(src, dst, dv)
+			h_liq[dst] -= q_hx
+			var lpm := dv / dt * 60000.0
+			ln["lpm"] = lpm * float(dirn)
+			# For the views: the liquid as a molar flow along the line
+			# (water's 55.5 kmol/m³; the gas step wrote these arrays first).
+			var mol_s := dv / dt * 55500.0 * float(dirn)
+			for qi in (ln["links"] as Array).size():
+				flow_link[int(ln["links"][qi])] += mol_s * float(ln["signs"][qi])
+			for cq in ln["cvs"]:
+				cv_flow[int(cq)] += absf(mol_s)
+			for part2 in running:
+				pump_lpm[part2] = float(pump_lpm.get(part2, 0.0)) + lpm
+				_pump_dst[part2] = dst
+			break
+	for bv in _breathers:
+		_breathe(int(bv))
+	# What the motors draw (a centrifugal pump's power falls with the cube of
+	# its speed: a nameplate figure). It ends up as heat: in the liquid it
+	# is moving, or lost to the room when it moves none.
+	for li2 in links.size():
+		var l2: Dictionary = links[li2]
+		if str(l2["kind"]) != "pump":
+			continue
+		var p2 := str(l2["part"])
+		if bool(pump_on.get(p2, false)):
+			var n2 := float(pump_speed.get(p2, 1.0))
+			var pj := float((l2.get("pump", {}) as Dictionary).get("watts", 250.0)) * n2 * n2 * n2 * dt
+			pump_kwh += pj / 3.6e6
+			e_in += pj
+			if float(pump_lpm.get(p2, 0.0)) > 0.0 and _pump_dst.has(p2):
+				h_liq[int(_pump_dst[p2])] += pj
+			else:
+				e_loss += pj
+
+
+## An open tank's gas back to the room's pressure: air in as the level falls,
+## its gas out (counted as vented) as it rises.
+func _breathe(i: int) -> void:
+	var t := maxf(gas_t(i), 200.0)
+	var want := TcSpecies.P_ATM * maxf(v_free[i], 1e-7) / (TcSpecies.R * t)
+	var g: PackedFloat64Array = gas[i]
+	var n := _sum(g)
+	if n > want and n > 1e-12:
+		var keep := want / n
+		for s in NS:
+			vented_mol[s] += g[s] * (1.0 - keep)
+			g[s] *= keep
+		var h_out := h_gas[i] * (1.0 - keep)
+		h_gas[i] -= h_out
+		# The vapour that leaves takes its latent heat with it.
+		e_out += h_out + _latent_of(g, (1.0 - keep) / maxf(keep, 1e-9))
+	elif want > n:
+		var mol := want - n
+		for s2 in NS:
+			g[s2] += _air[s2] * mol
+			_mass_in += _air[s2] * mol * MKG[s2]
+		var t_in := float(proc["ambient_c"]) + 273.15
+		h_gas[i] += mol * 30.0 * (t_in - T0)
+		e_out -= mol * 30.0 * (t_in - T0)
+	gas[i] = g
+	p_cv[i] = TcSpecies.P_ATM
+
+
+## `dv` m³ of liquid from one volume to another, with its heat.
+func _move_liquid(src: int, dst: int, dv: float) -> void:
+	var l: PackedFloat64Array = liq[src]
+	var vol := _liq_volume(l)
+	if vol <= 1e-12:
+		return
+	var f := clampf(dv / vol, 0.0, 1.0)
+	var lj: PackedFloat64Array = liq[dst]
+	for sidx in COND:
+		lj[sidx] += l[sidx] * f
+		l[sidx] *= (1.0 - f)
+	liq[src] = l
+	liq[dst] = lj
+	var hm := h_liq[src] * f
+	h_liq[src] -= hm
+	h_liq[dst] += hm
+	var moved := vol * f
+	v_free[src] += moved
+	v_free[dst] = maxf(v_free[dst] - moved, 1e-4)
+
+
+# ---------------------------------------------------------------------------
 # Events
 # ---------------------------------------------------------------------------
 
@@ -1923,6 +2503,10 @@ func snapshot() -> Dictionary:
 		"drained_by": drained_by.duplicate(), "bed_acc": _bed_acc, "bed_n": _bed_n, "bed_rel": _bed_rel.duplicate(true),
 		"bed_rel_left": _bed_rel_left, "bed_events_due": _bed_events_due,
 		"auto": automations.snapshot() if automations != null else {}, "auto_acc": _auto_acc,
+		"logic": logic_state.duplicate(true), "logic_status": logic_status.duplicate(true),
+		"link_frac": link_frac.duplicate(), "pump_on": pump_on.duplicate(), "pump_speed": pump_speed.duplicate(),
+		"pump_kwh": pump_kwh, "v_free_l": v_free.duplicate(),
+		"agit_on": agit_on.duplicate(), "jacket": jacket.duplicate(true),
 		"ads": ads_mol.duplicate(), "burned": burned_mol.duplicate(), "engine_on": engine_on.duplicate(),
 		"engine_kwh": engine_kwh}
 
@@ -1975,6 +2559,16 @@ func restore(s: Dictionary) -> void:
 	if automations != null:
 		automations.restore(s.get("auto", {}))
 	_auto_acc = float(s.get("auto_acc", 0.0))
+	logic_state = (s.get("logic", {}) as Dictionary).duplicate(true)
+	if s.has("link_frac"):
+		link_frac = (s["link_frac"] as Array).duplicate()
+		pump_on = (s["pump_on"] as Dictionary).duplicate()
+		pump_speed = (s["pump_speed"] as Dictionary).duplicate()
+		pump_kwh = float(s.get("pump_kwh", 0.0))
+	if s.has("agit_on"):
+		agit_on = (s["agit_on"] as Dictionary).duplicate()
+		jacket = (s["jacket"] as Dictionary).duplicate(true)
+	logic_status = (s.get("logic_status", {}) as Dictionary).duplicate(true)
 	if s.has("ads"):
 		ads_mol = (s["ads"] as PackedFloat64Array).duplicate()
 		burned_mol = (s["burned"] as PackedFloat64Array).duplicate()

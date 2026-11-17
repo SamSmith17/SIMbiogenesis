@@ -183,25 +183,26 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 </tr>
 <tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#graph_ring_3d"><img src="docs/tour/graph_ring_3d.jpg" width="260" alt="The ring in 3D: a cell, or a torus"></a><br><b>The ring in 3D: a cell, or a torus</b><br><sub>G</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#flow_torus"><img src="docs/tour/flow_torus.jpg" width="260" alt="Flows as a torus"></a><br><b>Flows as a torus</b><br><sub>G</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#site_plan"><img src="docs/tour/site_plan.jpg" width="260" alt="Site Plan lens"></a><br><b>Site Plan lens</b><br><sub>G</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#elevation"><img src="docs/tour/elevation.jpg" width="260" alt="Elevation lens"></a><br><b>Elevation lens</b><br><sub>G</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#elevation"><img src="docs/tour/elevation.jpg" width="260" alt="Elevation lens"></a><br><b>Elevation lens</b><br><sub>G</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#globe"><img src="docs/tour/globe.jpg" width="260" alt="Globe lens"></a><br><b>Globe lens</b><br><sub>G</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#snowglobe"><img src="docs/tour/snowglobe.jpg" width="260" alt="Full-screen globe"></a><br><b>Full-screen globe</b><br><sub>SoI marker / full globe</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#hydro_lab"><img src="docs/tour/hydro_lab.jpg" width="260" alt="Hydro Lab"></a><br><b>Hydro Lab</b><br><sub>Inspector → Open Hydro Lab</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#hydro_lab"><img src="docs/tour/hydro_lab.jpg" width="260" alt="Hydro Lab"></a><br><b>Hydro Lab</b><br><sub>Inspector → Open Hydro Lab</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#site_report"><img src="docs/tour/site_report.jpg" width="260" alt="Site Report"></a><br><b>Site Report</b><br><sub>K</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#bootcamp"><img src="docs/tour/bootcamp.jpg" width="260" alt="Solar Bootcamp"></a><br><b>Solar Bootcamp</b><br><sub>🎓 Bootcamp</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#challenges"><img src="docs/tour/challenges.jpg" width="260" alt="Challenges"></a><br><b>Challenges</b><br><sub>🎯</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#challenges"><img src="docs/tour/challenges.jpg" width="260" alt="Challenges"></a><br><b>Challenges</b><br><sub>🎯</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#conduit_routing"><img src="docs/tour/conduit_routing.jpg" width="260" alt="3D wire and pipe routing"></a><br><b>3D wire and pipe routing</b><br><sub>a device's port (press and drag)</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#wind_turbines"><img src="docs/tour/wind_turbines.jpg" width="260" alt="Wind turbines"></a><br><b>Wind turbines</b><br><sub>U</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#csp_heliostats"><img src="docs/tour/csp_heliostats.jpg" width="260" alt="Concentrated solar: troughs and heliostats"></a><br><b>Concentrated solar: troughs and heliostats</b><br><sub>U</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#csp_heliostats"><img src="docs/tour/csp_heliostats.jpg" width="260" alt="Concentrated solar: troughs and heliostats"></a><br><b>Concentrated solar: troughs and heliostats</b><br><sub>U</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#home_assistant"><img src="docs/tour/home_assistant.jpg" width="260" alt="Home Assistant live links"></a><br><b>Home Assistant live links</b><br><sub>HA</sub></td>
 </tr>
 </table>

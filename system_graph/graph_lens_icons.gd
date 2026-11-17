@@ -44,6 +44,14 @@ static func icon(kind: String, px: int = 16) -> Texture2D:
 			_ring(img, Vector2(8, 8) * s, 6.4 * s, 1.3 * s)
 			_ellipse(img, Vector2(8, 8) * s, Vector2(6.4, 2.3) * s, 1.0 * s)
 			_ellipse(img, Vector2(8, 8) * s, Vector2(2.6, 6.4) * s, 1.0 * s)
+		"process":
+			# A tank, a pipe and a valve.
+			_ring(img, Vector2(4.6, 8) * s, 3.2 * s, 1.3 * s)
+			_line(img, Vector2(7.8, 8) * s, Vector2(14.5, 8) * s, 1.6 * s)
+			_line(img, Vector2(10, 5.8) * s, Vector2(13, 10.2) * s, 1.2 * s)
+			_line(img, Vector2(13, 5.8) * s, Vector2(10, 10.2) * s, 1.2 * s)
+			_line(img, Vector2(10, 5.8) * s, Vector2(10, 10.2) * s, 1.2 * s)
+			_line(img, Vector2(13, 5.8) * s, Vector2(13, 10.2) * s, 1.2 * s)
 		"flows":
 			# A stream flowing down with loops returning up either side.
 			_line(img, Vector2(8, 2) * s, Vector2(8, 14) * s, 1.8 * s)

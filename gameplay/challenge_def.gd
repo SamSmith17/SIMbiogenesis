@@ -37,6 +37,8 @@ var fail_on_power_failure: bool = false
 var fail_on_collapse: bool = false
 ## Win threshold on PV utilization (∫delivered / ∫potential solar), 0 = ignore.
 var min_pv_utilization_pct: float = 0.0
+## Conditions on tags and alarms (ProcessChallenge): realtime runs only.
+var process: Dictionary = {}
 
 
 func is_prebake() -> bool:
@@ -79,6 +81,8 @@ static func from_dict(d: Dictionary) -> ChallengeDef:
 	c.fail_on_power_failure = bool(d.get("fail_on_power_failure", false))
 	c.fail_on_collapse = bool(d.get("fail_on_collapse", false))
 	c.min_pv_utilization_pct = float(d.get("min_pv_utilization_pct", 0.0))
+	if d.has("process") and d["process"] is Dictionary:
+		c.process = (d["process"] as Dictionary).duplicate(true)
 	return c
 
 
@@ -103,6 +107,8 @@ static func reason_label(reason: String) -> String:
 		"no_main":
 			return "Could not start — world not ready."
 		_:
+			if ProcessChallenge.is_reason(reason):
+				return ProcessChallenge.reason_label(reason)
 			if reason.begins_with("stockout_"):
 				return "%s supply ran out." % reason.substr(9).capitalize()
 			return reason if not reason.is_empty() else "Mission requirements not met."
@@ -132,4 +138,5 @@ func to_dict() -> Dictionary:
 		"fail_on_power_failure": fail_on_power_failure,
 		"fail_on_collapse": fail_on_collapse,
 		"min_pv_utilization_pct": min_pv_utilization_pct,
+		"process": process.duplicate(true),
 	}

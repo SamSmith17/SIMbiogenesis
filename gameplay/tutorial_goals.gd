@@ -33,6 +33,8 @@ static func evaluate(goal: Dictionary, ctx: Dictionary) -> Dictionary:
 			}
 		"build":
 			return _evaluate_build(goal, ctx)
+		"tag_reach", "tag_band_hold", "alarm_acked":
+			return _evaluate_process(goal, ctx)
 		"run_clean":
 			# Run-level goals are decided by the DIRECTOR from bake results
 			# (evaluate_run below); topology evaluation just prompts the run.
@@ -252,3 +254,108 @@ static func array_config_matches(model: GraphModel, flat: Array,
 		if all_match:
 			return true
 	return false
+
+
+# ── process goals (SCADA plan, Phase 9) ─────────────────────────────────────
+# ctx also carries: now_h (site hours), gstate (a Dictionary this level owns,
+# for goals that take time), logic (the hub's blocks), alarm_rules,
+# alarm_status. All optional: without them these goals just are not met.
+
+static func item_named(model: GraphModel, item_name: String) -> Dictionary:
+	if model == null:
+		return {}
+	for it in model.get_items_in_scope("root"):
+		if str(((it as Dictionary).get("specs", {}) as Dictionary).get("name", "")) == item_name:
+			return it
+	return {}
+
+
+## A reading off the model: "level" (% full) of a store.
+static func read_item(model: GraphModel, item_name: String, what: String) -> float:
+	var it := item_named(model, item_name)
+	if it.is_empty():
+		return NAN
+	var specs: Dictionary = it.get("specs", {}) as Dictionary
+	if what == "level":
+		return clampf(float(specs.get("level", 0.0)), 0.0, 1.0) * 100.0
+	return NAN
+
+
+static func tag_of(model: GraphModel, item_name: String, what: String) -> String:
+	var it := item_named(model, item_name)
+	if it.is_empty():
+		return ""
+	return "tank.%s.%s" % [str(it.get("id", "")), what]
+
+
+## A control block of `kind` that reads `tag` and drives something.
+static func has_block(blocks: Array, kind: String, tag: String) -> bool:
+	for b in blocks:
+		if b is Dictionary and str(b.get("kind", "")) == kind and str(b.get("pv", "")) == tag \
+				and not str(b.get("out", "")).is_empty() and bool(b.get("enabled", true)):
+			return true
+	return false
+
+
+static func _hours_text(h: float) -> String:
+	if h < 1.0:
+		return "%d min" % int(round(h * 60.0))
+	return "%.1f h" % h
+
+
+static func _evaluate_process(goal: Dictionary, ctx: Dictionary) -> Dictionary:
+	var model: GraphModel = ctx.get("model")
+	var item_name := str(goal.get("item", ""))
+	var what := str(goal.get("read", "level"))
+	var v := read_item(model, item_name, what)
+	if is_nan(v):
+		return {"met": false, "progress": "The %s is gone: restart the level" % item_name}
+	var gs: Dictionary = ctx.get("gstate", {}) as Dictionary
+	var now := float(ctx.get("now_h", NAN))
+	match str(goal.get("kind", "")):
+		"tag_reach":
+			var want := float(goal.get("value", 0.0))
+			return {"met": v >= want, "progress": "%s: %.0f %% (reach %.0f %%)" % [item_name, v, want]}
+		"tag_band_hold":
+			var lo := float(goal.get("lo", 0.0))
+			var hi := float(goal.get("hi", 100.0))
+			var hold := float(goal.get("hold_h", 1.0))
+			var need := str(goal.get("need_block", ""))
+			var block_ok := need.is_empty() or has_block(ctx.get("logic", []) as Array, need, tag_of(model, item_name, what))
+			var inside := v >= lo and v <= hi
+			# Time counts only while it is in the band, the block (if one is
+			# asked for) is in place, and the clock runs forward.
+			var since := float(gs.get("since", NAN))
+			if not inside or not block_ok or is_nan(now) or (not is_nan(since) and now < since):
+				gs.erase("since")
+				since = NAN
+			elif is_nan(since):
+				gs["since"] = now
+				since = now
+			var held := (now - since) if not is_nan(since) else 0.0
+			var line := "%s: %.0f %% (keep %.0f to %.0f %%)" % [item_name, v, lo, hi]
+			if not block_ok:
+				line += "  ·  add the %s block in Logic, reading this level" % ("on / off" if need == "band" else "PID")
+			elif inside:
+				line += "  ·  held %s of %s" % [_hours_text(held), _hours_text(hold)]
+			else:
+				line += "  ·  outside the band"
+			return {"met": block_ok and inside and held >= hold, "progress": line}
+		"alarm_acked":
+			var tag := tag_of(model, item_name, what)
+			var rule_id := ""
+			for r in ctx.get("alarm_rules", []) as Array:
+				if r is Dictionary and str(r.get("tag", "")) == tag and str(r.get("op", "")) == ">=":
+					rule_id = str(r.get("id", ""))
+			if rule_id.is_empty():
+				return {"met": false, "progress": "Add a high alarm on the %s (Alarms, then Suggest for this site)" % item_name}
+			var st := str(((ctx.get("alarm_status", {}) as Dictionary).get(rule_id, {}) as Dictionary).get("state", "normal"))
+			if st == "unack" or st == "rtn":
+				gs["raised"] = true
+				return {"met": false, "progress": "The alarm is up: acknowledge it (Alarms, or the bar over the picture)"}
+			# "acked" = it went off and somebody acknowledged it (even if this
+			# level never looked while it was still flashing).
+			if st == "acked" or (bool(gs.get("raised", false)) and st != "shelved"):
+				return {"met": true, "progress": "Alarm seen and acknowledged"}
+			return {"met": false, "progress": "%s: %.0f %%. Let time run until the alarm goes off" % [item_name, v]}
+	return {"met": false, "progress": ""}

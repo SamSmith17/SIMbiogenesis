@@ -128,6 +128,8 @@ var _review_sets: PackedStringArray = PackedStringArray()
 var _map_def_path := ""
 ## --window-wall: open the Window Wall after load (no capture, no quit).
 var _boot_window_wall := false
+## --operator: open the graph in operator mode after load (no capture, no quit).
+var _boot_operator := false
 ## --count=N: how many people the crowd bench seeds (festival-scale baseline).
 var _bench_count := 300
 ## --ts=<multiple>: the crowd bench's clock speed as a multiple of realtime
@@ -450,6 +452,8 @@ func _await_world_ready() -> bool:
 ## the process (_maybe_quit is a no-op while dispatching) — _finish does.
 func _dispatch() -> void:
 	if _chain.is_empty():
+		if _boot_operator:
+			_boot_operator_view()
 		if _boot_window_wall:
 			_boot_window_wall_view()
 		elif _assign_facades_count > 0 or _sculpt_test:
@@ -577,6 +581,8 @@ func _parse_args(args: PackedStringArray) -> void:
 			_quit_after = true
 		elif a == "--window-wall":
 			_boot_window_wall = true
+		elif a == "--operator":
+			_boot_operator = true
 		elif a.begins_with("--count="):
 			_bench_count = clampi(a.get_slice("=", 1).to_int(), 1, 20000)
 		elif a.begins_with("--ts="):
@@ -11430,6 +11436,19 @@ func _run_window_wall_capture() -> void:
 
 ## --window-wall: the desktop-shortcut launch. Wait for the map, then open the
 ## wall through Main's entry point and leave it running (no capture, no quit).
+func _boot_operator_view() -> void:
+	var scene := get_tree().current_scene
+	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null
+	if loader != null and not (loader.get("load_completed") == true):
+		await loader.map_load_complete
+	await get_tree().create_timer(2.0).timeout
+	var gv := ServiceLocator.graph()
+	if gv == null or not gv.has_method("set_operator_mode"):
+		push_error("PlaytestHarness: --operator — no graph view in this scene")
+		return
+	gv.call("set_operator_mode", true)
+
+
 func _boot_window_wall_view() -> void:
 	var scene := get_tree().current_scene
 	var loader: Node = scene.find_child("TerrainLoader", true, false) if scene != null else null

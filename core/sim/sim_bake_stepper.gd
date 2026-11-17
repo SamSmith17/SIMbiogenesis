@@ -90,6 +90,9 @@ func step(cursor: float) -> Dictionary:
 		gv.call("_tick_vehicle_power", cursor)
 
 	var t_flow0 := Time.get_ticks_usec()
+	# Control logic at this instant, before the resources move.
+	if gv != null and gv.has_method("scada_logic_step"):
+		gv.call("scada_logic_step", cursor)
 	flow.call("render_step", cursor, step_h, ac)
 	t_flow_us += Time.get_ticks_usec() - t_flow0
 

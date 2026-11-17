@@ -61,11 +61,14 @@ const KINDS: Array = [
 	["channel_tiles", "bin"],
 	["channel_tiles", "json"],
 	["poi", "json"],
+	["terraces", "json"],
 	["ha_links", "json"],
 	["climelapse_keys", "json"],
 	["experiments", "json"],
 	["deploy_schedule", "json"],
 	["suggestions", "json"],
+	["scada_history", "json"],
+	["scada_outputs", "json"],
 ]
 
 static var _world_id: String = ""

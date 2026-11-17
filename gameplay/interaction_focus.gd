@@ -17,6 +17,9 @@ var _stream_focus_id: String = ""
 ## Painted camp under the crosshair ("" = none). Stamped with the physics frame
 ## it was last confirmed on, so every OTHER focus path drops it for free.
 var _camp_focus_id := ""
+## A terrace field under the crosshair (TerraceRuntime), re-confirmed per frame.
+var _terrace_focus_id := ""
+var _terrace_focus_frame := -1
 var _camp_focus_frame := -1
 var _conduit_focus_id: String = ""
 var _conduit_focus_hang_edit: bool = false
@@ -239,6 +242,12 @@ func _perf_phys_tick(_delta: float) -> void:
 			elif _update_camp_focus(ground as Vector3):
 				# A painted camp is the player's own object: it wins over the
 				# OSM ground polygons it was painted across.
+				_clear_solar_focus()
+				_clear_water_focus()
+				_clear_building_focus()
+				_clear_veg_focus()
+			elif _update_terrace_focus(ground as Vector3):
+				# The player's terraces win over the forest polygon they cut.
 				_clear_solar_focus()
 				_clear_water_focus()
 				_clear_building_focus()
@@ -1048,11 +1057,43 @@ func _clear_camp_focus() -> void:
 		_loader.call("set_camp_focus", "")
 
 
+func _update_terrace_focus(hit_pos: Vector3) -> bool:
+	if _loader == null or not _loader.has_method("terraces"):
+		return false
+	var rt: Object = _loader.call("terraces")
+	var id := str(rt.call("field_at", Vector2(hit_pos.x, hit_pos.z)))
+	if id.is_empty():
+		_clear_terrace_focus()
+		return false
+	_terrace_focus_id = id
+	_terrace_focus_frame = Engine.get_physics_frames()
+	rt.call("set_focus", id)
+	if _crosshair != null and _crosshair.has_method("set_target_active"):
+		_crosshair.set_target_active(true)
+	if _crosshair != null and _crosshair.has_method("set_prompt_text"):
+		var act := "Interact"
+		if _prompt_ui != null and _prompt_ui.has_method("get_action_label"):
+			act = _prompt_ui.get_action_label("interact")
+		var rec: Dictionary = rt.call("record", id)
+		_crosshair.set_prompt_text("[%s / Click] Edit %s" % [act, str(rec.get("name", "terraces"))])
+	return true
+
+
+func _clear_terrace_focus() -> void:
+	if _terrace_focus_id.is_empty():
+		return
+	_terrace_focus_id = ""
+	if _loader != null and _loader.has_method("terraces"):
+		(_loader.call("terraces") as Object).call("set_focus", "")
+
+
 func _clear_water_focus() -> void:
 	# Every focus path that is NOT the camp branch comes through here, so a camp
 	# focus that was not re-confirmed this frame is dropped.
 	if _camp_focus_frame != Engine.get_physics_frames():
 		_clear_camp_focus()
+	if _terrace_focus_frame != Engine.get_physics_frames():
+		_clear_terrace_focus()
 	_water_focus_idx = -1
 	if _loader != null and _loader.has_method("set_water_focus_idx"):
 		if _loader.has_method("get_water_focus_idx") \
@@ -1311,6 +1352,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if bool(_loader.call("add_solar_array_to_graph", _solar_focus_idx)):
 			get_viewport().set_input_as_handled()
+		return
+	# Aimed at a terrace field: its editor (the T toolbar's Terrace tool).
+	if not _terrace_focus_id.is_empty() and _loader != null 			and _loader.has_method("open_terrace_editor") and (is_interact or is_click):
+		_loader.call("open_terrace_editor", _terrace_focus_id)
+		get_viewport().set_input_as_handled()
 		return
 	# Aimed at a painted camp. Ctrl/Meta+Interact (or Ctrl+Click) opens its
 	# system, framed. Plain Interact stays the Tune-look modal.

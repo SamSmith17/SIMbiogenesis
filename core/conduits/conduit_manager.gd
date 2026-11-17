@@ -53,6 +53,21 @@ var _sync_timer: float = 0.0
 var _follow_timer: float = 0.0
 var _obstacle_cache: Array = []
 var _obstacle_cache_valid: bool = false
+## ConduitRunSolver's obstacles + what it last said per run.
+var _field: ConduitObstacleField = null
+var _field_valid := false
+var _field_check_acc := 0.0
+var _props_sig := 0
+const FIELD_CHECK_S := 1.0
+var _run_info: Dictionary = {}
+## Automatic lanes (ConduitBundler): conn_id -> {raw (hash of the solver's
+## corners it was worked out from), corners, radii, lane, lanes, bundle}.
+## Re-worked out BUNDLE_SETTLE_S after the solver's corners of any run change.
+var _bundles: Dictionary = {}
+var _raw_hash: Dictionary = {}
+var _bundle_dirty := false
+var _bundle_acc := 0.0
+const BUNDLE_SETTLE_S := 0.3
 var _lane_map: Dictionary = {}  ## conn_id -> lane int (unused by A*; kept for tools)
 var _astar_gen: int = 0  ## bumped on invalidate so paths refresh once
 var _waypoint_gizmo: ConduitWaypointGizmo = null
@@ -220,16 +235,45 @@ func set_preview_element_lens(lens: String, flux: Dictionary, flux_max: float) -
 	_apply_preview_element_lens()
 
 
+## Service colours in the graph's 3D lens views: every run wears the colour
+## of what it carries (hot water red, cold blue, drain grey, power yellow,
+## data green; ServicePalette), so the system reads like the Process lens.
+## First person keeps each run's own material. The element lens wins.
+var service_colours := true
+
+
 func _apply_preview_element_lens() -> void:
 	var on := _preview_visible and not _lens_id.is_empty()
+	var svc := _preview_visible and _lens_id.is_empty() and service_colours and _model != null
 	for cid in _lens_touched.keys():
-		if on and _instances.has(cid):
+		if (on or svc) and _instances.has(cid):
 			continue
 		var old := _instances.get(cid, null) as MeshInstance3D
 		if old != null and is_instance_valid(old):
 			old.material_overlay = null
 			old.transparency = 0.0
 		_lens_touched.erase(cid)
+	if svc:
+		for cid3 in _instances.keys():
+			var inst3 := _instances[cid3] as MeshInstance3D
+			if inst3 == null or not is_instance_valid(inst3):
+				continue
+			var conn3 := _model.get_connection(str(cid3))
+			if conn3.is_empty():
+				continue
+			var c3 := ServicePalette.color_for(conn3)
+			var key3 := "svc|%s" % c3.to_html()
+			if not _lens_mats.has(key3):
+				var m3 := StandardMaterial3D.new()
+				m3.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+				m3.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				m3.no_depth_test = true
+				m3.albedo_color = Color(c3, 0.55)
+				_lens_mats[key3] = m3
+			inst3.material_overlay = _lens_mats[key3]
+			inst3.transparency = 0.0
+			_lens_touched[cid3] = true
+		return
 	if not on:
 		return
 	var col := ElementLens.color(_lens_id)
@@ -305,6 +349,7 @@ func set_global_flow_glow(enabled: bool) -> void:
 
 
 func invalidate_obstacle_cache() -> void:
+	_field_valid = false
 	_obstacle_cache_valid = false
 	_obstacle_cache.clear()
 	invalidate_astar()
@@ -492,12 +537,15 @@ func _process(delta: float) -> void:
 					_last_cheap.erase(str(cid))
 					_rebuild_if_dirty(c, true)
 	# A show-only view hides runs in the lenses; a run rebuilt since (new
-	# MeshInstance) is caught here, twice a second.
-	if _preview_visible and not _preview_domain_shown.is_empty():
+	# MeshInstance) is caught here, twice a second — and gets its service
+	# colour.
+	if _preview_visible:
 		_domain_filter_acc += delta
 		if _domain_filter_acc >= 0.5:
 			_domain_filter_acc = 0.0
-			_apply_preview_domain_filter()
+			if not _preview_domain_shown.is_empty():
+				_apply_preview_domain_filter()
+			_apply_preview_element_lens()
 	# With wires off, the focused conn AND explicitly-visible conns still tick.
 	if _model == null \
 			or (not _global_visible and _focus_id.is_empty() and not _explicit_seen):
@@ -522,6 +570,18 @@ func _process(delta: float) -> void:
 	if not _remesh_queue.is_empty():
 		_drain_remesh_queue()
 		return
+	if _bundle_dirty:
+		_bundle_acc += delta
+		if _bundle_acc >= BUNDLE_SETTLE_S:
+			_bundle_acc = 0.0
+			_run_bundles()
+	_field_check_acc += delta
+	if _field_check_acc >= FIELD_CHECK_S:
+		_field_check_acc = 0.0
+		var sig := _props_signature()
+		if sig != _props_sig:
+			_props_sig = sig
+			_field_valid = false
 	_follow_timer -= delta
 	var do_follow := _follow_timer <= 0.0
 	if do_follow:
@@ -1520,6 +1580,8 @@ func build_control_points(conn: Dictionary) -> Array:
 		return []
 	var locked := bool(conn.get("route_locked", false))
 	var type_id: String = ConduitKinds.derive_type_for_connection(conn)
+	if ConduitRouteDispatch.uses_solver(conn, type_id):
+		return _solver_control_points(conn, src, tgt, src_h, tgt_h, a, b, type_id, tree)
 	# End/approach/seat resolution + the route-mode cascade now live in the shared
 	# ConduitRouteDispatch so the drag preview and this committed build stay in
 	# lockstep (see conduit_route_dispatch.gd). Committed routes always run the full
@@ -1533,6 +1595,141 @@ func build_control_points(conn: Dictionary) -> Array:
 	var style_ov: Dictionary = conn.get("conduit_style", {}) as Dictionary
 	return ConduitRouteDispatch.control_points(ends, type_id, style_ov, wps, locked,
 		_cached_obstacles([]), true, SITE_CLEARANCE_M, Callable(self, "ground_y_at"))
+
+
+## One run through ConduitRunSolver. Pins are vias whether the run is locked
+## or not, and keep their heights. What the solver found (corners, flags) is
+## kept per run for the views and the style modal (`run_info`).
+func _solver_control_points(conn: Dictionary, src: Dictionary, tgt: Dictionary,
+		src_h: String, tgt_h: String, a: Vector3, b: Vector3, type_id: String,
+		tree: SceneTree) -> Array:
+	var ends := ConduitRouteDispatch.resolve_route_ends(a, b, src, tgt, src_h, tgt_h,
+		type_id, _main)
+	var wps: Array = ConduitKinds.waypoints_to_vectors(
+		conn.get("route_3d", []) as Array, tree, false)
+	var style_ov: Dictionary = conn.get("conduit_style", {}) as Dictionary
+	var info := {}
+	var cid := str(conn.get("id", ""))
+	var pts := ConduitRouteDispatch.solver_points(ends, type_id, style_ov, wps, {
+		"field": obstacle_field(), "ground_fn": Callable(self, "ground_y_at"),
+		"info": info, "bundle_fn": _bundle_lookup.bind(cid),
+	})
+	if not cid.is_empty():
+		_run_info[cid] = info
+		# The lane overrides are inputs too: dragging a lane re-lanes the bundle.
+		var h := hash([info.get("raw_corners", PackedVector3Array()),
+			int(style_ov.get("lane_index", -1)), bool(style_ov.get("lane_free", false))])
+		if int(_raw_hash.get(cid, 0)) != h:
+			_raw_hash[cid] = h
+			_bundle_dirty = true
+			_bundle_acc = 0.0
+	return pts
+
+
+## The bundler's lane for a run, if it was worked out from these corners.
+func _bundle_lookup(raw: PackedVector3Array, cid: String) -> Dictionary:
+	if cid.is_empty() or not _bundles.has(cid):
+		return {}
+	var b: Dictionary = _bundles[cid]
+	if int(b.get("raw", 0)) != hash(raw):
+		return {}
+	return b
+
+
+## Every solver run's lane, worked out together; the runs whose lane changed
+## are rebuilt (their next build picks the lane up through _bundle_lookup).
+func _run_bundles() -> void:
+	_bundle_dirty = false
+	if _model == null:
+		return
+	var runs: Array = []
+	for cid: Variant in _run_info:
+		var info: Dictionary = _run_info[cid]
+		if not info.has("raw_corners"):
+			continue
+		var conn := _model.get_connection(str(cid))
+		if conn.is_empty() or not _instances.has(str(cid)):
+			continue
+		var st: Dictionary = conn.get("conduit_style", {}) as Dictionary
+		runs.append({"id": str(cid), "corners": info["raw_corners"], "od": float(info.get("od", 0.03)),
+			"bend_r": float(info.get("bend_r", 0.1)), "service": ServicePalette.service_for(conn),
+			"lane_index": int(st.get("lane_index", -1)), "lane_free": bool(st.get("lane_free", false))})
+	var res := ConduitBundler.bundle(runs, {"field": obstacle_field()})
+	var changed: Array = []
+	for r: Dictionary in runs:
+		var cid := str(r["id"])
+		var e: Dictionary = res.get(cid, {})
+		var raw_h := hash(r["corners"])
+		if e.is_empty() or int(e.get("lanes", 1)) < 2:
+			if _bundles.has(cid):
+				_bundles.erase(cid)
+				changed.append(cid)
+			continue
+		var nb := {"raw": raw_h, "corners": e["corners"], "radii": e["radii"],
+			"lane": int(e["lane"]), "lanes": int(e["lanes"]), "bundle": str(e["bundle"])}
+		var old: Dictionary = _bundles.get(cid, {})
+		if old.is_empty() or int(old.get("raw", 0)) != raw_h \
+				or (old["corners"] as PackedVector3Array) != (nb["corners"] as PackedVector3Array) \
+				or (old["radii"] as PackedFloat64Array) != (nb["radii"] as PackedFloat64Array):
+			_bundles[cid] = nb
+			changed.append(cid)
+	for cid: String in changed:
+		force_remesh(cid)
+
+
+## The bundle a run is in ({} = none): {lane, lanes, bundle, members}.
+func bundle_of(conn_id: String) -> Dictionary:
+	if not _bundles.has(conn_id):
+		return {}
+	var b: Dictionary = _bundles[conn_id]
+	var members: Array = []
+	for cid: Variant in _bundles:
+		if str((_bundles[cid] as Dictionary).get("bundle", "")) == str(b.get("bundle", "")):
+			members.append(str(cid))
+	members.sort_custom(func(x: String, y: String) -> bool:
+		return int(_bundles[x]["lane"]) < int(_bundles[y]["lane"]))
+	return {"lane": int(b["lane"]), "lanes": int(b["lanes"]), "bundle": str(b["bundle"]),
+		"members": members}
+
+
+## What the solver last said about a run: {corners, flags, stub_a, stub_b,
+## bend_r, od}. Empty for runs on the old routers.
+func run_info(conn_id: String) -> Dictionary:
+	return _run_info.get(conn_id, {}) as Dictionary
+
+
+## The sharp corners of a run (solver runs), else its sample polyline.
+func run_corners(conn_id: String) -> PackedVector3Array:
+	var info := run_info(conn_id)
+	if info.has("corners"):
+		return info["corners"] as PackedVector3Array
+	return get_sample_points(conn_id)
+
+
+## Placed props and buildings as the solver sees them. Rebuilt when the
+## obstacle cache is invalidated or the placed props change (checked every
+## FIELD_CHECK_S).
+func obstacle_field() -> ConduitObstacleField:
+	if _field == null or not _field_valid:
+		_field = ConduitObstacleField.from_scene(_main, Callable(self, "ground_y_at"))
+		_field_valid = true
+	return _field
+
+
+func _props_signature() -> int:
+	if _main == null:
+		return 0
+	var loader := _main.get_node_or_null("TerrainLoader")
+	if loader == null or not loader.has_method("placed_prop_records"):
+		return 0
+	var parts: Array = []
+	for r: Variant in loader.call("placed_prop_records") as Array:
+		if r is Dictionary:
+			var d: Dictionary = r
+			parts.append([str(d.get("id", "")), snappedf(float(d.get("x", 0.0)), 0.05),
+				snappedf(float(d.get("z", 0.0)), 0.05), snappedf(float(d.get("yaw", 0.0)), 0.5),
+				snappedf(float(d.get("y_offset", 0.0)), 0.05), bool(d.get("packed", false))])
+	return parts.hash()
 
 
 ## Sparse chain: [port_a,] approach_a, leave_shoulder, pins…, arrive_shoulder, approach_b [,port_b].
@@ -1756,10 +1953,31 @@ func create_plug_connection(spec: Dictionary) -> String:
 ## All live in-world connection ports as plug-hits for ConduitPlugLogic:
 ## [{port, world_pos, item_id}] — resolved from every graph item bound to a placed
 ## prop (reuses ConnectionPortDefs port resolution + marker transforms).
+## Every port of every placed graph item in world space. The plug drag asks
+## this on every physics tick; the answer only changes when props move, so it
+## is held for GATHER_PORTS_MS (and dropped when the graph's structure changes).
+const GATHER_PORTS_MS := 125
+var _ports_cache: Array = []
+var _ports_cache_ms: int = -100000
+var _ports_cache_key: String = ""
+
+
 func gather_world_ports() -> Array:
-	var out: Array = []
 	if _model == null:
 		return []
+	var key := "%d|%d|%d" % [_model.struct_rev,
+		_model.items.size(), ConnectionPortDefs.revision]
+	var now := Time.get_ticks_msec()
+	if key == _ports_cache_key and now - _ports_cache_ms < GATHER_PORTS_MS:
+		return _ports_cache
+	_ports_cache = _gather_world_ports_now()
+	_ports_cache_key = key
+	_ports_cache_ms = now
+	return _ports_cache
+
+
+func _gather_world_ports_now() -> Array:
+	var out: Array = []
 	for it: Dictionary in _model.items:
 		var specs: Dictionary = it.get("specs", {}) as Dictionary
 		var pid := str(specs.get("bound_prop_id", ""))
@@ -1821,7 +2039,12 @@ func _cheap_dirty_key(conn: Dictionary) -> String:
 			var kit := _get_pipe_kit(kit_id)
 			if kit != null:
 				kit_rev = kit.revision
-	return "%s|%s|%d|%s|%s|%s|%d|%s|%d" % [
+	var field_key := 0
+	if ConduitRouteDispatch.uses_solver(conn, type_id) and is_finite(a.x) and is_finite(b.x):
+		var mn := Vector2(minf(a.x, b.x), minf(a.z, b.z)) - Vector2.ONE * 12.0
+		var mx := Vector2(maxf(a.x, b.x), maxf(a.z, b.z)) + Vector2.ONE * 12.0
+		field_key = obstacle_field().fingerprint_xz(mn, mx)
+	return "%s|%s|%d|%s|%s|%s|%d|%s|%d|%d|%s" % [
 		_v3_key(a), _v3_key(b),
 		1 if bool(conn.get("route_locked", false)) else 0,
 		type_id,
@@ -1830,6 +2053,8 @@ func _cheap_dirty_key(conn: Dictionary) -> String:
 		_astar_gen,
 		kit_id,
 		kit_rev,
+		field_key,
+		str(conn.get("route_solver", "")),
 	]
 
 
@@ -1878,6 +2103,12 @@ func _rebuild_if_dirty(conn: Dictionary, force: bool = false) -> void:
 	PipePartsAssembler.clear(self, cid)
 	CulvertAssembler.clear(self, cid)
 	_parts_active.erase(cid)
+	# A solver run of kit pipe whose elbows could not be seated (a leg shorter
+	# than two elbow takeouts) is drawn as a bent tube, not a sharp one.
+	if ConduitKinds.uses_pipe_kit(type_id) and run_info(cid).has("corners"):
+		var fil := ConduitFillet.apply(run_info(cid)["corners"] as PackedVector3Array,
+			float(run_info(cid).get("bend_r", 0.05)))
+		control = _packed_to_array(fil["points"] as PackedVector3Array)
 	var bp := mesh_build_params(conn, type_id, style_ov)
 	var ground_fn: Callable = bp["ground_fn"]
 	var rm: String = bp["rm"]
@@ -2541,6 +2772,11 @@ func _finish_parts_instance(cid: String, conn: Dictionary, type_id: String,
 
 
 func _remove_instance(conn_id: String) -> void:
+	_run_info.erase(conn_id)
+	if _bundles.has(conn_id) or _raw_hash.has(conn_id):
+		_bundles.erase(conn_id)
+		_raw_hash.erase(conn_id)
+		_bundle_dirty = true
 	if _run_labels != null and is_instance_valid(_run_labels):
 		_run_labels.clear_run(conn_id)
 	_remove_outlet_marker(conn_id)
@@ -2643,9 +2879,14 @@ func mesh_build_params(conn: Dictionary, type_id: String, style_ov: Dictionary) 
 	# at the kind's single fallback radius and a 2" run looked identical to a
 	# 1" one — the diameter is the main thing the player is tuning.
 	if not mesh_style.has("radius_m"):
-		var od := ConduitKinds.outer_diameter_m(type_id, style_ov)
-		if od > 0.0 and ConduitKinds.has_size_options(type_id):
-			mesh_style["radius_m"] = od * 0.5
+		if not ConduitSpecs.row(type_id, style_ov).is_empty():
+			# Cable, hose, tube, duct and conduit draw at their real OD for the
+			# chosen size (kit pipes draw their own GLB parts).
+			mesh_style["radius_m"] = ConduitSpecs.od_m(type_id, style_ov) * 0.5
+		else:
+			var od := ConduitKinds.outer_diameter_m(type_id, style_ov)
+			if od > 0.0 and ConduitKinds.has_size_options(type_id):
+				mesh_style["radius_m"] = od * 0.5
 	# Hang-edit with locked mid pins: span-wise catenary (not whole-run ground-snake).
 	# Still pass terrain so sag that hits the ground rests on it (no under-mesh).
 	var hang_sag := ConduitKinds.conn_uses_hang_sag(conn)
@@ -2665,6 +2906,12 @@ func mesh_build_params(conn: Dictionary, type_id: String, style_ov: Dictionary) 
 		# Patio / hang-edit catenary: free sag in air, clamp where it meets terrain.
 		mesh_style["terrain_clamp"] = true
 		ground_fn = Callable(self, "ground_y_at")
+	if ConduitRouteDispatch.uses_solver(conn, type_id):
+		mesh_style["flexible"] = false
+		mesh_style["sag_amount"] = 0.0
+		mesh_style["end_slack_m"] = 0.0
+		ground_fn = Callable()
+		is_pipes = true
 	var is_light: bool = ConduitKinds.is_light_type(type_id)
 	# Contour routes carry ~1 m control spacing already — default per-span
 	# tessellation on 160 spans would be thousands of ring segments.
@@ -2701,6 +2948,31 @@ func measure_route(conn: Dictionary, control: Array, type_id: String = "") -> fl
 		built = ConduitMeshBuilder.build(control, type_id, int(bp["segs"]),
 			bp["ground_fn"], bp["mesh_style"])
 	return float(built.get("arc_length_m", 0.0))
+
+
+## The points a run with these control points would be drawn through: the
+## committed build's own tessellation (a cord draped on the ground, a hang's
+## sag), so a preview is the run you get. Kit pipes: the control points.
+func preview_samples(conn: Dictionary, control: Array, type_id: String = "") -> PackedVector3Array:
+	var pts := PackedVector3Array()
+	if control.size() < 2:
+		return pts
+	if type_id.is_empty():
+		type_id = ConduitKinds.derive_type_for_connection(conn)
+	if ConduitKinds.uses_pipe_kit(type_id) or ConduitKinds.uses_culvert_kit(type_id):
+		for p in control:
+			if p is Vector3:
+				pts.append(p)
+		return pts
+	var bp := mesh_build_params(conn, type_id, conn.get("conduit_style", {}) as Dictionary)
+	var built: Dictionary
+	if bool(bp["is_light"]):
+		built = ConduitMeshBuilder.build_light_string(control, type_id, int(bp["segs"]),
+			bp["ground_fn"], bp["mesh_style"])
+	else:
+		built = ConduitMeshBuilder.build(control, type_id, int(bp["segs"]),
+			bp["ground_fn"], bp["mesh_style"])
+	return built.get("sample_points", PackedVector3Array()) as PackedVector3Array
 
 
 ## A copy of a run's visuals (tube + fittings + assembled kit parts) with world

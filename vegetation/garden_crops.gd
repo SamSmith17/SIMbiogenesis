@@ -52,6 +52,13 @@ const CROPS := {
 	"basil": {"spacing": 0.25, "cycle": 90.0, "mature": 0.6, "height": 0.35, "label": "Basil"},
 	"willow": {"spacing": 0.6, "cycle": 1095.0, "mature": 0.7, "height": 3.4, "shadow": true, "label": "Willow coppice"},
 	"sorghum": {"spacing": 0.5, "cycle": 100.0, "mature": 0.7, "height": 2.3, "shadow": true, "label": "Sorghum-sudan grass"},
+	# Terrace crops (TerraceField). Rice is transplanted in hills of 3-4
+	# seedlings 20-25 cm apart; one mesh here is a hill. Common reed
+	# (Phragmites australis) stands 2-3 m in a bed cut once a year; taro
+	# (Colocasia esculenta) on wet terraces at ~60 cm.
+	"rice": {"spacing": 0.25, "cycle": 120.0, "mature": 0.7, "height": 0.95, "label": "Rice"},
+	"reed": {"spacing": 0.35, "cycle": 365.0, "mature": 0.55, "height": 2.5, "shadow": true, "label": "Reed"},
+	"taro": {"spacing": 0.6, "cycle": 270.0, "mature": 0.5, "height": 1.1, "label": "Taro"},
 }
 
 ## Crop plans by ring (outer first) for a mixed kitchen garden: tall and
@@ -107,6 +114,9 @@ static func mesh(id: String) -> ArrayMesh:
 		"basil": _basil(k)
 		"willow": _willow(k)
 		"sorghum": _sorghum(k)
+		"rice": _rice(k)
+		"reed": _reed(k)
+		"taro": _taro(k)
 		_: _lettuce(k, Color(0.46, 0.74, 0.26), Color(0.66, 0.86, 0.38), false)
 	var m := k.commit()
 	_cache[id] = m
@@ -390,6 +400,52 @@ static func _sorghum(k: Kit) -> void:
 		k.blob(top + Vector3(0.0, 0.08, 0.0), Vector3(0.035, 0.11, 0.035), Color(0.58, 0.32, 0.18), 1)
 		k.part = PART_LEAF
 		k.fruit_from = 0.0
+
+
+## A rice hill: a tuft of narrow straps, the outer ones arching over, and
+## nodding panicles that turn gold as it ripens.
+static func _rice(k: Kit) -> void:
+	for b in 14:
+		var d := _dir(float(b) * 2.39996)
+		var pitch := deg_to_rad(lerpf(84.0, 55.0, float(b % 7) / 6.0))
+		k.leaf(Vector3(k.jitter(0.02), 0.0, k.jitter(0.02)), d, pitch, 0.75 + 0.25 * k.rng.randf(), 0.014, 0.9,
+			Color(0.3, 0.56, 0.2).lerp(Color(0.44, 0.66, 0.26), k.rng.randf()), "strap", 0.0, 4)
+	for s in 5:
+		var d2 := _dir(float(s) * 1.3 + 0.4)
+		var top := d2 * 0.1 + Vector3(0.0, 0.86, 0.0)
+		k.part = PART_FRUIT
+		k.fruit_from = 0.55
+		k.leaf(top, d2, deg_to_rad(10.0), 0.2, 0.03, 1.1, Color(0.86, 0.72, 0.3), "lance", 0.0, 3)
+		k.part = PART_LEAF
+		k.fruit_from = 0.0
+
+
+## A clump of reed culms with long leaves and a purplish-brown plume.
+static func _reed(k: Kit) -> void:
+	for c in 5:
+		var d := _dir(float(c) * 2.39996)
+		var foot := d * k.rng.randf_range(0.02, 0.1)
+		var top := foot + d * 0.12 + Vector3(0.0, 2.35 + k.jitter(0.15), 0.0)
+		k.stem(foot, top, 0.006, 0.004, Color(0.48, 0.58, 0.3))
+		for lv in 4:
+			var y := lerpf(0.5, 1.9, float(lv) / 3.0)
+			var at := foot.lerp(top, y / top.y)
+			k.leaf(at, _dir(float(c * 4 + lv) * 1.7), deg_to_rad(30.0), 0.45, 0.025, 0.7,
+				Color(0.36, 0.52, 0.24), "strap", 0.0, 3)
+		k.part = PART_FRUIT
+		k.fruit_from = 0.5
+		k.blob(top + Vector3(0.0, 0.12, 0.0), Vector3(0.05, 0.16, 0.05), Color(0.5, 0.36, 0.3), 1)
+		k.part = PART_LEAF
+		k.fruit_from = 0.0
+
+
+## Taro: a few long stalks, each holding a big heart-shaped leaf.
+static func _taro(k: Kit) -> void:
+	for i in 5:
+		var d := _dir(float(i) * 2.39996)
+		var top := d * 0.22 + Vector3(0.0, 0.85 + k.jitter(0.12), 0.0)
+		k.stem(Vector3.ZERO, top, 0.012, 0.008, Color(0.36, 0.48, 0.3))
+		k.leaf(top, d, deg_to_rad(-12.0), 0.5, 0.36, 0.4, Color(0.24, 0.44, 0.2), "heart", 0.15, 4)
 
 
 static func _dir(yaw: float) -> Vector3:

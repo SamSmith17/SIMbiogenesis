@@ -17,6 +17,13 @@ uniform float now_d = 0.0;
 uniform float fallow = 0.04;
 // Gentle sway (greenhouse air: a few cm at the top of a tall plant).
 uniform float sway = 0.012;
+// A terrace paddy's crop (TerraceRuntime): when fixed_f >= 0 every plant is
+// at that share of its cycle; the plants are ranked down the paddy in
+// INSTANCE_CUSTOM.w and only those with rank_cut < w <= rank_show stand (a
+// planting or a cut moving down the step). Defaults leave a grow bed as it was.
+uniform float fixed_f = -1.0;
+uniform float rank_show = 2.0;
+uniform float rank_cut = -1.0;
 
 varying vec3 v_col;
 varying float v_part;
@@ -32,8 +39,12 @@ void vertex() {
 	v_h = UV.y;
 	float age = now_d - sow;
 	float f = age >= 0.0 ? fract(age / cycle) : -1.0;
+	if (fixed_f >= 0.0) {
+		f = fixed_f;
+		age = 1.0;
+	}
 	// Not sown yet, or the bed is being turned: nothing there.
-	bool absent = f < fallow;
+	bool absent = f < fallow || seed > rank_show || seed < rank_cut;
 	float g = smoothstep(fallow, mature, f);
 	float s = mix(0.05, 1.0, g);
 	vec3 col = COLOR.rgb;

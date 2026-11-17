@@ -46,7 +46,7 @@ const BUILTIN: Dictionary = {
 	},
 	"extension_cord": {
 		"label": "Extension Cord",
-		"radius_m": 0.016,
+		"radius_m": 0.0042,  # 16/3 SJTW ≈ 8.4 mm OD (ConduitSpecs sizes)
 		"color": Color(0.95, 0.82, 0.08, 1.0),  # safety yellow jacket
 		"roughness": 0.85,
 		"metallic": 0.0,
@@ -65,7 +65,7 @@ const BUILTIN: Dictionary = {
 	},
 	"romex": {
 		"label": "Romex / NM-B",
-		"radius_m": 0.008,
+		"radius_m": 0.0048,  # 12/2 NM-B ≈ 9.6 mm (round equivalent of the flat jacket)
 		"color": Color(0.95, 0.93, 0.86, 1.0),
 		"roughness": 0.9,
 		"metallic": 0.0,
@@ -79,7 +79,7 @@ const BUILTIN: Dictionary = {
 	},
 	"dc_solar": {
 		"label": "DC Solar Wire",
-		"radius_m": 0.005,
+		"radius_m": 0.003,  # 10 AWG PV wire ≈ 6 mm OD
 		"color": Color(0.08, 0.08, 0.1, 1.0),
 		"roughness": 0.8,
 		"metallic": 0.0,
@@ -92,7 +92,7 @@ const BUILTIN: Dictionary = {
 	},
 	"garden_hose": {
 		"label": "Garden Hose",
-		"radius_m": 0.015,
+		"radius_m": 0.011,  # 5/8" hose ≈ 22 mm OD
 		"color": Color(0.12, 0.62, 0.20, 1.0),
 		"roughness": 0.72,
 		"metallic": 0.0,
@@ -173,7 +173,7 @@ const BUILTIN: Dictionary = {
 	},
 	"abs_dwv": {
 		"label": "ABS DWV (Black)",
-		"radius_m": 0.036,  # ~2½″ OD/2 fallback; kit OD wins at runtime
+		"radius_m": 0.0302,  # 2″ OD/2 fallback; kit OD wins at runtime
 		"color": Color(0.05, 0.05, 0.055, 1.0),  # dull ABS black
 		"roughness": 0.68,
 		"metallic": 0.0,
@@ -186,11 +186,10 @@ const BUILTIN: Dictionary = {
 		"fitting_color": Color(0.04, 0.04, 0.045, 1.0),
 		"fitting_collars": false,
 		"pipe_kit_family": "us_sch40",
-		"default_pipe_size_in": 2.5,
-		"inner_diameter_m": 0.062,
+		"default_pipe_size_in": 2.0,
+		"inner_diameter_m": 0.0525,  # 2″ Sch40 ID (ASTM D2661)
 		"hw_c": 130.0,
-		"max_flow_lpm": 800.0,
-		"burst_pressure_psi": 60.0,
+		"max_flow_lpm": 300.0,  # gravity drain, about a 2″ stack's capacity
 	},
 	"pex_red": {
 		"label": "PEX (Red / Hot)",
@@ -236,7 +235,7 @@ const BUILTIN: Dictionary = {
 	},
 	"ethernet": {
 		"label": "Ethernet (Cat6)",
-		"radius_m": 0.0035,  # ~7 mm Cat6 jacket
+		"radius_m": 0.00305,  # Cat6 UTP ≈ 6.1 mm OD
 		"color": Color(0.12, 0.34, 0.78, 1.0),  # classic patch-cable blue
 		"roughness": 0.55,
 		"metallic": 0.0,
@@ -247,12 +246,12 @@ const BUILTIN: Dictionary = {
 		"fitting_color": Color(0.5, 0.55, 0.62, 1.0),  # RJ45 boot
 		# 24 AWG copper: 84.2 mOhm/m/conductor -> 168 mOhm/m loop (PoE pair).
 		"resistance_ohm_per_m": 0.168,
-		"ampacity_a": 0.6,  # IEEE 802.3bt per-pair limit
+		"ampacity_a": 0.96,  # IEEE 802.3bt Type 4: 960 mA per pair (PoE budget)
 		"nominal_volts": 48.0,
 	},
 	"ducting": {
 		"label": "Ducting",
-		"radius_m": 0.085,
+		"radius_m": 0.077,  # 6″ round duct
 		"color": Color(0.72, 0.76, 0.80, 1.0),
 		"roughness": 0.48,
 		"metallic": 0.15,
@@ -263,10 +262,44 @@ const BUILTIN: Dictionary = {
 		"fitting_step_deg": 45.0,
 		"fitting_color": Color(0.55, 0.58, 0.62, 1.0),
 		"fitting_collars": true,
-		"inner_diameter_m": 0.15,
+		"inner_diameter_m": 0.1524,
 		"hw_c": 120.0,
-		"max_flow_lpm": 5000.0,
-		"burst_pressure_psi": 10.0,
+		"max_flow_lpm": 4450.0,  # 157 CFM: 6″ at 800 fpm (ConduitSpecs)
+	},
+	# Electrical metallic tubing with THHN pulled in it: the rigid electrical
+	# raceway. Trade size in pipe_size_in, conductors in awg (ConduitSpecs).
+	"emt_conduit": {
+		"label": "EMT Conduit",
+		"radius_m": 0.0117,  # ¾″ EMT, 0.922″ OD (ANSI C80.3)
+		"color": Color(0.74, 0.75, 0.76, 1.0),  # galvanised steel
+		"roughness": 0.42,
+		"metallic": 0.85,
+		"flexible": false,
+		"sag_amount": 0.0,
+		"route_mode": "ortho",
+		"fitting_color": Color(0.62, 0.63, 0.65, 1.0),
+		"fitting_collars": true,
+		"default_pipe_size_in": 0.75,
+		# 12 AWG THHN circuit: 5.21 mOhm/m/conductor -> 10.4 mOhm/m loop.
+		"resistance_ohm_per_m": 0.0104,
+		"ampacity_a": 20.0,  # NEC 310.16 75 °C, limited by 240.4(D)
+		"nominal_volts": 120.0,
+	},
+	# Rigid copper water tube with sweat elbows.
+	"copper_type_l": {
+		"label": "Copper (Type L)",
+		"radius_m": 0.0111,  # ¾″ Type L, 0.875″ OD (ASTM B88)
+		"color": Color(0.80, 0.47, 0.29, 1.0),
+		"roughness": 0.32,
+		"metallic": 0.9,
+		"flexible": false,
+		"sag_amount": 0.0,
+		"route_mode": "ortho",
+		"fitting_color": Color(0.74, 0.43, 0.27, 1.0),
+		"inner_diameter_m": 0.0199,
+		"hw_c": 140.0,
+		"max_flow_lpm": 59.0,
+		"burst_pressure_psi": 600.0,
 	},
 	"culvert_pipe": {
 		"label": "Culvert Pipe",
@@ -945,10 +978,21 @@ static func fitting_color(type_id: String) -> Color:
 	return meta.get("color", Color(0.7, 0.7, 0.7, 1.0)) as Color
 
 
+## Fitting materials are shared per kind + colour: every plug, coupler and
+## collar used to allocate its own StandardMaterial3D. Callers must not
+## mutate the returned material (dimming goes through instance transparency).
+static var _fitting_mats: Dictionary = {}
+
+
 static func make_fitting_material(type_id: String) -> StandardMaterial3D:
 	var meta: Dictionary = type_meta(type_id)
-	var mat := StandardMaterial3D.new()
 	var col := fitting_color(type_id)
+	var key := "%s|%s|%s" % [type_id, col.to_html(), str(meta.get("plug_emissive", false))]
+	var cached: StandardMaterial3D = _fitting_mats.get(key) as StandardMaterial3D
+	if cached != null:
+		return cached
+	var mat := StandardMaterial3D.new()
+	_fitting_mats[key] = mat
 	mat.albedo_color = col
 	mat.roughness = 0.45
 	mat.metallic = 0.15

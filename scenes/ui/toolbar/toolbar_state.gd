@@ -101,6 +101,18 @@ const TOOLS: Array[Dictionary] = [
 		],
 	},
 	{
+		"id": "terrace", "section": "terrain", "label": "Terrace",
+		"tooltip": "Cut a hillside into level stepped fields: rice paddies, reed beds or dry steps.\n"
+			+ "Hill: click the slope — everything above the click is terraced. Or draw an outline.\n"
+			+ "Click a terrace field to select it and change it. Water pumped to the top cascades down.",
+		"shapes": ["hill", "lasso", "polygon", "rect", "circle"],
+		"params": [
+			{"key": "step_h", "label": "Step height", "unit": "m", "auto_below": 0.3, "min": 0.0, "max": 5.0, "default": 0.0, "step": 0.1},
+			{"key": "riser_run", "label": "Riser 1:", "unit": "", "min": 0.2, "max": 3.0, "default": 0.6, "step": 0.05},
+			{"key": "hill_r_m", "label": "Hill reach", "unit": "m", "min": 20.0, "max": 250.0, "default": 90.0, "step": 5.0},
+		],
+	},
+	{
 		"id": "measure", "section": "terrain", "label": "Measure",
 		"tooltip": "Click two points — distance, elevation delta and slope",
 		"shapes": [],
@@ -281,6 +293,47 @@ const TOOLS: Array[Dictionary] = [
 		"shapes": [],
 		"params": [],
 	},
+	# --- ROUTE: 3D runs of pipe, conduit and cable between machines ---
+	{
+		"id": "route_connect", "section": "route", "label": "Connect",
+		"tooltip": "Click a port on a machine, then a port on another one.
+Shift keeps chaining from the machine you reached.",
+		"shapes": [],
+		"params": [],
+	},
+	{
+		"id": "route_bend", "section": "route", "label": "Bend",
+		"tooltip": "Click a run, then click it to add a bend point.
+Drag a point to move it (Shift: up or down), double-click or Del removes it.",
+		"shapes": [],
+		"params": [],
+	},
+	{
+		"id": "route_height", "section": "route", "label": "Height",
+		"tooltip": "Drag a run up or down: the height it prefers to run at.
+Snaps to the floor, knee, bench and head height.",
+		"shapes": [],
+		"params": [],
+	},
+	{
+		"id": "route_wall", "section": "route", "label": "Along wall",
+		"tooltip": "Click a run, then a building or machine side:
+the run goes along it at that height.",
+		"shapes": [],
+		"params": [],
+	},
+	{
+		"id": "route_lane", "section": "route", "label": "Lane",
+		"tooltip": "Runs laid side by side share a bundle. Drag a run sideways to\nanother lane, or well clear of the bundle to take it out.",
+		"shapes": [],
+		"params": [],
+	},
+	{
+		"id": "route_style", "section": "route", "label": "Style",
+		"tooltip": "Click a run: its kind, size and look.",
+		"shapes": [],
+		"params": [],
+	},
 ]
 
 ## Placement chip vocabularies. LITERAL copies of FestivalPlacementLayer's
@@ -351,6 +404,18 @@ var placement_features: Array = []
 var placement_surface: String = "gravel"
 var placement_equalise: String = "usable"
 var placement_subdivide_now: bool = true
+## What a NEW terrace field grows and whether its steps hold water. LITERAL
+## crop ids (TerraceField.CROP_ORDER; toolbar_selftest-style rule: the model
+## loads with a stale class cache).
+const TERRACE_CROPS: Array[String] = ["rice", "reed", "taro", "potato", "sweet_potato",
+	"sorghum", "beans", "willow", "fallow"]
+var terrace_crop: String = "rice"
+var terrace_flooded: bool = true
+## Who farms a new field ("people" | "machines" | "free") and how its steps
+## are cut ("hand" | "machine" | "instant"): TerraceField.LABOUR_MODES /
+## BUILD_MODES, as literals (the stale-class-cache rule).
+var terrace_labour: String = "people"
+var terrace_build: String = "hand"
 
 
 func _init() -> void:
@@ -647,6 +712,10 @@ func to_config(cfg: ConfigFile) -> void:
 	cfg.set_value("toolbar", "placement_surface", placement_surface)
 	cfg.set_value("toolbar", "placement_equalise", placement_equalise)
 	cfg.set_value("toolbar", "placement_subdivide_now", placement_subdivide_now)
+	cfg.set_value("toolbar", "terrace_crop", terrace_crop)
+	cfg.set_value("toolbar", "terrace_flooded", terrace_flooded)
+	cfg.set_value("toolbar", "terrace_labour", terrace_labour)
+	cfg.set_value("toolbar", "terrace_build", terrace_build)
 	for t in TOOLS:
 		var id := String(t["id"])
 		var section := "tool_%s" % id
@@ -697,6 +766,16 @@ func from_config(cfg: ConfigFile) -> void:
 	set_placement_surface(String(cfg.get_value("toolbar", "placement_surface", placement_surface)))
 	set_placement_equalise(String(cfg.get_value("toolbar", "placement_equalise", placement_equalise)))
 	placement_subdivide_now = bool(cfg.get_value("toolbar", "placement_subdivide_now", placement_subdivide_now))
+	var tc := String(cfg.get_value("toolbar", "terrace_crop", terrace_crop))
+	if TERRACE_CROPS.has(tc):
+		terrace_crop = tc
+	terrace_flooded = bool(cfg.get_value("toolbar", "terrace_flooded", terrace_flooded))
+	var tl := String(cfg.get_value("toolbar", "terrace_labour", terrace_labour))
+	if tl in ["people", "machines", "free"]:
+		terrace_labour = tl
+	var tb := String(cfg.get_value("toolbar", "terrace_build", terrace_build))
+	if tb in ["hand", "skid_steer", "tractor", "instant"]:
+		terrace_build = tb
 	for t in TOOLS:
 		var id := String(t["id"])
 		var section := "tool_%s" % id

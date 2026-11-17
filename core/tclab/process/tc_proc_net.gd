@@ -253,6 +253,9 @@ static func build_transient(d: Dictionary) -> Dictionary:
 				elif mrole.begins_with("probe"):
 					info["probe_mm"] = float(mc.get("probe_mm", 0.0))
 					(cv2["probes"] as Array).append(info)
+				elif mrole == "agitator":
+					info["watts"] = float(mc.get("watts", 120.0))
+					info["start_on"] = bool(mc.get("on", false))
 				(cv2["attach"] as Array).append(info)
 	# 5. Boundaries (open ports).
 	var boundaries: Array = []
@@ -310,6 +313,12 @@ static func build_transient(d: Dictionary) -> Dictionary:
 				# Flow is allowed a → b only; record which end is which.
 				link["from"] = ea if ea >= 0 else -1
 				link["set_bar"] = float(c.get("set_bar", 1.0))
+			if bool(c.get("throttle", false)):
+				link["throttle"] = true
+				link["frac"] = clampf(float(c.get("open_frac", 1.0)), 0.0, 1.0)
+			if str(c["role"]) == "pump":
+				link["from"] = ea if ea >= 0 else -1
+				link["pump"] = (c.get("pump", {}) as Dictionary).duplicate()
 			if bnd >= 0:
 				(boundaries[bnd] as Dictionary)["link"] = links.size()
 				(boundaries[bnd] as Dictionary)["cv"] = int(link["a"])
@@ -370,6 +379,8 @@ static func _port_r_m(ref: String, parts: Dictionary) -> float:
 ## Inside wall area of a circuit (m²): tube walls 2πrL, a vessel's shell
 ## and bottom, a dephlegmator jacket's annulus walls.
 static func _wall_area_m2(c: Dictionary) -> float:
+	if c.has("area_m2"):
+		return float(c["area_m2"])   # a plate pack says its own
 	var r := float(c.get("r_in_mm", 10.0)) * 0.001
 	match str(c.get("role", "")):
 		"vessel":

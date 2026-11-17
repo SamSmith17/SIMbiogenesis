@@ -1,8 +1,9 @@
 extends TourStop
 
-## Wires and pipes in 3D: a cord pulled off one device's port and plugged into
-## another in first person, measured as it is drawn, then restyled live in the
-## conduit modal. Whatever the stop wires up it removes again.
+## Pipes and cables in 3D: the Route tools (Shift+R) join two machines by
+## clicking a port and then the other, the ghost being the run you get; a bend
+## dragged in; then the same run in the Process lens's "As built" picture.
+## Whatever the stop wires up it removes again.
 
 var _made: PackedStringArray = PackedStringArray()
 var _placed: PackedStringArray = PackedStringArray()
@@ -12,21 +13,23 @@ var _labels_before := false
 
 func _init() -> void:
 	id = "conduit_routing"
-	title = "3D wire and pipe routing"
+	title = "3D pipe and cable routing"
 	chapter = "Systems"
-	summary = "Pull a cord or a pipe off a device's port and plug it in — measured as you go."
-	how = PackedStringArray(["Aim at a device's port, press and drag to the other device, release",
-		"Shift+release keeps chaining from the device you plugged into",
-		"Click a run to restyle it live: kind, size, colour — Revert puts it back"])
-	button = "a device's port (press and drag)"
+	summary = "Join machines with real runs: square, with proper bends, round what is in the way."
+	how = PackedStringArray(["Shift+R opens the Route tools: click a port, then a port on the other machine",
+		"Bend: click a run, click it again to add a bend point, drag it",
+		"Runs on the same line lie side by side in lanes; Lane drags one to another",
+		"Open in Process → As built: the system drawn where it really is"])
+	action = "route_edit"
 	world = "mtvernon"
 	budget_s = 45.0
 	hour = 14.0
-	blurb = ("Every wire, hose, penstock and culvert on the graph can be a real run in " +
-		"the world, drawn from port to port over the ground and bent round obstacles. " +
-		"The HUD measures the run as it is pulled with the same rule the committed run " +
-		"uses, run-length tags show metres and feet, and the style modal edits the live " +
-		"run with the I²R loss and a stock-length fit in its header.")
+	blurb = ("Every pipe and cable on the graph can be a real run in the world. The " +
+		"router lays it square, with bends at the real minimum radius of what it is " +
+		"(NEC, PPI, TIA), round machines and buildings and over low things, through " +
+		"any bend points you add. Runs on one line become a bundle of lanes with " +
+		"matched bends. The style window lists the run's size, rating, weight, " +
+		"supports and cost, and the Process lens can draw it all as built.")
 
 
 func run(ctx: TourContext) -> void:
@@ -49,10 +52,11 @@ func run(ctx: TourContext) -> void:
 		rll.call("set_enabled", true)
 	await ctx.wait(0.5)
 	var model: Variant = g.get("model")
-	var pair := _pick_pair(ctx, mgr, model)
+	# Two water tanks of our own: a pipe between two stores is what the
+	# As built picture draws best. Else two free ports already on the site.
+	var pair: Array = await _place_tank_pair(ctx, mgr, model)
 	if pair.is_empty():
-		# Nothing free to wire on this site: set out two water tanks of our own.
-		pair = await _place_tank_pair(ctx, mgr, model)
+		pair = _pick_pair(ctx, mgr, model)
 	var conn_id := ""
 	if pair.is_empty():
 		ctx.note("no two free, compatible ports nearby — showing an existing run")
@@ -75,28 +79,29 @@ func run(ctx: TourContext) -> void:
 		stand.y = ctx.ground_y(stand.x, stand.z) + 0.1
 		ctx.player.global_position = stand
 		ctx.aim_player_at(a)
+		var mid := (a + b) * 0.5
+		ctx.place_camera(mid + side * maxf(7.0, dxz.length() * 0.8) + Vector3.UP * maxf(5.0, dxz.length() * 0.5), mid)
 		await ctx.wait(0.6)
-		ctx.caption("Press on a port and pull a cord off it…", 2.5)
-		await ctx.wait(1.5)
+		var tb: Node = ctx.main.find_child("EditToolbarUI", true, false)
+		if not ctx.require(tb != null, "the edit toolbar"):
+			return
+		await ctx.press("route_edit")
+		await ctx.wait(0.4)
+		if not bool(tb.call("is_panel_open")):
+			tb.call("open_with_section", "route")
+		tb.call("_set_active_tool", "route_connect")
+		ctx.caption("Shift+R: the Route tools. Click a port…", 2.5)
+		await ctx.wait(1.2)
 		var n_before: int = (model.get("connections") as Array).size()
-		ctrl.call("begin_plug", src)
-		# Swing the view across to the far port, the plug following the aim.
-		var steps := 40
-		for i in steps + 1:
-			var p := a.lerp(b, float(i) / float(steps))
-			ctx.aim_player_at(p)
-			await ctx.frames(1)
-		await ctx.wait(0.5)
-		ctx.caption("…measured as you pull it, snapped onto the far port", 3.0)
+		var cam3: Camera3D = ctx.tree().root.get_viewport().get_camera_3d()
+		await ctx.click_at(cam3.unproject_position(a))
+		await ctx.wait(0.4)
+		await ctx.pointer_to(cam3.unproject_position(b), 1.2)
+		await ctx.wait(0.6)
+		ctx.caption("…the ghost is the run you will get: square, real bends, round what is in the way", 3.5)
 		await ctx.wait(1.5)
 		await ctx.hero()
-		var vp := ctx.tree().root.get_viewport()
-		var ev := InputEventMouseButton.new()
-		ev.button_index = MOUSE_BUTTON_LEFT
-		ev.pressed = false
-		ev.position = vp.get_visible_rect().size * 0.5
-		ev.global_position = ev.position
-		vp.push_input(ev, true)
+		await ctx.click_at(cam3.unproject_position(b))
 		await ctx.wait(0.8)
 		for c in model.get("connections"):
 			var cd: Dictionary = c
@@ -107,21 +112,41 @@ func run(ctx: TourContext) -> void:
 			"the release made one run")
 		if not conn_id.is_empty():
 			_made.append(conn_id)
-			mgr.call("force_remesh", conn_id)
-			ctx.caption("Plugged in — the run carries its length", 2.5)
+			ctx.caption("Made: the run between them, with real bends, measured", 2.5)
 			await ctx.wait(2.0)
+			# A bend point, dragged.
+			tb.call("_set_active_tool", "route_bend")
+			await ctx.wait(0.3)
+			var pts: PackedVector3Array = mgr.call("get_sample_points", conn_id)
+			if pts.size() >= 2:
+				var on := cam3.unproject_position(pts[pts.size() / 2])
+				await ctx.click_at(on)
+				await ctx.wait(0.3)
+				await ctx.click_at(on)
+				await ctx.wait(0.6)
+				var vias: Array = (model.call("get_connection", conn_id) as Dictionary).get("route_3d", [])
+				if vias.size() == 1:
+					var v0 := Vector3(float(vias[0]["x"]), float(vias[0]["y"]), float(vias[0]["z"]))
+					var sv := cam3.unproject_position(v0)
+					ctx.caption("Bend: drag a bend point and the run is re-routed through it", 3.0)
+					await ctx.drag_to(sv, sv + Vector2(90, 30), 1.2)
+					await ctx.wait(1.2)
+					await ctx.shot("bend")
 	if conn_id.is_empty():
 		return
-	g.call("open_conduit_style_modal", conn_id)
-	await ctx.wait(1.0)
-	var modal: Variant = g.get("_conduit_style_modal")
-	if ctx.require(modal != null and bool((modal as CanvasItem).visible), "the conduit style modal opened"):
-		ctx.caption("Click a run: restyle it live, on the real run", 3.0)
-		await ctx.wait(3.0)
-		if _made.is_empty():
-			await ctx.hero()
-		await ctx.shot("style_modal")
-		modal.call("close")
+	# The same run in the Process lens, drawn as built.
+	g.call("open_run_in_process", conn_id)
+	await ctx.wait(1.2)
+	var canvas: Variant = g.get("_graph_canvas")
+	var lens: Variant = canvas.call("process_lens") if canvas != null else null
+	if ctx.require(lens != null, "the Process lens"):
+		lens.call("set_built", true)
+		await ctx.wait(1.0)
+		ctx.caption("Process → As built: every machine where it stands, every run along its real path", 3.5)
+		await ctx.wait(2.5)
+		await ctx.shot("as_built")
+		lens.call("set_built", false)
+	ctx.close_graph()
 
 
 ## Two ports on different placed devices, unwired, compatible, 2–60 m apart
@@ -212,6 +237,9 @@ func _existing_run(model: Object) -> String:
 
 
 func teardown(ctx: TourContext) -> void:
+	var tb: Node = ctx.main.find_child("EditToolbarUI", true, false) if ctx.main != null else null
+	if tb != null and bool(tb.call("is_panel_open")):
+		tb.call("_exit_mode")
 	var g := ctx.graph
 	if g != null:
 		var modal: Variant = g.get("_conduit_style_modal")

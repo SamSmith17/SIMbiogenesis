@@ -26,7 +26,13 @@ extends RefCounted
 ## resource, so widths only compare inside one resource.
 ##
 ## Input:
-##   nodes: [{id, label}]
+##   nodes: [{id, label, tier?, w?, h?}]
+##          tier: the reading order the player expects, top to bottom (0
+##          sources, 1 converters, 2 stores; -1 / absent = no rule). A node
+##          sits below every lower-tier node it is wired to; a flow from a
+##          higher tier into a lower one runs UP (KIND_UP when one layer
+##          apart, else a return round the side).
+##          w / h: the node's own least width and its height.
 ##   edges: [{id, a, b, key, value}]          (key = resource / scale key)
 ##   boundary_in:  [{node, key, value, label}] (from outside, into a node)
 ##   boundary_out: [{node, key, value, label}] (out of a node, to outside)
@@ -43,6 +49,9 @@ const KIND_FORWARD := "forward"
 const KIND_RETURN := "return"
 const KIND_IN := "in"
 const KIND_OUT := "out"
+## A flow from a store up into the converter right above it (a battery
+## discharging into its inverter, when tiers put the battery under it).
+const KIND_UP := "up"
 
 const DEF_THICKNESS := 26.0
 const DEF_NODE_H := 46.0
@@ -68,16 +77,28 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 	var node_gap := float(opts.get("node_gap", DEF_NODE_GAP))
 	var min_w := float(opts.get("min_node_w", DEF_MIN_NODE_W))
 	var ret_gap := float(opts.get("return_gap", RETURN_MARGIN))
+	# The wire shape: "bezier" (smooth), "orthogonal" (rounded right angles)
+	# or "metro" (45 degree runs) — the graph's own wire styles.
+	var wire := str(opts.get("wire", "bezier"))
 
 	# --- Nodes and edges, sorted for determinism ------------------------
 	var ids: Array = []
 	var label_of := {}
+	var tier_of := {}
+	var minw_of := {}
+	var h_of := {}
 	for n in nodes:
 		var nid := str((n as Dictionary).get("id", ""))
 		if nid.is_empty() or label_of.has(nid):
 			continue
 		ids.append(nid)
 		label_of[nid] = str((n as Dictionary).get("label", nid))
+		if int((n as Dictionary).get("tier", -1)) >= 0:
+			tier_of[nid] = int((n as Dictionary)["tier"])
+		if float((n as Dictionary).get("w", 0.0)) > 0.0:
+			minw_of[nid] = float((n as Dictionary)["w"])
+		if float((n as Dictionary).get("h", 0.0)) > 0.0:
+			h_of[nid] = float((n as Dictionary)["h"])
 	ids.sort()
 	var idx := {}
 	for i in ids.size():
@@ -94,8 +115,12 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 			"key": str(ed.get("key", "")), "value": v,
 			"conn_ids": ed.get("conn_ids", [str(ed.get("id", ""))])})
 	E.sort_custom(func(x, y) -> bool: return str(x["id"]) < str(y["id"]))
-	var bin: Array = _clean_boundary(boundary_in, idx)
-	var bout: Array = _clean_boundary(boundary_out, idx)
+	# A boundary flow with `hide` (a store's own stock going in or out)
+	# counts in the metrics but takes no slot and draws no ribbon.
+	var bin_all: Array = _clean_boundary(boundary_in, idx)
+	var bout_all: Array = _clean_boundary(boundary_out, idx)
+	var bin: Array = bin_all.filter(func(b) -> bool: return not bool(b.get("hide", false)))
+	var bout: Array = bout_all.filter(func(b) -> bool: return not bool(b.get("hide", false)))
 
 	# --- Per-resource references (each resource its own scale) ----------
 	var refs: Dictionary = (opts.get("refs", {}) as Dictionary).duplicate()
@@ -172,6 +197,40 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 		else:
 			fwd.append(ei)
 
+	# --- 2b. tiers: a flow from a store up into its converter runs up ---
+	var ups: Array = []
+	var tier_pairs: Array = []
+	if not tier_of.is_empty():
+		var keep_f: Array = []
+		for ei in fwd:
+			var tf := _tiers(E[ei], tier_of)
+			if tf.x >= 0 and tf.y >= 0 and tf.x > tf.y:
+				ups.append(ei)
+			else:
+				keep_f.append(ei)
+		var keep_r: Array = []
+		for ei in rets:
+			var tr := _tiers(E[ei], tier_of)
+			if tr.x >= 0 and tr.y >= 0 and tr.x > tr.y:
+				ups.append(ei)
+			elif tr.x >= 0 and tr.y >= 0 and tr.x < tr.y:
+				keep_f.append(ei)
+			else:
+				keep_r.append(ei)
+		fwd = keep_f
+		rets = keep_r
+		var seen_pair := {}
+		for e in E:
+			var tp := _tiers(e, tier_of)
+			if tp.x < 0 or tp.y < 0 or tp.x == tp.y:
+				continue
+			var lo_i := int(idx[e["a"]]) if tp.x < tp.y else int(idx[e["b"]])
+			var hi_i := int(idx[e["b"]]) if tp.x < tp.y else int(idx[e["a"]])
+			var pk := "%d>%d" % [lo_i, hi_i]
+			if not seen_pair.has(pk):
+				seen_pair[pk] = true
+				tier_pairs.append([lo_i, hi_i])
+
 	# --- 3. longest-path layering on the forward edges -------------------
 	var layer := PackedInt32Array()
 	layer.resize(n)
@@ -203,6 +262,39 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 		for ek in (fwd_out[u] as Array):
 			lo = mini(lo, layer[int(idx[(E[ek] as Dictionary)["b"]])])
 		layer[u] = maxi(layer[u], lo - 1)
+	if not tier_pairs.is_empty() or not ups.is_empty():
+		# The tiers on top of the flow: a store below its converter, the
+		# converter below its sources. A cycle the two cannot both satisfy
+		# stops after n passes and the offending flows become returns.
+		for _pass in n + 2:
+			var moved := false
+			for ei in fwd:
+				var fa := int(idx[(E[ei] as Dictionary)["a"]])
+				var fb := int(idx[(E[ei] as Dictionary)["b"]])
+				if layer[fb] < layer[fa] + 1:
+					layer[fb] = layer[fa] + 1
+					moved = true
+			for pr in tier_pairs:
+				if layer[int(pr[1])] < layer[int(pr[0])] + 1:
+					layer[int(pr[1])] = layer[int(pr[0])] + 1
+					moved = true
+			if not moved:
+				break
+		var keep2: Array = []
+		for ei in fwd:
+			if layer[int(idx[(E[ei] as Dictionary)["b"]])] <= layer[int(idx[(E[ei] as Dictionary)["a"]])]:
+				rets.append(ei)
+			else:
+				keep2.append(ei)
+		fwd = keep2
+		var up_adj: Array = []
+		for ei in ups:
+			if layer[int(idx[(E[ei] as Dictionary)["a"]])] == layer[int(idx[(E[ei] as Dictionary)["b"]])] + 1:
+				up_adj.append(ei)
+			else:
+				rets.append(ei)
+		ups = up_adj
+		rets.sort()
 	var max_layer := 0
 	for i in n:
 		max_layer = maxi(max_layer, layer[i])
@@ -243,8 +335,16 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 	var out_px := PackedFloat64Array()
 	in_px.resize(n)
 	out_px.resize(n)
-	for e in E:
+	var is_up := {}
+	for ei in ups:
+		is_up[int(ei)] = true
+	for ei2 in E.size():
+		var e: Dictionary = E[ei2]
 		var w := float(wfn.call(str(e["key"]), float(e["value"])))
+		if is_up.has(ei2):
+			in_px[int(idx[e["a"]])] += w
+			out_px[int(idx[e["b"]])] += w
+			continue
 		out_px[int(idx[e["a"]])] += w
 		in_px[int(idx[e["b"]])] += w
 	for b in bin:
@@ -253,7 +353,13 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 		out_px[int(idx[b["node"]])] += float(wfn.call(str(b["key"]), float(b["value"])))
 	for i in n:
 		units[i]["through"] = maxf(in_px[i], out_px[i])
-		units[i]["w"] = maxf(min_w, maxf(in_px[i], out_px[i]) + 12.0)
+		units[i]["w"] = maxf(maxf(min_w, float(minw_of.get(ids[i], 0.0))), maxf(in_px[i], out_px[i]) + 12.0)
+	# An up flow pulls its store under its converter like any wire.
+	for ei in ups:
+		var eu0: Dictionary = E[ei]
+		var w0 := float(wfn.call(str(eu0["key"]), float(eu0["value"])))
+		(unit_in[int(idx[eu0["a"]])] as Array).append([int(idx[eu0["b"]]), w0])
+		(unit_out[int(idx[eu0["b"]])] as Array).append([int(idx[eu0["a"]]), w0])
 
 	# --- 4. ordering: barycenter sweeps over the layers -----------------
 	var rows: Array = []
@@ -336,14 +442,29 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 	lo_x += shift
 	hi_x += shift
 	var top_y := BAND_H if not bin.is_empty() else 0.0
+	# Each node has its own height; a layer is as tall as its tallest.
+	var h_node := PackedFloat64Array()
+	h_node.resize(n)
+	var layer_h := PackedFloat64Array()
+	layer_h.resize(max_layer + 1)
+	layer_h.fill(node_h)
+	for i in n:
+		h_node[i] = float(h_of.get(ids[i], node_h))
+		layer_h[layer[i]] = maxf(layer_h[layer[i]], h_node[i])
+	var layer_y := PackedFloat64Array()
+	layer_y.resize(max_layer + 1)
+	var yacc := top_y
+	for L in max_layer + 1:
+		layer_y[L] = yacc
+		yacc += layer_h[L] + layer_gap
 	var ly := func(L: int) -> float:
-		return top_y + float(L) * (node_h + layer_gap)
+		return layer_y[clampi(L, 0, max_layer)]
 
 	# --- Node rects ------------------------------------------------------
 	var out_nodes := {}
 	for i in n:
 		var w := float(units[i]["w"])
-		out_nodes[ids[i]] = {"rect": Rect2(Vector2(xc[i] - w * 0.5, float(ly.call(layer[i]))), Vector2(w, node_h)),
+		out_nodes[ids[i]] = {"rect": Rect2(Vector2(xc[i] - w * 0.5, float(ly.call(layer[i]))), Vector2(w, h_node[i])),
 			"layer": layer[i], "order": int(slot[i]), "through_px": float(units[i]["through"]),
 			"label": label_of[ids[i]], "loop": loop_of[i]}
 
@@ -412,6 +533,13 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 		var u4 := int(idx[b2["node"]])
 		(bot[u4] as Array).append({"t": "out", "b": bo, "w": float(wfn.call(str(b2["key"]), float(b2["value"]))),
 			"to_x": xc[u4], "order": 0})
+	for ei in ups:
+		var eu: Dictionary = E[ei]
+		var w_u := float(wfn.call(str(eu["key"]), float(eu["value"])))
+		var ua_u := int(idx[eu["a"]])
+		var ub_u := int(idx[eu["b"]])
+		(top[ua_u] as Array).append({"t": "u", "e": int(ei), "w": w_u, "to_x": xc[ub_u], "order": 0})
+		(bot[ub_u] as Array).append({"t": "u", "e": int(ei), "w": w_u, "to_x": xc[ua_u], "order": 0})
 	for r in ret_info:
 		var lane := float(r["lane"])
 		# Outermost lanes at the outer ends: order key pushes them out.
@@ -439,12 +567,16 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 		return float(ly.call(int(units[u]["layer"])))
 	var y_bot_of := func(u: int) -> float:
 		var yy := float(ly.call(int(units[u]["layer"])))
-		return yy + (node_h if int(units[u]["real"]) >= 0 else 0.0)
+		var ri := int(units[u]["real"])
+		return yy + (h_node[ri] if ri >= 0 else layer_h[int(units[u]["layer"])])
 	# Forward ribbons: down through their dummies.
 	for ch in chains:
 		var e: Dictionary = E[int(ch["edge"])]
 		var cu3: Array = ch["units"]
-		var path := PackedVector2Array()
+		# The waypoints: out of the source's bottom, through each dummy, into
+		# the target's top. One curve through all of them (a chain of
+		# S-curves, one per layer, made long ribbons snake).
+		var way := PackedVector2Array()
 		for j in cu3.size() - 1:
 			var ua3 := int(cu3[j])
 			var ub3 := int(cu3[j + 1])
@@ -453,16 +585,33 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 			var x2 := float(slot_x.get("%d|1|%s" % [ub3, it_key], xc[ub3]))
 			var y1 := float(y_bot_of.call(ua3))
 			var y2 := float(y_top_of.call(ub3))
-			var seg := _vbezier(Vector2(x1, y1), Vector2(x2, y2), 14)
-			if path.size() > 0:
-				seg = seg.slice(1)
-			path.append_array(seg)
+			if way.is_empty() or absf(way[way.size() - 1].y - y1) > 0.01:
+				way.append(Vector2(x1, y1))
+			way.append(Vector2(x2, y2))
+		var path := wire_path(way, wire)
 		var ia5 := int(idx[e["a"]])
 		var ib5 := int(idx[e["b"]])
 		var lp := loop_of[ia5] if loop_of[ia5] >= 0 and loop_of[ia5] == loop_of[ib5] else -1
 		ribbons.append({"id": str(e["id"]), "conn_ids": e["conn_ids"], "a": str(e["a"]), "b": str(e["b"]),
 			"key": str(e["key"]), "value": float(e["value"]), "width": float(ch["w"]), "path": path,
 			"kind": KIND_FORWARD, "loop": lp, "side": 0})
+	# Up flows: out of the store's top, straight up into the converter's bottom.
+	for ei in ups:
+		var eu2: Dictionary = E[ei]
+		var ua7 := int(idx[eu2["a"]])
+		var ub7 := int(idx[eu2["b"]])
+		var k7 := "u%d" % int(ei)
+		var pa := Vector2(float(slot_x.get("%d|1|%s" % [ua7, k7], xc[ua7])), float(y_top_of.call(ua7)))
+		var pb := Vector2(float(slot_x.get("%d|0|%s" % [ub7, k7], xc[ub7])), float(y_bot_of.call(ub7)))
+		var down := wire_path(PackedVector2Array([pb, pa]), wire)
+		var path7 := PackedVector2Array()
+		for q in range(down.size() - 1, -1, -1):
+			path7.append(down[q])
+		var lp7 := loop_of[ua7] if loop_of[ua7] >= 0 and loop_of[ua7] == loop_of[ub7] else -1
+		ribbons.append({"id": str(eu2["id"]), "conn_ids": eu2["conn_ids"], "a": str(eu2["a"]), "b": str(eu2["b"]),
+			"key": str(eu2["key"]), "value": float(eu2["value"]),
+			"width": float(wfn.call(str(eu2["key"]), float(eu2["value"]))), "path": path7,
+			"kind": KIND_UP, "loop": lp7, "side": 0})
 	# Returns: down, out to the lane, up the side, in, and down into the target.
 	var col_lo := lo_x
 	var col_hi := hi_x
@@ -479,12 +628,18 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 		var s2 := int(r["side"])
 		var xl := (col_lo - ret_gap - lane) if s2 < 0 else (col_hi + ret_gap + lane)
 		var dip := 22.0 + lane * 0.55
-		var path2 := _return_path(Vector2(xs, ys), Vector2(xt, yt), xl, dip)
+		var path2: PackedVector2Array
+		if wire == "bezier":
+			path2 = _return_path(Vector2(xs, ys), Vector2(xt, yt), xl, dip)
+		else:
+			path2 = round_poly(PackedVector2Array([Vector2(xs, ys), Vector2(xs, ys + dip),
+				Vector2(xl, ys + dip), Vector2(xl, yt - dip), Vector2(xt, yt - dip), Vector2(xt, yt)]),
+				minf(dip * 0.8, 18.0), wire == "metro")
 		ribbons.append({"id": str(e2["id"]), "conn_ids": e2["conn_ids"], "a": str(e2["a"]), "b": str(e2["b"]),
 			"key": str(e2["key"]), "value": float(e2["value"]), "width": float(r["w"]), "path": path2,
 			"kind": KIND_RETURN, "loop": loop_of[ua4], "side": s2})
 	# Boundary flows: from the top band, to the bottom band.
-	var bottom_y := float(ly.call(max_layer)) + node_h + layer_gap * 0.5 + BAND_H
+	var bottom_y := float(ly.call(max_layer)) + layer_h[max_layer] + layer_gap * 0.5 + BAND_H
 	for bi2 in bin.size():
 		var b3: Dictionary = bin[bi2]
 		var u5 := int(idx[b3["node"]])
@@ -495,7 +650,8 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 		ribbons.append({"id": "in:%d" % bi2, "conn_ids": [], "a": "", "b": str(b3["node"]),
 			"key": str(b3["key"]), "value": float(b3["value"]),
 			"width": float(wfn.call(str(b3["key"]), float(b3["value"]))), "path": p5,
-			"kind": KIND_IN, "loop": -1, "side": 0, "label": str(b3.get("label", ""))})
+			"kind": KIND_IN, "loop": -1, "side": 0, "label": str(b3.get("label", "")),
+			"sun": bool(b3.get("sun", false))})
 	for bo2 in bout.size():
 		var b4: Dictionary = bout[bo2]
 		var u6 := int(idx[b4["node"]])
@@ -509,7 +665,7 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 			"kind": KIND_OUT, "loop": -1, "side": 0, "label": str(b4.get("label", ""))})
 
 	# --- 7. metrics ------------------------------------------------------
-	var metrics := cycling_metrics(ids, E, bin, bout)
+	var metrics := cycling_metrics(ids, E, bin_all, bout_all)
 	var loops: Array = []
 	for li in loop_ids.size():
 		var lm: Array = []
@@ -533,7 +689,7 @@ static func layout(nodes: Array, edges: Array, boundary_in: Array = [],
 		Vector2((col_hi - col_lo) + 2.0 * (ret_gap + lane_max + 20.0), bottom_y))
 	return {"nodes": out_nodes, "ribbons": ribbons, "loops": loops, "metrics": metrics,
 		"bounds": bounds, "center_x": 0.0, "refs": refs, "layers": max_layer + 1,
-		"returns": rets.size()}
+		"returns": rets.size(), "ups": ups.size()}
 
 
 ## Finn's Cycling Index per resource (Finn 1976, J. Theor. Biol. 56:363):
@@ -696,7 +852,8 @@ static func _clean_boundary(lst: Array, idx: Dictionary) -> Array:
 		var v := float(bd.get("value", 0.0))
 		if not idx.has(nd) or v <= 0.0:
 			continue
-		out.append({"node": nd, "key": str(bd.get("key", "")), "value": v, "label": str(bd.get("label", ""))})
+		out.append({"node": nd, "key": str(bd.get("key", "")), "value": v, "label": str(bd.get("label", "")),
+			"sun": bool(bd.get("sun", false)), "hide": bool(bd.get("hide", false))})
 	out.sort_custom(func(x, y) -> bool:
 		if str(x["node"]) != str(y["node"]):
 			return str(x["node"]) < str(y["node"])
@@ -848,7 +1005,14 @@ static func _slot_key(it: Dictionary) -> String:
 			return "i%d" % int(it["b"])
 		"out":
 			return "o%d" % int(it["b"])
+		"u":
+			return "u%d" % int(it["e"])
 	return "?"
+
+
+## The two ends' tiers of an edge (x = source, y = target; -1 = none).
+static func _tiers(e: Dictionary, tier_of: Dictionary) -> Vector2i:
+	return Vector2i(int(tier_of.get(str(e["a"]), -1)), int(tier_of.get(str(e["b"]), -1)))
 
 
 ## Pack one layer left to right in its current order, centred on 0.
@@ -921,4 +1085,174 @@ static func _return_path(s: Vector2, t: Vector2, xl: float, dip: float) -> Packe
 	var b2 := t - Vector2(0.0, dip * 2.2)
 	for i2 in range(1, SEGS + 1):
 		out.append(m.bezier_interpolate(b1, b2, t, float(i2) / float(SEGS)))
+	return out
+
+
+## One forward ribbon through its waypoints (top to bottom) in a wire style.
+##   bezier: a monotone curve through every waypoint, vertical at both ends
+##     (Fritsch & Carlson 1980), so a ribbon crossing several layers bends
+##     once instead of once per layer;
+##   orthogonal: down, across, down with rounded corners;
+##   metro: down, a 45 degree run, down.
+static func wire_path(way: PackedVector2Array, wire: String = "bezier") -> PackedVector2Array:
+	var n := way.size()
+	if n < 2:
+		return way
+	var out := PackedVector2Array()
+	if wire == "orthogonal" or wire == "metro":
+		for i in n - 1:
+			var a := way[i]
+			var b := way[i + 1]
+			var seg: PackedVector2Array
+			if absf(b.x - a.x) < 0.5:
+				seg = PackedVector2Array([a, b])
+			elif wire == "orthogonal":
+				var ym := (a.y + b.y) * 0.5
+				seg = round_poly(PackedVector2Array([a, Vector2(a.x, ym), Vector2(b.x, ym), b]),
+					minf(14.0, absf(b.y - a.y) * 0.25), false)
+			else:
+				var run := minf(absf(b.x - a.x), absf(b.y - a.y) * 0.8)
+				var ym2 := (a.y + b.y) * 0.5
+				seg = PackedVector2Array([a, Vector2(a.x, ym2 - run * 0.5), Vector2(b.x, ym2 + run * 0.5), b])
+			if out.size() > 0:
+				seg = seg.slice(1)
+			out.append_array(seg)
+		return out
+	if n == 2:
+		return _vbezier(way[0], way[1], 14)
+	# Monotone cubic x(y): slopes dx/dy, zero at both ends.
+	var d := PackedFloat64Array()
+	d.resize(n - 1)
+	for i2 in n - 1:
+		var dy := maxf(way[i2 + 1].y - way[i2].y, 0.001)
+		d[i2] = (way[i2 + 1].x - way[i2].x) / dy
+	var m := PackedFloat64Array()
+	m.resize(n)
+	for i3 in range(1, n - 1):
+		m[i3] = 0.0 if d[i3 - 1] * d[i3] <= 0.0 else (d[i3 - 1] + d[i3]) * 0.5
+	for i4 in n - 1:
+		if absf(d[i4]) < 1e-12:
+			m[i4] = 0.0
+			m[i4 + 1] = 0.0
+			continue
+		var al := m[i4] / d[i4]
+		var be := m[i4 + 1] / d[i4]
+		var h := al * al + be * be
+		if h > 9.0:
+			var tau := 3.0 / sqrt(h)
+			m[i4] = tau * al * d[i4]
+			m[i4 + 1] = tau * be * d[i4]
+	const SEGS := 12
+	for i5 in n - 1:
+		var p0 := way[i5]
+		var p1 := way[i5 + 1]
+		var hy := p1.y - p0.y
+		for k in range(0 if i5 == 0 else 1, SEGS + 1):
+			var t := float(k) / float(SEGS)
+			var t2 := t * t
+			var t3 := t2 * t
+			var x := (2.0 * t3 - 3.0 * t2 + 1.0) * p0.x + (t3 - 2.0 * t2 + t) * hy * m[i5]
+			x += (-2.0 * t3 + 3.0 * t2) * p1.x + (t3 - t2) * hy * m[i5 + 1]
+			out.append(Vector2(x, p0.y + hy * t))
+	return out
+
+
+## A polyline with its inside corners rounded (radius r) or cut at 45 degrees.
+static func round_poly(pts: PackedVector2Array, r: float, chamfer: bool) -> PackedVector2Array:
+	var n := pts.size()
+	if n < 3 or r <= 0.5:
+		return pts
+	var out := PackedVector2Array([pts[0]])
+	for i in range(1, n - 1):
+		var p := pts[i]
+		var da := pts[i - 1] - p
+		var db := pts[i + 1] - p
+		var la := da.length()
+		var lb := db.length()
+		var c := minf(r, minf(la, lb) * 0.5)
+		if c < 0.5:
+			out.append(p)
+			continue
+		var a := p + da / la * c
+		var b := p + db / lb * c
+		if chamfer:
+			out.append(a)
+			out.append(b)
+		else:
+			for k in 7:
+				var t := float(k) / 6.0
+				out.append(a.lerp(p, t).lerp(p.lerp(b, t), t))
+	out.append(pts[n - 1])
+	return out
+
+
+## Move nodes to where the player dragged them. `pins` = {id: centre (graph
+## units)}. A ribbon follows its two ends: each point moves by a blend of
+## the two ends' moves along the ribbon, so the shape it had is kept and
+## both ends stay attached. Returns a new layout; `lay` is not changed.
+static func apply_pins(lay: Dictionary, pins: Dictionary) -> Dictionary:
+	if pins.is_empty() or lay.is_empty():
+		return lay
+	var nodes: Dictionary = lay.get("nodes", {})
+	var delta := {}
+	for id in pins:
+		if not nodes.has(id):
+			continue
+		var want: Vector2 = pins[id]
+		var d: Vector2 = want - (nodes[id]["rect"] as Rect2).get_center()
+		if d.length_squared() > 0.01:
+			delta[str(id)] = d
+	if delta.is_empty():
+		return lay
+	var out := lay.duplicate()
+	var nn := {}
+	var lo := (lay["bounds"] as Rect2).position
+	var hi := (lay["bounds"] as Rect2).end
+	for id2 in nodes:
+		var nd: Dictionary = (nodes[id2] as Dictionary)
+		if delta.has(str(id2)):
+			nd = nd.duplicate()
+			var r: Rect2 = nd["rect"]
+			r.position += delta[str(id2)] as Vector2
+			nd["rect"] = r
+			nd["pinned"] = true
+			lo = lo.min(r.position - Vector2(30.0, 30.0))
+			hi = hi.max(r.end + Vector2(30.0, 30.0))
+		nn[id2] = nd
+	out["nodes"] = nn
+	var rs: Array = []
+	for rbv in (lay.get("ribbons", []) as Array):
+		var rb: Dictionary = rbv
+		var ida := str(rb["a"])
+		var idb := str(rb["b"])
+		var has_a := delta.has(ida)
+		var has_b := delta.has(idb)
+		if not has_a and not has_b:
+			rs.append(rb)
+			continue
+		var da: Vector2 = delta[ida] if has_a else Vector2.ZERO
+		var db: Vector2 = delta[idb] if has_b else Vector2.ZERO
+		# A boundary flow has one end: it moves whole with its node.
+		if ida.is_empty():
+			da = db
+		if idb.is_empty():
+			db = da
+		var src: PackedVector2Array = rb["path"]
+		var np := PackedVector2Array()
+		np.resize(src.size())
+		var total := 0.0
+		for i in range(1, src.size()):
+			total += src[i].distance_to(src[i - 1])
+		var run := 0.0
+		for i2 in src.size():
+			if i2 > 0:
+				run += src[i2].distance_to(src[i2 - 1])
+			var t := run / total if total > 1e-6 else 0.0
+			var st := t * t * (3.0 - 2.0 * t)
+			np[i2] = src[i2] + da.lerp(db, st)
+		var nrb := rb.duplicate()
+		nrb["path"] = np
+		rs.append(nrb)
+	out["ribbons"] = rs
+	out["bounds"] = Rect2(lo, hi - lo)
 	return out

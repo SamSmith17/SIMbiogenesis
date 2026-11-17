@@ -11,7 +11,7 @@ extends SceneTree
 ## and one clamp per joint), the spec key round trip, picking, the builder's
 ## nodes, and the files (GLB re-imported, STL size).
 
-const EXPECTED_CHECKS := 691
+const EXPECTED_CHECKS := 779
 
 var _pass := 0
 var _fail := 0

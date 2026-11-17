@@ -990,7 +990,7 @@ var _tracks_subs: Dictionary = {}   # "power" | "weather" | "ha" | "remove" -> P
 
 const TRACK_SOURCE_NAMES := {"live": "live", "sim": "simulated", "observed": "observed CSV",
 	"ha": "Home Assistant link", "ha_entity": "Home Assistant", "weather": "weather",
-	"composition": "water & nutrients"}
+	"composition": "water & nutrients", "tag": "tag"}
 
 
 func _setup_tracks_menu() -> void:
@@ -1073,6 +1073,8 @@ func _rebuild_tracks_menu() -> void:
 				first = false
 			_track_menu_add(ha, str(t.get("label", tid)), {"add_ha": tid, "label": str(t.get("label", tid))})
 	_tracks_menu.add_submenu_node_item("Add Home Assistant track", ha)
+	# Any tag on the site (tank level, pipe flow, a board's sensor…).
+	_track_menu_add(_tracks_menu, "Add tag track…", {"pick_tag": true}, _scada_hub() == null)
 	if shown > 0:
 		_tracks_menu.add_separator()
 		_tracks_menu.add_submenu_node_item("Remove a track", _tracks_subs["remove"])
@@ -1103,6 +1105,11 @@ func _on_tracks_menu_id_pressed(id : int, menu : PopupMenu) -> void:
 	var meta : Variant = menu.get_item_metadata(idx)
 	if meta is Dictionary and meta.has("pick_ha"):
 		_open_ha_sensor_picker()
+		return
+	if meta is Dictionary and meta.has("pick_tag"):
+		open_tag_browser({"title": "Add a tag track",
+			"subtitle": "Its history is recorded on the game clock from now on.",
+			"pick": _on_tag_picked_for_track})
 		return
 	if meta is Dictionary and meta.has("add_ha"):
 		var dh : Dictionary = meta as Dictionary
@@ -1141,6 +1148,41 @@ func add_ha_entity_track(entity_id : String, label : String) -> void:
 	if svc != null:
 		svc.call("track_entity", entity_id)
 	_tracks_changed()
+
+
+const _TAG_BROWSER := preload("res://scenes/ui/scada/tag_browser.gd")
+
+
+func _scada_hub() -> Node:
+	var g := ServiceLocator.graph()
+	return g.call("scada_hub") if g != null and g.has_method("scada_hub") else null
+
+
+## A site tag as a track; the hub keeps its history long and saves it.
+func add_tag_track(tag_id : String, label : String) -> void:
+	if tag_id.is_empty():
+		return
+	_track_layout.add_tag_track(tag_id, label)
+	var hub := _scada_hub()
+	if hub != null:
+		hub.call("watch", tag_id)
+	_tracks_changed()
+
+
+func _on_tag_picked_for_track(tg : Dictionary) -> void:
+	add_tag_track(str(tg.get("id", "")), _TAG_BROWSER.track_label(tg))
+
+
+## The tag browser (every live value on the site). `opts` as tag_browser.open.
+func open_tag_browser(opts : Dictionary = {}) -> Node:
+	var hub := _scada_hub()
+	if hub == null:
+		return null
+	var br := Node.new()
+	br.set_script(_TAG_BROWSER)
+	add_child(br)
+	br.call("open", hub, opts)
+	return br
 
 
 func _open_ha_sensor_picker() -> void:
@@ -2341,6 +2383,8 @@ func _draw_waveform_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : f
 			_draw_ha_lane(td, lane_rect, win_start, span, fnt)
 		"ha_entity":
 			_draw_ha_entity_lane(td, lane_rect, win_start, span, fnt)
+		"tag":
+			_draw_tag_lane(td, lane_rect, win_start, span, fnt)
 		TimelineWeatherChannels.SOURCE:
 			_draw_weather_lane(td, lane_rect, win_start, span, fnt)
 		TimelineCompositionChannels.SOURCE:
@@ -2442,6 +2486,30 @@ func _draw_ha_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : float, 
 		axis = Vector2(-0.05, 1.05)
 	_draw_bins_lane(td, lane_rect, bins, win_start, span, axis, unit,
 		"no readings in this window" if not t.is_empty() else "this link was removed", fnt)
+
+
+## A site tag's history (ScadaHub), on the sim clock, in the tag's own unit.
+func _draw_tag_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : float, span : float, fnt : Font) -> void:
+	var hub := _scada_hub()
+	if hub == null:
+		return
+	var hist : ScadaHistorian = hub.call("history")
+	var g := _lane_grid(lane_rect, win_start, span, 0.0)
+	var now_h := float(hub.call("now_h"))
+	var bins : Dictionary = _lane_bins_cached(td, g, 1.0, func() -> Dictionary:
+		return hist.bins_exact(td.channel, float(g["w"]), int(g["i0"]), int(g["n"]),
+			now_h if not is_nan(now_h) else INF))
+	var tg : Dictionary = (hub.call("book") as ScadaTags).tag(td.channel)
+	var unit := str(tg.get("unit", ""))
+	var binary := ScadaTags.is_bool_kind(str(tg.get("kind", "")))
+	var r := TimelineBinning.value_range(bins)
+	var axis := _axis_for(r, unit in ["W", "%", "L", "kg", "/h"])
+	if tg.has("lo") and tg.has("hi") and unit == "%" and not is_nan(r.x):
+		axis = Vector2(float(tg["lo"]), float(tg["hi"]))
+	if binary and not is_nan(r.x):
+		axis = Vector2(-0.05, 1.05)
+	_draw_bins_lane(td, lane_rect, bins, win_start, span, axis, "bool" if binary else unit,
+		"no history in this window yet" if not tg.is_empty() else "this tag is gone", fnt)
 
 
 ## Any Home Assistant entity (the service records it and fetches the window

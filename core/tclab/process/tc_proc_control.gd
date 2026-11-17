@@ -93,6 +93,10 @@ static func sensors(sim: TcProcSim, d: Dictionary, proc: Dictionary) -> Array:
 			var pid2 := str(a["part"])
 			if role == "probe_p":
 				add.call(pid2, _part_label(d, pid2), "kPa", {"kind": "cv_p", "cv": i})
+			elif role == "probe_l":
+				add.call(pid2, _part_label(d, pid2), "%", {"kind": "cv_level", "cv": i})
+			elif role == "probe_ls":
+				add.call(pid2, _part_label(d, pid2), "", {"kind": "level_switch", "cv": i, "y_m": float((a["at_mm"] as Vector3).y) * 0.001})
 			else:
 				add.call(pid2, _part_label(d, pid2), "°C", {"kind": "cv_t", "cv": i})
 		if str(cv["role"]) == "sight":
@@ -104,6 +108,24 @@ static func sensors(sim: TcProcSim, d: Dictionary, proc: Dictionary) -> Array:
 			add.call("%s_level" % slug(str(b["ref"])), "Liquid above %s (%s)" % [nm, b["ref"]], "%", {"kind": "cv_level", "cv": int(b["cv"])})
 	if not sim.cool_lpm.is_empty():
 		add.call("cooling_out_temp", "Cooling water out", "°C", {"kind": "cool_out"})
+	# Liquid lines: every vessel's level, every pump's flow.
+	if not sim.lines.is_empty():
+		for i2 in cvs.size():
+			if str(cvs[i2]["role"]) == "vessel":
+				var vp := str(cvs[i2].get("vessel_part", "v%d" % i2))
+				add.call("%s_level" % vp, "%s level" % _part_label(d, vp), "%", {"kind": "cv_level", "cv": i2})
+		for i5 in cvs.size():
+			if str(cvs[i5]["role"]) == "vessel":
+				var vp5 := str(cvs[i5].get("vessel_part", "v%d" % i5))
+				add.call("%s_liquid_temp" % vp5, "%s liquid" % _part_label(d, vp5), "°C", {"kind": "cv_liq_t", "cv": i5})
+	# A flow meter reads the line it sits in.
+	for fm in (d.get("spec", {}) as Dictionary).get("parts", []):
+		if str(fm.get("type", "")) == "flow_meter":
+			var fc := _cv_of_part(sim, str(fm["id"]))
+			if fc >= 0:
+				add.call(str(fm["id"]), _part_label(d, str(fm["id"])), "L/min", {"kind": "line_flow", "cv": fc})
+	for pk in sim.pump_on.keys():
+		add.call("%s_flow" % str(pk), "%s flow" % _part_label(d, str(pk)), "L/min", {"kind": "pump_flow", "part": str(pk)})
 	# Gas out of a labelled outlet (none on a chain whose gas goes to units).
 	var has_product := false
 	for b2 in sim.net["boundaries"]:
@@ -238,6 +260,18 @@ static func read_all(sim: TcProcSim, list: Array, only: Dictionary = {}) -> Dict
 				v = float(sim.engine_kw.get(str(src["part"]), 0.0))
 			"engine_kwh":
 				v = sim.engine_kwh
+			"pump_flow":
+				v = float(sim.pump_lpm.get(str(src["part"]), 0.0))
+			"cv_liq_t":
+				var il := int(src["cv"])
+				v = sim.liq_t(il) - 273.15 if sim._liq_volume(sim.liq[il]) > 1e-6 else NAN
+			"level_switch":
+				v = 1.0 if sim.liquid_surface_m(int(src["cv"])) >= float(src["y_m"]) else 0.0
+			"line_flow":
+				v = 0.0
+				for ln in sim.lines:
+					if (ln["cvs"] as Array).has(int(src["cv"])):
+						v += absf(float(ln["lpm"]))
 			"cv_lhv":
 				v = sim._lhv_of(sim.gas[int(src["cv"])]) * 1.0e-6 / 0.022414
 		if is_finite(v):
@@ -262,8 +296,28 @@ static func actuators(sim: TcProcSim, d: Dictionary, proc: Dictionary) -> Array:
 	for l in sim.net["links"]:
 		if str(l["kind"]) == "valve" and str(l["part"]) != "" and not seen.has(str(l["part"])):
 			seen[str(l["part"])] = true
+			# A hand valve has nothing to switch it but a person: `hand`
+			# says so (an actuator on its stem, a solenoid or a control
+			# valve is driven).
 			out.append({"key": "switch.%s_%s" % [s, l["part"]], "label": _part_label(d, str(l["part"])), "kind": "switch",
-				"act": "valve:%s" % l["part"]})
+				"act": "valve:%s" % l["part"], "hand": is_hand_valve(d, str(l["part"]))})
+	for l2 in sim.net["links"]:
+		var lp := str(l2["part"])
+		if str(l2["kind"]) == "pump":
+			out.append({"key": "switch.%s_%s" % [s, lp], "label": _part_label(d, lp), "kind": "switch", "act": "pump:%s" % lp})
+			out.append({"key": "number.%s_%s_speed" % [s, lp], "label": "%s speed" % _part_label(d, lp), "kind": "number",
+				"act": "pumpspeed:%s" % lp, "min": 0.0, "max": 100.0, "step": 1.0, "unit": "%"})
+		elif bool(l2.get("throttle", false)):
+			out.append({"key": "number.%s_%s_opening" % [s, lp], "label": "%s opening" % _part_label(d, lp), "kind": "number",
+				"act": "cvalve:%s" % lp, "min": 0.0, "max": 100.0, "step": 1.0, "unit": "%"})
+	for ap in sim.agit.keys():
+		out.append({"key": "switch.%s_%s" % [s, ap], "label": _part_label(d, str(ap)), "kind": "switch", "act": "agitator:%s" % ap})
+	for jc in sim.jacket.keys():
+		var jp := str(sim.jacket[jc]["part"])
+		var jl := "%s jacket" % _part_label(d, jp)
+		out.append({"key": "switch.%s_%s_jacket" % [s, jp], "label": jl, "kind": "switch", "act": "jacket:%s" % jp})
+		out.append({"key": "number.%s_%s_jacket_temp" % [s, jp], "label": "%s water" % jl, "kind": "number",
+			"act": "jackett:%s" % jp, "min": 0.0, "max": 99.0, "step": 1.0, "unit": "°C"})
 	if not sim.cool_lpm.is_empty():
 		out.append({"key": "switch.%s_cooling" % s, "label": "Cooling water", "kind": "switch", "act": "cooling_switch"})
 		out.append({"key": "number.%s_cooling_flow" % s, "label": "Cooling water flow", "kind": "number", "act": "cooling",
@@ -281,6 +335,22 @@ static func actuators(sim: TcProcSim, d: Dictionary, proc: Dictionary) -> Array:
 
 
 ## on / off of every switch (the automations' state signals).
+## True for a valve only a person can turn: a manual valve type with no
+## actuator clamped to its stem.
+static func is_hand_valve(d: Dictionary, pid: String) -> bool:
+	var sp: Dictionary = d.get("spec", {})
+	var type := ""
+	for p in sp.get("parts", []):
+		if str(p.get("id", "")) == pid:
+			type = str(p.get("type", ""))
+	if type in ["control_valve", "solenoid_valve"]:
+		return false
+	for j in sp.get("joints", []):
+		if str(j.get("a", "")) == pid + ":stem" or str(j.get("b", "")) == pid + ":stem":
+			return false
+	return true
+
+
 static func states(sim: TcProcSim, acts: Array) -> Dictionary:
 	var out := {}
 	for a in acts:
@@ -317,6 +387,15 @@ static func is_on(sim: TcProcSim, act: String) -> bool:
 					return bool(sim.drain_open[bi])
 		"engine":
 			return bool(sim.engine_on.get(key, false))
+		"pump":
+			return bool(sim.pump_on.get(key, false))
+		"agitator":
+			return bool(sim.agit_on.get(key, false))
+		"jacket":
+			for jc in sim.jacket.keys():
+				if str(sim.jacket[jc]["part"]) == key:
+					return bool(sim.jacket[jc]["on"])
+			return false
 	return false
 
 
@@ -327,6 +406,16 @@ static func value_of(sim: TcProcSim, a: Dictionary) -> float:
 	if act == "cooling":
 		for c in sim.cool_lpm.keys():
 			return float(sim.cool_lpm[c])
+	if act.begins_with("jackett:"):
+		for jc in sim.jacket.keys():
+			if str(sim.jacket[jc]["part"]) == act.substr(8):
+				return float(sim.jacket[jc]["t_c"])
+	if act.begins_with("pumpspeed:"):
+		return float(sim.pump_speed.get(act.substr(10), 1.0)) * 100.0
+	if act.begins_with("cvalve:"):
+		for li in (sim.net["links"] as Array).size():
+			if str(sim.net["links"][li]["part"]) == act.substr(7):
+				return float(sim.link_frac[li]) * 100.0
 	return 0.0
 
 

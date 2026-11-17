@@ -176,7 +176,7 @@ func _draw_v2_all() -> void:
 	_tile_labels.clear()
 	super._draw()
 	# The Flows lens draws everything it shows itself (GraphFlowLens).
-	if view_mode == GraphSiteLayout.VIEW_FLOWS:
+	if view_mode == GraphSiteLayout.VIEW_FLOWS or view_mode == GraphSiteLayout.VIEW_PROCESS:
 		return
 	_draw_system_overlay_site()
 	_draw_tile_labels()
@@ -413,6 +413,7 @@ func _render_card_v2(item: Dictionary) -> void:
 		_card_ctx["agg_soc"] = _aggregate_child_battery_soc(item)
 	_card_ctx["sys_level"] = str(system_status.get(iid, ""))
 	_card_ctx["sys_reason"] = str(system_reasons.get(iid, ""))
+	_card_ctx["ac_out_w"] = controller_ac_out_w(item) if itype == "controller" else -1.0
 	_card_ctx.erase("array_live_w")
 	_card_ctx.erase("array_peak_w")
 	_card_ctx.erase("array_count")

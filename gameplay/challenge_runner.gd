@@ -25,6 +25,8 @@ var _active := false
 var _start_abs: float = -1.0
 var _eval_acc: float = 0.0
 var _ac_down_hours: float = 0.0
+## ProcessChallenge's running state (alarm and store timers).
+var _proc_state: Dictionary = {}
 var _last_eval_abs: float = -1.0
 var _last_metrics: Dictionary = {}
 var _last_status: String = "idle"
@@ -93,11 +95,19 @@ func start_challenge(def: ChallengeDef) -> bool:
 			and bool(gv_pre.call("is_sandbox_active")):
 		challenge_toast.emit("Exit the Solar Bootcamp before starting a challenge", TOAST_WARN)
 		return false
+	# A watch on tags and alarms needs alarms to watch.
+	if not def.process.is_empty():
+		var hub_pre: Node = gv_pre.call("scada_hub") if gv_pre != null and gv_pre.has_method("scada_hub") else null
+		var gate := ProcessChallenge.gate(def.process, hub_pre.call("alarm_rules") if hub_pre != null else [])
+		if not gate.is_empty():
+			challenge_toast.emit(ProcessChallenge.reason_label(gate), TOAST_WARN)
+			return false
 	if _active:
 		abort_challenge()
 	_def = def
 	_active = true
 	_ac_down_hours = 0.0
+	_proc_state = {}
 	_eval_acc = 0.0
 	_last_status = "running"
 	_last_metrics.clear()
@@ -305,6 +315,20 @@ func _evaluate(emit_tick: bool) -> Dictionary:
 			_ac_down_hours += dt_h
 		if _ac_down_hours > _def.max_ac_down_hours + 1e-6:
 			return _fail_result(result, "ac_down")
+
+	if not _def.process.is_empty():
+		var gv := _graph_view()
+		var hub: Node = gv.call("scada_hub") if gv != null and gv.has_method("scada_hub") else null
+		if hub != null:
+			var pr := ProcessChallenge.step(_proc_state, _def.process, hub.call("alarm_rules"), hub.call("alarm_status"),
+				func(tag: String) -> float: return float(hub.call("read_now", tag)), dt_h)
+			_proc_state = pr["state"]
+			result["process_note"] = str(pr["note"])
+			if not str(pr["fail"]).is_empty():
+				return _fail_result(result, str(pr["fail"]))
+			var gate2 := ProcessChallenge.gate(_def.process, hub.call("alarm_rules"))
+			if not gate2.is_empty():
+				return _fail_result(result, gate2)
 
 	if elapsed + 1e-6 < _def.duration_hours:
 		result["status"] = "running"

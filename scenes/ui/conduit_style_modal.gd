@@ -89,6 +89,27 @@ var _row_elbow: Control = null
 var _row_slack: Control = null
 var _row_flow_glow: Control = null
 var _hdr_glow: Control = null
+## Rows the run solver uses (ConduitStyleModel.rows decides which show).
+var _conductor_opt: OptionButton = null
+var _row_conductor: Control = null
+var _router_opt: OptionButton = null
+var _row_router: Control = null
+var _bend_val: Label = null
+var _row_bend: Control = null
+var _wide_spin: SpinBox = null
+var _row_wide: Control = null
+var _height_chk: CheckBox = null
+var _height_spin: SpinBox = null
+var _row_height: Control = null
+var _wall_chk: CheckBox = null
+var _row_wall: Control = null
+var _a45_chk: CheckBox = null
+var _row_a45: Control = null
+var _lane_lbl: Label = null
+var _row_lane: Control = null
+var _row_route_mode: Control = null
+var _spec_flow: HFlowContainer = null
+var _warn_box: VBoxContainer = null
 
 
 func open(conn_id: String, model: GraphModel, main: Node) -> void:
@@ -193,7 +214,19 @@ func _build_ui() -> void:
 	_measure_lbl.add_theme_font_override("font", UITheme.font("medium", true))
 	_measure_lbl.add_theme_color_override("font_color", UITheme.C_TEXT)
 	_measure_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	meas.add_child(_measure_lbl)
+	var meas_col := VBoxContainer.new()
+	meas_col.add_theme_constant_override("separation", 6)
+	meas.add_child(meas_col)
+	meas_col.add_child(_measure_lbl)
+	_spec_flow = HFlowContainer.new()
+	_spec_flow.name = "SpecStrip"
+	_spec_flow.add_theme_constant_override("h_separation", 14)
+	_spec_flow.add_theme_constant_override("v_separation", 4)
+	meas_col.add_child(_spec_flow)
+	_warn_box = VBoxContainer.new()
+	_warn_box.name = "Warnings"
+	_warn_box.add_theme_constant_override("separation", 3)
+	meas_col.add_child(_warn_box)
 
 	# Body: preview | settings
 	var body := HBoxContainer.new()
@@ -308,9 +341,60 @@ func _build_settings_pane(parent: Control) -> void:
 	_row_size = _size_opt.get_parent()
 	OPTS.fill_sizes(_size_opt, _derived_type)
 	_size_opt.item_selected.connect(func(_i: int) -> void: _on_draft_changed())
+	_conductor_opt = _add_opt(form, "Wire inside")
+	_row_conductor = _conductor_opt.get_parent()
+	for pair: Array in ConduitStyleModel.conductor_choices():
+		_conductor_opt.add_item(str(pair[0]))
+		_conductor_opt.set_item_metadata(_conductor_opt.item_count - 1, float(pair[1]))
+	_conductor_opt.item_selected.connect(func(_i: int) -> void: _on_draft_changed())
 
-	form.add_child(_section("Routing"))
+	form.add_child(_section("Route"))
+	_router_opt = _add_opt(form, "Path")
+	_router_opt.name = "RouterOpt"
+	_row_router = _router_opt.get_parent()
+	_router_opt.add_item("Routed round what is in the way")
+	_router_opt.set_item_metadata(0, "v2")
+	_router_opt.add_item("Kept exactly as drawn")
+	_router_opt.set_item_metadata(1, "legacy")
+	_router_opt.tooltip_text = ("Routed: square runs with real bends, round machines and buildings, "
+		+ "through its bend points, laid beside runs on the same line.\nKept: the path stays as it is.")
+	_router_opt.item_selected.connect(func(_i: int) -> void: _on_route_changed())
+	_row_bend = _value_row(form, "Bends at")
+	_bend_val = _row_bend.get_child(1) as Label
+	_wide_spin = _add_spin(form, "Wider bends", 0.0, 3000.0, 5.0, "mm",
+		"A bend radius of your own (only wider than the kind's minimum). 0 = the minimum.")
+	_row_wide = _wide_spin.get_parent()
+	_row_height = HBoxContainer.new()
+	(_row_height as HBoxContainer).add_theme_constant_override("separation", 8)
+	var hl := Label.new()
+	hl.text = "Height"
+	hl.custom_minimum_size.x = 118
+	_row_height.add_child(hl)
+	_height_chk = CheckBox.new()
+	_height_chk.text = "Hold at"
+	_height_chk.focus_mode = Control.FOCUS_NONE
+	_height_chk.tooltip_text = "Keep the run at this height above the ground where it can (else as the ports are)"
+	_height_chk.toggled.connect(func(_on: bool) -> void: _on_draft_changed())
+	_row_height.add_child(_height_chk)
+	_height_spin = SpinBox.new()
+	_height_spin.min_value = 0.0
+	_height_spin.max_value = 12.0
+	_height_spin.step = 0.05
+	_height_spin.suffix = "m up"
+	_height_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_height_spin.value_changed.connect(func(_v: float) -> void: _on_draft_changed())
+	_row_height.add_child(_height_spin)
+	form.add_child(_row_height)
+	_wall_chk = _add_check(form, "Walls", "Run along walls and machine sides",
+		"Prefer legs close along building walls and machine sides, as pipes are run on a wall.")
+	_row_wall = _wall_chk.get_parent()
+	_a45_chk = _add_check(form, "Bends", "45° fittings where they save length",
+		"Cut corners with two 45° bends instead of one 90° where nothing is in the way.")
+	_row_a45 = _a45_chk.get_parent()
+	_row_lane = _value_row(form, "Lane")
+	_lane_lbl = _row_lane.get_child(1) as Label
 	_route_opt = _add_opt(form, OPTS.LABEL_ROUTE)
+	_row_route_mode = _route_opt.get_parent()
 	OPTS.fill_route_modes(_route_opt)
 	_route_opt.item_selected.connect(func(_i: int) -> void: _on_route_changed())
 	_fitting_opt = _add_opt(form, OPTS.LABEL_FITTING)
@@ -430,6 +514,60 @@ func _add_slider(parent: Control, label: String, mn: float, mx: float, step: flo
 	return sl
 
 
+func _value_row(parent: Control, label: String) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var lbl := Label.new()
+	lbl.text = label
+	lbl.custom_minimum_size.x = 118
+	row.add_child(lbl)
+	var val := Label.new()
+	val.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	val.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	val.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	row.add_child(val)
+	parent.add_child(row)
+	return row
+
+
+func _add_spin(parent: Control, label: String, mn: float, mx: float, step: float,
+		unit: String, tip: String) -> SpinBox:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var lbl := Label.new()
+	lbl.text = label
+	lbl.custom_minimum_size.x = 118
+	row.add_child(lbl)
+	var sp := SpinBox.new()
+	sp.min_value = mn
+	sp.max_value = mx
+	sp.step = step
+	sp.suffix = unit
+	sp.tooltip_text = tip
+	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	sp.value_changed.connect(func(_v: float) -> void: _on_draft_changed())
+	row.add_child(sp)
+	parent.add_child(row)
+	return sp
+
+
+func _add_check(parent: Control, label: String, text: String, tip: String) -> CheckBox:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var lbl := Label.new()
+	lbl.text = label
+	lbl.custom_minimum_size.x = 118
+	row.add_child(lbl)
+	var cb := CheckBox.new()
+	cb.text = text
+	cb.tooltip_text = tip
+	cb.focus_mode = Control.FOCUS_NONE
+	cb.toggled.connect(func(_on: bool) -> void: _on_draft_changed())
+	row.add_child(cb)
+	parent.add_child(row)
+	return cb
+
+
 func _add_color(parent: Control, label: String) -> ColorPickerButton:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
@@ -485,8 +623,40 @@ func _load_draft_from_connection() -> void:
 		_draft["visible_3d"] = conn.get("visible_3d")
 	if conn.has("flow_glow"):
 		_draft["flow_glow"] = conn.get("flow_glow")
-	OPTS.fill_sizes(_size_opt, _effective_type_id())
+	_draft["_route_solver"] = "v2" if ConduitRouteDispatch.uses_solver(conn, _derived_type) else "legacy"
+	_fill_size_opt(_effective_type_id())
 	_refresh_titles()
+
+
+## The kind's catalog sizes (ConduitSpecs): gauges for cables, trade sizes
+## for pipe and conduit.
+func _fill_size_opt(type_id: String) -> void:
+	if _size_opt == null:
+		return
+	_size_opt.clear()
+	for pair: Array in ConduitStyleModel.size_choices(type_id)["choices"] as Array:
+		_size_opt.add_item(str(pair[0]))
+		_size_opt.set_item_metadata(_size_opt.item_count - 1, float(pair[1]))
+
+
+## Would the solver route this run with the draft as it stands?
+func _draft_on_solver() -> bool:
+	if str(_draft.get("_route_solver", "v2")) == "legacy":
+		return false
+	var conn := _model.get_connection(_conn_id).duplicate() if _model != null else {}
+	conn["route_solver"] = "v2"
+	conn["route_locked"] = false
+	conn["conduit_style"] = ConduitStyleModel.clean(_draft, _effective_type_id())
+	return ConduitRouteDispatch.uses_solver(conn, _effective_type_id())
+
+
+## Ground height under the run's start (for "m above the ground").
+func _ground_at_start() -> float:
+	var ends := _end_points(_model.get_connection(_conn_id)) if _model != null else []
+	var mgr := _manager()
+	if ends.size() == 2 and mgr != null and mgr.has_method("ground_y_at"):
+		return float(mgr.call("ground_y_at", ends[0]))
+	return 0.0
 
 
 func _refresh_titles() -> void:
@@ -510,12 +680,29 @@ func _effective_type_id() -> String:
 	return ctype if not ctype.is_empty() else _derived_type
 
 
+## Store `key` only when it differs from the kind's own value (or was already
+## overridden), so opening and closing the modal never pins defaults.
+func _put_if_changed(key: String, value: float, kind_value: float, eps: float) -> void:
+	if _draft.has(key) or absf(value - kind_value) > eps:
+		_draft[key] = value
+
+
 func _sync_controls_from_draft() -> void:
 	OPTS.select_meta(_type_opt, str(_draft.get("conduit_type", "")))
 	var eff := _effective_type_id()
 	var meta := ConduitKinds.type_meta(eff)
 	if _size_opt != null:
-		OPTS.select_meta(_size_opt, ConduitKinds.pipe_size_in(eff, _draft))
+		OPTS.select_meta(_size_opt, ConduitStyleModel.size_value(eff, _draft))
+	if _conductor_opt != null:
+		OPTS.select_meta(_conductor_opt, float(_draft.get("awg", 12.0)))
+	if _router_opt != null:
+		OPTS.select_meta(_router_opt, str(_draft.get("_route_solver", "v2")))
+		_wide_spin.value = float(_draft.get("bend_radius_m", 0.0)) * 1000.0
+		var g := _ground_at_start()
+		_height_chk.button_pressed = _draft.has("run_height_m")
+		_height_spin.value = (float(_draft["run_height_m"]) - g) if _draft.has("run_height_m") else 1.2
+		_wall_chk.button_pressed = bool(_draft.get("wall_hug", false))
+		_a45_chk.button_pressed = bool(_draft.get("allow_45", false))
 	_color_picker.color = _draft.get("color", meta.get("color", Color.WHITE)) as Color
 	_radius_slider.value = float(_draft.get("radius_m", meta.get("radius_m", 0.02)))
 	_roughness_slider.value = float(_draft.get("roughness", meta.get("roughness", 0.7)))
@@ -527,8 +714,8 @@ func _sync_controls_from_draft() -> void:
 	OPTS.select_meta(_route_opt, rm)
 	OPTS.select_meta(_fitting_opt, float(_draft.get("fitting_step_deg", 0.0)))
 	_elbow_slider.value = float(_draft.get("elbow_radius_frac", meta.get("elbow_radius_frac", 0.35)))
-	_slack_slider.value = float(_draft.get("end_slack_m", meta.get("end_slack_m",
-		meta.get("sag_amount", 0.0))))
+	var slack_key := "end_slack_m" if meta.has("end_slack_m") or bool(meta.get("ground_drape", false)) else "sag_amount"
+	_slack_slider.value = float(_draft.get(slack_key, meta.get(slack_key, 0.0)))
 	_visible_opt.select(1 if _draft.get("visible_3d") == true else (2 if _draft.get("visible_3d") == false else 0))
 	_flow_glow_opt.select(1 if _draft.get("flow_glow") == true else (2 if _draft.get("flow_glow") == false else 0))
 
@@ -537,12 +724,40 @@ func _read_draft_from_controls() -> void:
 	_draft["conduit_type"] = str(_type_opt.get_item_metadata(_type_opt.selected))
 	var eff := _effective_type_id()
 	var glow_type := ConduitKinds.is_conceptual_type(eff) or ConduitKinds.is_light_type(eff)
-	if _size_opt != null and ConduitKinds.has_size_options(eff) and _size_opt.item_count > 0:
-		_draft["pipe_size_in"] = float(_size_opt.get_item_metadata(_size_opt.selected))
-	elif _draft.has("pipe_size_in") and not ConduitKinds.has_size_options(eff):
+	if _size_opt != null and _size_opt.item_count > 0 and _row_size.visible:
+		_draft = ConduitStyleModel.set_size(_draft, eff, float(_size_opt.get_item_metadata(_size_opt.selected)))
+	elif _draft.has("pipe_size_in") and not ConduitKinds.has_size_options(eff) \
+			and str(ConduitStyleModel.size_choices(eff)["key"]) != "pipe_size_in":
 		_draft.erase("pipe_size_in")
+	if _conductor_opt != null and eff == "emt_conduit" and _conductor_opt.item_count > 0:
+		_draft["awg"] = float(_conductor_opt.get_item_metadata(_conductor_opt.selected))
+	if _router_opt != null:
+		_draft["_route_solver"] = str(_router_opt.get_item_metadata(_router_opt.selected))
+		if _wide_spin.value > 0.5:
+			_draft["bend_radius_m"] = _wide_spin.value / 1000.0
+		else:
+			_draft.erase("bend_radius_m")
+		if _height_chk.button_pressed:
+			_draft["run_height_m"] = _ground_at_start() + _height_spin.value
+		else:
+			_draft.erase("run_height_m")
+		if _wall_chk.button_pressed:
+			_draft["wall_hug"] = true
+		else:
+			_draft.erase("wall_hug")
+		if _a45_chk.button_pressed:
+			_draft["allow_45"] = true
+		else:
+			_draft.erase("allow_45")
 	_draft["color"] = _color_picker.color
-	_draft["radius_m"] = _radius_slider.value
+	var meta_eff := ConduitKinds.type_meta(eff)
+	# A real sized kind takes its OD from the size; a hand thickness only applies
+	# to kinds without sizes, and only once the player moved the slider.
+	if ConduitKinds.has_size_options(eff) or ConduitSpecs.has_sizes(eff):
+		_draft.erase("radius_m")
+	else:
+		_put_if_changed("radius_m", _radius_slider.value,
+			float(meta_eff.get("radius_m", 0.02)), 0.0005)
 	_draft["roughness"] = _roughness_slider.value
 	_draft["flow_strength_default"] = _glow_slider.value
 	_draft["emission_energy"] = _emission_slider.value
@@ -557,9 +772,15 @@ func _read_draft_from_controls() -> void:
 		_draft.erase("fitting_step_deg")
 	else:
 		_draft["fitting_step_deg"] = fs
-	_draft["elbow_radius_frac"] = _elbow_slider.value
-	_draft["end_slack_m"] = _slack_slider.value
-	_draft["sag_amount"] = _slack_slider.value
+	_put_if_changed("elbow_radius_frac", _elbow_slider.value,
+		float(meta_eff.get("elbow_radius_frac", 0.35)), 0.005)
+	# Slack means two things: a cord laid on the ground has end slack, a hung
+	# run has sag. Write only the one this kind uses.
+	var slack_key := "end_slack_m" if meta_eff.has("end_slack_m") or bool(meta_eff.get("ground_drape", false)) else "sag_amount"
+	var other_key := "sag_amount" if slack_key == "end_slack_m" else "end_slack_m"
+	_draft.erase(other_key)
+	_put_if_changed(slack_key, _slack_slider.value,
+		float(meta_eff.get(slack_key, 0.0)), 0.005)
 	# Only conceptual / light kinds glow; physical wires render their PBR material.
 	if glow_type:
 		_draft["emissive"] = true
@@ -597,7 +818,8 @@ func _on_type_changed() -> void:
 		_draft["visible_3d"] = keep_vis
 	if keep_glow != null:
 		_draft["flow_glow"] = keep_glow
-	OPTS.fill_sizes(_size_opt, eff)
+	_draft["_route_solver"] = "v2"
+	_fill_size_opt(eff)
 	_syncing = true
 	_sync_controls_from_draft()
 	_syncing = false
@@ -662,19 +884,39 @@ func _update_control_visibility() -> void:
 	var is_culvert_rm := rm == "culvert" or culvert
 	var can_sag := rm == "catenary" or rm == "direct" or rm == "" \
 			or ConduitKinds.is_flexible_type(eff) or ConduitKinds.is_ground_drape_type(eff)
+	var on_solver := _draft_on_solver()
+	var mr := ConduitStyleModel.rows(eff, _draft, on_solver)
 	if _row_size != null:
-		_row_size.visible = kit or ConduitKinds.has_size_options(eff)
-	# Kit OD is baked into fittings — thickness slider is misleading.
-	_row_radius.visible = not kit
+		_row_size.visible = bool(mr["size"]) and _size_opt.item_count > 1
+	_row_conductor.visible = bool(mr["conductors"])
+	# A real kind's thickness IS its size.
+	_row_radius.visible = bool(mr["thickness"])
+	var routable := ConduitRouteDispatch.uses_solver({"route_solver": "v2",
+		"conduit_style": ConduitStyleModel.clean(_draft, eff)}, eff)
+	_row_router.visible = routable
+	_row_bend.visible = on_solver
+	_row_wide.visible = on_solver
+	_row_height.visible = on_solver
+	_row_wall.visible = on_solver
+	_row_a45.visible = bool(mr["allow_45"])
+	_row_route_mode.visible = bool(mr["route_mode"])
+	_bend_val.text = ConduitStyleModel.bend_text(eff, _draft)
+	var bd: Dictionary = {}
+	var mgr := _manager()
+	if mgr != null and mgr.has_method("bundle_of"):
+		bd = mgr.call("bundle_of", _conn_id)
+	_row_lane.visible = on_solver and not bd.is_empty()
+	if not bd.is_empty():
+		_lane_lbl.text = "%d of %d (drag it with the Route tool's Lane)" % [int(bd["lane"]) + 1, int(bd["lanes"])]
 	_row_roughness.visible = not glow_type
 	_hdr_glow.visible = glow_type
 	_row_glow.visible = glow_type
 	_row_emission.visible = glow_type
 	_row_flow_color.visible = glow_type
 	_row_flow_glow.visible = glow_type
-	_row_fitting.visible = is_pipes and not kit and not is_culvert_rm
-	_row_elbow.visible = (is_pipes or rm == "ortho") and not kit and not is_culvert_rm
-	_row_slack.visible = can_sag and rm != "taut" and not kit
+	_row_fitting.visible = is_pipes and not kit and not is_culvert_rm and not on_solver
+	_row_elbow.visible = (is_pipes or rm == "ortho") and not kit and not is_culvert_rm and not on_solver
+	_row_slack.visible = can_sag and rm != "taut" and not kit and not on_solver
 
 
 # ---------------------------------------------------------------------------
@@ -717,13 +959,13 @@ func _apply_to_wire() -> void:
 	if _model == null or _conn_id.is_empty():
 		return
 	var patch: Dictionary = {"conduit_type": str(_draft.get("conduit_type", ""))}
-	var style: Dictionary = {}
-	for k: String in ConduitStylePresets.STYLE_KEYS:
-		if _draft.has(k):
-			style[k] = _draft[k]
-	if _draft.has("fitting_step_deg"):
-		style["fitting_step_deg"] = _draft["fitting_step_deg"]
+	var style := ConduitStyleModel.clean(_draft, _effective_type_id())
 	patch["conduit_style"] = style
+	if _row_router != null and _row_router.visible:
+		var rs := str(_draft.get("_route_solver", "v2"))
+		patch["route_solver"] = rs
+		if rs == "v2":
+			patch["route_locked"] = false
 	patch["visible_3d"] = _draft["visible_3d"] if _draft.has("visible_3d") else null
 	patch["flow_glow"] = _draft["flow_glow"] if _draft.has("flow_glow") else null
 	_write_patch(patch)
@@ -797,6 +1039,38 @@ func _refresh_measurements() -> void:
 	if loss > 0.05:
 		parts.append("loses %s" % UiText.num(loss, "W"))
 	_measure_lbl.text = "  ·  ".join(parts)
+	_refresh_specs(conn)
+
+
+## The run's spec chips (size, bend radius, rating, weight, supports, cost)
+## and what is wrong with it as built.
+func _refresh_specs(conn: Dictionary) -> void:
+	if _spec_flow == null:
+		return
+	for c: Node in _spec_flow.get_children():
+		_spec_flow.remove_child(c)
+		c.queue_free()
+	var probe := conn.duplicate()
+	probe["conduit_type"] = _effective_type_id()
+	probe["conduit_style"] = ConduitStyleModel.clean(_draft, _effective_type_id())
+	for line: Array in ConduitStyleModel.spec_lines(probe):
+		var kv := Label.new()
+		kv.text = "%s %s" % [str(line[0]), str(line[1])]
+		kv.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+		kv.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+		_spec_flow.add_child(kv)
+	for c2: Node in _warn_box.get_children():
+		_warn_box.remove_child(c2)
+		c2.queue_free()
+	var mgr := _manager()
+	var info: Dictionary = mgr.call("run_info", _conn_id) if mgr != null and mgr.has_method("run_info") else {}
+	var live := {}
+	if float(conn.get("current_a", 0.0)) > 0.0:
+		live["amps"] = float(conn.get("current_a", 0.0))
+	for w: Dictionary in ConduitStyleModel.warnings(probe, info, live):
+		var banner := AlertBanner.new()
+		_warn_box.add_child(banner)
+		banner.show_alert(AlertBanner.ERROR if str(w["level"]) == "error" else AlertBanner.WARN, str(w["text"]))
 
 
 func _end_points(conn: Dictionary) -> Array:

@@ -163,6 +163,11 @@ func add_ha_entity_track(entity_id : String, label : String) -> TimelineTrackDef
 	return add_custom_track("ha_entity", entity_id, "HA: %s" % label, Color(0.55, 0.80, 1.00, 1.0))
 
 
+## A site tag (ScadaTags id): its history on the sim clock.
+func add_tag_track(tag_id : String, label : String) -> TimelineTrackDef:
+	return add_custom_track("tag", tag_id, label, Color(0.62, 0.90, 0.70, 1.0))
+
+
 ## A weather variable (TimelineWeatherChannels id).
 func add_weather_track(channel_id : String) -> TimelineTrackDef:
 	var ch := TimelineWeatherChannels.find(channel_id)

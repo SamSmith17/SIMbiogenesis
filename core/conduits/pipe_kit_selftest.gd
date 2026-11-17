@@ -21,6 +21,7 @@ func _initialize() -> void:
 	_test_procedural_straight()
 	_test_planner_axis()
 	_test_planner_90()
+	_test_planner_short_span()
 	_test_planner_riser_pin()
 	_test_expander_3d()
 	_test_expander_compound()
@@ -48,7 +49,7 @@ func _test_kit_meta() -> void:
 	_check("abs uses kit", ConduitKinds.uses_pipe_kit("abs_dwv"))
 	_check("pvc uses kit", ConduitKinds.uses_pipe_kit("pvc_pipe"))
 	_check("pvc_4in uses kit", ConduitKinds.uses_pipe_kit("pvc_4in"))
-	_check("abs default kit id", ConduitKinds.pipe_kit_id("abs_dwv") == "us_sch40_2_5")
+	_check("abs default kit id", ConduitKinds.pipe_kit_id("abs_dwv") == "us_sch40_2")
 	_check("pvc default kit id", ConduitKinds.pipe_kit_id("pvc_pipe") == "us_sch40_1_25")
 	_check("pvc size override",
 		ConduitKinds.pipe_kit_id("pvc_pipe", {"pipe_size_in": 4.0}) == "us_sch40_4")
@@ -59,7 +60,7 @@ func _test_kit_meta() -> void:
 	_check("pvc sharp elbows", is_equal_approx(
 		float(ConduitKinds.type_meta("pvc_pipe").get("elbow_radius_frac", 1.0)), 0.0))
 	var abs_lbl := ConduitKinds.display_name_with_size("abs_dwv", {})
-	_check("display with size", abs_lbl.find("½") >= 0 or abs_lbl.find("2.5") >= 0,
+	_check("display with size", abs_lbl.find("2") >= 0,
 		abs_lbl)
 
 
@@ -284,6 +285,31 @@ func _test_planner_axis() -> void:
 			and str((parts[0] as Dictionary).get("kind", "")) == "straight")
 	if parts.size() == 1:
 		_check("axis length", absf(float((parts[0] as Dictionary).get("length_m", 0.0)) - short) < 0.02)
+
+
+## Two 90 elbows closer together than their takeouts cannot be built: the
+## planner must refuse (the old unsigned test let a backwards straight through).
+func _test_planner_short_span() -> void:
+	var kit := _default_kit()
+	if kit == null:
+		_check("planner short kit", false)
+		return
+	var gap := kit.elbow_takeout_m(90.0) * 0.5
+	var sharp := PackedVector3Array([
+		Vector3(0, 1, 0), Vector3(2, 1, 0), Vector3(2, 1, gap), Vector3(4, 1, gap),
+	])
+	var bom := PipePartsPlanner.plan(sharp, kit)
+	_check("short span refused", not bool(bom.get("ok", true)),
+		"gap %.3f m built anyway" % gap)
+	var long_sharp := PackedVector3Array([
+		Vector3(0, 1, 0), Vector3(2, 1, 0), Vector3(2, 1, 1.5), Vector3(4, 1, 1.5),
+	])
+	var bom2 := PipePartsPlanner.plan(long_sharp, kit)
+	_check("long span builds", bool(bom2.get("ok", false)), str(bom2.get("error", "")))
+	for part: Variant in bom2.get("parts", []) as Array:
+		var pd: Dictionary = part
+		if str(pd.get("kind", "")) == "straight":
+			_check("no negative straight", float(pd.get("length_m", 0.0)) >= 0.0)
 
 
 func _test_planner_90() -> void:

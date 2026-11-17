@@ -30,7 +30,7 @@ const LIBRARY_GROUPS := [
 	["music", "Stage music", "Tracks your stages and venues play", ["stage_audio"]],
 	["presets", "Looks, presets and recipes",
 		"Vegetation looks, camp styles, component presets, recipes, conduit styles, pack kits",
-		["resource_kinds.cfg", "process_recipes.json", "workflow_recipes.json", "user_presets.json",
+		["resource_kinds.cfg", "process_recipes.json", "workflow_recipes.json", "user_presets.json", "process_library.json",
 			"camp_styles.json", "pack_defs.json", "conduit_kinds.cfg", "conduit_style_presets.json",
 			"vegetation_style_v3.json", "vegetation_species_defaults.json", "vegetation_presets.cfg",
 			"maps/packing_layouts.json", "maps/packing_custom_items.json"]],

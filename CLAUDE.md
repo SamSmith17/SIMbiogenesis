@@ -3353,6 +3353,117 @@ Each piece has its own harness gate (Validation list).
   `--capture=graphtools` drives all of it with real clicks.
 - Not built: clickable legend toggles.
 
+## Clean 3D runs: the run solver, lanes, the Route tool, As built (2026-11-16)
+
+Plan: `~/.claude/plans/the-new-process-view-sleepy-jellyfish.md`. User's
+choices: automatic lanes the player can drag (no tray or rack props),
+the Process lens's As built picture plus a Route tool on the edit toolbar
+(the Globe "Connect (C)" button is gone), re-route unpinned runs only,
+service colours in the graph's views (first person keeps materials).
+- **Kinds are real** (`ConduitSpecs`, pure, + `ConduitKinds` sizes): each
+  size row has OD / ID / weight / cost / ampacity or pressure (null where
+  none: ABS DWV, ducting, data); `bend_radius_m` from the kind's rule (NEC
+  334.24 NM-B 5×OD, EMT per size, PEX 6×OD, HDPE by SDR, Cat6 4×OD, hoses
+  and cords ~6×OD); `routing_style` rigid_ortho | flex_route | hang |
+  contour | culvert replaces the scattered kind tests. `for_run(conn)` is
+  what the style window's spec strip and the Route tool's label read.
+  `ServicePalette.color_for(conn)` is the service colour (after ANSI/ASME
+  A13.1: hot red, cold blue, drain grey, gas / fuel, air, power AC / DC,
+  data).
+- **One solver for pipes and cables** (`ConduitRunSolver`, pure, memoised):
+  port stubs along each port's normal (pushed clear of the host's own box,
+  `flags.stub_extended`), a sparse orthogonal grid from the obstacles' faces
+  + clearance, the ports, the vias and the levels (ground, obstacle tops,
+  `run_height_m`), A* with bend, climb and wall-hug costs, over a low thing
+  when that is cheaper, round a building otherwise; past the caps
+  (`MAX_AXIS` 96, `MAX_EXPAND` 12000) vias joined by L-legs (`flags.budget`).
+  `ConduitObstacleField` = placed props as boxes at their real height + OSM
+  buildings as walls, one ground Y per footprint (no per-cell terrain
+  sampling: the AMD TDR rule). `ConduitFillet` = true tangent fillets at the
+  kind's minimum radius (per-corner radii for lanes; `flags.tight_bend` when
+  a leg is too short); kit pipes keep sharp corners for their elbows.
+- **`route_solver`** on a connection: "v2" = the solver; "" = the old path.
+  ⚠ `ConduitRouteDispatch.uses_solver(conn, type)` is THE test: never
+  `direct_intake`, contour / culvert / direct / taut / catenary /
+  metro_ground route modes, hanging kinds, or "legacy"; "" + `route_locked`
+  stays exactly as pinned. In v2, `route_3d` points are VIAS the run passes
+  through, heights kept (no more "unlocked ignores route_3d"). Penstocks,
+  culverts and siphon runs keep their own routers (their lengths drive the
+  flow engine). Unlocked non-hydro runs migrate to v2, so their lengths
+  change: `flow_step_bench`'s hash moves with them on a world that has them
+  (take the before-hash on the same build).
+- **The ghost is the commit**: the plug drag snapped onto a port and the
+  Route tool both preview through
+  `ConduitManager.build_control_points` with the solver's field. Checks
+  compare the ghost to the committed run's corners (`run_corners(cid)`).
+- **Lanes** (`ConduitBundler`, pure; run by the manager after rebuilds settle,
+  `BUNDLE_SETTLE_S` 0.3, keyed on raw corners + lane keys): runs sharing a
+  collinear stretch of ≥ `MIN_OVERLAP_M` 0.6 at one height become a bundle,
+  offset sideways at max OD + `GAP_M` 0.04, bends concentric
+  (r = base + (Dmax − D)/√2), joins and leaves with a jog; a lane that would
+  hit an obstacle the original path did not drops out. ⚠ The run's own
+  left is L(u) = (u.z, 0, −u.x), and the side sign is carried through a
+  shared cluster, or lanes swap at every bend. `lane_index` (dragged order)
+  and `lane_free` (dragged out) are on the conduit style;
+  `SystemGraphView.set_lane_order(order, free_patch)` is one undo step.
+  `bundle_of(cid)` = {lane, lanes, bundle, members}.
+- **The Route tool** (edit toolbar ROUTE section, Shift+R `route_edit`;
+  `scenes/ui/toolbar/route_tool_controller.gd`, preloaded, no class_name,
+  tool-overlay tier; `TerrainLoader.open_route_tools_on(cid, tool)`):
+  Connect (click a port, then a port; kind / size / height in the bar),
+  Bend (click a run, click again for a bend point, drag it level, Shift
+  vertical, double-click removes), Height (drag a leg; snaps 0.1 / 0.45 /
+  1.2 / 2.4 m), Along wall (click a building wall: `wall_hug` +
+  `run_height_m`), Lane (drag a bundled run across, or out), Style.
+  A picked run's bar: spec, Style…, Open in Process, Lane n of m, Back into
+  its bundle, Clear bend points; with no run picked, **Re-route pinned runs
+  (N)…** (two clicks; `pinned_runs_to_reroute` / `reroute_pinned_runs`, one
+  undo step, pins become vias). Every gesture is ONE undo step through
+  `SystemGraphView.set_run_route(cid, vias, style_patch)` (a null style
+  value erases the key). All runs show while the tool is up (they are x-ray);
+  "Service colours" draws them in theirs.
+- **Graph**: the top bar's **Route** (Structure cluster) arms the canvas's
+  connect tool in Globe / Site Plan (its ground clicks are vias on a v2 run)
+  and elsewhere calls `route_in_world()` (C does the same).
+  `route_run_in_world(cid)` stands the player near the run, closes the graph
+  and opens the Route tool on it. While a graph lens shows the world, runs
+  wear their service colour (`ConduitManager.service_colours`, an overlay;
+  the element lens wins).
+- **Style window** (`conduit_style_modal.gd` over pure
+  `ConduitStyleModel`): sizes only from the catalog (no free radius on a
+  real kind), wire gauge for EMT, the route rows (Path solver / legacy,
+  Bends at, Wider bends, Height hold, Walls, 45°, Lane), a spec strip and
+  warnings. Writes `STYLE_KEYS` only (`pipe_sdr` used to be dropped).
+- **Port window**: Suggest places (`PortSuggest`: water low on the sides,
+  power side-low, data side-high, exhaust on top), a Fitting row
+  (`port.fitting` = the stub), exits cleaned to the picked face's normal
+  (Shift snaps to an axis), a warning when an exit points into the model.
+- **As built** (the Process lens's bottom bar; `MimicWorldSource`, pure,
+  `class Iso` = a true 30° isometric with an inverse): the schematic doc
+  re-laid with every machine where it stands and every built run along its
+  real corners, far first; a run not built in 3D is a faint dashed line,
+  things with no place wait in a row. Dragging a bend writes a via on the
+  run (`_on_bend_moved`: nearest via within 0.35 m moved, else inserted);
+  double-click removes one; machines do not move here. The pipe card has
+  Show in 3D and Style…; `open_run_in_process(cid)` opens it from 3D.
+- Gates: `core/conduits/run_solver_selftest.gd` (35),
+  `conduit_specs_selftest.gd` (54), `conduit_bundler_selftest.gd` (26),
+  `port_suggest_selftest.gd` (11), `system_graph/conduit_style_model_selftest.gd`
+  (18), `core/scada/mimic_world_selftest.gd` (12), `conduit_selftest`
+  (449, now with EXPECTED_CHECKS, geometry pins untouched);
+  `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/conduit_tool_check.gd -Label conduit_tool -Timeout 900`
+  (27, real clicks: Connect, ghost == commit, Bend, Ctrl+Z, Height, Open in
+  Process, Show in 3D, a lane dragged across and out) and
+  `tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/process_iso_check.gd -Label process_iso -Timeout 900`
+  (14: As built opened framed on the run, a bend dragged in the picture
+  moves the 3D run, Ctrl+Z).
+  Tour stop `29_conduit_routing` (mtvernon). Mount Vernon has no two
+  process machines in reach of each other, so the As built check runs on
+  Closed Loop Ten.
+- Not built: tray and rack props, tees / reducers / 22.5° kit elbows, a true
+  catenary, solving off the main thread, interior walls, leg drags in As
+  built (bends only), the legacy routers retired.
+
 ## Solar arrays on the graph (system_graph/graph_solar_arrays.gd, 2026-10-27)
 
 Every solar array is ONE model, whatever made it: "array" (imported OSM,
@@ -3593,6 +3704,149 @@ Plan + the catalog of further visualizations: `plans/FLOW_VIZ_PLAN.md`.
   - bench `tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/bench/flow_style_bench.gd -Timeout 900`;
   - diagnostic `tools/diag/flow_loops_diag.gd` (what flowed over a day);
   - tour stop `20f_flow_lens`.
+
+## Flows lens: torus shape, moved nodes, wire styles, cadence (2026-11-14)
+
+Plan: `plans/TOROID_SANKEY_PLAN.md`. The Flows lens (lens chip "Flows") has
+two SHAPES, picked by chips in its header and saved with the graph
+(`flows_shape`): **Column** (LoopSankeyLayout) and **Torus**
+(`ToroidFlowLayout`, `system_graph/data/toroid_flow_layout.gd`, pure).
+- **Torus rules (second design, 2026-11-15, after the user's concept
+  images: a bold trunk with racetrack loops beside it; a diagram, not a
+  strict Sankey).**
+  - TRUNK: a node that only touches the axis resource (electricity) stands
+    on the central line, layered source to load from the top. What is made
+    comes in from the top edge; what is used leaves the bottom as heat
+    (`heat: true` ribbons grade to red). The lens draws a yellow-to-red
+    arrow behind it (notch on top, head below).
+  - LOOPS: every other node sits on a RING on one of two lobes. A ring is a
+    rounded rectangle round the lobe centre (`ring_pt(a, ring, frac)`, frac
+    0 = top centre, 0.25 = beside the trunk; `nearest_on_ring`). Rings are
+    parallel offsets of each other (`_ring_size`), smallest loop innermost.
+    Round every ring the flow runs DOWN beside the trunk and UP the far side.
+  - A flow from one node to the NEXT one round its ring is a BAND
+    (`band: true`): one width for the whole ring (`_ring_band`, 12..38),
+    with a chevron. Its amount is on the pill, not in the width.
+  - THROUGH-FLOWS: nodes on no loop go on open rings outside the loops:
+    the longest chains get a ring each (`_longest_chain`, `CHAIN_OWN_RING`),
+    the rest share. An open ring runs from an arm over the top, down the
+    trunk's side, to an arm under the bottom; what its nodes take in is its
+    `tail` ribbon and what they give off its `arrow` ribbon.
+  - Every other flow is a thin LINK (`link: true`, <= 4.5 wide, drawn
+    first and dimmed until something is hovered or selected): the work from
+    the trunk to a machine, a flow across a lobe, a flow between lobes
+    (round an end of the trunk, never through it).
+  - Loops are peeled from each strongly connected component
+    (`_peel_loops`); loops from one component and the small chains that feed
+    them stay on one lobe. A store filling / emptying is `store_flow` on
+    the node. Boundary flows of ring nodes are only shown as tails / arrows.
+  - Output is LoopSankeyLayout's shape plus `shape: "torus"`, `rings`,
+    `guides` ([{path, width}], drawn as faint tracks), `axis`, node `shape`
+    card | disc.
+- **Sides.** The layout fills the left lobe first; the lens passes
+  `opts.mirror` (its `mirror`, default TRUE at the user's request, saved as
+  `flows_mirror`), which swaps the lobes, so the first loops sit RIGHT of the
+  trunk. The header's "Swap sides" chip toggles it (and drops torus pins).
+- No layout is applied while a node is being dragged (`lens.dragging`).
+- **Moved nodes.** Drag a node in either shape; `LoopSankeyLayout.apply_pins`
+  moves each ribbon point by a blend of its two ends' moves. Pins are the
+  lens's (`pins_by_shape`, saved as `flows_pins`), never the model's x / y.
+  Right-click a moved node or the "Reset positions" chip puts it back.
+- **Wire styles.** The toolbar's Wire style reaches the column
+  (`opts.wire`: bezier / orthogonal / metro; `wire_path`, `round_poly`).
+  Bezier is ONE monotone curve through a ribbon's waypoints (it was one
+  S-curve per layer, which is what made long ribbons wavy). Torus ribbons
+  are field lines and ignore it.
+- **Cadence.** `_flows_input` is cached `FLOWS_INPUT_MS` 700 (it ran on
+  every draw); the lens lays out at most every `TOPO_MIN_S` 4 s when WHAT
+  flows changes and `VALUE_MIN_S` 8 s when only amounts change, with no
+  cross-fade for the latter; numbers follow between layouts
+  (`_refresh_values`); a player's choice lays out at once (`force_next`).
+  Measured on Closed Loop Ten at 60x: 6 layouts in 12 s before, 3 after;
+  frame median in the lens 49 → 31 ms.
+- **Nodes.** `input.visuals` {id: {kind store | battery, level, color}}:
+  stores draw as vessels with their level, batteries in cells, machines
+  glow while working.
+- Gates: `system_graph/toroid_flow_layout_selftest.gd` (59) and
+  `tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/flow_torus_check.gd -Label flow_torus -Timeout 900`
+  (36, real clicks and drags; shot 10 is a synthetic closed site).
+- The window Sankeys (`LoopSankeyView`: Where it goes…, run cards, Compare)
+  carry their own Column / Torus chips in the top right corner.
+- On the torus a dragged lobe node rides its ring (`snap_to_shell`,
+  `SHELL_SNAP` 34); pulled further it comes free.
+- Tour stop `20h_flow_torus` (mtvernon).
+- **Between the lobes.** A flow from one lobe to the other goes round an END
+  of the axis (over the top or under the arrow head, each in its own lane),
+  never through the beam (selftest). To keep them few, loops cut from one
+  component share a lobe and a refinement pass moves a loose node to the
+  lobe most of its flow is on (`SIDE_MAX` 0.68 of the nodes a lobe).
+  Closed Loop Ten over a week: 19 of 215 ribbons cross.
+- **The per-wire ledger (engine).** `ResourceFlowEngine._conn_qty`: every
+  LIVE step adds rate x dt per wire, and a batch's FRONTLOADED charge (taken
+  from its tank in one step with no rate on the wire) is added whole;
+  `take_conn_quantities()` drains it. The view's `_record_flow_history`
+  feeds it to `FlowHistory.add_quantities` (spread over the time since the
+  last record) and samples only electricity from the canvas. Before this
+  the history was a once-a-second SAMPLE of the wires: a frontloaded charge
+  was never seen, so a store feeding a batch machine (Pantry to Kitchen)
+  read as a dead end and no loop through it could close. Pre-render steps
+  are not counted. Simkit's `conn_tot` still misses frontloaded charges.
+- On Closed Loop Ten the windows show 0 loops over a day and 1 over a week
+  (digester, filter, reclaimed water, HomeBiogas); the Nutrient Store only
+  fills in that week, so the food loop stays open there.
+
+## Flows + Process lens improvement pass (2026-11-17)
+
+- **Reading order (tiers).** `LoopSankeyLayout` nodes take `tier` (0
+  sources, 1 converters, 2 stores; the canvas's `_flows_tier`: panels,
+  arrays, wind / hydro turbines 0, controllers 1, batteries 2). A node sits
+  under every lower-tier node it is wired to. A flow from a higher tier into
+  a lower one one layer up is `KIND_UP` (battery top → inverter bottom, a
+  short rising ribbon); further apart it is a return. Before, a discharging
+  battery had no forward input and climbed to the panels' row.
+- **One flow per DC pair.** `_flows_input_build` merges the second wire
+  between the same two things (the − of a + / − pair) into the first edge's
+  `conn_ids`. Every DC value used to be doubled.
+- **Boundary flows say where they come from**: "sunlight" (with `sun`,
+  drawn as a broad beam with a sun and moving streaks, `_draw_sun_bands`),
+  "wind", "falling water", "losses" / "from other sources" at a controller.
+  A store's own stock in / out has `hide` (counts in the metrics, takes no
+  slot, draws nothing); its card says charging / giving instead.
+- **Cards**: per-node `w` / `h`; input `info` {id: {value, media}}. An
+  array (`compound_kind` array / pv_design) is a card sized to show every
+  panel (`_flows_array_size`, `draw_array_cells` in its body); one panel is a
+  drawn module (media "panel"); a node with a model gets the Process lens's
+  picture (`_flows_icon_of`, the process lens's view per node, else side),
+  else a pictogram. The value line: a controller with AC wired says
+  "AC out X" (its DC side is the battery's to show), a battery "charging" /
+  "giving", a generator "making", a load "using".
+- **Freeform controller card**: ctx `ac_out_w` (`controller_ac_out_w`,
+  -1 = no AC wire) makes the hero the AC output, chip INVERTER, sub "AC out ·
+  solar in X", bar against `overload_watts`.
+- **Multi-select in the lens**: Shift / Ctrl-click toggles, Shift / Ctrl-drag
+  on the background is a selection box, dragging a selected node carries the
+  others (`GraphFlowLens.set_pins`), a "Group N" chip in the header (and
+  Ctrl+G) emits `group_selection_requested` → the view's
+  `_on_group_selected_pressed`.
+- **Estimator fixes** (freeform wires too): a battery ↔ controller wire's
+  direction now accounts for which end the battery is on (Mount Vernon's
+  battery is the source end, so charge and discharge were swapped); a hydro
+  turbine's + / − leads carry its `live_power_w` (checked before the AC-load
+  and AC-shed rules, which took a processor ↔ controller wire for an AC
+  load); the published `battery_w` uses load 0 while the AC is shed.
+- **Process lens top to bottom**: `MimicGraphSource.build(..., {"flow":
+  "down"})` lays the picture out the "right" way with each thing's size
+  swapped, then turns positions and line corners over the diagonal
+  (`_tp`): lines leave a bottom and arrive at a top, returns run down the
+  right side, things keep their shapes. Palette picker "Flow: left to right /
+  top to bottom" (`set_flow_dir`, saved inside `icons_data` as `flow`);
+  moved things are kept per direction (`_pin_scope`, "<scope>|down").
+- Gates: `loop_sankey_layout_selftest` (41), `mimic_selftest` (128),
+  `graph_card_specs_selftest` (47) and
+  `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/flows_lens_tiers_check.gd -Label flows_tiers -Timeout 900`
+  (33, at noon / 18:00 / 23:00: rows, no doubled pairs, sunlight bands,
+  AC out, the battery agreeing with SolarUI, REAL Shift-clicks + the Group
+  chip, the Process lens turned top to bottom).
 
 ## Circle packing: nested things as zoomable circles (2026-11-12)
 
@@ -16644,6 +16898,185 @@ placemark's exact coordinates so nothing has to be guessed at in the world.
   `core/poi/poi_selftest.gd` and `--capture=poi` on mtvernon (Validation
   list), which asserts the panel and the block are inside the viewport.
 
+## Terraced fields: rice paddies, reed beds, dry steps (core/terrace/, 2026-11-16)
+
+T toolbar → **Terrace** (mountain icon). Shapes: **Hill** (one click on a
+slope terraces everything connected to the click that stands higher than it,
+within "Hill reach"; the outline previews under the pointer) or any drawn
+outline. A click inside an existing field selects it and opens the editor
+dock (`scenes/ui/terrace_editor_dock.gd`, right edge); Del deletes, Ctrl+Z
+undoes, Esc deselects. The crop picker and "Flooded" in the options bar are
+for the NEXT field drawn. Step height "auto" (the default) picks
+`TerraceField.auto_step_h`: median slope × 7 m, 0.5–3.5 m, so steps come out
+about 7 m wide (a fixed 1.2 m on a 60 % slope made 1.5 m-wide stripes, one
+tile cell each).
+- **`TerraceField`** (pure): the record (`defaults` / `resolve`; step_h,
+  riser_run, feather_m, datum (NAN = lowest ground), flooded, bund_h, crop,
+  plant_abs_h, inflow_mode off | keep | pump, inflow_lph, perc_mm_d) and
+  `solve(rec, ground_fn)`. The height law: the ground smoothed over
+  `SMOOTH_M`, t = (s − datum)/H, step m = round(t), d = t − m; a level floor
+  inside ±flat, a straight riser to the band edge (continuous with the next
+  band's). The riser's share r = riser_run × local slope, so the riser face
+  keeps one steepness. Floors at the band's middle: cut ≈ fill. A
+  `feather_m` fade to natural ground inside the outline. Paddies = connected
+  runs of one step in the core (past the feather), highest first; `down`
+  always points further down the list (slivers under `MIN_PADDY_M2` forward
+  their spill); `heads` = paddies nothing spills into.
+- **The cascade** (`cascade_step`, mass-exact at any dt): inflow to the heads
+  by area, rain on each paddy's catchment (floor + half its risers), losses
+  (ET0 by Blaney–Criddle × the crop's kc, + percolation on a flooded floor),
+  over capacity spills to the paddies below by shared edge, the lowest spill
+  out of the field. Capacity = floor × bund_h (flooded) or × `DRY_AWC_M`
+  (dry: the root zone). `intake_lph`: keep = tops up + this step's losses,
+  never above the set rate; pump = the rate (extra cascades out).
+- **The engine**: a terrace field is ONE `plant` node with `specs.terrace_id`
+  (`SystemGraphView.sync_terrace_node`, its record keys on the specs, the
+  paddy table `terrace_table` [[area, catch, cap, [down], [w]]…] and
+  `terrace_heads`). `ResourceFlowEngine._process_terrace` (from
+  `_process_plant`): the intake draws from the store on `water_in`, the
+  cascade runs, the spill goes to the store on `water_out` (else "runs
+  off"), the crop grows by light × `water_factor`, and at each crop cycle's
+  end the standing crop is HARVESTED into `harvest_out` (food, or biomass for
+  reeds / coppice) with the straw to `residue_out`; what does not fit stays
+  standing ("harvest waiting"). State `_terrace_state` (in the snapshots), a
+  scrub back holds. Stamps `terrace_fill` / `terrace_spill` (per paddy),
+  `water_held_l`, `inflow_lph_live`, `outflow_lph`, `standing_kg`,
+  `last_harvest_kg`, `crop_pct`. `terrace_fill_set` on the specs (the dock's
+  Fill now / Drain, `set_terrace_fill`) is taken once. Ports in
+  `GraphPortService` (terrace branch). Wiring from the dock:
+  `terrace_store_choices` / `terrace_wire`.
+- **The terrain**: a FOURTH tile layer, `_terrace_tiles`, written by
+  `TerraceRuntime` (TerrainLoader child "Terraces", `loader.terraces()`):
+  deltas = target − `ground_without_terraces` (base + player + channel).
+  Terraces ARE ground for everything else (`ground_without_structures`
+  includes them; a structure stands on a terrace); `_sync_composed_tiles`
+  bumps `ground_rev` when the ground under a field changes and the field is
+  re-measured. Tiles padded like the earthworks layer; `sink_rev` folds into
+  the DetailGround sink signature. Records per world: WorldPaths kind
+  `terraces` (`TerraceLayer`, whole-layer undo of 30).
+- **Drawing** (`TerraceMesh`, marching squares over a per-paddy field from
+  the solved grid): water per paddy built at full depth and slid down by its
+  fill (`terrace_water.gdshader`); bunds along the downhill lips and the
+  field's edge (a d-edge with d < 0, or a non-d edge); the crop as
+  GardenCrops (`rice`, `reed`, `taro` added) in 16 m chunks to
+  `CROP_DRAW_M` and a canopy beyond `CANOPY_FROM_M`
+  (`terrace_canopy.gdshader`, the crop shader's clock); spills as ribbons
+  down the riser (`terrace_fall.gdshader`, instance uniform `flow`), shown
+  while the paddy spills. All on the sim clock via the node's specs (2 Hz).
+- Vegetation inside an outline is cleared when a field is made or moved.
+- **Steps are smoothed**: the riser share comes from the slope blurred over
+  ~6 m (twice), so step edges no longer wobble with every DEM sample.
+- **First person**: Ctrl/Alt-aim a field (`interaction_focus._update_terrace_focus`,
+  after camps) outlines it; Interact / click opens the dock
+  (`TerrainLoader.open_terrace_editor`). Water held in the paddies is saved
+  with the graph (`terrace_fill`) and comes back on load.
+- **Per-step crop and water** (record `steps` {"<m>": {crop, flooded}},
+  `TerraceField.step_setting`; the dock's step list: click a step, pick its
+  crop, Flooded, "Like the field"). Paddy-table rows are now [area, catch,
+  cap, [down], [w], m, crop, flooded]; capacity, ET loss
+  (`paddy_loss_mm_h`, per paddy) and the water factor (`paddy_water_factor`)
+  are per paddy. `TerraceField.makes_food(specs)`: any step with food → the
+  harvest port takes food and biomass goes to residue_out.
+- **Farm work, paddy by paddy** (`TerraceFarm`, pure, state in the engine's
+  `_terrace_state[iid].farm`, saved as `specs.terrace_farm` when a job starts
+  or ends and hourly). Each paddy: PREP → PLANT → GROW (4 tending rounds at
+  12/30/50/70 % of the cycle; one undone when the next falls due costs 15 %
+  of the yield) → HARVEST (7 days' grace, then 1.5 %/day lost) → PREP;
+  reeds and willow are planted once and regrow. Every job has person-hours
+  = the crop's h/ha (`LABOUR`; rice 300/250/300/350 = 1,200 h/ha, IRRI/FAO
+  smallholder ranges, estimates) × area. Record `labour`:
+  - `people`: the engine lists open jobs (`terrace_jobs`: paddy, seq, task,
+    need_h, frac, crew, verb); TerraceRuntime puts each on the nearest camp's
+    board (`add_chore`, key `terr|<field>|<paddy>|<seq>`, window 6:30–18:30,
+    outdoor, crew from `CREW` scaled by area / 40 m², ≤ 12 at once a field),
+    patches `row_spine` / `row_half_w` (`TerraceDig.paddy_rows`) and
+    `pose: "dig"`, reads progress back and writes `terrace_credit`
+    {"<paddy>": [seq, frac]} into the node (`SystemGraphView.set_terrace_credit`,
+    a sim write). A camp that would not work a board is pinned
+    (`NpcPopulationBridge.pin_for_work(iid, owner, on)`, only while jobs exist).
+  - `machines`: the TRACTOR (`vehicle_tractor`) does prep (rotary tiller,
+    0.05 of the hand hours, 4 L/h) and harvest (reaper, 0.15, 3.5 L/h), by day
+    only; planting and weeding stay with the crew (`open_jobs(table, fs,
+    labour)` lists only people's jobs; `machine_jobs` the tractor's). The
+    engine draws diesel from the `fuel_in` store (`TerraceField.wants_fuel`
+    adds the port), else counts it as bought; a dry store sets `fuel_ok`
+    false and the tractor stops. The runtime draws the tractor working up and
+    down the paddy in 1.6 m passes (`TerraceFarm.tractor_at`).
+  - `free`: done when due (the sandbox; the tour; an old field sown before
+    this seeds as growing from `plant_abs_h`).
+  - Inside a pre-render, an A/B world or simkit (`_render_ctx_active`)
+    there are no live crews: people's jobs move on at a modelled crew's pace
+    (env `crews`: the job's full crew × `CREW_RATE` 0.8, by day).
+  The ledger (`farm_ledger`: labour_h, work_kwh = h × 80 Wh, food_kwh =
+  work / 0.25, fuel_l, fuel_kwh at 9.9 kWh/L, food / biomass in, missed,
+  lost) and `TerraceFarm.season_estimate(table)` (hand vs machine) are in the
+  dock's Work section. The harvest is delivered as it is cut; what no store
+  takes waits (`pend`).
+- **Crews in a line** (`NpcRowWork`, pure): a chore with `row_spine` puts
+  worker k of n across the plot (≥ 0.9 m apart, a second line 1.5 m behind
+  when the plot is narrower) at the share of its length the job has reached;
+  `NpcAgent._row_place` sets it on claim and re-reads it every DOING step
+  (moving at `ROW_PACE_MPS` 0.5). `NpcWorkPose.family_for` takes a chore's
+  own `pose` first. A chore's `tool` (FabToolCatalog: `hoe`, `seedlings`,
+  `sickle`, `shovel` were added) rides the dot as `work_tool` while DOING and
+  `NpcAvatar._update_work_tool` hangs it in the stick figure's hand
+  (`work_tool()` for probes; the rigged body holds none).
+- **Light camps work it**: `NpcPopulationBridge.pin_for_work` pins now force
+  the camp to the full tier like project pins (they did not, so a light camp
+  with terrace jobs never worked them).
+- **Digging in stages** (record `build_mode` hand | skid_steer | tractor |
+  instant, an old "machine" reads as skid_steer,
+  `built` {"<m>": 0..1}, `dig` {iid, pid, mode, base}; `TerraceDig`, pure).
+  A hand or machine field starts uncut; TerraceRuntime makes ONE site project
+  (kind `terrace_build`) with a task per step, top step first, each
+  depending on the one above, worked in a line along the step. Hours:
+  hand 3 h/m³ moved (max of cut, fill) + 0.05 h/m² of floor (ILO
+  labour-based norms, estimates), crew 2..16 by step length / 4 m. Machines
+  are the game's own vehicles (`TerraceDig.MACHINES`): skid steer
+  (`vehicle_skid_steer`) 10 m³/h, 7 L/h; tractor with front loader
+  (`vehicle_tractor`, the player's Kubota SketchUp model copied to the
+  gitignored `Imported Models/Vehicles/tractor.glb`, metres, front +X,
+  PlacedVehicle profile `tractor` yaw 90) 6 m³/h, 4.5 L/h; each with an
+  operator and a helper, + 0.02 / 0.03 h/m² hand finishing. The machine is
+  drawn (a ModelCatalog instance, not a prop; a box stand-in without the
+  art) working up and down the step as its task goes, and its diesel comes
+  out of the field's `fuel_in` store (`SystemGraphView.terrace_take_fuel`);
+  a dry store pauses the dig project (`dig.no_fuel`) until it is filled.
+  `dig.ledger` keeps machine hours and fuel (bought in when nothing is
+  wired). The task's share,
+  in 10 % steps, becomes `built` and the cut shows as far as it got, moving
+  along the step's long axis (`TerraceDig.cell_share`, a 3 m ramp). A step
+  not fully dug holds no water and is not farmed (capacity 0, stage
+  "unbuilt", not drawn). "Finish digging now" (`finish_dig_now`) cuts the
+  rest; switching an instant field to hand / machine counts it as dug
+  (`set_build_mode`). The dock shows the earth moved and its hours and energy
+  three ways. The toolbar's new-field choices: Cut by (default "Dug by hand")
+  and Farmed by (default people) — `terrace_build` / `terrace_labour` in
+  toolbar prefs.
+- **Drawing follows the paddies**: crops, canopy and water per paddy, each
+  with its own crop; plants are ranked down the paddy the way the crew works
+  it (INSTANCE_CUSTOM.w) and `garden_crop.gdshader`'s `fixed_f` /
+  `rank_show` / `rank_cut` (defaults leave grow beds unchanged) show a
+  planting or a cut moving down the step; `terrace_canopy` has `fixed_f` and
+  `cover`. The engine stamps `terrace_view` [stage, sow_h, planted, cut].
+- Gates: `core/terrace/terrace_selftest.gd` (offline, 113: the surface, the
+  cascade, the farm by people / tractor / free, a dry tractor, modelled
+  crews, per-step settings, unbuilt steps, dig estimates for both machines,
+  crew rows, the engine with crew credit),
+  `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/terrace_check.gd -Label terraces -Timeout 1200`
+  (real clicks: Hill on a slope, floors level, graph node, pumped water top
+  first, Fill now spills, edits, select / Delete / Ctrl+Z; instant + free) and
+  `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/terrace_crew_check.gd -Label terrace_crew -Timeout 1500`
+  (a seeded 14-person camp: a hand-dug field's project, the crew in a line on
+  the top step, the cut moving along it, Finish digging now, prep jobs on the
+  board with rows, a farm crew in the paddy, planting, the ledger's 80 Wh/h,
+  tools in hand, the tractor drawn at a paddy, a skid-steer dig burning a
+  wired diesel tote and stopping when it runs dry). Tour stop `13a_terraces`
+  (mtvernon, free).
+- Not built: an NPC sitting in the drawn machine (the crew stands beside
+  it), the player's own placed skid steer / tractor doing the work (a drawn
+  copy does), steps drawn sharper than the 1.5 m tile grid.
+
 ## Earth-sheltered structures: earthworks, Earthships, basements (2026-11-10)
 
 Plan: `~/.claude/plans/c-users-notsa-documents-earthship-glb-c-compressed-salamander.md`.
@@ -16848,6 +17281,817 @@ first ask); its record rides world.json `terrain_imagery.history`
 - Gates: `core/terrain/shoreline/shoreline_selftest.gd` (offline, real
   fixtures in testdata/) and `tools/checks/shoreline_history_check.gd`
   (Validation list).
+
+## SCADA process designer (core/scada/, 2026-11-15, all 9 phases)
+
+Plan: `plans/SCADA_PROCESS_PLAN.md`. Goal: design whole processes (equipment,
+piping, wiring, sensors, actuators, logic) as 2D mimics over the graph and the
+tri-clamp Process Lab, in four domains (process, plumbing, electrical,
+information), with tags, control blocks, alarms, trends and armed hardware
+outputs. User's choices: one shared mimic canvas (a graph lens AND a P&ID view
+in the Process Lab), two physics tiers, real outputs armed per process in Live
+mode only, dark theme with shaded parts. Landed so far: Phase 1 (tags +
+history), Phase 2 (the P&ID view in the Process Lab) and Phase 3 (the
+Process lens on the graph, valves and pumps) and Phase 3b (network domain,
+Power / Network layers, breakers, wiring tools, checks, instruments). Phase 4 (control logic) is done: live graph, pre-render, A/B worlds, simkit and the Process Lab. Phase 5 (alarms) is done on the live graph. Phase 6 (liquid hydraulics in the lab) is done bar the leftovers listed in its section. Phase 7 (real outputs, arming, operator mode) is done on the live graph. Phase 8 (dashboard widgets, screens, the Trends window) is done on the graph lens. Phase 9 (lessons, templates and share codes, a challenge, simkit alarms) is done bar the leftovers listed in its section.
+- **`ScadaTags`** (pure): ONE tag list. A tag = `{id, label, group, unit, kind
+  sensor | binary | switch | number, value, text, available, writable, source,
+  item}`. Tag ids ARE the keys automations already read (`tank.<id>.level`,
+  `node.<id>`, `sensor.battery_level`, `greenhouse.<id>.temp`) and a board's
+  entity ids. Collectors: `graph_tags(model)` (tank level / amount / overflow,
+  each machine's run switch, each resource wire's flow, greenhouse air),
+  `site_tags`, `esp_tags`, `tc_tags`, `ha_tags`. `context(tags)` =
+  {numeric_values, device_states} with name aliases; `display(tag)`; the
+  instance is the registry (`search`, `value`).
+- **`ScadaHistorian`** (pure): change-only samples per tag on the SIM clock
+  (deadband 0.2 % of the seen range, keep-alive 1 h), a scrub back drops the
+  future, NAN = a gap, `bins_exact` through `TimelineBinning.from_steps`.
+  `watched` tags keep 12,000 samples and are saved; the rest keep 1,500.
+- **`ScadaHub`** (`core/scada/scada_hub.gd`, a SystemGraphView child,
+  `view.scada_hub()`): gathers every tag once a second (PerfSpan
+  `scada_hub`), records history, `command(id, v)` for writable graph
+  switches (through `GraphSimLoadHost.proxy_for`, then bumps `user_rev`: the
+  proxy writes as the sim, a command is the operator's), `watch(id)`. Saved
+  per world as WorldPaths kind `scada_history` (watched tags only).
+  `EspLabRuntime` joins group `esplab_runtimes`; boards' readings now reach
+  the automation context (`get_automation_resource_context` merges
+  `extra_context()`), so a rule can read a placed board's sensor.
+- **UI:** Graph → View options → **Tags…** (`scenes/ui/scada/tag_browser.gd`:
+  search, source filter, live values, On / Off on switches, Add to timeline;
+  `open(hub, {pick})` is the tag picker). Timeline Tracks → **Add tag
+  track…** (track source `tag`, `_draw_tag_lane`, `add_tag_track`).
+- **Phase 2: the P&ID view in the Process Lab** (transport button **P&ID**,
+  `tclab_process_panel.set_pid`; the picture stands over the 3D studio and
+  shares its clock, selection and switches).
+  - `MimicLayout` (pure): `Proj` = a side elevation with the depth axis
+    drawn up-right at `DEPTH_K` 0.38 (height is height; what stands behind
+    is drawn beside); across = the horizontal axis with the larger VARIANCE
+    of path points.
+  - **Equipment pictures (2026-11-16).** In the Process lens a machine,
+    source, device or group with a 3D model (its own `specs.model_id`, else
+    its placed prop's model with `PlacedPropRuntime.model_extras`) is drawn
+    as a picture of that model instead of a grey box:
+    - `GraphModelPreviewService.get_icon(model_id, view, extras)` renders it
+      ORTHOGRAPHIC, framed on the instance's real visual AABB, at 384 px, and
+      `MimicIcons.stylize` (on a WorkerThreadPool task, never the main
+      thread) turns it into three flat grey tones, line work where the
+      shading turns sharply and a light outline, cropped to the silhouette.
+      Cached in `user://graph_previews/icon<STYLE_VERSION>_*.png`; bump
+      `MimicIcons.STYLE_VERSION` when the look changes.
+    - Views `MimicIcons.VIEWS` side (default) | front | three_quarter | top,
+      or "boxes": the bottom bar's Pictures menu (`icon_view`) sets every
+      node, a faceplate's "Show its …" button one node. Saved with the graph
+      as `process_icons` {view, per}. While a view is being drawn each node
+      keeps its last picture (no flash of boxes, no layout jump).
+    - A pictured node takes its picture's shape (`MimicGraphSource.icon_size`,
+      build opts `aspect`), so its pipes meet the picture's sides.
+      `MimicSymbols.equipment_icon`: state in colour only (lamp, ground line,
+      dimmed while off); the reading goes under the picture with its name.
+    - A node with no model gets a pictogram in its cabinet
+      (`MimicIcons.glyph_for`: words in its name / role / type → a UiIcons
+      name). Gate: `tools\harness.ps1 -World w6af22bac295d -RunScript
+      res://tools/checks/process_icons_check.gd -Label process_icons -Timeout 1200`.
+  - **Drags keep lines square (2026-11-16).** A drag moves only the thing
+    dragged, plus what sits on it (a vessel's probes, heaters, nozzle
+    valves and open ends by `cv`; an instrument bubble by `reads`): the
+    canvas's `offset_of(id)` = own pin + its parent's. Each line's ends
+    follow what they attach to (`pipe_ends`: a graph line's `from` / `to`;
+    a tri-clamp pipe's ends = the smallest valve / end / equipment whose
+    outline, grown a little, holds them) and the line between is
+    `MimicLayout.reroute(corners, da, db, stub)`: every leg keeps its
+    direction (a depth leg keeps its slant), the first and last slide
+    through the moved ends, the ones between stay, a straight run moved
+    sideways gets a jog, and a route that would double back is drawn
+    afresh by `connector` (out and in the way it left and arrived). Docs
+    carry `corners` (graph: the unrounded route; tri-clamp:
+    `simplify_corners` = RDP + sampled elbows turned into one corner),
+    `corner_r`, `stub`. The old `warp` rubber sheet (it bent every pipe
+    near a drag and pulled the neighbours along) is no longer used by the
+    canvas.
+  - `MimicTcSource` (pure): `build(d, net)` = the DOC {pipes, elements,
+    bounds, proj} from `TcProcNet` (lines along each volume's real centre
+    lines, a condenser's cooling water as its `shell`, equipment at the
+    part's projected bounds, valves on links, heaters / probes on volumes,
+    an `end` per open port). `state(sim, doc)` = live values by the same
+    ids; `flow_sign` = which way a line runs with the flow.
+  - `MimicSymbols` (static draw functions, screen px): pipe (tube shading,
+    contents by temperature, liquid, moving flow marks, shell), vessel
+    (window with headspace, charge, level), holder, engine, dryer, flare,
+    valve / check / relief, heater, instrument bubble, end, tag.
+  - `scenes/ui/scada/mimic_canvas.gd`: draws a doc + state; wheel zoom
+    about the pointer, drag pans, click = `element_clicked` / `pipe_clicked`,
+    dragging an element emits `element_moved` once on release, F fits;
+    redraws at most 20 Hz while flow moves (~3 ms a redraw on the reactor).
+    Coolant ends, plugs and vents behind equipment are not drawn; anything
+    operable always is. `scenes/ui/scada/faceplate.gd`: the card on a
+    valve / heater / drain / generator (state + Open / Close or On / Off,
+    through the panel's `_manual`, so the run past now is recomputed).
+  - Dragged positions are `process.mimic.pins` (kept by `TcProcSpec`, never
+    restarts a run, undoable; Ctrl+Z / Ctrl+Y and Esc-closes-faceplate now
+    work in Process mode).
+  - Traps: an inner class named `Projection` collides with Godot's built-in;
+    `const S := SomeClass` is not a constant expression; a top-level
+    PanelContainer under a full-rect modal is stretched to its height (set
+    its size from its minimum); a pushed wheel press with no release keeps
+    the mouse focus on that control.
+  - Gates: `core/scada/mimic_selftest.gd` (47),
+    `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/tc_pid_view_check.gd -Label tc_pid`
+    (34, at 1080 and 720: real clicks on P&ID, vessel, pipe, faceplates,
+    a drag, Ctrl+Z, wheel, UiAudit), look sheet
+    `tools/diag/mimic_look_diag.gd -- --design=<builtin> --hours=2 --out=<png>`.
+  - ⚠ Failing BEFORE this work (recipe port order: the Biochar Reactor
+    preset gained a `thermal` output): 1 check each in `tc_proc_selftest`,
+    `tclab_selftest` and `tc_process_check`.
+- **Phase 3: the Process lens on the graph + valves and pumps** (lens chip
+  **Process**, `GraphSiteLayout.VIEW_PROCESS`).
+  - **Valves and pumps** (`FlowCtl`, `system_graph/data/flow_ctl.gd`, pure):
+    a `processor` with `role: "flowctl"` standing IN LINE between two stores
+    of one kind (store → valve | check | pump → store). Rate = `max_rate` ×
+    `open` (0..1; `throttle` false snaps to 0 / 1). Its run switch
+    (`requested_state`) is open / closed or on / off, so rules, tags and
+    faceplates switch it like any machine. A valve flows downhill only (both
+    ends' `elevation_m` known and the target higher = "needs a pump"); a
+    pump needs AC and lifts up to `max_lift_m`. A line straight from a store
+    into a MACHINE is shut with the store's own `output_valve_open`.
+    Engine: `ResourceFlowEngine._prepare_flowctl` (from `_process_processor`)
+    sets the node's one input / output each step, capped to the source's
+    stock and the target's room for that step (a big valve on a coarse step
+    used to make water), and stamps `ctl_block` / `ctl_rate`. No flowctl
+    nodes = the engine is untouched. Library category "Valves & Pumps"
+    (`ComponentPresets.FLOW_CONTROLS`: Ball / Control / Check Valve,
+    Transfer / Dosing / Sump Pump, Greywater Valve); card + inspector
+    section (`_build_flowctl_section`).
+  - `MimicGraphSource` (pure): `build(items, conns)` = the scope's piped
+    nodes as the same DOC the P&ID uses (kinds tank, machine, pump, valve,
+    check, group, source; lines = resource wires by wire id). Longest-path
+    columns left to right in the graph's own order; a wire that closes a loop
+    is a RETURN and runs under everything; unpiped stores are left out,
+    unpiped valves / pumps are shown. `state(items, conns)` = {el, pipe}.
+  - `system_graph/graph_process_lens.gd` (a child Control of the graph
+    canvas, made on first use by `canvas.sync_process_lens(view)`): hosts a
+    MimicCanvas + faceplate. The canvas draws only its background in this
+    mode and returns from `_gui_input`. Click = select the node / wire in
+    the graph + a faceplate (machines, valves, pumps: on / off through
+    `hub.command("node.<id>")`, so it counts as the operator's edit; a
+    store: its own way in / way out); double-click a group goes inside;
+    drag moves a thing in the picture only (pins per scope, saved as
+    `process_pins`; never x / y); Esc puts the faceplate away; F fits.
+    `MimicCanvas` draws graph kinds from `state["el"][id]` /
+    `state["pipe"][wire id]` (`BIG` kinds list).
+  - **Editing in the lens** (the "Add" palette, bottom-left: Store, Valve,
+    Check valve, Pump, Pipe, Tidy). `ProcessEdit`
+    (`system_graph/data/process_edit.gd`, pure over a GraphModel): `place`
+    (a new unpiped part, flagged `specs.process_show` so the picture shows
+    it), `split(conn, tool)` (A → new → B on the old wire's handles), `link`
+    (a pipe; its kind is the source's — a store's kind, a valve's line, the
+    machine output the target takes; an unpiped valve / pump / lens-placed
+    empty store takes the kind of the first pipe joined to it; refusals come
+    back as a sentence, shown as a toast). The canvas has `set_tool("place" |
+    "pipe", hint)` and emits `place_requested(at, pipe)` /
+    `link_requested(from, to)`. A place click on a pipe splits it; on open
+    space it sets the part down there (a pin); on a thing it does nothing.
+    Pipe: press on the source, drag to the target. Each edit is ONE undo
+    step (`_edit`: history suppressed, then `_push_history`). Esc drops an
+    armed tool first, then the faceplate; with neither it is the graph's own
+    Esc (closes the view at the root). Delete is the graph's own (the lens
+    selects in the canvas). A lens-placed pump still needs an AC wire, drawn
+    in freeform.
+  - Layout rules that came with it: unpiped parts stand in a row UNDER the
+    picture (`loose`; setting one down moves nothing else; piping it drops
+    its pin and it takes its column); a pipe's riser runs in the gap between
+    columns (`col_right` / `col_left`), never over a wider thing in a narrow
+    thing's column; the lens passes `set_doc(doc, false)` so an edit never
+    refits the view (it fits on a scope change).
+  - Not done in Phase 3: machines from the palette and power wiring in the
+    lens (freeform / library for those), instrument bubbles bound to tags, opening a bound reactor's P&ID from
+    the lens, a tour stop, `flow_step_bench` hash not re-run (the hook is
+    behind `FlowCtl.is_flowctl`).
+  - Gates: `system_graph/flow_ctl_selftest.gd` (27), `core/scada/
+    mimic_selftest.gd` (68, with `_test_graph_picture`),
+    `system_graph/process_edit_selftest.gd` (30),
+    `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/process_lens_check.gd -Label process_lens -Timeout 900`
+    (45 at 1080 and 720: real clicks on the chip, valve, faceplate buttons,
+    a store's outlet; the Valve tool on a pipe + Ctrl+Z, the Store tool on
+    open space, a Pipe drag, Delete; a drag, Esc, UiAudit, ~1.4 ms a redraw). ⚠ In a check,
+    move the pointer onto the picture and settle before the first click.
+- **Phase 3b (first part): the Network domain, and Power / Network layers
+  in the Process lens.**
+  - **Data wires** (`ScadaNet`, `core/scada/scada_net.gd`, pure): a graph
+    connection with `polarity: "data"`. The flow, AC and DC code filter on
+    their own polarities, so a data wire moves nothing. Kinds (`kind_of`:
+    the wire's `data_kind`, else Wi-Fi on an access point's `wifi` port,
+    else Ethernet) with a longest working run (Ethernet 100 m, RS-485
+    1200 m, CAN 500 m; signal cable 30 m and Wi-Fi 45 m are estimates).
+  - **Network nodes** are loads with `specs.net_role`: server, switch
+    (`ports`), ap, board. `GraphPortService.resolved_handles` gives them
+    their type's ports plus `ScadaNet.data_handles` on the bottom edge (the
+    type's own bottom port is dropped). A placed ESP board's node is a
+    board by its `model_id`, so existing boards get a data port with no
+    migration. Library category "Network" (`ComponentPresets.NETWORK`: Home
+    Assistant Server, 5 / 8 port switch, Wi-Fi Access Point). Canvas port
+    colour `data` (teal); show-only filter domain `GraphDomainFilter.DATA`
+    ("Network").
+  - **Reach** (`ScadaNet.reach(items, conns)` over the whole flat graph):
+    breadth-first from every powered server; only powered switches and
+    access points pass anything on; a board never forwards. A node's power
+    is its load state (`current_state`, which the load proxy writes, so AC
+    loss shows). ⚠ ENFORCED ONLY WHEN THE GRAPH HAS A SERVER: with none,
+    every board is heard, so existing worlds are unchanged. `checks()` =
+    unreachable boards, a cable too long, two cables in one port.
+  - ⚠ A cable's length counts only when the player ROUTED it in 3D
+    (`visible_3d`): the conduit system also stamps `route_length_m` on
+    wires to nodes with no place of their own (a graph-only switch read
+    1040 m from a placed board).
+  - **Tags follow it**: `scada_hub.net_reach()` / `net_fault(gid)`; a board
+    the server cannot hear has every tag unavailable with the reason as its
+    text ("not on the network", "no path to the server", "no power", the
+    cable fault). `EspLabRuntime.graph_item_id()`.
+  - **Lens layers** (the palette's "Show" row: Pipes / Power / Network,
+    saved as `process_layers`; at least one stays on).
+    `MimicGraphSource.build(items, conns, layers)`: power = every other
+    polarity, one line per pair of things (a + / − pair is ONE line of a
+    single-line diagram), drawn thin (`MimicSymbols.wire`: moving dots when
+    it carries, amber when it warns, dashed for Wi-Fi); anything not a
+    process type on a shown line is a `device` box with a glyph
+    (`glyph_of`: panel, battery, inverter, load, generator, breaker, server,
+    switch, ap, board). `wire_state` writes what a diagram writes on a run:
+    the cable (`ConduitKinds.display_name_with_size`), its routed length,
+    amps, % drop, "overloaded N %"; pipes get the pipe, length, flow and
+    "% lost to the run". `state(items, conns, net)` puts Heard / the reason
+    on network nodes. Loads and network nodes have an on / off faceplate
+    with how they are heard.
+  - Layout: a thing nothing feeds stands one column LEFT OF WHAT IT FEEDS
+    (`_pull_roots`), not in column 0 with every other source (one very tall
+    column once power was shown). The picture fits above the palette
+    (`PALETTE_CLEAR`).
+  - NOT built from the plan's 3b: breakers / fuses as in-line parts that
+    trip, wire gauge picked on the line, pipe size / material picked on the
+    line, DWV slope and ampacity checks beyond the stamped overload / drop,
+    drawing power or data wires in the lens (freeform does that), remote
+    sensor heads with signal runs, `signal_cable` 3D kind and instrument
+    ports, relays that stop switching when their board is unheard.
+  - Gates: `system_graph/scada_net_selftest.gd` (31), `core/scada/
+    mimic_selftest.gd` (89, with `_test_graph_layers`),
+    `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/process_domains_check.gd -Label process_domains -Timeout 900`
+    (28 at 1080 and 720: a real placed ESP board heard / not heard as a
+    server, a switch and data wires come and go, the switch switched off,
+    real clicks on Show → Network and Power, the board's faceplate, UiAudit,
+    layers saved).
+- **Phase 3b (second part): breakers, wiring tools, checks, instruments.**
+  - **Breakers that trip** (`BreakerTrip`, `system_graph/data/
+    breaker_trip.gd`, pure): an in-line `acbreaker` item (GraphAcLoad
+    already stops AC at one whose `closed` is false) with `rating_a` /
+    `volts`. Amps = watts through it ÷ volts; over its rating for
+    `TRIP_DELAY_S` 20 sim-seconds, or at `INSTANT_X` 2× at once, it opens
+    (`tripped`, `trip_amps`). Those two numbers stand in for a UL 489
+    inverse-time curve; they are not the curve. `SystemGraphView.
+    _tick_breakers` (2 Hz, graph closed too, a sim write; watts =
+    `GraphAcLoad.delivered_watts_indexed` over its output wires) + a toast;
+    `reset_breaker(id)`. Library (Breaker Panels category): Breaker 15 A /
+    20 A, Fuse 10 A (`fuse: true`: "Blown", "Replace the fuse").
+  - **Tools in the lens** (palette: Breaker, Wire, Cable; arming one turns
+    its layer on). `ProcessEdit.link_power(model, a, b, handles_of)` (an AC
+    wire from a supply's AC output to a load's input; refusals in words),
+    `link_data` (a free data port on each; Wi-Fi from an access point to a
+    board; board to board refused; "has no free port"), `split_power(conn)`
+    (supply → 15 A breaker → load). `handles_of` = the canvas's
+    `_resolved_handles`. DC wiring stays in freeform.
+  - A load with no power wire (`WAITING_LOADS`) and any network device wait
+    in the row under the picture while their layer shows, so they can be
+    wired from the lens.
+  - **Checks** (`ProcessChecks.run(items, conns, net_checks)`, pure): a
+    tripped breaker, an uphill valve / a pump past its lift (`ctl_block`), a
+    pump with no power wire, a cable over its rating (`overload_ratio`),
+    voltage drop over 3 % (NEC 210.19 note), water faster than 3 m/s in its
+    pipe (from the wire's `flow_rate` and `ConduitKinds.inner_diameter_for`),
+    a drain routed in 3D that falls under 2.08 % (IPC 704.1, from the run's
+    inverts), plus ScadaNet's. The palette's Checks button counts them
+    ("2 problems, 1 warning" / "Checks pass", recomputed once a second);
+    its list opens above the palette and a row selects what it is about.
+    Wire gauge and pipe size are picked on the line through the inspector
+    (a clicked line is selected in the graph).
+  - **Instruments** (`scada_hub.esp_instruments()`): every placed board's
+    reading BOUND to a graph item (EspBindings) is a bubble standing on that
+    item in the picture (ISA-style letters from the binding,
+    `MimicGraphSource.letters_for`: LI level, LS level switch, WI weight, EI
+    volts, JI power, II current, XY relay) with its live reading; with
+    Network shown, a dashed signal line runs to its board. Unheard = amber
+    with the reason. Element ids `ins:<entity id>`, lines `sig:<entity id>`
+    (not graph wires: not selectable, not editable).
+  - **An unheard relay refuses**: `scada_hub.command("node.<id>")` returns
+    false with `last_refusal` when a board's relay is bound to that load
+    (`item.<id>.switch`) and no such board can be heard; the lens toasts
+    it. Only while a server is on the graph. Rules in AutomationEngine do
+    not go through the hub and are not stopped.
+  - The palette is a bar along the bottom that WRAPS (HFlowContainer); the
+    picture's bottom inset follows its height. At 720p it is two rows.
+  - Still not built from the plan's 3b: sensor heads as their own placed
+    props with 3D signal runs and instrument ports, a `signal_cable` 3D
+    kind, DC wiring from the lens, breakers on DC lines.
+  - Gates: `system_graph/process_domains_selftest.gd` (51),
+    `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/process_wiring_check.gd -Label process_wiring -Timeout 900`
+    (34 at 1080 and 720: real drags with Wire / Cable, a real click with
+    Breaker, 4 kW tripping a 15 A breaker, the Checks list, Reset from the
+    faceplate, instrument bubbles from a placed board, the refused relay,
+    Ctrl+Z). ⚠ The graph's own toast stands over the palette for a few
+    seconds: a check audits after it has gone.
+- **Phase 4: control logic, live on the graph** (`ScadaLogic`,
+  `core/scada/scada_logic.gd`, pure).
+  - Blocks (`KINDS`): `band` (on / off with hysteresis), `pid` (out = bias +
+    kp·(e + ∫e/Ti + Td·d/dt on the measurement), output limits, anti-windup by
+    conditional integration, auto / manual, bumpless back to auto),
+    `interlock` (conditions → forced safe values, optional latch + Reset; an
+    interlock's write OVERRIDES every other block's), `timer` (on for / off
+    for), `counter`, `sequence` (steps with actions, a wait condition, a
+    timeout; Start / Hold / Resume / Abort). `step(blocks, state, read,
+    now_h)` → {state, writes, status, forced}; a scrub back or a step past
+    `MAX_DT_H` 0.5 h holds. `command`, `tags`, `tags_used`, `template`
+    (`TEMPLATES`: hold a level with a band / with a PID, overfill, dry run,
+    cycle, fill-wait-drain).
+  - **Runs in the hub** (`scada_hub.logic_tick`, every `LOGIC_S` 0.1 s,
+    graph closed too; skipped while the ambient flow is suspended or a
+    render is replaying). Reads go straight to the graph (`read_now`; the tag
+    list itself is gathered once a second). Writes are SIM writes inside the
+    view's bracket, only when the value changes: `node.<id>` through the load
+    proxy, `valve.<id>.open` onto `specs.open`. An unheard relay refuses
+    (`logic_notes`). Saved with the graph as `scada_logic` {blocks, state}.
+    `set_logic_blocks` (the player's edit: bumps `user_rev`), `logic_command`,
+    `logic_block`, `logic_status`, `new_logic_id`. One pass ~0.02 ms.
+  - New tags: `valve.<id>.open` (a number, 0–100 %, on throttle valves and
+    variable pumps only; `hub.command` writes it as the operator) and each
+    block's own `logic.<id>.out | sp | tripped | step | count` (source
+    "logic", read-only).
+  - **Window** (`scenes/ui/scada/logic_editor.gd`, a ModalFrame;
+    `view.open_logic_editor(select_id)`; the lens palette's **Logic**
+    button): templates across the top (`add_<template>`), the block list
+    (`block_<id>`), a plain-word form per kind (`f_<key>`; tag fields open
+    the tag list in pick mode), its commands (`cmd_<what>`), Delete.
+  - **In the picture**: every block bound to a graph item is a controller
+    bubble (`MimicGraphSource.logic_instruments`: LIC / IC / LS / S / I / KC
+    / QI / KS) on what it reads, with a dashed line to what it drives (shown
+    whatever the layers). Its faceplate: Auto / Manual, Reset, Start / Hold /
+    Resume / Abort, Edit….
+  - Measured on Mount Vernon (cistern → 600 L/h control valve → 1000 L day
+    tank → 200 L/h drain): from 20 % the PID (kp 6, Ti 20 min) holds 50.0 %
+    with the valve 33.5 % open; an overfill interlock on the same valve
+    shuts it over the loop.
+  - **Everywhere the simulation runs (second part, same day).**
+    - `ScadaLogicRun` (pure): blocks stepped against a bare graph MODEL
+      (`read_model`, `apply_write`, `step(model, now_h, extra, on_switch)`,
+      `summary`, `remap` for design files). Used by:
+      - **A/B and calibration worlds**: `ExperimentWorld.logic`, taken from
+        the live hub in `from_graph`, stepped in `before_step` after the
+        automations. Every version runs the WORLD's blocks (a fork stores a
+        graph, not its own logic).
+      - **simkit**: design key `logic` (a list of blocks whose tank. / node. /
+        valve. tags use DESIGN node ids; `SimkitGuard` + the MCP server's
+        mirror allow it, at most 40), remapped by the runner, stepped in
+        `SimkitYear.step_chunk`; the compact report's `logic` rows.
+    - **Pre-render and challenge bake**: `SimBakeStepper.step` calls
+      `gv.scada_logic_step(cursor)` before the flow step. The hub keeps what
+      the logic was (`logic_render_begin` / `_end`, called by SimRenderer and
+      ChallengeBakeEngine) and a state + status every 0.25 h
+      (`_render_states`); inside a rendered range the live tick only ADOPTS
+      the nearest one (`_adopt_rendered`). A logic write to a load now writes
+      the specs as well as calling the proxy (the proxy's own write lands a
+      frame later: too late for many steps inside one frame).
+    - **Tri-clamp Process Lab**: `process.logic` (kept by `TcProcSpec`; an
+      edit restarts the run like a rule's). `TcProcSim._run_logic` every
+      model step on the design's own sensor / switch keys; state in the
+      snapshot. A PID's 0..100 % on a number actuator = that share of an
+      element's rated watts (cooling: of the actuator's top flow). The
+      Control tab's **Control blocks…** (`proc_logic_btn`,
+      `panel.open_logic()`) opens the same window over
+      `scenes/ui/scada/tc_logic_host.gd` (a hub-shaped adapter; its
+      `modal_layer` lifts the window and the tag list above the designer).
+  - **Duty / standby** (kind `duty`: `when`, `outs` [a, b], `swap_h`,
+    `assist`; command `swap`; tag `logic.<id>.lead`) and two more templates
+    (`hold_temp_band`, `duty_standby`).
+  - **Tuning** (`ScadaTune`, pure: `fit` = integrating or first order + delay
+    by the two-point method; `gains` = SIMC, Skogestad 2003).
+    `ScadaStepTest.run` steps a COPY of the graph with its own flow engine
+    (20 min of drift, then a 10 % step, up to 8 h at 1-min steps; ~1.2 s,
+    blocking); `hub.tune_block(id)`; the PID form's **Suggest gains from a
+    step test** → **Use these gains**. Graph tags only; an estimate.
+  - **Export** (`ScadaLogicExport.export(blocks, entity_of)`): bands,
+    interlocks, timers, counters as Home Assistant automations, a sequence
+    as a script, a PID as an ESPHome `climate: pid` snippet in comments
+    (kp ÷ 100, ki = kp ÷ Ti in seconds). Graph tags become placeholder
+    entity ids; a board's or HA's own ids are kept. The window's **Export
+    for Home Assistant** copies it and writes `user://scada_export/logic.yaml`.
+    NOT run through `esphome_validate.py`; latches, the duty swap and timer
+    offsets are noted as not exported.
+  - **Faceplate trend**: `faceplate.gd` `set_trend({label, series})`; a
+    block's faceplate draws the last 2 h of its reading (and a PID's output)
+    from `hub.trend(tag)`.
+  - Measured: the brew kettle with a PID on its 3 kW element holds 65.0 °C
+    (346 W) through the 2.5 h pre-run; a 6 h render leaves the day tank at
+    50.0 % with the valve 33.6 % open in the replay.
+  - Still NOT built: logic per fork, logic for the light A/B "energy only"
+    runs with no flow engine (it steps, but tanks do not move there), a
+    step test off the main thread, validation of the exported YAML, the
+    Process Lab's faceplates for blocks in its P&ID view.
+  - Gates: `core/scada/scada_logic_selftest.gd` (64),
+    `core/scada/scada_logic_run_selftest.gd` (48),
+    `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/scada_logic_check.gd -Label scada_logic -Timeout 900`
+    (25) and
+    `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/scada_logic_more_check.gd -Label scada_logic_more -Timeout 1200`
+    (29), both at 1080 and 720.
+- **Phase 5: alarms** (`ScadaAlarms`, `core/scada/scada_alarms.gd`, pure).
+  - A rule = `{id, name, tag, op, limit, deadband, delay_s, priority,
+    enabled}`; `op` ">=" | "<=" | "on" | "off" | "lost" (no reading);
+    priority high | medium | low. A tank's high and low are two rules.
+  - States after ANSI/ISA-18.2: `normal`, `unack` (in alarm, new: flashes),
+    `acked` (in alarm, seen), `rtn` (cleared before anyone saw it: stays
+    listed until acknowledged), `shelved` (aside until an hour of the site's
+    clock; raises nothing). `step(rules, state, read, now_h)` → {state,
+    status, events raised | cleared}; the deadband applies on the way back;
+    the delay is sim time; a scrub back raises nothing and restarts delays,
+    as does a step over 0.5 h. `command` (ack, shelve, unshelve), `ack_all`,
+    `active_list` (new first, then by priority), `summary`, `tags`,
+    `suggest` (a high and a low on every store with a 2 % deadband and a
+    60 s delay, a trip on every interlock, a low battery).
+  - **Hub**: `alarm_tick` beside the logic tick (0.1 s; skipped while a
+    render / bake owns the world and inside a replay: alarms are about NOW),
+    reads through `read_now`, a journal of the last 300 events, signals
+    `alarms_changed` / `alarm_raised`; `alarm_rules / _status / _active /
+    _summary / _journal`, `set_alarm_rules`, `suggest_alarms`,
+    `alarm_command(id, what, value)` ("ack_all" too), `alarm_items()` (the
+    worst alarm per graph item). Saved with the graph as `scada_alarms`
+    {rules, state, journal (last 100)}. One pass ~0.014 ms.
+  - Each rule is a tag, `alarm.<id>` (1 while in alarm and not shelved;
+    source "alarm"), readable by control blocks: an interlock on it shut a
+    valve in the check.
+  - **Window** (`scenes/ui/scada/alarm_panel.gd`, `view.open_alarm_panel(tab)`):
+    Now (Acknowledge, Shelve 1 h, Acknowledge all, shelved ones to bring
+    back), Rules (a card per rule; the tag through the tag list; Add a rule;
+    Suggest for this site), Journal (newest first).
+  - **In the Process lens**: a thing in alarm is outlined in its priority's
+    colour and flashes about once a second until acknowledged
+    (`mimic_canvas._draw_alarms`, state key `alarm`; real time, so it shows
+    with the clock held); an alarm bar along the top while anything is in
+    alarm (the worst in words, Acknowledge all, Alarms…; the picture starts
+    under it); the palette's Alarms button counts them.
+  - **First person**: `scenes/ui/scada/alarm_chip.gd` (HudLayout top centre,
+    made by the view once the site has a rule; shown only while something is
+    in alarm; a click opens the graph on the window). A raised alarm is
+    said ONCE as a toast (`view.scada_alarm_toast`: the graph's own while it
+    is up, else Main's; high = error level).
+  - NOT built: alarms inside the pre-render / A/B / simkit / the Process Lab
+    (they run live on the graph only), `SettlementLog` entries, suggested
+    over-temperature and pump dry-run rules (no such tags on the graph yet),
+    shelving for other lengths than an hour from the window, sound.
+  - Gates: `core/scada/scada_alarms_selftest.gd` (42) and
+    `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/scada_alarm_check.gd -Label scada_alarms -Timeout 900`
+    (28 at 1080 and 720: real clicks on Alarms, Suggest, Acknowledge, Shelve,
+    Bring back, the journal; the tank outlined, the bar, the chip; saved;
+    `user_rev` unmoved; UiAudit). ⚠ The graph's toast for a raised alarm
+    stands over the palette for a few seconds: audit after it.
+- **Phase 6, first part: liquid lines in the Process Lab** (pumps, control
+  valves, liquid between vessels).
+  - Parts (`TcParts`): `control_valve` (valves; `open_pct`; its opening is a
+    number the process sets) and `pump` (process; `kind` centrifugal |
+    positive, `head_m`, `flow_lpm`, `watts`, `on`; liquid goes a → b).
+    `TcFlowPaths`: rule "cvalve" = a valve link with `throttle` + `open_frac`;
+    rule "pump" = link role "pump" with its `pump` dict.
+  - ⚠ A pump and a valve are both LINKS, and a link needs a pipe volume on
+    each side: two link parts clamped face to face drop out of the network.
+    Put a spool between them (the rig preset does). No design check says so
+    yet.
+  - **Lines** (`TcProcSim._build_lines` / `_lines_step`): a line is the
+    pipework from one VESSEL's nozzle to another's with no branch. Each step
+    its flow balances static head + pump head against friction: K = 1.5
+    (entrance + exit) + 0.03·L/D + 0.3/open² per valve + 4 for a stopped
+    centrifugal pump (Crane TP-410 for the first; the valve law and the
+    stopped pump are estimates). A running centrifugal pump: H0(1 − (Q/Qmax)²)
+    with H0 ∝ speed², Qmax ∝ speed; a positive-displacement pump gives its
+    rated flow × speed up to its head and passes nothing stopped. The suction
+    must be flooded; a nozzle above the far tank's liquid is a free fall;
+    checks and pumps pass one way. The pipes' own hold-up is ignored. Gas
+    treats a pump like a check valve. Liquid moves with its heat
+    (`_move_liquid`); a lidless tank on a line breathes to the room's
+    pressure (`_breathe`, air counted in the mass ledger). A design with
+    one vessel has no lines and is unchanged (the reactor: 1.39 ms a step,
+    as before).
+  - State: `link_frac`, `pump_on`, `pump_speed`, `pump_lpm`, `pump_kwh`,
+    `lines[].lpm`; in the snapshot. `set_actuator`: "cvalve:<part>" (0..100),
+    "pump:<part>", "pumpspeed:<part>" (0..100).
+  - `TcProcControl`: `switch.<slug>_<pump>`, `number.<slug>_<pump>_speed`,
+    `number.<slug>_<valve>_opening`; sensors `sensor.<slug>_<vessel
+    part>_level` (%; only when the design has lines) and
+    `sensor.<slug>_<pump>_flow` (L/min).
+  - `process.liquids` = [{part, litres, feed, t_c}] fills vessels other than
+    the first (kept by `TcProcSpec`).
+  - Built-in `level_rig` ("Two-tank level rig"): ½" lines; a supply tank and
+    a process tank on 640 mm legs, a receiver on the floor filled near its
+    top; supply → pump (1 m, 10 L/min) → control valve → process tank →
+    a second control valve a quarter open → receiver; a PID block holds the
+    process tank at 50 % for the ~30 min the 150 L lasts (valve ~11–13 %
+    open, 3.3 L/min).
+  - P&ID: a pump is drawn with its flow and runs green; a moving line draws
+    full with flow marks; faceplates: pump (Switch on / off, speed ±10 %),
+    control valve (opening ±10 %). `MimicTcSource.state` gained `el` (pumps)
+    and `frac` per link.
+  - Also fixed: the batch chart's time axis used "%.2g" (no such format in
+    GDScript) for batches of 2 h or less: 63 engine errors a run.
+  - NOT built from the plan's Phase 6: charges, heaters and pools in vessels
+    other than the first (`vessel_cv` is still one), branches and loops in
+    liquid lines, pipe hold-up, level transmitter / level switch / flow
+    meter / solenoid PARTS (levels and pump flow are model sensors), plate
+    heat exchanger, agitator, jacket / coil circuits fed by a medium, an
+    actuator driving a valve's opening, the CIP / brewhouse / water-treatment
+    presets, multi-output `TcProcSummary`, pump kWh in the energy ledger.
+  - Gates: `tc_proc_selftest` `_test_liquid_lines` (522 checks in all; pump
+    operating point by hand, half speed, throttling, shut, gravity through a
+    stopped pump, Torricelli drain, volume and heat conserved, breathing,
+    positive displacement, the PID at 50 %, restore) and
+    `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/tc_hydraulics_check.gd -Label tc_hydraulics -Timeout 900`
+    (24 at 1080 and 720, real clicks on the pump's and valve's faceplates).
+- **Phase 6, second part: the rest of the liquid plant** (same day).
+  - **Parts** (`TcParts` / `TcSpecialty`): `solenoid_valve` (a valve link,
+    shut at the start), `level_tx` (attach role "probe_l": % full of its
+    vessel), `level_switch` ("probe_ls": 1 while the liquid surface is at or
+    above the height it is fitted at), `flow_meter` (a pipe; reads the lines
+    through its volume, L/min), `plate_exchanger` (the dephlegmator's two
+    circuits with `area_m2` = 0.03 m² a plate), `agitator` (attach role
+    "agitator", `watts`, `on`).
+  - **Heaters in any vessel**: `heater_parts` lists the charge vessel's
+    first (`n_bed_heaters`), then the other vessels' (`heater_cv`);
+    `_pool_heaters` heats the liquid in each one's own vessel (dry firing
+    heats the wall). Every vessel on a line has `sensor.<slug>_<vessel>_liquid_temp`.
+    Pools already boiled per volume. Only the FIRST vessel takes a solid
+    charge (`vessel_cv` is still where the bed lives).
+  - **Lines with tees**: `_walk_line` lists every simple path between two
+    vessels (cap 64). Paths sharing a pipe each count its friction (and a
+    shared pump's curve) alone: exact when valves pick one route.
+  - **Plate exchanger**: liquid pumped through trades heat with the service
+    water by counter-flow effectiveness–NTU (`U_PLATE` 3000 W/m²·K), using
+    the Process tab's cooling water inlet and flow; the heat lands in the
+    coolant volume and is carried out by the existing coolant code. Other
+    condensers on a liquid line trade with their wall (`H_LIQ_WALL`).
+  - **Agitator**: its watts become heat in the liquid; the wall film is
+    `AGIT_H_GAIN` 3× while it runs. Switch `agitator:<part>`.
+  - **Jacket fed by a medium**: `process.jackets` {vessel part: {t_c, lpm,
+    on}} (kept by `TcProcSpec`). The wall trades with the stream
+    (`H_JACKET` 600 W/m²·K, an estimate) instead of with the room; booked
+    in the ledger's coolant term. Actuators `jacket:<part>` (switch) and
+    `jackett:<part>` (water °C). No UI row yet: set it in the design's
+    process block or by a control block.
+  - **Energy**: a pump's motor watts are in `e_in` and become heat in the
+    liquid it moves (lost to the room when it moves none); vapour breathed
+    out of an open tank carries its latent heat (a boiling open kettle left
+    a 5 % gap before). All three presets close to rounding.
+  - **Design check**: a pump or valve clamped straight to another is a
+    warning naming both parts (`TcDesign.LINK_RULES`).
+  - **Hand valves**: a valve switch carries `hand: true` unless it is a
+    solenoid or control valve or has an actuator clamped to its stem
+    (`TcProcControl.is_hand_valve`); the controller board gives a hand valve
+    no relay. Rules and blocks can still switch one in the model.
+  - `ScadaLogic` sequences take `autostart` (run from the start of a batch
+    with no Start).
+  - **Presets** (each with its process block): `brewhouse` (liquor tank →
+    stirred mash tun → kettle → 30-plate chiller → fermenter, positive
+    pumps; a sequence heats to 70 °C, mashes in, rests, boils and knocks out
+    at 17 °C; water all the way, no malt in the model), `cip_skid` (rinse
+    tank and heated wash tank behind solenoid valves on one tee and pump,
+    the vessel being cleaned on legs, a receiver; a band holds the wash at
+    60–65 °C and a sequence rinses, washes, rinses), `water_filter_train`
+    (raw tank → pump → strainer → flow meter → check valve → clean tank with
+    a level switch → tap valve → tank; a band keeps the clean tank between
+    40 and 80 %, an interlock stops the pump on the switch).
+  - P&ID: LT / LS bubbles for the level parts; open tanks no longer get the
+    "will pressurise" hint.
+  - STILL NOT built: a solid charge or several charges in other vessels, a
+    true pressure network for branches (shared-pipe friction), pipe hold-up,
+    malt / caustic chemistry, a Process-tab row for jackets and the other
+    vessels' liquids, agitators in the P&ID, `TcProcSummary` for liquid
+    products (these presets bind to no graph node).
+  - Gates: `tc_proc_selftest` `_test_liquid_plant` (583 checks in all, the
+    one old port-order failure), `tclab_selftest` (779, the same old
+    failure), `tc_hydraulics_check.gd` (40 at 1080 and 720).
+- **Phase 7: real outputs and operator mode** (2026-11-15, the live graph).
+  - **`ScadaOutputs`** (`core/scada/scada_outputs.gd`, pure): a link =
+    `{id, tag, entity_id, enabled, invert, scale, offset, min, max, deadband,
+    min_interval_s, safe}`. The entity's DOMAIN picks the service: switch /
+    input_boolean / light / fan → turn_on / turn_off; number / input_number
+    → set_value; valve / cover → a position for a number tag, open / close
+    for an on / off tag. `value_for`, `call_for`, `due(links, values, binary,
+    sent, now_s)` (change past the deadband, never sooner than the interval,
+    a tag with no reading sends nothing, biggest change first, `MAX_SENDS`
+    12 a pass), `safe_what` / `safe_calls` ("off" | "on" | "hold" | a
+    number), `heartbeat_call` (input_boolean toggle / input_button press),
+    `checks`, `watchdog_yaml` (a Home Assistant automation: the heartbeat
+    unchanged for `timeout_s` → every output to its safe state).
+  - **Hub** (`scada_hub.gd`, "real outputs" section): links + settings saved
+    per world as WorldPaths kind `scada_outputs` (entity ids only), never in
+    the graph. **ARMED is runtime only and never saved**: a world always
+    loads disarmed.
+    - `arm_refusal()` / `arm()`: refused in a test run (`--capture` /
+      `--run-script`, unless a check sets `test_allow_arm`), with no enabled
+      link, with a check error, while a sandbox / fork edit / render / bake
+      has the world or on a multiplayer guest, outside Live mode
+      (`SimMode.should_run_realworld_actions`), or with Home Assistant not
+      connected.
+    - `outputs_tick` (0.5 s, real time): disarms if any of those stops
+      holding; sends `due` through `HomeAssistant.call_service` WITHOUT
+      force (so the service's own Live gate applies too); touches the
+      heartbeat.
+    - `disarm(reason)`: every safe call is sent first (FORCED, since leaving
+      Live mode is one of the reasons), then nothing more, not even the
+      heartbeat. Editing a link or the settings disarms first; so does the
+      hub leaving the tree and the world's file changing. If Home Assistant
+      cannot be reached nothing can be put safe: that is what the watchdog
+      is for.
+    - `output_rows()` (what each would send / last sent), `output_journal()`
+      (last 200), `watchdog_yaml()` (also `user://scada_export/watchdog.yaml`).
+    - Sending is not an edit (`user_rev` does not move).
+  - **Hardware window** (`scenes/ui/scada/outputs_panel.gd`,
+    `view.open_outputs_panel()`; the lens palette's **Hardware** button):
+    the status line and Arm / Disarm (greyed out with the reason while it
+    cannot arm), a card per output (tag through the tag list, entity typed or
+    picked from Home Assistant's drivable entities, On, safe state, "Other way
+    round", × / + / min / max for numbers, what it would send / last sent),
+    the heartbeat row with "Copy the watchdog automation", a Journal tab.
+  - **ARMED is always on screen**: a bar across the top of the Process lens
+    (Disarm, Hardware…; the alarm bar stacks under it) and
+    `scenes/ui/scada/armed_chip.gd` on the first-person HUD (HudLayout top
+    centre, made on the first arm; a click opens the window).
+  - **Operator mode** (`view.set_operator_mode(on)`, the palette's
+    **Operate** button, Esc leaves, `--operator` on the command line opens a
+    world into it): the Process lens with both sidebars folded, the Add
+    tools hidden, no tool / place / pipe / drag (`lens.set_operator`),
+    faceplate buttons 110 × 56 px (`faceplate.touch`). Faceplates, Logic,
+    Alarms, Hardware and Checks still work.
+  - NOT built from the plan's Phase 7: outputs for a tri-clamp design (the
+    lab's model is not live), a relay "switched by" an ESP board as the
+    output path, the Compare window's process mode (tag by tag, sim vs
+    real), the timeline HA chip showing ARMED, hiding the graph's top bar
+    in operator mode, the Window Wall. Inputs (real readings driving the
+    picture) are the existing live links, unchanged.
+  - Gates: `core/scada/scada_outputs_selftest.gd` (48) and
+    `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/scada_outputs_check.gd -Label scada_outputs -Timeout 900`
+    (53 at 1080 and 720, against `HaFakeServer`: refused in a test run and
+    outside Live, a real click on Arm, values and heartbeat sent, changes
+    sent and repeats not, the bar and the chip, safe states on leaving
+    Live / Disarm / an edit, Home Assistant lost, nothing saved as armed,
+    the watchdog, operator mode with real clicks and Esc).
+- **Phase 8: dashboard widgets, screens, trends** (2026-11-15, the Process
+  lens on the graph).
+  - **`MimicWidgets`** (`core/scada/mimic_widgets.gd`, pure). A widget =
+    `{id, kind, x, y, w, h, tag, label, lo, hi, text, screen}`; kinds gauge,
+    bar, value, trend, lamp, button, slider, text, nav. Per scope:
+    `{screens: [{id, name, picture, widgets}]}`; the first screen is the
+    process picture, a screen with `picture` false is a blank board.
+    `make`, `normalized`, `clean` (caps: 120 widgets, 12 screens), `element`
+    (a doc element, kind "widget", id `w:<id>`), `state(w, read, info, trend,
+    screen_name)` (label, text, frac, lo / hi, on, avail), `scale_of` (its
+    own lo / hi, else the tag's range, % = 0..100, on / off = 0..1, else a
+    round span over the value; a trend scales to its data), `press(w, st,
+    frac)` = {tag, value} | {screen} | {}.
+  - **Drawing**: `MimicSymbols.widget(ci, rect, wkind, st, font, sel, hover)`
+    and `slider_frac(rect, x)` (the drawing and the click share it).
+    `mimic_canvas.gd` draws widgets LAST, picks them first, never moves them
+    with anything else (a drag offset is applied to the widget alone), keeps `click_pos`, `widgets_drawn()`.
+  - **Lens** (`graph_process_lens.gd`, "dashboard widgets and screens"):
+    - Palette **Widgets** menu (`widgets_menu`): a kind arms the place tool
+      (`set_widget_tool`); a click on open space sets it down at its designed
+      size ON SCREEN (scaled by 1 / zoom, up to `SIZE_MAX` 6) and opens the
+      tag list in pick mode (buttons and sliders: writable tags only).
+    - A click on a button / slider / nav OPERATES it (`hub.command`; a refusal
+      is a toast). A click on a gauge / bar / number / trend / lamp shows its
+      card (reading, last 2 h, Open in Trends). With the menu's "Click a
+      widget to edit it" on (`set_widget_edit`), or while a widget is
+      unbound, a click shows the edit card instead: Tag…, Name…, Scale…
+      ("0 to 100", empty = automatic; `parse_range`), Smaller, Bigger,
+      Remove (buttons `w_tag`, `w_name`, `w_range`, `w_smaller`, `w_bigger`,
+      `w_remove`, `w_text`, `w_screen`). A drag moves a widget.
+    - Screen tabs top-left (`screen_bar`: `screen_<id>`, `screen_add`,
+      `screen_menu` = rename / show the process picture on it / remove). API:
+      `screens`, `screen_id`, `set_screen`, `add_screen`, `rename_screen`,
+      `set_screen_picture`, `remove_screen`, `widgets`, `widget`,
+      `widget_state`, `add_widget`, `set_widget`, `remove_widget`.
+    - Operator mode: no Widgets menu, no + or screen menu, nothing moves or
+      is added; buttons, sliders, nav and tabs still work.
+    - Saved with the graph as `process_screens` ({scope: data}, through
+      `graph_canvas.process_screens_data` like the pins). Widget edits are
+      NOT in the graph's undo history and do not move `user_rev`.
+  - **Trends** (`scenes/ui/kit/trend_chart.gd` `TrendChart` +
+    `scenes/ui/scada/trend_window.gd`, `view.open_trend_window(add_tag)`; the
+    palette's **Trends** button): up to 8 pens, pens of one unit share a
+    scale, on / off pens their own; the left axis is the clicked pen's; the
+    cursor reads every pen; wheel zooms about the pointer, drag pans, Back to
+    now; 1 h / 6 h / 24 h / 7 days. Pens are the hub's (`trend_pens`,
+    `set_trend_pens`, `trend_span(tag, t0, t1, n)`; saved with the graph as
+    `scada_trends`); a pen's tag is watched (long history, saved).
+  - `faceplate.gd`: `place` keeps the card inside its parent (the picture),
+    below `top_clear` (bars and tabs). It used to clamp to the window only.
+  - Cost: the picture with nine widgets ~1.5 ms a redraw, the chart ~0.5 ms.
+  - NOT built from the plan's Phase 8: widgets and screens in the Process
+    Lab's P&ID view (graph lens only), the lab's three fixed chart lanes
+    replaced by user pens, a selector widget (the slider and the push button
+    cover it), slider dragging (a click sets it), widget undo, copying a
+    screen, pens with their own colour or scale set by hand, a tour stop.
+  - Traps: a `match` with a lambda argument inside a lambda did not parse
+    (use if / elif or a method); a pushed wheel press needs its release or
+    the chart keeps the mouse focus and eats every later click; an edit that
+    refreshes the lens hides the open card (`_touch` puts a widget's card
+    back).
+  - Gates: `core/scada/mimic_widgets_selftest.gd` (73) and
+    `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/scada_widgets_check.gd -Label scada_widgets -Timeout 900`
+    (69 at 1080 and 720: real clicks to place and bind a gauge, the push
+    button and slider driving a valve, a drag, the edit card, screens and a
+    nav button, operator mode, the Trends window with wheel / drag / Back to
+    now, saved and restored, UiAudit).
+- **Found by the regression runs (2026-11-15): a pond tank's Auto capacity is
+  the basin's, now.** `_push_pond_mesh_writeback` (system_graph_view) wrote
+  `capacity_qty = max(terrain capacity, the pond record's capacity)` and the
+  level as stock ÷ the record's capacity. On Mount Vernon the stream carve
+  that lands after load shrinks the basin 3.6 %, the record's capacity stays
+  the older one, and a brim-full pond read 96.4 % on the specs against 100 %
+  on its timeline: the level flipped on every seek and `sim_render_probe`
+  failed "every tank level back at the playhead". With Auto capacity the
+  tank now takes the terrain capacity and its level is stock ÷ that.
+  - ⚠ Do NOT anchor the tank's timeline from that writeback: tried, and the
+    pond ratcheted down to 1 % in four seconds with the clock held.
+  - `sim_render_probe` can still fail once in a while when a stream re-carve
+    lands during its replay (a carve commit drops every rendered range).
+  - Diagnostic: `tools/diag/pond_level_trace.gd` (RunScript; the pond tank's
+    specs beside its timeline, with the clock held and across a seek).
+- **Phase 9: lessons, templates, a challenge, simkit alarms** (2026-11-15).
+  - **Process Bootcamp** (the lens palette's **Lessons** button,
+    `view.start_process_bootcamp(level_id)`): a second tutorial TRACK.
+    `TutorialCatalog.TRACKS` solar | process; `all_levels(track)`,
+    `ordered_ids(track)`, `track_of`, `next_after` stays inside its track;
+    `TutorialLevelDef.track` / `lens` ("process" opens the level in the
+    Process lens). Five levels (`_PROCESS_LEVELS`): open a valve, run a tank
+    by hand, hold it with a band, hold it with a PID, raise and acknowledge
+    an alarm. Seeds take `set` (spec values) and resource wires.
+    `TutorialGoals._evaluate_process`: `tag_reach`, `tag_band_hold` (with
+    `need_block`), `alarm_acked`; the director's ctx carries `gstate`,
+    `now_h`, `logic`, `alarm_rules`, `alarm_status` from the hub. Solar
+    levels are unchanged (`all_levels()` still means solar).
+    - The lens is applied with `call_deferred`: `apply_save_state` defers its
+      own restore of the saved view, which put the level back in freeform.
+    - The tutorial HUD stands over the lens's top: the armed / alarm / screen
+      bars start under it (`_hud_clear`).
+    - `UiScreenLayout.clamped_corner_card` grows toward the screen (the
+      debrief card hung 12 px off the right edge).
+  - **Templates and sharing** (`ProcessPack`, `core/scada/process_pack.gd`,
+    pure): a pack = {name, items, conns, logic, alarms, widgets}. `capture`
+    (the selected parts, the pipes between them, the blocks and alarms that
+    read or drive them, the widgets bound to them), `clean` (through
+    `SimkitGuard`'s spec rules; never real-output links, HA entity ids, 3D
+    bindings or site coordinates), `instantiate` (fresh ids; tags inside
+    blocks, alarms and widgets remapped), `encode` / `decode` ("SMPR1:" +
+    base64 gzip JSON), built-in `TEMPLATES` (level_pid and others).
+    `ProcessLibrary` = `user://process_library.json` (in the asset packs'
+    preset list). Window `scenes/ui/scada/process_library_window.gd`
+    (palette **Templates**, `view.open_process_library()`): built-ins and
+    Yours, Add to the graph, Save the selection, Copy code, Save file
+    (`user://process_export/<name>.simproc`), paste a code.
+    `view.process_capture(name, ids)`, `view.process_insert(pack, at, quiet)`
+    (items and pipes are ONE undo step; blocks, alarms and widgets are not in
+    the undo history).
+    - `hub.logic_blocks()` / `alarm_rules()` return the LIVE arrays:
+      duplicate before appending or keeping a copy to restore.
+  - **Challenge** "Operator's Watch" (`ChallengeCatalog.operators_watch`,
+    realtime, 24 h). `ChallengeDef.process` is judged by `ProcessChallenge`
+    (pure): `gate` (at least N enabled alarm rules, at the start and each
+    evaluation), `step` (an alarm unacknowledged past `max_unacked_alarm_h`,
+    `max_in_alarm_h` in all, a watched store outside `watch_lo..watch_hi`
+    past `watch_grace_h`; a watched store = any tank an enabled alarm rule
+    reads; a step over 0.5 h counts as 0.5 h). Reasons have words through
+    `ChallengeDef.reason_label`.
+  - **Simkit / MCP**: design key `alarms` (rules on design node ids, at most
+    60; guard + the Python mirror), stepped by `ScadaAlarmRun` in
+    `SimkitYear`; the compact report has `alarms` rows (times raised, hours
+    in alarm) and each PID block's `in_band_pct` (share of the run within
+    5 % of span, at least 1 unit, of its setpoint). `docs/SIMKIT_MCP.md`.
+  - Tour stop `20i_process_control` (mtvernon); modal audit entries
+    scada_tags, scada_logic, scada_alarms, scada_hardware, scada_trends,
+    scada_templates.
+  - NOT built from the plan's Phase 9: importing a `.simproc` FILE (a pasted
+    code only; the file is written), packs inside `.esim` packages,
+    thumbnails for templates, process conditions on PREBAKE challenges, the
+    goal kind `make_quantity`, a batch-sequence and an interlock lesson, a
+    Lessons entry outside the lens, valve / pump presets named in the simkit
+    catalog, a live simkit run with alarms, an in-game check of Operator's
+    Watch, tour stops for the lab's P&ID and for operator mode.
+  - Gates: `gameplay/tutorial_selftest.gd` (18),
+    `core/scada/process_pack_selftest.gd` (50),
+    `core/scada/process_challenge_selftest.gd` (18),
+    `core/scada/scada_logic_run_selftest.gd` (53), and
+    `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/process_bootcamp_check.gd -Label process_bootcamp -Timeout 900`
+    (all five lessons played with real clicks; ~7 min) and
+    `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/process_templates_check.gd -Label process_templates -Timeout 900`
+    (25 at 1080 and 720).
+- Not done in Phase 1: tags as Home Assistant link targets (`HaTargets`), tags
+  in `ExperimentWorld`'s context, TC process tags in the hub (the lab's sim
+  lives in its modal).
+- Gates: `core/scada/scada_tags_selftest.gd` (offline, 41) and
+  `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/scada_tags_check.gd -Label scada_tags`
+  (26: tags on a real world, the context agrees, a switch command, history
+  and scrub back, a REAL click on Add to timeline, the lane fills, UiAudit).
 
 ## Known pre-existing runtime errors (not regressions)
 

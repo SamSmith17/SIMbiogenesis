@@ -24,6 +24,13 @@ var _mem_order: Array[String] = [] # LRU order (oldest first)
 var _queue: Array[Dictionary] = [] # pending {key, model_id, yaw, pitch, dist}
 var _queued_keys: Dictionary = {}  # key → true
 var _busy := false
+## Icon keys whose model could not be drawn (not asked again this session).
+var _failed: Dictionary = {}
+## Icons drawn this session, and the last one's cost (ms), for checks.
+var _tasks: Array = []
+var icons_rendered := 0
+var last_icon_ms := 0.0
+const ICON_PX := 384
 
 var _viewport: SubViewport = null
 var _studio: Node3D = null
@@ -35,6 +42,12 @@ func _ready() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(CACHE_DIR))
 	_ensure_studio()
 	set_process(true)
+
+
+func _exit_tree() -> void:
+	for t in _tasks:
+		WorkerThreadPool.wait_for_task_completion(int(t))
+	_tasks.clear()
 
 
 func _process(_delta: float) -> void:
@@ -113,6 +126,42 @@ func get_or_request(specs: Dictionary) -> ImageTexture:
 		return disk
 	_enqueue(key, mid, float(cam.yaw), float(cam.pitch), float(cam.dist))
 	return null
+
+
+## A Process-lens icon: the model seen straight on (orthographic) from
+## `view` (MimicIcons.VIEWS), redrawn in the picture's look
+## (MimicIcons.stylize). `extras` = the placed prop's build options (a
+## designed vehicle, dome, …). Returns the cached texture or null (and
+## queues a render; `preview_ready` says when it lands).
+func get_icon(model_id: String, view: String, extras: Dictionary = {}) -> ImageTexture:
+	if model_id.is_empty():
+		return null
+	var key := icon_key(model_id, view, extras)
+	if _mem.has(key):
+		_touch_lru(key)
+		return _mem[key] as ImageTexture
+	if _failed.has(key):
+		return null
+	var disk := _load_disk(key)
+	if disk != null:
+		_store_mem(key, disk)
+		return disk
+	if not (_queued_keys.has(key)):
+		_queued_keys[key] = true
+		var cam := MimicIcons.camera(view)
+		# Newest asks first: after a view switch the pictures now wanted are
+		# drawn before what is left of the old view.
+		_queue.push_front({"key": key, "model_id": model_id, "yaw": float(cam["yaw"]), "pitch": float(cam["pitch"]),
+			"dist": DEFAULT_DIST_MULT, "icon": true, "extras": extras.duplicate(true)})
+	return null
+
+
+static func icon_key(model_id: String, view: String, extras: Dictionary = {}) -> String:
+	var safe_id := model_id.validate_filename()
+	if safe_id.is_empty():
+		safe_id = str(model_id.hash())
+	var xh := "" if extras.is_empty() else "_x%x" % (JSON.stringify(extras).hash() & 0x7fffffff)
+	return "icon%d_%s_%s%s" % [MimicIcons.STYLE_VERSION, safe_id, view.validate_filename(), xh]
 
 
 ## Force a fresh render (inspector "Refresh preview").
@@ -217,6 +266,11 @@ func _render_job(job: Dictionary) -> void:
 	for child in _holder.get_children():
 		child.free()
 
+	if bool(job.get("icon", false)):
+		await _render_icon(job)
+		return
+	_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+	_viewport.size = Vector2i(PREVIEW_PX, PREVIEW_PX)
 	var inst := ModelCatalog.instantiate(model_id)
 	if inst == null:
 		push_warning("GraphModelPreview: failed to instantiate '%s'" % model_id)
@@ -265,6 +319,102 @@ func _render_job(job: Dictionary) -> void:
 	preview_ready.emit(key, tex)
 
 
+func _render_icon(job: Dictionary) -> void:
+	var key := str(job.get("key", ""))
+	var model_id := str(job.get("model_id", ""))
+	var t0 := Time.get_ticks_usec()
+	var inst: Node3D = null
+	inst = ModelCatalog.instantiate(model_id, job.get("extras", {}) as Dictionary)
+	if inst == null:
+		_failed[key] = true
+		return
+	var s := ModelCatalog.resolved_scale(model_id, 1.0)
+	inst.scale = Vector3.ONE * s
+	_holder.add_child(inst)
+	var box := _visual_aabb(inst)
+	if box.size.length() < 1e-4:
+		for child in _holder.get_children():
+			child.free()
+		_failed[key] = true
+		return
+	_viewport.size = Vector2i(ICON_PX, ICON_PX)
+	# Straight on: an orthographic camera on the model's middle, framing its
+	# outline as seen from the view (the 8 corners on the camera's axes).
+	var az := deg_to_rad(float(job.get("yaw", 90.0)))
+	var el := deg_to_rad(clampf(float(job.get("pitch", 0.0)), -89.0, 89.0))
+	var dir := Vector3(sin(az) * cos(el), sin(el), cos(az) * cos(el))
+	var centre := box.get_center()
+	var reach := box.size.length() * 2.0 + 1.0
+	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	_camera.position = centre + dir * reach
+	var up := Vector3.UP if absf(dir.y) < 0.98 else Vector3.FORWARD
+	_camera.look_at(centre, up)
+	var right := _camera.global_transform.basis.x
+	var cup := _camera.global_transform.basis.y
+	var ext := 0.0
+	for k in 8:
+		var c := box.get_endpoint(k) - centre
+		ext = maxf(ext, maxf(absf(c.dot(right)), absf(c.dot(cup))))
+	_camera.size = maxf(ext * 2.0 * 1.06, 0.05)
+	_camera.near = 0.01
+	_camera.far = reach * 2.5
+	_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	var vp_tex := _viewport.get_texture()
+	var img: Image = vp_tex.get_image() if vp_tex != null else null
+	_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	for child2 in _holder.get_children():
+		child2.free()
+	_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+	_viewport.size = Vector2i(PREVIEW_PX, PREVIEW_PX)
+	if img == null or img.is_empty():
+		_failed[key] = true
+		return
+	# The restyling walks every pixel: off the main thread, so a render
+	# never holds up a frame.
+	var out := [null]
+	var src := img
+	var task := WorkerThreadPool.add_task(func() -> void: out[0] = MimicIcons.stylize(src))
+	_tasks.append(task)
+	while not WorkerThreadPool.is_task_completed(task):
+		await get_tree().process_frame
+	WorkerThreadPool.wait_for_task_completion(task)
+	_tasks.erase(task)
+	var icon: Image = out[0] as Image
+	if icon == null or icon.is_empty():
+		_failed[key] = true
+		return
+	_save_disk(key, icon)
+	icons_rendered += 1
+	last_icon_ms = float(Time.get_ticks_usec() - t0) / 1000.0
+	icon.generate_mipmaps()
+	var tex := ImageTexture.create_from_image(icon)
+	_store_mem(key, tex)
+	preview_ready.emit(key, tex)
+
+
+## Everything drawn under `root`, in the studio's frame.
+func _visual_aabb(root: Node) -> AABB:
+	var have := false
+	var box := AABB()
+	var stack: Array = [root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n is VisualInstance3D and (n as Node3D).is_visible_in_tree() and not (n is Light3D):
+			var vi := n as VisualInstance3D
+			var b := vi.global_transform * vi.get_aabb()
+			if b.size.length() > 1e-6:
+				box = b if not have else box.merge(b)
+				have = true
+		for c in n.get_children():
+			stack.append(c)
+	return box
+
+
 func _place_camera(yaw_deg: float, pitch_deg: float, dist_mult: float,
 		size_m: float, target_y: float) -> void:
 	if _camera == null:
@@ -310,6 +460,8 @@ func _load_disk(key: String) -> ImageTexture:
 	var img := Image.new()
 	if img.load(path) != OK:
 		return null
+	if key.begins_with("icon"):
+		img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
 

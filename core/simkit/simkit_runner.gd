@@ -181,7 +181,9 @@ func _do_run(validate_only: bool) -> int:
 	_write(_out.path_join("graph.json"), JSON.stringify(model.serialize()))
 
 	var y := Year.new()
-	var err := y.begin(main, sgv, {"start_abs": start_abs, "days": days, "step_min": step_min,
+	var err := y.begin(main, sgv, {"logic": ScadaLogicRun.remap(design.get("logic", []) as Array, built["ids"] as Dictionary),
+		"alarms": ScadaLogicRun.remap(design.get("alarms", []) as Array, built["ids"] as Dictionary),
+		"start_abs": start_abs, "days": days, "step_min": step_min,
 		"start_soc": float((design as Dictionary).get("start_soc", 0.8))})
 	if not err.is_empty():
 		return _fail(err)

@@ -437,6 +437,10 @@ var _composed_tiles: TerrainEditTiles = null
 ## and the hidden interior of a sunken room. Re-derived from prop records by
 ## the Earthworks child; never in player undo, never saved.
 var _structure_tiles: TerrainEditTiles = null
+## Terraced fields (core/terrace/): stepped floors cut into the hillside,
+## re-derived from the terrace records by the Terraces child. Part of the
+## GROUND (a structure stands on a terrace), never in player undo.
+var _terrace_tiles: TerrainEditTiles = null
 var _height_field: TerrainHeightField = null
 ## Signature of the sink currently baked into the DetailGround mesh/collider —
 ## skips the (relatively) heavy detail-patch rebuild when nothing changed.
@@ -908,6 +912,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		if _terrain_edit_ui != null and _terrain_edit_ui.visible:
 			_terrain_edit_ui.call("_exit_mode")
 		_edit_toolbar_ui.call("toggle_section", "water")
+		get_viewport().set_input_as_handled()
+	# Shift+R = the toolbar's ROUTE section: 3D runs of pipe and cable
+	# between machines (Connect / Bend / Height / Along wall / Style).
+	if event.is_action_pressed("route_edit", false, true) and _edit_toolbar_ui != null:
+		if _vegetation_edit_ui != null and _vegetation_edit_ui.visible:
+			_vegetation_edit_ui.call("_exit_mode")
+		if _terrain_edit_ui != null and _terrain_edit_ui.visible:
+			_terrain_edit_ui.call("_exit_mode")
+		_edit_toolbar_ui.call("toggle_section", "route")
 		get_viewport().set_input_as_handled()
 
 
@@ -7393,7 +7406,52 @@ func ground_without_structures(x: float, z: float) -> float:
 	return _surface_height_raw(x, z, false)
 
 
-func _surface_height_raw(x: float, z: float, with_structures: bool) -> float:
+## The ground under a terrace field before it was cut: what its level floors
+## are measured against (no terraces, no structures).
+func ground_without_terraces(x: float, z: float) -> float:
+	return _surface_height_raw(x, z, false, false)
+
+
+## The Terraces child (created on first use).
+func terraces() -> TerraceRuntime:
+	var tr := get_node_or_null("Terraces") as TerraceRuntime
+	if tr == null:
+		tr = TerraceRuntime.new()
+		tr.name = "Terraces"
+		tr.loader = self
+		add_child(tr)
+	return tr
+
+
+func _terraces_or_null() -> TerraceRuntime:
+	return get_node_or_null("Terraces") as TerraceRuntime
+
+
+## The edit toolbar's Terrace tool, opened on a field (the crosshair's
+## Interact on a terrace field).
+func open_terrace_editor(field_id: String) -> void:
+	if _edit_toolbar_ui == null or field_id.is_empty():
+		return
+	_edit_toolbar_ui.call("open_with_section", "terrain")
+	_edit_toolbar_ui.call("_set_active_tool", "terrace")
+	var tt: Variant = _edit_toolbar_ui.get("_terrace_tools")
+	if tt != null:
+		tt.call("select", field_id)
+
+
+## The terrace tile layer the Terraces child writes into.
+func terrace_tile_layer() -> TerrainEditTiles:
+	_ensure_tile_stack()
+	return _terrace_tiles
+
+
+## Push the terrace layer into the rendered terrain (the structure path: props
+## on the touched tiles follow, the water re-derives, people re-bake their nav).
+func commit_terrace_tiles(touched_keys: Array) -> void:
+	commit_structure_tiles(touched_keys)
+
+
+func _surface_height_raw(x: float, z: float, with_structures: bool, with_terraces: bool = true) -> float:
 	var detail := _detail_footing_grid()
 	var in_detail := absf(x) <= _detail_half_extent and absf(z) <= _detail_half_extent
 	var fallback := PackedFloat32Array()
@@ -7404,16 +7462,18 @@ func _surface_height_raw(x: float, z: float, with_structures: bool) -> float:
 		detail, _detail_elev_cols, _detail_elev_rows, _detail_extent_m(),
 		fallback)
 	if _built_grid.is_empty() and detail.is_empty():
-		return _spawn_ground_y + _edit_tile_delta(x, z, with_structures)
+		return _spawn_ground_y + _edit_tile_delta(x, z, with_structures, with_terraces)
 	# High-resolution edit layer sits on top of the composed DEM footing (this is
 	# the EXACT edited surface at 1.5 m resolution — the grids stay edit-free).
-	return y + _edit_tile_delta(x, z, with_structures)
+	return y + _edit_tile_delta(x, z, with_structures, with_terraces)
 
 
-func _edit_tile_delta(x: float, z: float, with_structures: bool = true) -> float:
+func _edit_tile_delta(x: float, z: float, with_structures: bool = true, with_terraces: bool = true) -> float:
 	var d := 0.0 if _edit_tiles == null else _edit_tiles.sample_delta(x, z)
 	if _channel_tiles != null:
 		d += _channel_tiles.sample_delta(x, z)
+	if with_terraces and _terrace_tiles != null:
+		d += _terrace_tiles.sample_delta(x, z)
 	if with_structures and _structure_tiles != null:
 		d += _structure_tiles.sample_delta(x, z)
 	return d
@@ -7530,6 +7590,8 @@ func _ensure_tile_stack() -> void:
 		_composed_tiles = TerrainEditTiles.new()
 	if _structure_tiles == null:
 		_structure_tiles = TerrainEditTiles.new()
+	if _terrace_tiles == null:
+		_terrace_tiles = TerrainEditTiles.new()
 
 
 ## Fold every tile either layer dirtied since the last call into the composed
@@ -7541,6 +7603,16 @@ func _sync_composed_tiles() -> void:
 	for k in _edit_tiles.consume_dirty():
 		keys[k] = true
 	for k in _channel_tiles.consume_dirty():
+		keys[k] = true
+	# Ground under a terrace changed (a sculpt, a re-carve): its floors are
+	# absolute, so its deltas are measured again.
+	var tr := _terraces_or_null()
+	if tr != null:
+		for k in keys.keys():
+			if tr.covers_tile(k):
+				tr.ground_rev += 1
+				break
+	for k in _terrace_tiles.consume_dirty():
 		keys[k] = true
 	# Ground under a structure changed (a sculpt, a channel re-carve): its
 	# floor and berm tops are absolute, so its deltas are measured again.
@@ -7554,14 +7626,14 @@ func _sync_composed_tiles() -> void:
 		keys[k] = true
 	if keys.is_empty():
 		return
-	_composed_tiles.compose_from([_channel_tiles, _edit_tiles, _structure_tiles], keys.keys())
+	_composed_tiles.compose_from([_channel_tiles, _edit_tiles, _structure_tiles, _terrace_tiles], keys.keys())
 
 
 ## Deep copies of the player + channel layers for a worker thread (drainage
 ## analysis samples the EDITED surface off the main thread).
 func tile_layers_snapshot() -> Array:
 	_ensure_tile_stack()
-	return [_edit_tiles.clone(), _channel_tiles.clone(), _structure_tiles.clone()]
+	return [_edit_tiles.clone(), _channel_tiles.clone(), _structure_tiles.clone(), _terrace_tiles.clone()]
 
 
 ## The procedural channel layer the WaterNetwork carves into.
@@ -7645,6 +7717,9 @@ func _load_edit_tiles() -> void:
 	# The structure layer is re-derived from the prop records once the map is
 	# built (the Earthworks child polls them).
 	_structure_tiles = TerrainEditTiles.new()
+	_terrace_tiles = TerrainEditTiles.new()
+	var tr := terraces()
+	tr.bind_map(_lat, _lon)
 	var ew := _structure_works()
 	ew.ground_rev += 1
 	var wn := _water_network()
@@ -7899,6 +7974,9 @@ func _sink_signature() -> String:
 	var ew := _earthworks_or_null()
 	if ew != null:
 		parts.append("ew%d" % ew.sink_rev)
+	var tr := _terraces_or_null()
+	if tr != null:
+		parts.append("tr%d" % tr.sink_rev)
 	return ";".join(parts)
 
 
@@ -12434,6 +12512,25 @@ func open_water_tools_on(feature_id: String) -> void:
 	var wt: Variant = _edit_toolbar_ui.get("_water_tools")
 	if wt != null and wt.has_method("pick_feature"):
 		wt.call("pick_feature", feature_id)
+
+
+## The edit toolbar on its ROUTE section with a run picked (Graph → "Show in
+## 3D", the Process lens's pipe card). `tool` = which Route tool.
+func open_route_tools_on(conn_id: String, tool: String = "route_bend") -> void:
+	if _edit_toolbar_ui == null:
+		return
+	if _edit_toolbar_ui.has_method("open_with_section"):
+		_edit_toolbar_ui.call("open_with_section", "route")
+	if _edit_toolbar_ui.has_method("_set_active_tool"):
+		_edit_toolbar_ui.call("_set_active_tool", tool)
+	var rt: Variant = _edit_toolbar_ui.call("route_tools") if _edit_toolbar_ui.has_method("route_tools") else null
+	if rt != null and not conn_id.is_empty():
+		rt.call("_pick_run", conn_id)
+
+
+## The edit toolbar, for harness checks.
+func edit_toolbar() -> Control:
+	return _edit_toolbar_ui
 
 
 func _close_edit_toolbar() -> void:

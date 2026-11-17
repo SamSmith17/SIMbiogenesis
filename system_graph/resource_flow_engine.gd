@@ -134,6 +134,13 @@ var _penstock_conn_cache: Dictionary = {}
 
 ## conn_id -> {rate, active} cached for wire animation
 var _conn_flow: Dictionary = {}
+## What every wire carried since it was last asked (`take_conn_quantities`):
+## conn id -> [quantity in the wire's unit, kind]. Rates are integrated over
+## each LIVE step, and a batch's frontloaded charge (taken in one step, with
+## no rate on its wire) is added whole. Pre-render steps are not counted.
+## FlowHistory reads it, so a day's window sees what a once-a-second sample
+## of the wires missed.
+var _conn_qty: Dictionary = {}
 
 ## processor_id -> { "state": String, "elapsed": float, "penalty_qty": float }
 var _processor_states: Dictionary = {}
@@ -145,6 +152,11 @@ var _gh_state: Dictionary = {}
 var _gh_models: Dictionary = {}
 var _gh_climate: Dictionary = {}
 var _gh_last_h: Dictionary = {}
+
+## Terraced fields (a plant with specs.terrace_id, TerraceField): per node the
+## water in each paddy (L, highest first), the crop standing in the field
+## (kg dry matter), the crop cycle last harvested and the last hour stepped.
+var _terrace_state: Dictionary = {}
 
 ## Per-tick adjacency index, rebuilt once at the top of _simulate_step() by
 ## _rebuild_conn_index(). Resolving a processor's I/O ports used to re-scan
@@ -511,6 +523,7 @@ func internal_state_snapshot() -> Dictionary:
 		"gh_state": _gh_state.duplicate(true),
 		"gh_climate": _gh_climate.duplicate(true),
 		"gh_last_h": _gh_last_h.duplicate(true),
+		"terrace_state": _terrace_state.duplicate(true),
 		"last_abs_hours": _last_abs_hours,
 	}
 
@@ -527,6 +540,7 @@ func restore_internal_state(snap: Dictionary) -> void:
 	_gh_state = (snap.get("gh_state", {}) as Dictionary).duplicate(true)
 	_gh_climate = (snap.get("gh_climate", {}) as Dictionary).duplicate(true)
 	_gh_last_h = (snap.get("gh_last_h", {}) as Dictionary).duplicate(true)
+	_terrace_state = (snap.get("terrace_state", {}) as Dictionary).duplicate(true)
 	_last_abs_hours = float(snap.get("last_abs_hours", _last_abs_hours))
 
 
@@ -591,6 +605,7 @@ func tick(delta: float) -> void:
 	else:
 		if dt_hours > 0.0:
 			_simulate_step(abs_hours, dt_hours)
+			_ledger_step(dt_hours)
 		else:
 			_read_all_tanks_at(abs_hours)
 			# Clock frozen (Elev noon-lock / pause) — Test Inflow still fills
@@ -616,6 +631,7 @@ func step_at(abs_hours: float, dt_hours: float) -> void:
 	_ensure_timelines()
 	if dt_hours > 0.0:
 		_simulate_step(abs_hours, dt_hours)
+		_ledger_step(dt_hours)
 	else:
 		_read_all_tanks_at(abs_hours)
 	_last_abs_hours = abs_hours
@@ -999,6 +1015,330 @@ func _process_wind_pbi(item: Dictionary, specs: Dictionary) -> void:
 		_cache_conn_flow(str(conn.get("id", "")), kinetic_kw, "wind")
 
 
+## A terraced field (TerraceField): water from the store wired to water_in
+## goes into the top paddies and cascades down, rain falls on every paddy's
+## catchment, evaporation and percolation take some, and what spills off the
+## lowest paddies leaves by water_out (a wired store) or runs off. The crop
+## grows by light × how well watered its paddies are and is HARVESTED at the
+## end of each crop cycle into the store on harvest_out (food for a food crop,
+## its straw to residue_out; a reed bed or coppice is all biomass). A scrub
+## back holds; nothing grows before the field is planted.
+func _process_terrace(item: Dictionary, specs: Dictionary, net_rates: Dictionary,
+		dt_hours: float, abs_h: float) -> void:
+	var iid := str(item.get("id", ""))
+	var table: Array = specs.get("terrace_table", []) as Array
+	var heads: Array = specs.get("terrace_heads", []) as Array
+	var n := table.size()
+	var st: Dictionary = _terrace_state.get(iid, {})
+	var store: PackedFloat64Array = st.get("s", PackedFloat64Array())
+	if store.size() != n:
+		var old := store
+		store = PackedFloat64Array()
+		store.resize(n)
+		for i in mini(n, old.size()):
+			store[i] = old[i]
+		# A world loaded (or a re-cut field): the water comes back from the
+		# levels the node saved with the graph.
+		var saved: Array = specs.get("terrace_fill", []) as Array
+		if old.is_empty() and saved.size() == n:
+			for i in n:
+				store[i] = clampf(float(saved[i]), 0.0, 1.0) * float(table[i][2])
+		if not st.has("standing"):
+			st["standing"] = float(specs.get("standing_kg", 0.0))
+	# "Fill now" / "Drain" from the editor: the fills ride the specs once.
+	var had_set := specs.has("terrace_fill_set")
+	var fill_req: Variant = specs.get("terrace_fill_set", null)
+	if fill_req is Array and (fill_req as Array).size() == n:
+		for i in n:
+			store[i] = clampf(float(fill_req[i]), 0.0, 1.0) * float(table[i][2])
+	specs.erase("terrace_fill_set")
+	var last_h := float(st.get("last_h", -1.0))
+	if dt_hours <= 0.0 or (last_h >= 0.0 and abs_h < last_h - 1e-6):
+		st["s"] = store
+		st["last_h"] = abs_h
+		_terrace_state[iid] = st
+		if had_set:
+			_model.update_item(iid, {"specs": specs})
+		return
+	var rec := specs
+	var atmo := _atmosphere_sample()
+	var temp_c := float(atmo.get("temp_c", 20.0))
+	var rain := _rain_rate_mmh()
+	# --- The farm (TerraceFarm): the paddies' stages decide which stand bare ---
+	var fs: Dictionary = st.get("farm", {})
+	if fs.is_empty():
+		var saved_fs: Variant = specs.get("terrace_farm", null)
+		if saved_fs is Dictionary and not (saved_fs as Dictionary).is_empty():
+			fs = (saved_fs as Dictionary).duplicate(true)
+		else:
+			fs = _terrace_seed_farm(specs, table)
+	fs = TerraceFarm.fit(fs, table)
+	var fps: Array = fs["p"]
+	var field_crop := str(specs.get("crop", "fallow"))
+	var field_flood := bool(specs.get("flooded", true))
+	var loss := PackedFloat64Array()
+	loss.resize(n)
+	for i in n:
+		var lrow: Array = table[i]
+		var stg := str((fps[i] as Dictionary).get("st", ""))
+		loss[i] = TerraceField.paddy_loss_mm_h(rec,
+			str(lrow[6]) if lrow.size() > 6 else field_crop,
+			bool(lrow[7]) if lrow.size() > 7 else field_flood, temp_c,
+			stg == TerraceFarm.STAGE_GROW or stg == TerraceFarm.STAGE_HARVEST)
+	# --- The intake: the store on water_in, as much as the gate asks ---
+	var want := TerraceField.intake_lph(rec, table, store, rain, loss, dt_hours)
+	var src_id := _tank_at_port(iid, "water_in", true)
+	var intake := 0.0
+	var no_source := src_id.is_empty()
+	var src_dry := false
+	if not no_source and want > 0.0:
+		var src_specs: Dictionary = (_model.get_item(src_id).get("specs", {}) as Dictionary).duplicate(true)
+		_rk.migrate_resource_specs(src_specs)
+		var stl: ResourceTimeline = _timelines.get(src_id) as ResourceTimeline
+		var ok: bool = _tank_has_supply(src_specs, stl, abs_h) \
+				or (stl == null and bool(src_specs.get("allow_negative", false)))
+		if ok:
+			var avail := INF
+			if not _tank_is_unlimited(src_specs) and not bool(src_specs.get("allow_negative", false)) and stl != null:
+				avail = maxf(stl.level_at(abs_h) - 0.001, 0.0) * _effective_capacity_qty(src_specs)
+			intake = minf(want, avail / dt_hours)
+			net_rates[src_id] = float(net_rates.get(src_id, 0.0)) - intake
+		else:
+			src_dry = true
+	var res := TerraceField.cascade_step(table, store, heads, intake, rain, loss, dt_hours)
+	store = res["store"]
+	var out_lph := float(res["outflow_lph"])
+	var runoff := out_lph
+	var out_id := _tank_at_port(iid, "water_out", false)
+	if not out_id.is_empty() and out_lph > 0.0:
+		var os: Dictionary = (_model.get_item(out_id).get("specs", {}) as Dictionary).duplicate(true)
+		_rk.migrate_resource_specs(os)
+		var otl: ResourceTimeline = _timelines.get(out_id) as ResourceTimeline
+		if _tank_accepts_inflow(os, otl, abs_h):
+			net_rates[out_id] = float(net_rates.get(out_id, 0.0)) + out_lph
+			runoff = 0.0
+	# --- The crop: each paddy's season, worked by its crew ---
+	var wf_arr: Array = []
+	var area := 0.0
+	var wf_acc := 0.0
+	for i in n:
+		var wrow: Array = table[i]
+		var pwf := TerraceField.paddy_water_factor(wrow, store[i])
+		wf_arr.append(pwf)
+		area += float(wrow[0])
+		wf_acc += pwf * float(wrow[0])
+	var wf := wf_acc / area if area > 0.0 else 0.0
+	var built: Array = []
+	for brow in table:
+		built.append(float((brow as Array)[2]) > 0.0)
+	var labour := str(specs.get("labour", "people"))
+	var credit: Variant = specs.get("terrace_credit", {})
+	# The tractor runs while the diesel store on fuel_in has fuel (with no
+	# store wired it is bought in and counted).
+	var fuel_ok := true
+	if labour == "machines":
+		var fid0 := _tank_at_port(iid, "fuel_in", true)
+		if not fid0.is_empty():
+			var fsp: Dictionary = (_model.get_item(fid0).get("specs", {}) as Dictionary).duplicate(true)
+			_rk.migrate_resource_specs(fsp)
+			fuel_ok = _tank_has_supply(fsp, _timelines.get(fid0) as ResourceTimeline, abs_h)
+	var fr := TerraceFarm.step(table, fs, abs_h, dt_hours, {
+		"fuel_ok": fuel_ok,
+		# No live crews inside a pre-render, an A/B run or simkit: model them.
+		"crews": _render_ctx_active,
+		"labour": labour, "hour": fposmod(abs_h, 24.0),
+		"par_wm2": SolarIrradiance.par_wm2_from_ghi(_sun_ghi_wm2()), "month": _sim_month(),
+		"wf": wf_arr, "built": built,
+		"credit": credit if credit is Dictionary else {}})
+	fs = fr["fs"]
+	fps = fs["p"]
+	var led: Dictionary = fs["ledger"]
+	var grown_h := float(fr["grown_kg_h"])
+	# Machines burn the fuel in the store on fuel_in (else it is bought in).
+	var fuel_l := float(fr["fuel_l"])
+	if fuel_l > 0.0:
+		var fid := _tank_at_port(iid, "fuel_in", true)
+		if not fid.is_empty():
+			net_rates[fid] = float(net_rates.get(fid, 0.0)) - fuel_l / dt_hours
+		else:
+			led["fuel_bought_l"] = float(led.get("fuel_bought_l", 0.0)) + fuel_l
+	# The harvest goes to its stores as it is cut; what does not fit waits.
+	var pend: Dictionary = st.get("pend", {"food": 0.0, "bio": 0.0, "straw": 0.0})
+	pend["food"] = float(pend["food"]) + float(fr["food_kg"])
+	pend["bio"] = float(pend["bio"]) + float(fr["biomass_kg"])
+	pend["straw"] = float(pend["straw"]) + float(fr["straw_kg"])
+	var food_port := TerraceField.makes_food(specs)
+	var put_now := 0.0
+	var waiting := ""
+	if float(pend["food"]) > 0.001:
+		var pf := _terrace_deliver(iid, "harvest_out", "food", float(pend["food"]), net_rates, dt_hours, abs_h)
+		pend["food"] = float(pend["food"]) - pf
+		led["food_kg"] = float(led.get("food_kg", 0.0)) + pf
+		put_now += pf
+		if float(pend["food"]) > 0.5:
+			waiting = "harvest waiting — wire a food store"
+	if float(pend["bio"]) > 0.001:
+		var bh := "residue_out" if food_port else "harvest_out"
+		var pb := _terrace_deliver(iid, bh, "biomass", float(pend["bio"]), net_rates, dt_hours, abs_h)
+		pend["bio"] = float(pend["bio"]) - pb
+		led["biomass_kg"] = float(led.get("biomass_kg", 0.0)) + pb
+		put_now += pb
+		if float(pend["bio"]) > 0.5 and waiting.is_empty():
+			waiting = "harvest waiting — wire a biomass store"
+	if float(pend["straw"]) > 0.001:
+		var ps2 := _terrace_deliver(iid, "residue_out", "biomass", float(pend["straw"]), net_rates, dt_hours, abs_h)
+		pend["straw"] = float(pend["straw"]) - ps2
+		led["straw_kg"] = float(led.get("straw_kg", 0.0)) + ps2
+		# Straw nobody collects is left on the field.
+		if _tank_at_port(iid, "residue_out", false).is_empty():
+			pend["straw"] = 0.0
+	var harvested := float(specs.get("last_harvest_kg", 0.0))
+	if put_now > 0.0:
+		harvested = put_now
+	var standing := 0.0
+	var f_acc := 0.0
+	var f_n := 0
+	var counts := {}
+	for i in n:
+		var pp: Dictionary = fps[i]
+		standing += float(pp.get("kg", 0.0))
+		var pst := str(pp.get("st", ""))
+		counts[pst] = int(counts.get(pst, 0)) + 1
+		if pst == TerraceFarm.STAGE_GROW and float(pp.get("sow", -1.0)) >= 0.0:
+			var pcrop := str((table[i] as Array)[6]) if (table[i] as Array).size() > 6 else field_crop
+			var cyc := float(TerraceField.crop_info(pcrop)["cycle_d"]) * 24.0
+			f_acc += clampf((abs_h - float(pp["sow"])) / maxf(cyc, 1.0), 0.0, 1.0)
+			f_n += 1
+	st["s"] = store
+	st["farm"] = fs
+	st["pend"] = pend
+	st["standing"] = standing
+	st["last_h"] = abs_h
+	_terrace_state[iid] = st
+	var cinfo := TerraceField.crop_info(field_crop)
+	var phase := {"planted": f_n > 0, "f": f_acc / float(maxi(f_n, 1))}
+	# --- Telemetry ---
+	var fills: Array = []
+	var spills: Array = []
+	var held := 0.0
+	var spill_arr: PackedFloat32Array = res["spill"]
+	for i in n:
+		var cap := maxf(float(table[i][2]), 1e-6)
+		fills.append(snappedf(clampf(store[i] / cap, 0.0, 1.0), 0.01))
+		spills.append(snappedf(float(spill_arr[i]), 10.0))
+		held += store[i]
+	var ff2 := float(cinfo["food"])
+	specs["terrace_fill"] = fills
+	specs["terrace_spill"] = spills
+	specs["water_held_l"] = snappedf(held, 10.0)
+	specs["inflow_lph_live"] = snappedf(intake, 1.0)
+	specs["outflow_lph"] = snappedf(out_lph, 1.0)
+	specs["runoff_lph"] = snappedf(runoff, 1.0)
+	specs["standing_kg"] = snappedf(standing, 0.1)
+	specs["last_harvest_kg"] = snappedf(harvested, 0.1)
+	specs["water_factor"] = snappedf(wf, 0.01)
+	specs["crop_pct"] = roundf(float(phase["f"]) * 100.0) if bool(phase["planted"]) else -1.0
+	specs["biomass_kg_h"] = snappedf(grown_h, 0.0001)
+	specs["food_kg_h"] = snappedf(grown_h * ff2, 0.0001)
+	var jobs: Array = TerraceFarm.open_jobs(table, fs, labour)
+	specs["terrace_jobs"] = jobs
+	var mjobs: Array = TerraceFarm.machine_jobs(fs) if labour == "machines" else []
+	specs["terrace_machine"] = mjobs
+	specs["fuel_ok"] = fuel_ok
+	specs["terrace_view"] = TerraceFarm.paddy_view(fs)
+	specs["farm_ledger"] = TerraceFarm.ledger_summary(led)
+	specs["farm_stages"] = counts
+	# The whole farm state rides the graph save when a job starts or ends,
+	# and once a sim-hour.
+	var fseq := int(fs.get("seq", 0))
+	var fhour := int(floor(abs_h))
+	var save_farm := fseq != int(st.get("saved_seq", -1)) or fhour != int(st.get("saved_hour", -1))
+	if save_farm:
+		specs["terrace_farm"] = fs.duplicate(true)
+		st["saved_seq"] = fseq
+		st["saved_hour"] = fhour
+	var dv := ""
+	if not bool(phase["planted"]):
+		dv = "%d %s to work" % [jobs.size(), "job" if jobs.size() == 1 else "jobs"] \
+			if not jobs.is_empty() else "not planted"
+	else:
+		dv = "%s %d%% · water %d%%" % [str(cinfo["label"]), int(roundf(float(phase["f"]) * 100.0)),
+			int(roundf(wf * 100.0))]
+		if not jobs.is_empty():
+			dv += " · %d %s for the crews" % [jobs.size(), "job" if jobs.size() == 1 else "jobs"]
+	if not mjobs.is_empty() and not fuel_ok:
+		dv = "the diesel store is empty — the tractor has stopped"
+	elif not waiting.is_empty():
+		dv = waiting
+	elif src_dry:
+		dv += " · its water store is empty"
+	elif no_source and str(specs.get("inflow_mode", "keep")) != "off":
+		dv += " · rain-fed"
+	specs["display_value"] = dv
+	var state := GraphNodeState.RUNNING if grown_h > 0.0 else GraphNodeState.IDLE
+	if had_set:
+		_model.update_item(iid, {"specs": specs})
+	else:
+		var wkeys := ["terrace_fill", "terrace_spill", "water_held_l",
+			"inflow_lph_live", "outflow_lph", "runoff_lph", "standing_kg", "last_harvest_kg",
+			"water_factor", "crop_pct", "biomass_kg_h", "food_kg_h", "display_value",
+			"terrace_jobs", "terrace_view", "farm_ledger", "farm_stages", "terrace_machine", "fuel_ok"]
+		if save_farm:
+			wkeys.append("terrace_farm")
+		_write_if_changed(iid, item, specs, wkeys)
+	_write_node_state(iid, specs, state)
+	for conn: Dictionary in (_resource_conns_by_target_item.get(iid, []) as Array):
+		var th := str(conn.get("target_handle_id", conn.get("target_handle", "")))
+		if th == "water_in":
+			_cache_conn_flow(str(conn.get("id", "")), intake, "water")
+	for conn: Dictionary in (_resource_conns_by_source_item.get(iid, []) as Array):
+		var sh := str(conn.get("source_handle_id", conn.get("source_handle", "")))
+		if sh == "water_out":
+			_cache_conn_flow(str(conn.get("id", "")), out_lph - runoff, "water")
+		elif sh == "harvest_out":
+			_cache_conn_flow(str(conn.get("id", "")), grown_h * (ff2 if ff2 > 0.0 else 1.0),
+				"food" if ff2 > 0.0 else "biomass")
+
+
+## The farm state a terrace starts with: a field worked for free and already
+## sown (the sandbox, and a field saved before the farm work existed) is
+## growing from its planting hour; any other field starts by being prepared.
+func _terrace_seed_farm(specs: Dictionary, table: Array) -> Dictionary:
+	var fs := TerraceFarm.fresh(table)
+	var sown := float(specs.get("plant_abs_h", -1.0))
+	if str(specs.get("labour", "people")) == "free" and sown >= 0.0:
+		for p in fs["p"]:
+			var pd: Dictionary = p
+			pd["st"] = TerraceFarm.STAGE_GROW
+			pd["sow"] = sown
+			pd["est"] = true
+	return fs
+
+
+## Put `kg` of `kind` into the store on a terrace's output port over this
+## step, as much as fits. Returns what went in.
+func _terrace_deliver(iid: String, handle: String, kind: String, kg: float,
+		net_rates: Dictionary, dt_hours: float, abs_h: float) -> float:
+	var tid := _tank_at_port(iid, handle, false)
+	if tid.is_empty() or kg <= 0.0:
+		return 0.0
+	var ts: Dictionary = (_model.get_item(tid).get("specs", {}) as Dictionary).duplicate(true)
+	_rk.migrate_resource_specs(ts)
+	if ResourceKinds.normalize_kind(str(ts.get("resource_kind", ""))) != kind:
+		return 0.0
+	var tl: ResourceTimeline = _timelines.get(tid) as ResourceTimeline
+	if not _tank_accepts_inflow(ts, tl, abs_h):
+		return 0.0
+	var put := kg
+	if not _tank_is_unlimited(ts) and not bool(ts.get("allow_negative", false)):
+		var lvl: float = tl.level_at(abs_h) if tl != null else float(ts.get("level", 0.0))
+		put = minf(put, maxf(0.998 - lvl, 0.0) * _effective_capacity_qty(ts))
+	if put <= 0.0:
+		return 0.0
+	net_rates[tid] = float(net_rates.get(tid, 0.0)) + put / maxf(dt_hours, 1e-6)
+	return put
+
+
 ## Food forest (veg overhaul Phase 10): the trees standing inside an OSM
 ## vegetation area, summarised by VegFoodYield into one bed node.
 ##
@@ -1333,6 +1673,10 @@ func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
 	# takes its own branch instead of the LUE/water-gated growth model.
 	if bool(specs.get("food_forest", false)):
 		_process_food_forest(item, specs, net_rates, dt_hours, abs_h)
+		return
+	# A terraced field holds its own water in its paddies (TerraceField).
+	if specs.has("terrace_id"):
+		_process_terrace(item, specs, net_rates, dt_hours, abs_h)
 		return
 
 	# A plant with an edible share (food_fraction) makes FOOD on its output
@@ -3156,7 +3500,10 @@ func _apply_conduit_derate(conn: Dictionary, rate_qph: float) -> float:
 		real["flow_derate"] = 1.0
 		real["overload_ratio"] = 0.0
 		return rate_qph
-	var meta: Dictionary = ConduitKinds.type_meta(type_id)
+	# The chosen size's bore and rating (ConduitSpecs). Before this a 4" PVC run
+	# lost head as if it were the kind's default 1¼".
+	var meta: Dictionary = ConduitSpecs.loss_meta(type_id,
+		conn.get("conduit_style", {}) as Dictionary)
 	var flow_lpm: float = rate_qph / 60.0
 	var rep: Dictionary = ConduitLoss.hydraulic_report_for_connection(conn, meta, flow_lpm)
 	var derate: float = clampf(float(rep.get("derate_frac", 1.0)), 0.0, 1.0)
@@ -3180,6 +3527,50 @@ func _connector_losses_enabled() -> bool:
 	if ctrl == null:
 		return false
 	return bool(ctrl.get("connector_losses_enabled"))
+
+
+## A valve / pump's rate for this step, written into the specs COPY the
+## machine step uses: max_rate × opening, zero when the height difference
+## stops it (a valve uphill; a pump past its lift). Stamps `ctl_block` and
+## `ctl_rate` on the node (sim writes, change-gated).
+func _prepare_flowctl(item: Dictionary, specs: Dictionary, dt_hours: float, abs_h: float) -> void:
+	var iid := str(item.get("id", ""))
+	var r := FlowCtl.rate(specs)
+	var blk := FlowCtl.BLOCK_NONE
+	if r > 0.0:
+		var src_id := _tank_at_port(iid, "res_in_0", true)
+		var tgt_id := _tank_at_port(iid, "res_out_0", false)
+		# Never more in a step than the source holds or the target has room
+		# for (the machine step alone would overdraw a small store through a
+		# big valve on a coarse step).
+		if dt_hours > 0.0:
+			for end in [[src_id, true], [tgt_id, false]]:
+				var tid := str(end[0])
+				if tid.is_empty():
+					continue
+				var ts: Dictionary = _model.get_item(tid).get("specs", {}) as Dictionary
+				if _tank_is_unlimited(ts) or bool(ts.get("allow_negative", false)):
+					continue
+				var tl: ResourceTimeline = _timelines.get(tid) as ResourceTimeline
+				var lvl := tl.level_at(abs_h) if tl != null else float(ts.get("level", 0.0))
+				var cap := maxf(_effective_capacity_qty(ts), 0.001)
+				var qty := maxf(lvl, 0.0) * cap if bool(end[1]) else maxf(0.998 - lvl, 0.0) * cap
+				r = minf(r, qty / dt_hours)
+		var delta := NAN
+		if not src_id.is_empty() and not tgt_id.is_empty():
+			var src := _model.get_item(src_id)
+			var tgt := _model.get_item(tgt_id)
+			if src.has("elevation_m") and tgt.has("elevation_m"):
+				delta = float(src.get("elevation_m", 0.0)) + float((src.get("specs", {}) as Dictionary).get("outlet_height_m", 0.0)) \
+					- float(tgt.get("elevation_m", 0.0)) - float((tgt.get("specs", {}) as Dictionary).get("inlet_height_m", 0.0))
+		blk = FlowCtl.block_for(specs, delta)
+		if blk != FlowCtl.BLOCK_NONE:
+			r = 0.0
+	FlowCtl.apply_rate(specs, r)
+	var live: Dictionary = item.get("specs", {}) as Dictionary
+	if str(live.get("ctl_block", "")) != blk or absf(float(live.get("ctl_rate", -1.0)) - r) > 1e-6:
+		live["ctl_block"] = blk
+		live["ctl_rate"] = r
 
 
 ## Returns {ok, delta_m}. ok=false when source elev < target elev and no pump.
@@ -3217,6 +3608,10 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 	if DesignGap.is_gap(specs):
 		_process_design_gap(item, specs, net_rates, _dt, abs_h)
 		return
+	# A valve or pump in a line: its opening sets the rate, then it runs as
+	# any machine does (FlowCtl).
+	if FlowCtl.is_flowctl(specs):
+		_prepare_flowctl(item, specs, _dt, abs_h)
 	# Siphon hydro has its own tick after culverts (_process_siphon_hydro).
 	if str(specs.get("role", "")) == "siphon_hydro":
 		return
@@ -3756,6 +4151,14 @@ func _process_processor_batch(item: Dictionary, specs: Dictionary, net_rates: Di
 						tank_id2 = _tank_at_port(item_id, "input", true)
 					if not tank_id2.is_empty() and dt_hours > 0.0:
 						net_rates[tank_id2] = float(net_rates.get(tank_id2, 0.0)) - (qty2 / dt_hours)
+						# The charge crosses its wire in this one step.
+						if not _render_ctx_active:
+							var charge_conns: Array = _connections_to_handle(item_id, "res_in_%d" % i)
+							if charge_conns.is_empty():
+								charge_conns = _connections_to_handle(item_id, "input")
+							if not charge_conns.is_empty():
+								_ledger_add(str((charge_conns[0] as Dictionary).get("id", "")), qty2,
+									str(inp2.get("kind", "")))
 
 			var begin := RecipeRunner.begin_run(specs, abs_h, recipe, chore_ledger)
 			state["state"] = "running"
@@ -4995,6 +5398,34 @@ func _stamp_conn_telemetry(conn: Dictionary, updates: Dictionary) -> void:
 			break
 	if dirty:
 		_model.stamp_connection_telemetry(cid, updates)
+
+
+## Add this step's flows to the per-wire ledger (live steps only).
+func _ledger_step(dt_hours: float) -> void:
+	if _render_ctx_active or dt_hours <= 0.0:
+		return
+	for cid in _conn_flow:
+		var f: Dictionary = _conn_flow[cid]
+		var rate := float(f.get("rate", 0.0))
+		if rate > 0.0:
+			_ledger_add(str(cid), rate * dt_hours, str(f.get("kind", "")))
+
+
+func _ledger_add(conn_id: String, qty: float, kind: String) -> void:
+	if conn_id.is_empty() or qty <= 0.0:
+		return
+	var cur: Array = _conn_qty.get(conn_id, [0.0, kind])
+	cur[0] = float(cur[0]) + qty
+	if str(cur[1]).is_empty():
+		cur[1] = kind
+	_conn_qty[conn_id] = cur
+
+
+## What every wire carried since the last call: {conn id: [quantity, kind]}.
+func take_conn_quantities() -> Dictionary:
+	var out := _conn_qty
+	_conn_qty = {}
+	return out
 
 
 func _cache_conn_flow(conn_id: String, rate: float, kind: String = "") -> void:

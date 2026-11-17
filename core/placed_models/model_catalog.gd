@@ -601,6 +601,12 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "vehicle_skid_steer", "label": "Skid steer",
 			"path": "res://Imported Models/Skid Steer.glb", "preserve_scale": true,
 			"category": "vehicles", "vehicle": "skid_steer"},
+		# A ~40 hp Kubota compact tractor with a front loader and a rear
+		# implement (the player's SketchUp model, already in metres; front
+		# = +X). Digs terraces and tills paddies (TerraceDig / TerraceFarm).
+		{"id": "vehicle_tractor", "label": "Tractor (compact, front loader)",
+			"path": "res://Imported Models/Vehicles/tractor.glb", "preserve_scale": true,
+			"category": "vehicles", "vehicle": "tractor"},
 		{"id": "vehicle_tool_bus", "label": "Tool Bus (International 3800 school bus)",
 			"procedural": true, "preserve_scale": true, "category": "vehicles",
 			"vehicle": "bus", "vehicle_name": "Tool Bus",

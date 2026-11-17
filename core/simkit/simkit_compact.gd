@@ -106,6 +106,8 @@ static func summary(y: Object, design: Dictionary, res: Dictionary, ids: Diction
 		"people_blocked_h": _round_dict(p["blocked_h"]),
 		"flows": flows(y, did, days),
 		"time_use": tu,
+		"logic": ((y.get("logic") as ScadaLogicRun).summary() if y.get("logic") != null else []),
+		"alarms": ((y.get("alarms") as ScadaAlarmRun).summary() if y.get("alarms") != null else []),
 		"work_per_person_h_week": _r(7.0 * float((tu.get("h_per_day", {}) as Dictionary).get("work", 0.0))),
 		"monthly": monthly(y),
 		"fidelity": {"kernel": "headless", "people": str(meta.get("people_mode", "agents")),

@@ -1527,12 +1527,37 @@
       "image": "earthship.jpg",
       "image_run": "2026-11-10T18:06:28",
       "image_commit": "0b7bb36"
+    },
+    "flow_torus": {
+      "id": "flow_torus",
+      "title": "Flows as a torus",
+      "chapter": "Systems",
+      "summary": "Sunlight down the middle, heat out the bottom, and the loops it drives turning either side.",
+      "how": [
+        "Press G and click the Flows lens",
+        "Click Torus in its header (Column goes back)",
+        "Drag a node to move it along its shell; right-click puts it back"
+      ],
+      "action": "system_graph_toggle",
+      "button": "",
+      "key": "G",
+      "open_hints": [
+        "Press G"
+      ],
+      "world": "mtvernon",
+      "blurb": "A site is a heat engine: sunlight comes in, does work and leaves as heat. The torus shape of the Flows lens draws that. Everything that only handles electricity stands on a central axis, sources at the top, and what is used leaves the bottom as heat. Everything that handles water, food or nutrients sits on one of two lobes. Each closed loop gets its own shell, smaller loops inside bigger ones, and round every shell the flow runs down beside the axis and back up the far side. Wires from the axis out to a machine are the work that keeps its loop turning.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "flow_torus.jpg",
+      "image_run": "2026-11-15T00:25:00",
+      "image_commit": "27de16d"
     }
   },
   "last_run": {
-    "label": "tour_20261110-180337",
-    "generated": "2026-11-10T18:06:28",
-    "git_commit": "0b7bb36",
+    "label": "tour_20261115-002145",
+    "generated": "2026-11-15T00:25:00",
+    "git_commit": "27de16d",
     "passed": 1,
     "total": 1,
     "video_secs": null
