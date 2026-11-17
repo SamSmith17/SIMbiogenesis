@@ -178,7 +178,7 @@ func _apply_fields() -> void:
 		s.light_energy = 0.0
 		s.visible = false
 	else:
-		s.visible = true
+		s.visible = _lit   # off = no light (its shadow map too), as PlacedLight
 	_beam.visible = fixture != "laser" and haze > 0.0
 	_sync_lasers(fixture)
 

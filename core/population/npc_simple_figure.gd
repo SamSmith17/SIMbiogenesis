@@ -1605,25 +1605,16 @@ func _build() -> void:
 		_head.position = head_at
 		_torso.add_child(_head)
 	var hm := MeshInstance3D.new()
-	var sph := SphereMesh.new()
-	sph.radius = HEAD_R
-	sph.height = HEAD_R * 2.0
-	if hi_detail:
-		# A touch taller than wide, and a jaw: a head, not a ball.
-		sph.height = HEAD_R * 2.2
-		sph.radial_segments = 48
-		sph.rings = 24
-	hm.mesh = sph
+	# A touch taller than wide (hi-detail, with a jaw): a head, not a ball.
+	hm.mesh = _shared_sphere(HEAD_R, HEAD_R * (2.2 if hi_detail else 2.0),
+		48 if hi_detail else FIG_SPHERE_SEGS, 24 if hi_detail else FIG_SPHERE_RINGS)
 	hm.position = Vector3(0.0, HEAD_R * 0.9, 0.0)
 	hm.material_override = _mat
 	_head.add_child(hm)
 	_head_meshes.append(hm)
 	if hi_detail:
 		var jaw := MeshInstance3D.new()
-		var js := SphereMesh.new()
-		js.radius = HEAD_R * 0.72
-		js.height = HEAD_R * 1.2
-		jaw.mesh = js
+		jaw.mesh = _shared_sphere(HEAD_R * 0.72, HEAD_R * 1.2, 64, 32)
 		jaw.position = Vector3(0.0, HEAD_R * 0.35, HEAD_R * 0.32)
 		jaw.material_override = _mat
 		_head.add_child(jaw)
@@ -1744,14 +1735,54 @@ func _glow_ring(parent: Node3D, at: Vector3, r: float, mat: ShaderMaterial, col:
 	parent.add_child(mi)
 
 
+## Primitive meshes shared by every figure (they are never changed after
+## creation). Each figure used to build its own Godot-default CapsuleMesh /
+## SphereMesh (64 radial segments; ~30 k triangles a figure, all casting
+## shadows). The background figures use FIG_CAPSULE_SEGS / FIG_SPHERE_SEGS,
+## under half a pixel of silhouette error on a 5 cm limb at 2 m; the
+## hi-detail build (the player's body) keeps the engine's detail.
+const FIG_CAPSULE_SEGS := 16
+const FIG_CAPSULE_RINGS := 6
+const FIG_SPHERE_SEGS := 24
+const FIG_SPHERE_RINGS := 12
+static var _mesh_cache: Dictionary = {}
+
+
+func _shared_capsule(radius: float, height: float) -> Mesh:
+	var segs := 64 if hi_detail else FIG_CAPSULE_SEGS
+	var rings := 8 if hi_detail else FIG_CAPSULE_RINGS
+	var key := "c|%.4f|%.4f|%d|%d" % [radius, height, segs, rings]
+	var m: Variant = _mesh_cache.get(key)
+	if m == null:
+		var cap := CapsuleMesh.new()
+		cap.radius = radius
+		cap.height = height
+		cap.radial_segments = segs
+		cap.rings = rings
+		_mesh_cache[key] = cap
+		m = cap
+	return m as Mesh
+
+
+func _shared_sphere(radius: float, height: float, segs: int, rings: int) -> Mesh:
+	var key := "s|%.4f|%.4f|%d|%d" % [radius, height, segs, rings]
+	var m: Variant = _mesh_cache.get(key)
+	if m == null:
+		var sph := SphereMesh.new()
+		sph.radius = radius
+		sph.height = height
+		sph.radial_segments = segs
+		sph.rings = rings
+		_mesh_cache[key] = sph
+		m = sph
+	return m as Mesh
+
+
 ## A capsule lying ACROSS the body (along X), centred at `at` — a pelvis or a
 ## shoulder girdle on the hi-detail build.
 func _limb_across(parent: Node3D, radius: float, at: Vector3, length: float) -> void:
 	var mi := MeshInstance3D.new()
-	var cap := CapsuleMesh.new()
-	cap.radius = radius
-	cap.height = maxf(length, radius * 2.05)
-	mi.mesh = cap
+	mi.mesh = _shared_capsule(radius, maxf(length, radius * 2.05))
 	mi.rotation = Vector3(0.0, 0.0, PI * 0.5)
 	mi.position = at
 	mi.material_override = _mat
@@ -1763,11 +1794,8 @@ func _limb_across(parent: Node3D, radius: float, at: Vector3, length: float) -> 
 ## that's how a limb overshoots its pivot to overlap its neighbour.
 func _limb(parent: Node3D, radius: float, top_y: float, bottom_y: float) -> void:
 	var mi := MeshInstance3D.new()
-	var cap := CapsuleMesh.new()
-	cap.radius = radius
 	var length := top_y - bottom_y
-	cap.height = maxf(length, radius * 2.05)
-	mi.mesh = cap
+	mi.mesh = _shared_capsule(radius, maxf(length, radius * 2.05))
 	mi.position = Vector3(0.0, (top_y + bottom_y) * 0.5, 0.0)
 	mi.material_override = _mat
 	parent.add_child(mi)

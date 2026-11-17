@@ -43,6 +43,9 @@ const ACTIVE_POLL_S := 0.5
 const MAX_STORMS := 64
 ## How far back a basin's water is followed, and the step of its balance.
 const BASIN_HORIZON_H := 24.0
+## How far the clock moves before the rain history is rebuilt (see
+## _ensure_rain_history).
+const HIST_REFRESH_H := 1.0 / 60.0
 const BASIN_STEP_H := 2.0 / 60.0
 const BASINS_NODE := "StreamBasins"
 ## Erosion: re-carve once the bed has dropped this much somewhere since the
@@ -825,7 +828,13 @@ func _ensure_rain_history() -> void:
 	var now := _now_h()
 	if not is_finite(now):
 		now = 0.0
-	if is_finite(_hist_now_h) and absf(now - _hist_now_h) < 1e-4:
+	# Rebuilt once the clock has moved HIST_REFRESH_H (one sim-minute) or on
+	# any invalidation (a carve, a new storm). It used to rebuild whenever the
+	# clock had moved at all, i.e. on every poll at 1x: ~380 weather samples
+	# for the rain series plus 24 h of basin balance, several times a second
+	# (water_poll 3-5 ms a frame on Walton). The flows it feeds lag the clock
+	# by under a minute; rain takes many minutes to travel down a channel.
+	if is_finite(_hist_now_h) and absf(now - _hist_now_h) < HIST_REFRESH_H:
 		return
 	var max_tc := StreamRunoff.TC_MIN_H
 	for fid in station_tc.keys():

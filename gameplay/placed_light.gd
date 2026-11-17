@@ -160,6 +160,9 @@ func _apply_fields() -> void:
 		_light_node.distance_fade_shadow = fade * 0.5
 	_light_node.light_color = _base_color
 	_light_node.light_energy = float(fields.get("energy", 1.0)) if _lit else 0.0
+	# An unlit light at zero energy still cost its shadow map (six faces for
+	# an omni) and its place in the light list: hide it while it is off.
+	_light_node.visible = _lit
 	if _gizmo_mat != null:
 		_gizmo_mat.albedo_color = Color(_base_color.r, _base_color.g, _base_color.b, 0.8)
 	if _bulb != null:
