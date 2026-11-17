@@ -538,6 +538,9 @@ func mean_solar_time_to_clock_time( mean_solar_time: float ) -> float :
 ## Cache for sunrise/sunset calculation (invalidated when date/location changes)
 var _cached_sun_times : Vector2 = Vector2( -1, -1 )
 var _cached_sun_times_key : String = ""
+var _cached_sun_ymd := -1
+var _cached_sun_geo := Vector3.INF
+var _cached_sun_dst := -1
 
 ## Calculated sunrise hour for current date/location (read-only, in clock time)
 var sunrise_hour : float :
@@ -553,10 +556,17 @@ var sunset_hour : float :
 ## Returns times in local clock time (accounting for timezone, DST, and equation of time)
 func _calculate_sunrise_sunset() -> Vector2 :
 	# Create cache key from date, location, and DST state
+	# Read every frame by several callers: compare plain numbers rather than
+	# formatting a seven-field String key on each read.
 	var dst_state := 1 if is_dst_active() else 0
-	var cache_key := "%d-%d-%d-%.2f-%.2f-%.2f-%d" % [ year, month, day, latitude, longitude, planet_axial_tilt, dst_state ]
-	if cache_key == _cached_sun_times_key and _cached_sun_times.x >= 0 :
+	var ymd := ( year * 100 + month ) * 100 + day
+	var geo := Vector3( snappedf( latitude, 0.01 ), snappedf( longitude, 0.01 ), snappedf( planet_axial_tilt, 0.01 ) )
+	if ymd == _cached_sun_ymd and geo == _cached_sun_geo and dst_state == _cached_sun_dst and _cached_sun_times.x >= 0 :
 		return _cached_sun_times
+	_cached_sun_ymd = ymd
+	_cached_sun_geo = geo
+	_cached_sun_dst = dst_state
+	var cache_key := ""
 
 	var jd := get_julian_day()
 	var declination := deg_to_rad( get_sun_declination( jd ) )

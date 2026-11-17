@@ -1230,8 +1230,7 @@ func _update_display() -> void:
 	# ── Time scrubber (multi-day absolute track) ─────────────────────────────
 	var dt : float = float(_main.get("day_time") if _main.get("day_time") != null else 0.0)
 	if _track != null:
-		_track.queue_redraw()
-		_update_track_edge_labels()
+		_maybe_redraw_track()
 	_update_nle_controls()
 
 	# ── Time label ───────────────────────────────────────────────────────────
@@ -1484,6 +1483,37 @@ func _now_abs() -> float:
 	if _td != null:
 		return float(_td.get("now_abs_hours"))
 	return _playhead_abs()
+
+## The track used to be redrawn on every display tick (10 Hz) even while
+## paused, and its edge labels and tooltip rebuilt with it. It is redrawn now
+## when what it shows moves: the playhead or NOW by half a pixel, the window,
+## the track's size; and at least every TRACK_IDLE_REDRAW_MS so data that
+## arrives on its own (recorded lanes, render progress, flags) still shows.
+## Input handlers redraw the track themselves.
+const TRACK_IDLE_REDRAW_MS := 500
+var _track_draw_key: Array = []
+var _track_draw_ms := 0
+var _track_label_win := PackedFloat64Array()
+
+
+func _maybe_redraw_track() -> void:
+	var win := _track_window()
+	var w := maxf(_track.size.x, 1.0)
+	var span := maxf(win[1], 1e-9)
+	var key: Array = [
+		snappedf((_playhead_abs() - win[0]) / span * w, 0.5),
+		snappedf((_now_abs() - win[0]) / span * w, 0.5),
+		win[0], win[1], _track.size,
+	]
+	var now_ms := Time.get_ticks_msec()
+	if key != _track_draw_key or now_ms - _track_draw_ms >= TRACK_IDLE_REDRAW_MS:
+		_track_draw_key = key
+		_track_draw_ms = now_ms
+		_track.queue_redraw()
+	if win != _track_label_win:
+		_track_label_win = win
+		_update_track_edge_labels()
+
 
 func _update_track_edge_labels() -> void:
 	if _track_lbl_start == null or _track_lbl_end == null:

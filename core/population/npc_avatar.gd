@@ -252,6 +252,7 @@ func set_display_name(new_name: String) -> void:
 func _build_nametag() -> void:
 	if _tag != null:
 		return
+	_tag_prefs_gen = -1  # the next set_tag_visible refreshes the new tag
 	_tag = Label3D.new()
 	_tag.name = "NameTag"
 	_tag.text = display_name
@@ -305,6 +306,7 @@ func set_morale(value: float) -> void:
 func _build_status_bar() -> void:
 	if _status_root != null:
 		return
+	_tag_prefs_gen = -1  # the next set_tag_visible refreshes the new readout
 	_status_root = Node3D.new()
 	_status_root.name = "StatusBar"
 	_status_root.visible = false  # ambient (near) or focus shows it
@@ -535,8 +537,18 @@ func pick_center() -> Vector3:
 ## Nametag + morale bar are off by default (50 floating labels is noise) —
 ## the crosshair turns them on for whoever the player is looking at.
 func set_tag_visible(on: bool) -> void:
+	# The host calls this for every hero every frame: refresh only when the
+	# focus or the display prefs (overhead mode) changed since the last refresh.
+	var gen := NpcDisplayPrefs.generation()
+	if on == _focus and gen == _tag_prefs_gen:
+		return
+	_tag_prefs_gen = gen
 	_focus = on
 	_refresh_overhead()
+
+
+## NpcDisplayPrefs.generation() at the last set_tag_visible refresh.
+var _tag_prefs_gen := -1
 
 
 ## Host-driven by distance: near people carry their bar + task tag all the

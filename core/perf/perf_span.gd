@@ -16,6 +16,10 @@ extends RefCounted
 
 static var _pm: Node = null
 static var _looked := false
+## Mirrors PerfMonitor's enabled flag (it sets this in set_enabled): with the
+## F3 HUD off a span costs one static read instead of two dynamic calls into
+## the monitor, which there were hundreds of a frame (one pair per prop tick).
+static var active := false
 
 
 static func _monitor() -> Node:
@@ -36,12 +40,16 @@ static func _monitor() -> Node:
 
 
 static func begin(section: String) -> void:
+	if not active:
+		return
 	var pm := _monitor()
 	if pm != null:
 		pm.call("begin", section)
 
 
 static func end(section: String) -> void:
+	if not active:
+		return
 	var pm := _monitor()
 	if pm != null:
 		pm.call("end", section)

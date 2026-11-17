@@ -125,7 +125,18 @@ func _perf_tick(delta: float) -> void:
 		_refresh_target()
 	_q_lps = lerpf(_q_lps, _q_target,
 			clampf(1.0 - exp(-delta / _SMOOTH_TAU), 0.0, 1.0))
+	# Once the flow has eased in, every frame wrote the same particle and pool
+	# values (a particle material write re-uploads it): snap and skip.
+	if absf(_q_lps - _q_target) < 1e-4:
+		_q_lps = _q_target
+	if _q_lps == _applied_q:
+		return
+	_applied_q = _q_lps
 	_apply()
+
+
+## The flow _apply last drew (NAN = never).
+var _applied_q := NAN
 
 
 func _refresh_target() -> void:

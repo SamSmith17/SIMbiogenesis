@@ -589,8 +589,29 @@ func _apply_water_flow(delta: float) -> void:
 	_flow_speed = lerpf(_flow_speed, float(target.get("speed_scale", 1.0)), k)
 	_flow_churn = lerpf(_flow_churn, float(target.get("churn", 1.0)), k)
 	_flow_alpha = lerpf(_flow_alpha, float(target.get("water_alpha", 0.88)), k)
+	# The eased values settle and then stop moving: skip the eight uniform
+	# writes when nothing moved by a visible amount. Re-sent every
+	# FLOW_REPUSH_S anyway, so rebuilt water materials pick the values up.
+	var vals := PackedFloat32Array([_flow_w, _flow_level, _flow_speed, _flow_churn, _flow_alpha])
+	_flow_repush_s -= delta
+	if _flow_repush_s > 0.0 and _flow_pushed.size() == vals.size():
+		var moved := false
+		for i in vals.size():
+			if absf(vals[i] - _flow_pushed[i]) > 1e-4:
+				moved = true
+				break
+		if not moved:
+			return
+	_flow_pushed = vals
+	_flow_repush_s = FLOW_REPUSH_S
 	WaterBuilder.apply_flow_visuals(_water_root, _flow_w, _flow_level,
 		_flow_speed, _flow_churn, _flow_alpha)
+
+
+## _apply_water_flow's last push (see there).
+const FLOW_REPUSH_S := 2.0
+var _flow_pushed := PackedFloat32Array()
+var _flow_repush_s := 0.0
 
 
 func _push_snow_to_mesh(mi: MeshInstance3D, snow: float, depth_m: float) -> void:

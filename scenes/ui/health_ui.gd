@@ -391,9 +391,14 @@ func _update_fog(delta: float) -> void:
 		_current_fog_opacity = move_toward(_current_fog_opacity, _target_fog_opacity, fog_fade_out_speed * delta)
 	
 	# Apply to shader
-	if _damage_fog.material is ShaderMaterial:
+	if _damage_fog.material is ShaderMaterial and _current_fog_opacity != _fog_written:
+		_fog_written = _current_fog_opacity
 		var mat = _damage_fog.material as ShaderMaterial
 		mat.set_shader_parameter("intensity", _current_fog_opacity)
+
+## The damage-fog intensity last written (NAN = never).
+var _fog_written := NAN
+
 
 func _update_activity_indicators() -> void:
 	if _health_system == null:

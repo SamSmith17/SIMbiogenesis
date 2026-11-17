@@ -71,6 +71,19 @@ const BUNDLE_SETTLE_S := 0.3
 var _lane_map: Dictionary = {}  ## conn_id -> lane int (unused by A*; kept for tools)
 var _astar_gen: int = 0  ## bumped on invalidate so paths refresh once
 var _waypoint_gizmo: ConduitWaypointGizmo = null
+## update_hang_hover_gizmo's last inputs (see there).
+## flow_strength / flow_speed last written per ShaderMaterial (instance id ->
+## Vector2): the inputs only move on a sim tick, so most frames write nothing.
+## Cleared whenever anything else writes those uniforms (_apply_focus_dim) or a
+## run is rebuilt.
+var _flow_param_memo: Dictionary = {}
+## Parts hosts per conduit (cid -> Array of Node3D), looked up once per
+## sample revision instead of two formatted-name lookups per conduit per frame.
+var _parts_host_cache: Dictionary = {}
+var _parts_host_rev := -1
+var _hover_memo_id := ""
+var _hover_memo_pt := Vector3.INF
+var _hover_memo_route := 0
 var _pipe_kits: Dictionary = {}  ## kit_id -> PipeKit (null cached as false)
 var _parts_active: Dictionary = {}  ## conn_id -> bool (GLB fittings assembled)
 var _pipe_kit_warn: Dictionary = {}  ## conn_id -> last error (dedupe warnings)
@@ -603,10 +616,11 @@ func _process(delta: float) -> void:
 			_rebuild_if_dirty(conn, true)
 		elif do_follow:
 			_rebuild_if_dirty(conn, false)
+		var type_id: String = ConduitKinds.derive_type_for_connection(conn)
 		if _global_flow_glow or cid == _focus_id or conn.get("flow_glow") == true:
-			_tick_flow_params(cid, conn)
-		_update_discharge_vfx(delta, cid, conn)
-		_update_outlet_marker(cid, conn)
+			_tick_flow_params(cid, conn, type_id)
+		_update_discharge_vfx(delta, cid, conn, type_id)
+		_update_outlet_marker(cid, conn, type_id)
 	for k in _flow_frame_max:
 		_flow_refs[k] = GraphFlowStyle.ease_ref(float(_flow_refs.get(k, 0.0)), float(_flow_frame_max[k]), delta)
 	_flow_frame_max.clear()
@@ -705,9 +719,15 @@ var _pick_memo_d := Vector3.ZERO
 
 func set_focus_highlight(conn_id: String) -> void:
 	if _focus_id == conn_id:
+		# The crosshair re-sends the focused id every physics tick. The focus
+		# look was applied when the id changed; remeshing again here rebuilt
+		# the whole run every tick (and bumped _sample_rev, which threw away
+		# every wire's pick memo). Only a focused run with no mesh yet (3D
+		# wires off) still needs building.
 		if not conn_id.is_empty():
 			set_process(true)
-			force_remesh(conn_id)
+			if not _instances.has(conn_id):
+				force_remesh(conn_id)
 		return
 	_focus_id = conn_id
 	_apply_focus_dim()
@@ -775,6 +795,17 @@ func update_hang_hover_gizmo(conn_id: String, hit_point: Vector3,
 		clear_elbow_highlight()
 		return
 	var conn := _model.get_connection(conn_id)
+	# Called every physics tick while a pin-editable wire is aimed at: the same
+	# wire, hit point (2 cm) and pins give the same gizmo, so skip the rebuild.
+	var route_h := (conn.get("route_3d", []) as Array).hash()
+	if not dragging and gizmo.visible and conn_id == _hover_memo_id 			and route_h == _hover_memo_route and hit_point.distance_to(_hover_memo_pt) < 0.02:
+		return
+	if dragging:
+		_hover_memo_id = ""
+	else:
+		_hover_memo_id = conn_id
+		_hover_memo_pt = hit_point
+		_hover_memo_route = route_h
 	var type_id := ConduitKinds.derive_type_for_connection(conn)
 	if not ConduitKinds.supports_pin_edit(type_id):
 		gizmo.clear_all()
@@ -811,6 +842,7 @@ func update_hang_hover_gizmo(conn_id: String, hit_point: Vector3,
 
 
 func set_hang_drag_gizmo(pos: Vector3, on: bool) -> void:
+	_hover_memo_id = ""
 	var gizmo := _ensure_waypoint_gizmo()
 	gizmo.visible = on or gizmo.visible
 	if on:
@@ -821,6 +853,7 @@ func set_hang_drag_gizmo(pos: Vector3, on: bool) -> void:
 
 
 func clear_hang_gizmos() -> void:
+	_hover_memo_id = ""
 	if _waypoint_gizmo != null and is_instance_valid(_waypoint_gizmo):
 		_waypoint_gizmo.clear_all()
 		_waypoint_gizmo.visible = false
@@ -1004,6 +1037,8 @@ func pick_any_hang_pin(origin: Vector3, direction: Vector3,
 
 
 func _apply_focus_dim() -> void:
+	# It writes flow_strength itself, so the per-material memo is stale after.
+	_flow_param_memo.clear()
 	for cid: String in _instances.keys():
 		var inst: MeshInstance3D = _instances[cid]
 		if inst == null or not is_instance_valid(inst):
@@ -1039,13 +1074,14 @@ func _apply_focus_dim() -> void:
 					(c as GeometryInstance3D).transparency = FOCUS_DIM if dimmed else 0.0
 
 
-func _tick_flow_params(cid: String, conn: Dictionary) -> void:
+func _tick_flow_params(cid: String, conn: Dictionary, type_id: String = "") -> void:
 	const Q_REF_LPS := 8.0
 	var amps: float = absf(float(conn.get("carried_amps", 0.0)))
 	var rate_lph: float = absf(float(conn.get("flow_rate", 0.0)))
 	var live_q: float = absf(float(conn.get("live_q_lps", 0.0)))
 	var activity: float = maxf(amps / 15.0, maxf(live_q / Q_REF_LPS, (rate_lph / 3600.0) / Q_REF_LPS))
-	var type_id: String = ConduitKinds.derive_type_for_connection(conn)
+	if type_id.is_empty():
+		type_id = ConduitKinds.derive_type_for_connection(conn)
 	var glow_on := ConduitKinds.resolve_flow_glow(conn, type_id, _global_flow_glow) \
 			or cid == _focus_id
 	var strength: float = 0.0
@@ -1069,10 +1105,7 @@ func _tick_flow_params(cid: String, conn: Dictionary) -> void:
 	# Pulse emission on PE culvert rings (StandardMaterial — survives SoI CT clip).
 	var pulse := 0.9 + 0.55 * sin(Time.get_ticks_msec() * 0.001 * (2.0 + speed * 3.0))
 	var emit_e := (1.2 + strength * 3.5) * pulse if glow_on else 0.0
-	for host_name in ["CulvertParts_%s" % cid, "PipeParts_%s" % cid]:
-		var host := get_node_or_null(host_name) as Node3D
-		if host == null:
-			continue
+	for host: Node3D in _parts_hosts(cid):
 		for c in host.get_children():
 			if not (c is GeometryInstance3D):
 				continue
@@ -1088,14 +1121,45 @@ func _tick_flow_params(cid: String, conn: Dictionary) -> void:
 							Color(0.65, 0.9, 1.0, 1.0), clampf(activity, 0.0, 1.0))
 				continue
 			if mat is ShaderMaterial:
-				var sm := mat as ShaderMaterial
-				sm.set_shader_parameter("flow_strength", strength)
-				sm.set_shader_parameter("flow_speed", speed)
+				_set_flow_params(mat as ShaderMaterial, strength, speed)
 	var inst: MeshInstance3D = _instances.get(cid, null)
 	if inst != null and inst.material_override is ShaderMaterial:
-		var smi := inst.material_override as ShaderMaterial
-		smi.set_shader_parameter("flow_strength", strength)
-		smi.set_shader_parameter("flow_speed", speed)
+		_set_flow_params(inst.material_override as ShaderMaterial, strength, speed)
+
+
+## Write a run's flow uniforms only when they moved (see _flow_param_memo).
+func _set_flow_params(sm: ShaderMaterial, strength: float, speed: float) -> void:
+	var v := Vector2(strength, speed)
+	var key := sm.get_instance_id()
+	if _flow_param_memo.get(key, Vector2.INF) == v:
+		return
+	_flow_param_memo[key] = v
+	sm.set_shader_parameter("flow_strength", strength)
+	sm.set_shader_parameter("flow_speed", speed)
+
+
+## The culvert / pipe-kit part hosts of a conduit (usually none).
+func _parts_hosts(cid: String) -> Array:
+	if _parts_host_rev != _sample_rev:
+		_parts_host_rev = _sample_rev
+		_parts_host_cache.clear()
+		_flow_param_memo.clear()
+	var hosts: Variant = _parts_host_cache.get(cid)
+	if hosts != null:
+		var ok := true
+		for h: Variant in hosts as Array:
+			if not is_instance_valid(h) or not (h as Node).is_inside_tree():
+				ok = false
+				break
+		if ok:
+			return hosts as Array
+	var found: Array = []
+	for host_name in ["CulvertParts_%s" % cid, "PipeParts_%s" % cid]:
+		var host := get_node_or_null(host_name) as Node3D
+		if host != null:
+			found.append(host)
+	_parts_host_cache[cid] = found
+	return found
 
 
 ## Water jet at a culvert's outlet mouth, driven by the live flow. Only culvert
@@ -1104,8 +1168,9 @@ func _tick_flow_params(cid: String, conn: Dictionary) -> void:
 ## flow stops. Position/direction come from the cached sample polyline
 ## (source→target order, so the last point is the outlet mouth). Freed per-cid
 ## in _remove_instance.
-func _update_discharge_vfx(delta: float, cid: String, conn: Dictionary) -> void:
-	var type_id: String = ConduitKinds.derive_type_for_connection(conn)
+func _update_discharge_vfx(delta: float, cid: String, conn: Dictionary, type_id: String = "") -> void:
+	if type_id.is_empty():
+		type_id = ConduitKinds.derive_type_for_connection(conn)
 	if not ConduitKinds.uses_culvert_kit(type_id) \
 			and str(conn.get("conduit_type", "")) != "culvert_pipe":
 		return
@@ -1357,7 +1422,7 @@ func _propless_outlet_sink_for(conn: Dictionary) -> Dictionary:
 
 
 ## Keep (or make) the END marker of a draft pipe at its mouth.
-func _update_outlet_marker(cid: String, conn: Dictionary) -> void:
+func _update_outlet_marker(cid: String, conn: Dictionary, type_id: String = "") -> void:
 	var sink := _propless_outlet_sink_for(conn)
 	if sink.is_empty():
 		_remove_outlet_marker(cid)
@@ -1379,7 +1444,8 @@ func _update_outlet_marker(cid: String, conn: Dictionary) -> void:
 		_outlet_markers[cid] = marker
 	marker.sink_id = str(sink.get("id", ""))
 	marker.siphon_id = str(conn.get("source_item_id", ""))
-	var type_id: String = ConduitKinds.derive_type_for_connection(conn)
+	if type_id.is_empty():
+		type_id = ConduitKinds.derive_type_for_connection(conn)
 	var od := ConduitKinds.outer_diameter_m(type_id, conn.get("conduit_style", {}) as Dictionary)
 	marker.set_mouth(mouth, dir, (od * 0.5) if od > 0.0 else 0.1)
 

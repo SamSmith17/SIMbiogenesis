@@ -139,6 +139,7 @@ func set_enabled(on: bool) -> void:
 	if on == _enabled:
 		return
 	_enabled = on
+	PerfSpan.active = on
 	if _enabled:
 		_ensure_hud()
 		if _hud != null:

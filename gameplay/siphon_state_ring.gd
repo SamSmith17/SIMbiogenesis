@@ -187,17 +187,28 @@ func _perf_tick(delta: float) -> void:
 			k = 0.75 + 0.25 * sin(_pulse_t * 5.0)
 		elif _state == "generating":
 			k = 0.9 + 0.1 * sin(_pulse_t * 2.0)
-		_ring_mat.emission_energy_multiplier = 1.3 * k
+		if _ring_mat.emission_energy_multiplier != 1.3 * k:
+			_ring_mat.emission_energy_multiplier = 1.3 * k
 	if _label != null:
 		var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
 		if cam != null:
 			var d := cam.global_position.distance_to(_label.global_position)
+			# Scale and fade follow the camera's distance: skip the writes while
+			# it (and whether there is any text) has not moved.
+			var lkey := Vector2(d, 0.0 if _text.is_empty() else 1.0)
+			if absf(lkey.x - _label_key.x) < 0.05 and lkey.y == _label_key.y:
+				return
+			_label_key = lkey
 			var s := sqrt(maxf(1.0, d / LABEL_REF_M))
 			_label.scale = Vector3.ONE * s
 			var a := 1.0 - clampf((d - LABEL_FAR_M * 0.7) / (LABEL_FAR_M * 0.3), 0.0, 1.0)
 			_label.modulate.a = a
 			_label.outline_modulate.a = 0.9 * a
 			_label.visible = a > 0.02 and not _text.is_empty()
+
+
+## Camera distance + has-text at the last label write (see _perf_tick).
+var _label_key := Vector2(-1.0, -1.0)
 
 
 func _main_node() -> Node:

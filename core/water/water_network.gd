@@ -588,6 +588,27 @@ func _apply_job_result_inner(res: Dictionary) -> void:
 func rain_mmh_now() -> float:
 	if rain_override_mmh >= 0.0:
 		return rain_override_mmh
+	# The poll asks once per station of every stream before the drainage
+	# analysis lands: the answer cannot change inside one frame.
+	# Keyed on the clock too, so a check that moves the clock and reads in
+	# the same frame still gets the new hour's rain.
+	var frame := Engine.get_process_frames()
+	var main: Node = loader.get("_main") if loader != null else null
+	var dt_now: float = float(main.get("day_time")) if main != null and main.get("day_time") != null else -1.0
+	if frame == _rain_now_frame and dt_now == _rain_now_dt:
+		return _rain_now_val
+	_rain_now_frame = frame
+	_rain_now_dt = dt_now
+	_rain_now_val = _rain_mmh_now_uncached()
+	return _rain_now_val
+
+
+var _rain_now_frame := -1
+var _rain_now_dt := -2.0
+var _rain_now_val := 0.0
+
+
+func _rain_mmh_now_uncached() -> float:
 	var main: Node = loader.get("_main") if loader != null else null
 	if main == null:
 		return 0.0

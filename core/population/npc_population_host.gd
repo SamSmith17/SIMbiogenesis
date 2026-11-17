@@ -755,13 +755,9 @@ func _exit_tree() -> void:
 func _find_prop_node(prop_id: String) -> Node3D:
 	if _main == null or not is_instance_valid(_main):
 		return null
-	var root := _main.find_child("PlacedProps", true, false)
-	if root == null:
-		return null
-	for child in root.get_children():
-		if child is PlacedProp and str((child as PlacedProp).prop_id) == prop_id:
-			return child as Node3D
-	return null
+	# The indexed lookup (validated per hit), not a recursive find_child plus a
+	# scan of every prop for each carried crate every frame.
+	return PlacedPropRuntime.find_by_prop_id(_main, prop_id)
 
 
 ## Re-tint every already-spawned avatar from NpcDisplayPrefs — called when the

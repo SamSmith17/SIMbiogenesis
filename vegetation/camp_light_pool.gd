@@ -107,7 +107,9 @@ func _process(delta: float) -> void:
 			now = _slot_target[i]
 		_slot_now[i] = now
 		var l := _lights[i]
-		l.light_energy = now
+		# Settled slots keep their energy: write only when it moved.
+		if absf(l.light_energy - now) > 1e-5:
+			l.light_energy = now
 		var on := now > 0.002
 		if l.visible != on:
 			l.visible = on

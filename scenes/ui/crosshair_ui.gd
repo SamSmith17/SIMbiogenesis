@@ -39,7 +39,12 @@ func _ready() -> void:
 	visible = false
 
 
+## Both setters are called several times every physics tick by the
+## crosshair ladder (each focus clear pushes the idle state): unchanged
+## values return at once instead of redrawing the reticle / rewriting the label.
 func set_target_active(active: bool) -> void:
+	if active == _target_active:
+		return
 	_target_active = active
 	if _reticle:
 		_reticle.queue_redraw()
@@ -49,10 +54,13 @@ func set_prompt_text(text: String) -> void:
 	if _prompt_lbl == null:
 		return
 	if text.is_empty():
-		_prompt_lbl.visible = false
+		if _prompt_lbl.visible:
+			_prompt_lbl.visible = false
 	else:
-		_prompt_lbl.text = text
-		_prompt_lbl.visible = true
+		if _prompt_lbl.text != text:
+			_prompt_lbl.text = text
+		if not _prompt_lbl.visible:
+			_prompt_lbl.visible = true
 
 
 ## The prompt currently shown ("" when hidden).

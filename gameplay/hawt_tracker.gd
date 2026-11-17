@@ -174,6 +174,12 @@ func _step_yaw(delta: float) -> void:
 		var x := delta / maxf(_YAW_TAU_REAL, 0.01) + dh / maxf(_YAW_TAU_SIM, 1e-4)
 		var k := clampf(1.0 - exp(-x), 0.0, 1.0)
 		_yaw_angle = lerp_angle(_yaw_angle, _yaw_target, k)
+	if absf(angle_difference(_yaw_angle, _yaw_target)) < 1e-6:
+		_yaw_angle = _yaw_target
+	# Settled on its bearing: the same transform as last frame, skip the write.
+	if _yaw_angle == _yaw_written:
+		return
+	_yaw_written = _yaw_angle
 	var rot := Basis(_yaw_axis_p, _yaw_angle)
 	# The yaw node's own origin (in _t0_yaw) already sits on the bearing
 	# centreline, so it is the fixed point rotation happens around.
@@ -186,9 +192,19 @@ func _step_blade_spin(delta: float) -> void:
 		return
 	var k := clampf(1.0 - exp(-delta / maxf(_SPIN_SMOOTH_TAU, 0.01)), 0.0, 1.0)
 	_blade_omega = lerpf(_blade_omega, _blade_target_omega, k)
+	if absf(_blade_omega) < 1e-5 and absf(_blade_target_omega) < 1e-5:
+		_blade_omega = 0.0
 	_blade_angle = wrapf(_blade_angle + _blade_omega * delta, -TAU, TAU)
+	if _blade_angle == _blade_written:
+		return
+	_blade_written = _blade_angle
 	var rot := Basis(_blade_axis_c, _blade_angle)
 	_blade_node.transform = Transform3D(rot, _blade_center_c - rot * _blade_center_c) * _t0_blade
+
+
+## Angles last written to the yaw and blade nodes (NAN = never).
+var _yaw_written := NAN
+var _blade_written := NAN
 
 
 func _refresh_targets() -> void:

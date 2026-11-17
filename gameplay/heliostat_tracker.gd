@@ -187,7 +187,7 @@ func _perf_tick(delta: float) -> void:
 			_model_root.rotation = Vector3(0.0, _forced_yaw_rad, 0.0)
 	if not _ready_ok:
 		return
-	_refresh_target()
+	_maybe_refresh_target(delta)
 
 	var dh := absf(_sim_dh)
 	var snap := dh > _SNAP_SIM_HOURS
@@ -216,12 +216,43 @@ func _perf_tick(delta: float) -> void:
 	_sync_focal_glow_position()
 
 
+## The target (sun position, weather, the physics for the glow) used to be
+## recomputed every frame for every instance. It is refreshed four times a
+## second, and whenever the sim clock has moved two minutes since the last
+## refresh (so at high speed it still follows every step of the sun); the
+## per-frame ease still runs every frame on the sim time that passed.
+const _TARGET_REFRESH_S := 0.25
+const _TARGET_REFRESH_SIM_H := 2.0 / 60.0
+var _target_acc := INF
+var _target_abs := NAN
+
+
+func _maybe_refresh_target(delta: float) -> void:
+	_sim_dh = 0.0
+	var cur_abs := NAN
+	var main := _main_node()
+	if main != null:
+		var clock_obj: Variant = main.get("clock")
+		if clock_obj != null and (clock_obj as Object).has_method("get_absolute_hours"):
+			cur_abs = float((clock_obj as Object).call("get_absolute_hours"))
+			if is_finite(_last_abs_hours):
+				_sim_dh = cur_abs - _last_abs_hours
+			_last_abs_hours = cur_abs
+	_target_acc += delta
+	var moved := is_finite(cur_abs) and (not is_finite(_target_abs)
+			or absf(cur_abs - _target_abs) >= _TARGET_REFRESH_SIM_H)
+	if _target_acc < _TARGET_REFRESH_S and not moved:
+		return
+	_target_acc = 0.0
+	_target_abs = cur_abs
+	_refresh_target()
+
+
 func _refresh_target() -> void:
 	var main := _main_node()
 	var sun_el := 0.0
 	var sun_az := 180.0
 	var weather := {"ghi": 0.0, "cloud": 0.0, "temp": 25.0, "has_real": false}
-	_sim_dh = 0.0
 	if main != null:
 		var lat_v: Variant = main.get("latitude")
 		var lon_v: Variant = main.get("longitude")
@@ -233,11 +264,6 @@ func _refresh_target() -> void:
 			var sp := SolarPosition.get_position(lat, lon, jd_utc)
 			sun_el = float(sp.get("elevation_deg", 0.0))
 			sun_az = float(sp.get("azimuth_deg", 180.0))
-		if clock_obj != null and (clock_obj as Object).has_method("get_absolute_hours"):
-			var cur_abs: float = float((clock_obj as Object).call("get_absolute_hours"))
-			if is_finite(_last_abs_hours):
-				_sim_dh = cur_abs - _last_abs_hours
-			_last_abs_hours = cur_abs
 		var hour := 12.0
 		var month := 6
 		var day := 15

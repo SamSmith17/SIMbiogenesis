@@ -174,6 +174,11 @@ func _perf_tick(delta: float) -> void:
 	var target := 1.0 if _lit else 0.0
 	_level = move_toward(_level, target, delta / _EASE_S)
 	var on := _level > 0.001
+	# An unlit, fully faded pit has nothing to animate: skip the particle and
+	# light writes until it is lit again (the poll above still runs).
+	if not on and _drawn_off:
+		return
+	_drawn_off = not on
 	_flames.emitting = on
 	_sparks.emitting = on
 	_flames.amount_ratio = _level
@@ -187,6 +192,10 @@ func _perf_tick(delta: float) -> void:
 		_light.light_energy = _LIGHT_ENERGY * _level * f
 	if _ash_mat != null:
 		_ash_mat.emission_energy_multiplier = 1.4 * _level
+
+
+## True once the cold state has been drawn (see _perf_tick).
+var _drawn_off := false
 
 
 func _refresh() -> void:

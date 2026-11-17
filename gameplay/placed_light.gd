@@ -183,8 +183,7 @@ func _perf_tick(delta: float) -> void:
 		_poll = 0.5
 		_update_lit()
 	_update_sound()
-	var fx := str(fields.get("effect", "solid"))
-	if fx != "solid" and _lit and _light_node != null:
+	if _lit and _light_node != null and str(fields.get("effect", "solid")) != "solid":
 		_light_node.light_color = LedEffects.color_at(fields, 0, 1, effect_time(), _base_color)
 		if _bulb_mat != null and _bulb.visible:
 			_bulb_mat.emission = _light_node.light_color
@@ -200,7 +199,10 @@ var _sounding := false
 
 func _update_sound() -> void:
 	if not (_lit and bool(fields.get("sound_reactive", false))) or _light_node == null:
-		_sound_beat = {}
+		# Runs every frame for every quiet light: keep the empty dict rather
+		# than allocating a new one each time.
+		if not _sound_beat.is_empty():
+			_sound_beat = {}
 		if _sounding:
 			_sounding = false
 			sound_level = 1.0

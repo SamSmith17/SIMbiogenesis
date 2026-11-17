@@ -79,9 +79,21 @@ func clear_focus() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# Once per RENDERED frame: below 60 fps the engine runs several physics
+	# ticks per frame (about three at 20 fps), and each re-ran the whole ladder
+	# (ray casts, picks, prompt writes) for a picture drawn once. The first
+	# tick of a frame updates the focus; the rest of that frame's ticks skip.
+	var frame := Engine.get_process_frames()
+	if frame == _focus_frame:
+		return
+	_focus_frame = frame
 	PerfSpan.begin("interact_focus")
 	_perf_phys_tick(delta)
 	PerfSpan.end("interact_focus")
+
+
+## Engine.get_process_frames() of the last focus update (see _physics_process).
+var _focus_frame := -1
 
 
 ## The per-frame body; `_physics_process` above only times it.

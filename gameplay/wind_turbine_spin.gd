@@ -91,9 +91,20 @@ func _perf_tick(delta: float) -> void:
 	# Exponential smoothing toward the target angular speed.
 	var k := 1.0 - exp(-delta / maxf(_SMOOTH_TAU, 0.01))
 	_omega = lerpf(_omega, _target_omega, clampf(k, 0.0, 1.0))
+	if absf(_omega) < 1e-5 and absf(_target_omega) < 1e-5:
+		_omega = 0.0
 	_angle = wrapf(_angle + _omega * delta, -TAU, TAU)
+	# Becalmed, the angle stops moving: the transform is a function of it, so
+	# skip the write while it holds (the same pose, not a snap to rest).
+	if _angle == _angle_written:
+		return
+	_angle_written = _angle
 	var rot := Basis(_axis_p, _angle)
 	_turbine.transform = Transform3D(rot, _center_p - rot * _center_p) * _t0
+
+
+## The angle last written to the rotor (NAN = never).
+var _angle_written := NAN
 
 
 func _refresh_target() -> void:

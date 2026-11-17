@@ -34,10 +34,10 @@ func _process(delta: float) -> void:
 	if _acc >= POLL_S:
 		_acc = 0.0
 		_poll()
-	var doors := get_parent().get_node_or_null("Doors") if get_parent() != null else null
-	if doors == null:
-		var root := _bank_root()
-		doors = root.get_node_or_null("Doors") if root != null else null
+	# Nothing swinging (the usual case): no door lookups, no writes.
+	if not _doors_moving():
+		return
+	var doors := _doors_node()
 	if doors == null:
 		return
 	for k in _angle.size():
@@ -108,7 +108,32 @@ func _find_bridge() -> Object:
 
 
 func _time_scale() -> float:
-	var main := get_tree().root.find_child("Main", true, false) if is_inside_tree() else null
-	if main != null and "time_scale" in main:
-		return absf(float(main.get("time_scale")))
-	return 0.0
+	# SimFxRate keeps a weak reference to Main: no recursive find_child of the
+	# whole tree every frame per bank.
+	if not is_inside_tree():
+		return 0.0
+	return absf(SimFxRate.time_scale_of(null))
+
+
+## Any door still opening, closing or held open.
+func _doors_moving() -> bool:
+	for k in _angle.size():
+		if float(_open_left[k]) > 0.0:
+			return true
+		if absf(float(_angle[k])) >= 0.05:
+			return true
+	return false
+
+
+var _doors_cache: Node = null
+
+
+func _doors_node() -> Node:
+	if _doors_cache != null and is_instance_valid(_doors_cache) and _doors_cache.is_inside_tree():
+		return _doors_cache
+	var doors := get_parent().get_node_or_null("Doors") if get_parent() != null else null
+	if doors == null:
+		var root := _bank_root()
+		doors = root.get_node_or_null("Doors") if root != null else null
+	_doors_cache = doors
+	return doors
