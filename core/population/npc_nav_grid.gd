@@ -86,6 +86,11 @@ var layers := 1
 var _height := PackedFloat32Array()
 var _flags := PackedByteArray()
 var _slope := PackedFloat32Array()   # degrees, per column (layer-independent)
+## Every column whose slope was written within STEEP_NEAR_DEG of the limit (a
+## superset of the steep ones, duplicates allowed): a reusing bake re-marks
+## steepness from these instead of testing every column.
+var _steep_near := PackedInt32Array()
+const STEEP_NEAR_DEG := 0.01
 var _phase: int = Phase.IDLE
 var _cursor := 0
 var _height_fn := Callable()
@@ -125,6 +130,7 @@ func configure_region(center: Vector2, half_extent_m: float, cell := CELL_M) -> 
 	_height = PackedFloat32Array()
 	_flags = PackedByteArray()
 	_slope = PackedFloat32Array()
+	_steep_near = PackedInt32Array()
 	_phase = Phase.IDLE
 	return true
 
@@ -178,14 +184,18 @@ func begin_bake(height_fn: Callable, obstacles: Array = [], fp: String = "",
 	_height = PackedFloat32Array()
 	_height.resize(n)
 	_flags = PackedByteArray()
-	_flags.resize(n)
+	_flags.resize(nx * nz)
 	_slope = PackedFloat32Array()
 	_slope.resize(nx * nz)
+	_steep_near = PackedInt32Array()
 	# Upper layers start blocked; _step_layers opens the ones that turn out to
 	# have a real surface. Otherwise agents could path through thin air.
-	for l in range(1, layers):
-		for i in range(l * nx * nz, (l + 1) * nx * nz):
-			_flags[i] = F_BLOCKED
+	# (Filled natively: a per-byte loop over 1.6M cells was 16 ms.)
+	if layers > 1:
+		var upper := PackedByteArray()
+		upper.resize((layers - 1) * nx * nz)
+		upper.fill(F_BLOCKED)
+		_flags.append_array(upper)
 	_height_fn = height_fn
 	_obstacles = obstacles
 	_obstacle_i = 0
@@ -222,12 +232,18 @@ func begin_bake_reusing(prev: NpcNavGrid, height_fn: Callable, obstacles: Array 
 	_pri_ix1 = -1
 	_path_ix1 = -1
 	_priority_ready = false
+	# Copied natively, and steepness re-marked only on the columns the old
+	# grid wrote near the limit (tested on the stored value, as before): a
+	# per-column loop here was ~77 ms on a 900 x 900 grid, one frame each
+	# time a prop was placed or a camp repainted.
 	var cols := nx * nz
-	for i in cols:
-		_height[i] = prev._height[i]
-		var deg: float = prev._slope[i]
-		_slope[i] = deg
-		if deg > MAX_SLOPE_DEG:
+	var h := prev._height.slice(0, cols)
+	h.resize(nx * nz * layers)
+	_height = h
+	_slope = prev._slope.slice(0, cols)
+	_steep_near = prev._steep_near.duplicate()
+	for i in _steep_near:
+		if _slope[i] > MAX_SLOPE_DEG:
 			_flags[i] = _flags[i] | F_STEEP | F_BLOCKED
 	_cursor = 0
 	_obstacle_i = 0
@@ -409,6 +425,8 @@ func _write_slope(ix: int, iz: int) -> void:
 	var deg := rad_to_deg(atan(sqrt(gx * gx + gz * gz)))
 	var i := idx(ix, iz)
 	_slope[i] = deg
+	if deg > MAX_SLOPE_DEG - STEEP_NEAR_DEG:
+		_steep_near.append(i)
 	if deg > MAX_SLOPE_DEG:
 		_flags[i] = _flags[i] | F_STEEP | F_BLOCKED
 

@@ -4232,6 +4232,17 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
   `npc_walk`, `npc_full_tick` / `_post`, `tl_draw` / `_lanes` / `_mc` /
   `_clips` / `tl_draw_wave_<source>_<channel>`, `tl_clip_*`.
   `PerfMonitor.last_frame_ms` is the delta that goes with `last_frame`.
+- **The nav re-bake spike** (2026-11-18). Placing a prop, repainting a camp
+  or tagging a space restarts the people's nav grid reusing its ground
+  (`NpcNavGrid.begin_bake_reusing`), and that copied every column's height
+  and slope in a GDScript loop, and `begin_bake` filled the upper layers a
+  byte at a time: 76 ms of `npc_svc_nav` in one frame on Walton's
+  800 x 800 x 3 grid, now 10–11 ms (whole frame ~93 → 22–29 ms). The arrays
+  are copied natively, and steepness is re-marked only on the columns
+  `_write_slope` recorded within `STEEP_NEAR_DEG` of the limit
+  (`_steep_near`), tested on the stored value as before. Gate:
+  `tools/diag/nav_reuse_parity.gd` (offline, frozen copy of the old loops,
+  byte for byte); in the world `tools/diag/nav_reuse_spike_probe.gd`.
 - **Still open:**
   - A terrain tile rebuild is ~15 ms on its own (the first build samples the
     base ground 67² times), more than the 6 ms budget.
