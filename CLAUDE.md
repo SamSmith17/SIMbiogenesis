@@ -4246,9 +4246,12 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
 - **Still open:**
   - A terrain tile rebuild is ~15 ms on its own (the first build samples the
     base ground 67² times), more than the 6 ms budget.
-  - The one remaining load carve still recuts all 425 Walton tiles (~10 s on
-    a worker). The cached feature signatures do not match; the cause was not
-    found.
+  - The load carve that recuts all 425 Walton tiles (~10 s on a worker) in
+    the harness: the sandbox always starts from the player's real channel
+    cache, saved 2026-10-31 by older code that computed other beds. The real
+    game re-carves once after such a change and saves a fresh cache.
+    (Separately, erosion made unrelated rebuilds re-carve in a loop: fixed,
+    see "Erosion never makes an unrelated rebuild re-carve".)
   - The flow step (~8 ms) is most of Walton's remaining frames over 33 ms.
 
 ## One site, many power systems (system_graph/data/graph_systems.gd, 2026-11-04)
@@ -9602,7 +9605,27 @@ it only ever writes the procedural CHANNEL tile layer.
   carver re-carves every 5 cm (≥ 10 s apart, the rest flushed when the flood
   ends). A 15-min 60 mm/h shower cuts ~1 cm; an hour at 100 mm/h over 50 ha
   cut 0.40 m on Bombay Beach. View tool: Reset erosion. Verify:
-  `tools/checks/stream_erosion_check.gd`.
+  `tools/checks/stream_erosion_check.gd` (its "eroded bed still runs
+  downhill" check fails on the 2026-11-18 code before and after the fix
+  below: not yet looked into).
+- **Erosion never makes an unrelated rebuild re-carve** (2026-11-18). The
+  rebuild's input signature hashed the features WITH their erosion arrays,
+  so any rebuild request (a still-water re-drape, a tile edit) re-carved
+  every channel that had eroded a few mm, through the full apply:
+  re-grounding every plant, camp and prop, re-running the drainage, and
+  re-draping the water, whose own rebuild request then found more erosion.
+  On Walton that was a 7.4–7.7 s main-thread apply about every 10 s, for
+  as long as the channels eroded (`tools/diag/carve_light_probe.gd`). Now:
+  - `_features_sig_without_erosion()` in the input signature; only an
+    erosion request (`_task_erosion`) or a player edit / undo / redo /
+    Reset erosion (`_carve_erosion_next`, set by `commit()` and
+    `reset_erosion()`) carves for erosion alone.
+  - A full carve whose changed features kept their shape signature
+    (`ChannelCarver.shape_signature`: line, modes, section, switches and the
+    ground under it, no bed, no erosion; saved in the channel cache as
+    `shape_sigs`) takes the erosion path's light apply (0.61 s instead of
+    7.5 s on Walton's 425 tiles). Never on the first carve of a load (no
+    profiles or drainage in memory yet).
 - **Rain at speed stays smooth (perf pass 2026-10-22).** At 600x in a storm
   the stream system froze the game for 1.1–1.3 s every 3 s (p95 1248 ms) —
   the likely cause of the reported "black flash", which never showed up in

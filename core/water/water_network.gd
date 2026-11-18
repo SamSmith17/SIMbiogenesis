@@ -148,6 +148,9 @@ var _by_id: Dictionary = {}
 var _profiles: Dictionary = {}
 var _links: Dictionary = {}
 var _sigs: Dictionary = {}
+## ChannelCarver.shape_signature per feature (the line and the ground under
+## it, without the bed and erosion), kept with the cache.
+var _shape_sigs: Dictionary = {}
 var _footprints: Dictionary = {}
 var _inputs_sig := 0
 
@@ -224,6 +227,7 @@ func bind_map(lat: float, lon: float) -> void:
 	_undo.clear()
 	_redo.clear()
 	_sigs = {}
+	_shape_sigs = {}
 	_footprints = {}
 	_inputs_sig = 0
 	clear_storms()
@@ -268,6 +272,9 @@ func load_cache_into(channel: TerrainEditTiles) -> bool:
 	_sigs = {}
 	for k in ((meta as Dictionary).get("sigs", {}) as Dictionary).keys():
 		_sigs[str(k)] = int(meta["sigs"][k])
+	_shape_sigs = {}
+	for k in ((meta as Dictionary).get("shape_sigs", {}) as Dictionary).keys():
+		_shape_sigs[str(k)] = int(meta["shape_sigs"][k])
 	_footprints = {}
 	var fps: Dictionary = (meta as Dictionary).get("footprints", {})
 	for k in fps.keys():
@@ -293,7 +300,8 @@ func _save_cache(channel: TerrainEditTiles) -> void:
 		fps[k] = arr
 	var f := FileAccess.open(paths[1], FileAccess.WRITE)
 	if f != null:
-		f.store_string(JSON.stringify({"version": CACHE_VERSION, "sigs": _sigs, "footprints": fps}))
+		f.store_string(JSON.stringify({"version": CACHE_VERSION, "sigs": _sigs,
+			"shape_sigs": _shape_sigs, "footprints": fps}))
 
 
 ## Forget the cache (and the carve) — the next rebuild re-carves everything.
@@ -302,6 +310,7 @@ func invalidate_cache() -> void:
 		if FileAccess.file_exists(p):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
 	_sigs = {}
+	_shape_sigs = {}
 	_footprints = {}
 	_inputs_sig = 0
 
@@ -390,9 +399,15 @@ func _start_rebuild(force: bool) -> void:
 	if sampler == null:
 		return
 	var carve_on := bool(layer.setting("carve_enabled"))
-	var in_sig := hash([_features, carve_on, sampler.coarse.size(), sampler.detail.size(),
-		sampler.center_elev, sampler.detail_extent_m, _grid_probe(sampler)])
-	if not force and in_sig == _inputs_sig and not _sigs.is_empty():
+	# Erosion is left out: it re-carves on its own (_request_erosion_rebuild,
+	# every few cm). Hashed in, a few mm of it made every unrelated rebuild (a
+	# water re-drape, a tile edit) re-carve every eroded channel.
+	var in_sig := hash([_features_sig_without_erosion(), carve_on, sampler.coarse.size(),
+		sampler.detail.size(), sampler.center_elev, sampler.detail_extent_m, _grid_probe(sampler)])
+	var count_erosion := _carve_erosion_next
+	_carve_erosion_next = false
+	if not force and not _task_erosion and not count_erosion and in_sig == _inputs_sig \
+			and not _sigs.is_empty():
 		# Nothing a carve depends on moved; the surfaces may still need a
 		# re-drape (water toggled, a sculpt under an uncarved reach).
 		rebuild_surfaces()
@@ -499,6 +514,22 @@ static func channel_footprint_polygon(pts: PackedVector2Array, half: float) -> P
 	return out
 
 
+## Set by a player edit (commit: edits, undo, redo) and Reset erosion: the
+## next rebuild re-carves what erosion alone moved too, as the input
+## signature (which leaves erosion out) would not notice.
+var _carve_erosion_next := false
+
+
+## The resolved features without their erosion arrays, as one hash.
+func _features_sig_without_erosion() -> int:
+	var parts: Array = []
+	for f_v in _features:
+		var d: Dictionary = (f_v as Dictionary).duplicate()
+		d.erase("erosion")
+		parts.append(d)
+	return hash(parts)
+
+
 ## Cheap fingerprint of the ground the sampler sees (a few samples): the
 ## detail DEM landing changes this, so the carve follows a better DEM.
 static func _grid_probe(s: WaterGroundSampler) -> Array:
@@ -506,6 +537,27 @@ static func _grid_probe(s: WaterGroundSampler) -> Array:
 	for p in [Vector2(0, 0), Vector2(311, -127), Vector2(-523, 401), Vector2(907, 913)]:
 		out.append(snappedf(s.base_at(p.x, p.y), 0.01))
 	return out
+
+
+## True when every feature in `new_sigs` existed before and the ones whose
+## signature moved kept their shape signature (only their beds moved: erosion).
+func _only_erosion_moved(new_sigs: Dictionary, new_shapes: Dictionary) -> bool:
+	# The light apply keeps the stations' catchment areas from an earlier full
+	# one: never on the first carve of a load (no profiles in memory yet).
+	if _profiles.is_empty() or _drain.is_empty():
+		return false
+	if new_sigs.size() != _sigs.size() or new_shapes.is_empty():
+		return false
+	var moved := 0
+	for fid in new_sigs.keys():
+		if not _sigs.has(fid):
+			return false
+		if int(_sigs[fid]) == int(new_sigs[fid]):
+			continue
+		moved += 1
+		if not _shape_sigs.has(fid) or int(_shape_sigs[fid]) != int(new_shapes.get(fid, -1)):
+			return false
+	return moved > 0
 
 
 func _apply_job_result(res: Dictionary) -> void:
@@ -517,8 +569,15 @@ func _apply_job_result(res: Dictionary) -> void:
 func _apply_job_result_inner(res: Dictionary) -> void:
 	if res.is_empty() or loader == null or not is_instance_valid(loader):
 		return
-	var erosion_only := _task_erosion
+	# A full carve whose features moved only by erosion (beds a few mm lower
+	# inside the channels; same lines, same ground) takes the erosion path's
+	# light apply: re-grounding every plant, camp and prop and re-running the
+	# drainage for that cost seconds on the main thread, and its water
+	# re-drape asked for the next rebuild, so under erosion they repeated.
+	var erosion_only := _task_erosion or (not _task_force
+		and _only_erosion_moved(res.get("sigs", {}), res.get("shape_sigs", {})))
 	_task_erosion = false
+	_shape_sigs = res.get("shape_sigs", {})
 	_profiles = res.get("profiles", {})
 	_links = res.get("links", {})
 	_ero_cache = {}
@@ -1089,6 +1148,7 @@ func reset_erosion() -> void:
 	layer.erosion = {}
 	_erosion_pending_m = 0.0
 	save_layer()
+	_carve_erosion_next = true
 	request_rebuild()
 
 
@@ -2755,6 +2815,7 @@ func set_curve_defaults(smooth: float, meander: float) -> void:
 	layer.set_setting("curve_meander", clampf(meander, 0.0, 1.0))
 	save_layer()
 	_clear_veg_after_carve = true
+	_carve_erosion_next = true
 	request_rebuild()
 
 
@@ -2957,6 +3018,7 @@ func commit() -> void:
 	# vegetation cleared (see _apply_job_result). Load-time carves do not —
 	# the forest on a saved map must not change because a cache missed.
 	_clear_veg_after_carve = true
+	_carve_erosion_next = true
 	request_rebuild()
 
 

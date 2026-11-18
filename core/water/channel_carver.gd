@@ -68,6 +68,16 @@ static func feature_signature(f: Dictionary, profile: Dictionary, carve_on: bool
 		carve_on, bed, f.get("erosion", PackedFloat32Array())])
 
 
+## The same without the bed and the erosion: what the channel IS (its line,
+## spans, section, switches and the ground under it). Two carves whose
+## signatures differ while this matches differ only by erosion (a feature's own
+## or the bed of the channel it runs into), and need only the light apply.
+static func shape_signature(f: Dictionary, profile: Dictionary, carve_on: bool) -> int:
+	var ground: PackedFloat32Array = profile.get("ground", PackedFloat32Array())
+	return hash([f.get("points"), f.get("modes"), f.get("section"), bool(f.get("carve", true)),
+		carve_on, ground])
+
+
 ## Run a carve job. `job`:
 ##   features       resolved StreamNetwork features
 ##   sampler        WaterGroundSampler (base ground, no tile layers)
@@ -92,6 +102,7 @@ static func run(job: Dictionary) -> Dictionary:
 	var order := StreamNetwork.downstream_first_order(features, links)
 	var profiles := {}
 	var sigs := {}
+	var shape_sigs := {}
 	for f_v in order:
 		var f: Dictionary = f_v
 		var id: String = f["id"]
@@ -109,6 +120,7 @@ static func run(job: Dictionary) -> Dictionary:
 		prof["varc"] = StreamNetwork.vertex_arc(f["points"])
 		profiles[id] = prof
 		sigs[id] = feature_signature(f, prof, carve_on)
+		shape_sigs[id] = shape_signature(f, prof, carve_on)
 
 	# --- 2. Which tiles need re-rasterising -------------------------------
 	var footprints := {}
@@ -168,8 +180,8 @@ static func run(job: Dictionary) -> Dictionary:
 					any = true
 		if any:
 			tiles[k] = out
-	return {"profiles": profiles, "sigs": sigs, "footprints": footprints,
-		"tiles": tiles, "touched": dirty.keys(), "links": links}
+	return {"profiles": profiles, "sigs": sigs, "shape_sigs": shape_sigs,
+		"footprints": footprints, "tiles": tiles, "touched": dirty.keys(), "links": links}
 
 
 ## The carved segments of one feature: consecutive profile stations whose arc
