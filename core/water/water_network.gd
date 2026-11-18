@@ -945,11 +945,12 @@ func _accumulate_erosion() -> void:
 		var ero := PackedFloat32Array()
 		var bins := int(ceil(s[s.size() - 1] / step)) + 1
 		var any := false
-		for i in _erosion_candidates(fid, states, ec["mask"]):
-			var y := float((states[i] as Dictionary).get("depth_m", 0.0))
-			var rate := StreamHydraulics.erosion_rate_mps(StreamHydraulics.bed_shear_pa(b, z, y, slope[i]))
-			if rate <= 0.0:
-				continue
+		var er := _erosion_rates(fid, states, ec, slope, b, z, s, bins)
+		var rates: PackedFloat64Array = er[0]
+		var ks: PackedInt32Array = er[1]
+		var dss: PackedFloat64Array = er[2]
+		for j in rates.size():
+			var rate := rates[j]
 			if not any:
 				any = true
 				ero = layer.erosion_of(fid).duplicate()
@@ -958,8 +959,8 @@ func _accumulate_erosion() -> void:
 					ero.resize(bins)
 					for k in range(old, bins):
 						ero[k] = 0.0
-			var k := clampi(int(round(s[i] / step)), 0, bins - 1)
-			var dz := rate * dt_s * (s[i] - s[i - 1]) / step
+			var k := ks[j]
+			var dz := rate * dt_s * dss[j] / step
 			var before := ero[k]
 			ero[k] = minf(ero[k] + dz, EROSION_MAX_M)
 			grew = maxf(grew, ero[k] - before)
@@ -992,6 +993,48 @@ func _erosion_candidates(fid: String, states: Array, mask: PackedByteArray) -> P
 		out.append(i)
 	_ero_candidates[fid] = [states, mask, out]
 	return out
+
+
+## The stations of a stream that erode now, in _erosion_candidates' order:
+## [rate (m/s), erosion bin, station spacing (m)] for each one whose shear is
+## over the critical. They follow from the flow states, the carve's facts and
+## the section alone, so they are kept until one of those changes. Most wet
+## stations are under the critical shear; working it out for every one of
+## them on every poll was ~9 ms on Walton. Same stations, same numbers.
+var _ero_rates: Dictionary = {}   # fid -> [states, ec, b, z, s, bins, rates, ks, dss]
+
+
+func _erosion_rates(fid: String, states: Array, ec: Dictionary, slope: PackedFloat32Array,
+		b: float, z: float, s: PackedFloat32Array, bins: int) -> Array:
+	var c: Variant = _ero_rates.get(fid, null)
+	if c is Array:
+		var ca: Array = c
+		var same := is_same(ca[0], states) and is_same(ca[1], ec) and float(ca[2]) == b
+		if same and float(ca[3]) == z and int(ca[5]) == bins and ca[4] == s:
+			return [ca[6], ca[7], ca[8]]
+	var rates := PackedFloat64Array()
+	var ks := PackedInt32Array()
+	var dss := PackedFloat64Array()
+	var step := ChannelProfile.EROSION_STEP_M
+	# StreamHydraulics.bed_shear_pa and erosion_rate_mps written out, with the
+	# section's terms taken once: the same arithmetic in the same order.
+	var bb := maxf(b, 0.05)
+	var side := sqrt(1.0 + z * z)
+	for i in _erosion_candidates(fid, states, ec["mask"]):
+		var y := float((states[i] as Dictionary).get("depth_m", 0.0))
+		var tau := 0.0
+		if not (y <= 0.0):
+			var p := bb + 2.0 * y * side
+			var r := (bb + z * y) * y / maxf(p, 1e-6)
+			tau = StreamHydraulics.RHO_W * StreamHydraulics.G * r * maxf(slope[i], StreamHydraulics.MIN_SLOPE)
+		var rate := StreamHydraulics.ERODE_KD * maxf(tau - StreamHydraulics.ERODE_TAU_C_PA, 0.0)
+		if rate <= 0.0:
+			continue
+		rates.append(rate)
+		ks.append(clampi(int(round(s[i] / step)), 0, bins - 1))
+		dss.append(s[i] - s[i - 1])
+	_ero_rates[fid] = [states, ec, b, z, s, bins, rates, ks, dss]
+	return [rates, ks, dss]
 
 
 ## What erosion needs per station, fixed until the next carve: carved AND an

@@ -1830,6 +1830,11 @@ tools\harness.ps1 -World <world> -RunScript res://tools/checks/stream_erosion_ch
 # Run it after ANY change to _refresh_basin_series, _q_at, step_volume,
 # rain_mmh_at or WeatherService.sample:
 tools\harness.ps1 -World walton -RunScript res://tools/diag/basin_series_parity.gd -Timeout 900
+# Erosion against the loop it replaced (sandbox): one poll as saved and in
+# 100 mm/h rain, the bed cut bit-identical; ms per poll old vs new (first
+# after a re-mesh, then warm). Run it after ANY change to _accumulate_erosion,
+# _erosion_rates, bed_shear_pa or erosion_rate_mps:
+tools\harness.ps1 -World walton -RunScript res://tools/diag/erosion_parity.gd -Timeout 900
 # Rain + stream frame bench (Bombay Beach = w6ad922917357): a 100 mm/h storm,
 # a bowl across a stream, then the real 2023 Hilary weather, 10 sim-h each;
 # prints p50/p95/max frame ms, every water_* / terrain_* section's avg + peak,
@@ -4034,6 +4039,20 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
 - **Erosion** walks only the stations that can erode (carved, open, ≥ 2 cm of
   water; `_erosion_candidates`, cached per flow-states array, which is always
   replaced and never edited), in the same order.
+  - Second pass, same day: `_erosion_rates` keeps each stream's stations over
+    the critical shear, with their rate, erosion bin and spacing, until the
+    flow states, the carve's facts or the section change. Only re-meshed
+    streams rebuild theirs, and the rebuild has `bed_shear_pa` /
+    `erosion_rate_mps` written out. On Walton's 19,879 stations (old → new):
+
+    | | dry day | 100 mm/h |
+    |---|---|---|
+    | a poll | 6.2 → 0.12 ms | 13.5 → 1.1 ms |
+    | a poll after its stream re-meshed | 6.2 → 2.6 ms | 13.5 → 6.9 ms |
+
+    `tools/diag/erosion_parity.gd` keeps the old loop and compares
+    (bit-identical). ⚠ A change to the shear or rate formulas must be made in
+    `StreamHydraulics` AND in `_erosion_rates`.
 - **Result** (Walton, same session, before → after; flow_step_bench state
   hash unchanged on both worlds, `873bbca3849e25ca` / `c196d8df62f4dee6`):
 
