@@ -209,6 +209,13 @@ Godot.exe.exe --headless --path . --script power_system/sources/source_physics_s
 # stream-source path, penstock-conn authority, habitat/processor/tank flows;
 # extend it with every flow-engine change):
 Godot.exe.exe --headless --path . --script power_system/sources/resource_flow_selftest.gd
+# Tank timelines (offline): ResourceTimeline against a frozen copy of the
+# version before its head-offset trim (RefTL, inside the test), 6 random runs
+# of 6,000 operations each (records incl. strided and past-retention gaps,
+# samples, seeks both ways with and without an evaluator, truncation, level
+# sets, slices, channel integrals, re-anchors), every answer compared
+# exactly. Run it after ANY change to core/resource_timeline.gd:
+Godot.exe.exe --headless --path . --script core/resource_timeline_selftest.gd
 # Services node-registry self-test (offline — register/get/has, auto-clear on
 # tree exit, freed-node guard; see docs/ARCHITECTURE.md debt #1):
 Godot.exe.exe --headless --path . --script core/services_selftest.gd
@@ -4111,6 +4118,17 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
     every step, so nearly every habitat writes and copies anyway. A
     read-in-place path saved 0.1 ms and was dropped.
   - Also not changed: Walton's one terraced field costs 0.8 ms a step.
+  - **Full tank histories.** Once a tank's `ResourceTimeline` held
+    `MAX_SAMPLES` (14 sim-days, ~14 real minutes at 1440x), every step
+    copied its three arrays to drop the oldest sample: 16.5 µs a step
+    against 2.7 µs, ~3 ms of every flow step on Walton's 233 tanks. Now the
+    trim moves `_head` (storage index of the first kept sample) and the
+    dead samples are cut off every `COMPACT_AT` (2048) steps: 2.6 µs, full
+    or not. Logical sample i is storage `_head + i`; anything new that
+    indexes `_level` / `_inflow` / `_outflow` must add `_head` (appends at
+    the end and the last element need not). Gate:
+    `core/resource_timeline_selftest.gd`; a deliberately broken index
+    fails it at op 282.
 - Spans added: `npc_svc` / `_pos` / `_spots` / `_comfort` / `_nav`,
   `npc_walk`, `npc_full_tick` / `_post`, `tl_draw` / `_lanes` / `_mc` /
   `_clips` / `tl_draw_wave_<source>_<channel>`, `tl_clip_*`.
