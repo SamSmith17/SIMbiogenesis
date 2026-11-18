@@ -2101,7 +2101,9 @@ tools\harness.ps1 -World walton -RunScript res://tools/checks/first_run_probe.gd
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/site_ledger_probe.gd -Label site_ledger -Timeout 900
 # Timeline sizes + modals over the bar (sandbox, REAL input): Ctrl+wheel
 # resizes a track and does not zoom, ▼ compact / hidden, the tab, ▲, F2,
-# and Settings covering the bar; shots under screenshots\tl_modes\:
+# and Settings covering the bar (full screen, the UiFit.fill rule); the shrink
+# is measured from the grown height, since a saved track may already be at its
+# 12 px floor; shots under screenshots\tl_modes\:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/timeline_bar_modes_check.gd -Label tl_modes -UserArgs @("--window-size=1280x720")
 # Would / did save end to end (sandbox, fake HA): reality = the world's own
 # sim with a nightly shutdown, served as history; "did" with a fork without
@@ -2929,6 +2931,16 @@ UX streamlining; user's choices: Inter, Lucide, HUD auto-tucks into pills,
   order) into a "⋯" MenuButton, change-gated on the fold COUNT (it runs as
   the clock text changes; hiding a hovered button per frame would flicker).
   Width changes of the centre / chips requeue it.
+  - When the row is too narrow to centre it (Mount Vernon at 1280×720: a
+    1536 px row, a 790 px centre after a 451 px left cluster), the centre is
+    pushed by the LEFT cluster, so any left-cluster text that changes width
+    moves the clock, transport and date. The needs chips' status glyphs (● ▲ ■ ○) differ by a pixel:
+    each chip is pinned to its widest text (`_pin_needs_chips`, measured off
+    the button, redone on a theme change). A new label in the left cluster
+    whose text changes needs the same pin.
+  - `--capture=timeline` caught it as a 1.00 px drift (failing on HEAD
+    until 2026-11-18). `tools/diag/timeline_row_drift_diag.gd` prints the
+    row's layout each time the centre moves.
 - The edit toolbar's options bar is an `HFlowContainer` (it wraps instead of
   running off the right edge), its strip is an accordion of sections, and
   `_sync_hud_claim` keeps the strip under the bar.
@@ -4216,10 +4228,6 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
     a worker). The cached feature signatures do not match; the cause was not
     found.
   - The flow step (~8 ms) is most of Walton's remaining frames over 33 ms.
-  - Two timeline checks fail on HEAD before the lane pass too:
-    `--capture=timeline` (a centre-cluster label drifts 1.00 px) and
-    `timeline_bar_modes_check` ("Ctrl+wheel down shrinks it": the track
-    is already at its 12 px floor).
 
 ## One site, many power systems (system_graph/data/graph_systems.gd, 2026-11-04)
 

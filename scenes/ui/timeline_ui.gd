@@ -3231,6 +3231,8 @@ func _build_left_cluster() -> Control:
 		_needs_chips[kind] = chip
 	left.add_child(needs)
 	left.add_child(_mk_vsep())
+	_pin_needs_chips()
+	needs.theme_changed.connect(_pin_needs_chips)
 	call_deferred("_update_needs_strip")
 
 	_import_btn = _mk_icon_btn("📥", _on_import_pressed,
@@ -4874,6 +4876,40 @@ func _on_needs_chip_pressed(_kind: String = "") -> void:
 		gv.call("_on_system_review")
 
 
+## The four status glyphs differ in width by a pixel (● ▲ ■ ○), so a chip
+## whose status changed resized the left cluster, and at widths where the
+## centre cluster sits right after it, moved the whole centre (clock,
+## transport, date) a pixel. Each chip is pinned to the widest text it can
+## show, measured off the button itself (the same rule as the clock labels).
+const _NEEDS_ICONS := {"energy": "⚡", "water": "💧", "food": "🍎", "waste": "♻"}
+const _NEEDS_LETTERS := {"energy": "E", "water": "W", "food": "F", "waste": "X"}
+const _NEEDS_GLYPHS := {"ok": "●", "warn": "▲", "critical": "■", "idle": "○"}
+
+
+static func needs_chip_texts(kind: String) -> Array:
+	var icon := str(_NEEDS_ICONS.get(kind, ""))
+	var letter := str(_NEEDS_LETTERS.get(kind, kind.substr(0, 1).to_upper()))
+	var out: Array = ["%s %s %s" % [icon, letter, _NEEDS_GLYPHS["idle"]]]
+	for st in ["ok", "warn", "critical", "idle"]:
+		out.append("%s %s%s" % [icon, letter, _NEEDS_GLYPHS[st]])
+	return out
+
+
+func _pin_needs_chips() -> void:
+	for kind: String in _needs_chips.keys():
+		var btn: Button = _needs_chips[kind] as Button
+		if btn == null:
+			continue
+		var keep := btn.text
+		var w := 0.0
+		for t in needs_chip_texts(kind):
+			btn.text = str(t)
+			w = maxf(w, btn.get_minimum_size().x)
+		btn.text = keep
+		if w > 0.0 and absf(btn.custom_minimum_size.x - w) > 0.5:
+			btn.custom_minimum_size.x = w
+
+
 func _update_needs_strip() -> void:
 	if _needs_chips.is_empty():
 		return
@@ -4884,9 +4920,9 @@ func _update_needs_strip() -> void:
 		m = gv.call("compute_closure_metrics") as Dictionary
 	var channels: Dictionary = m.get("channels", {}) as Dictionary
 	# Colorblind-safe: icon + letter + status glyph (not hue alone).
-	var icons := {"energy": "⚡", "water": "💧", "food": "🍎", "waste": "♻"}
-	var letters := {"energy": "E", "water": "W", "food": "F", "waste": "X"}
-	var glyphs := {"ok": "●", "warn": "▲", "critical": "■", "idle": "○"}
+	var icons := _NEEDS_ICONS
+	var letters := _NEEDS_LETTERS
+	var glyphs := _NEEDS_GLYPHS
 	for kind: String in _needs_chips.keys():
 		var btn: Button = _needs_chips[kind] as Button
 		if btn == null:

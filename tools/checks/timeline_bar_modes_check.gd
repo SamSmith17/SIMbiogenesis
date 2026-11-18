@@ -6,7 +6,7 @@ extends RefCounted
 ## Ctrl+wheel over a data track makes it taller / shorter (and does not zoom);
 ## a plain wheel still zooms; the ▼ button goes full → compact → hidden, the
 ## "Timeline" tab and ▲ bring it back, F2 cycles; the HUD's timeline height
-## follows each size; a modal (Settings, 1180 × 880) now covers the bar.
+## follows each size; a modal (Settings) covers the bar, full screen.
 ## Shots under screenshots\tl_modes\.
 
 const HI := preload("res://core/terrain/harness/harness_input.gd")
@@ -95,7 +95,10 @@ func run(main: Node, _harness: Node) -> Dictionary:
 		await _wheel(vp, pos, false, true)
 	await _frames(tree, 3)
 	var h2 := float(td.get("height"))
-	_ok(h2 < h0 and h2 >= 12.0, "Ctrl+wheel down shrinks it (%.0f px, floor 12)" % h2)
+	# Measured against the grown height: a saved track already at the 12 px
+	# floor (both test worlds' are) can only come back down to it.
+	_ok(h2 < h1 and h2 >= 12.0, "Ctrl+wheel down shrinks it (%.0f → %.0f px, floor 12)" % [h1, h2])
+	_ok(h2 <= maxf(h0, 12.0), "8 notches down are back at or under the start (%.0f px)" % h0)
 	_shot(main, "02_track_shorter")
 	# Plain wheel still zooms.
 	await _wheel(vp, pos, true, false)
@@ -167,7 +170,10 @@ func run(main: Node, _harness: Node) -> Dictionary:
 		var bar_top := tl.get_global_rect().position.y
 		_ok(UiFit.draws_over_timeline(cp), "the settings panel draws over the bar")
 		_ok(r.end.y > bar_top + 20.0, "the modal reaches over the timeline (bottom %.0f, bar top %.0f)" % [r.end.y, bar_top])
-		_ok(r.end.y <= vr.end.y - UiFit.MARGIN + 1.0, "and stays inside the screen margin")
+		# Modals fill the screen edge to edge since UiFit.fill (2026-11-10);
+		# the old rule kept them UiFit.MARGIN inside it.
+		var inner := UiFit.MARGIN if not UiFit.FULLSCREEN else 0.0
+		_ok(r.end.y <= vr.end.y - inner + 1.0, "and stays on the screen (bottom %.0f, screen %.0f)" % [r.end.y, vr.end.y])
 		_ok(r.size.y > vr.size.y - HudLayout.timeline_height() - UiFit.MARGIN * 2.0 + 1.0 or r.size.y >= 879.0,
 			"it is taller than the old above-the-bar area (%.0f px)" % r.size.y)
 		_shot(main, "05_modal_over_timeline")
