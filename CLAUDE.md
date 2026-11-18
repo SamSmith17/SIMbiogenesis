@@ -3296,8 +3296,11 @@ what leaked). Three tranches, each its own commit and gate.
     walks every scope); packing a placed rack, toroid, pv_array or designed
     array stows its graph array (`set_designed_array_stowed` for PvLab).
 - **Presets and polish.** MSAA is part of the graphics preset
-  (`RenderProfile.graphics_profile` `msaa`: off / 2x / 4x / 8x — 8x alone was
-  12 of Mount Vernon's 23 GPU ms) while `Main.msaa_follows_preset`; a level
+  (`RenderProfile.graphics_profile` `msaa`: off / 2x / 2x / 8x — 8x alone was
+  12 of Mount Vernon's 23 GPU ms; High went 4x → 2x on 2026-11-18, 20.9 →
+  19.0 ms GPU with the same picture under TAA, `tools/bench/msaa_trade_bench.gd`,
+  `MSAA_DEFAULTS=1` for a new player's style and scale) while
+  `Main.msaa_follows_preset`; a level
   picked in Settings → Lighting ("Preset's" is the fifth choice) is the
   player's and stays, and the <45 fps auto-drop lowers a hand-picked MSAA
   above the new preset's. An older sim_settings.cfg with MSAA off follows

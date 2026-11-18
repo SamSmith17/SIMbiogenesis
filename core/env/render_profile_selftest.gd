@@ -65,7 +65,7 @@ func _test_graphics_profiles() -> void:
 	# MSAA per preset: off / 2x / 4x / 8x, so the 12 ms of 8x is Ultra's alone.
 	_check("low msaa off", int(lo["msaa"]) == 0)
 	_check("medium msaa 2x", int(mid["msaa"]) == 1)
-	_check("high msaa 4x", int(hi["msaa"]) == 2)
+	_check("high msaa 2x", int(hi["msaa"]) == 1)
 	_check("ultra msaa 8x", int(RenderProfile.graphics_profile(RenderProfile.QUALITY_ULTRA)["msaa"]) == 3)
 
 	# A corrupt or future saved index must degrade to "looks right", not to an
@@ -88,8 +88,8 @@ func _test_graphics_monotonic() -> void:
 	_check("soft-shadow quality increases with quality",
 		int(lo["soft_quality"]) < int(mid["soft_quality"])
 			and int(mid["soft_quality"]) <= int(hi["soft_quality"]))
-	_check("msaa increases with quality",
-		int(lo["msaa"]) < int(mid["msaa"]) and int(mid["msaa"]) < int(hi["msaa"])
+	_check("msaa never drops with quality",
+		int(lo["msaa"]) <= int(mid["msaa"]) and int(mid["msaa"]) <= int(hi["msaa"])
 			and int(hi["msaa"]) < int(RenderProfile.graphics_profile(RenderProfile.QUALITY_ULTRA)["msaa"]))
 
 

@@ -51,7 +51,11 @@ static func quality_name(quality: int) -> String:
 ## `msaa` is Main's msaa_level (0 off, 1 = 2x, 2 = 4x, 3 = 8x), followed while
 ## the player has not picked one themselves (Main.msaa_follows_preset).
 ## MSAA 8x was measured at 12 of Mount Vernon's 23 GPU ms (gpu_toggle_bench,
-## 2026-10-18); it is Ultra's, not High's.
+## 2026-10-18); it is Ultra's, not High's. High is 2x (2026-11-18,
+## tools/bench/msaa_trade_bench.gd, Mount Vernon at 1920x1080, realistic
+## style, full scale, 13 views): 4x 20.9 ms GPU, 2x 19.0, off 17.0; the
+## heaviest view 33.1 -> 28.6 ms. With TAA on, 4x and 2x shots of railings,
+## wheel rims and leaf edges were the same at 3x zoom.
 static func graphics_profile(quality: int) -> Dictionary:
 	match quality:
 		QUALITY_LOW:
@@ -80,7 +84,7 @@ static func graphics_profile(quality: int) -> Dictionary:
 		"atlas_size": 2048,
 		"soft_quality": RenderingServer.SHADOW_QUALITY_SOFT_HIGH,
 		"taa": true,
-		"msaa": 2,
+		"msaa": 1,
 	}
 
 
