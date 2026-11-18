@@ -1835,6 +1835,10 @@ tools\harness.ps1 -World walton -RunScript res://tools/diag/basin_series_parity.
 # after a re-mesh, then warm). Run it after ANY change to _accumulate_erosion,
 # _erosion_rates, bed_shear_pa or erosion_rate_mps:
 tools\harness.ps1 -World walton -RunScript res://tools/diag/erosion_parity.gd -Timeout 900
+# Where one live flow step spends its time (sandbox): its stages run one by
+# one, in order, inside the sim-write bracket at 60x; mean / worst ms per
+# stage, the costliest items. FSP_STEPS sets the step count (default 40):
+tools\harness.ps1 -World walton -RunScript res://tools/diag/flow_step_profile.gd -Timeout 900
 # Rain + stream frame bench (Bombay Beach = w6ad922917357): a 100 mm/h storm,
 # a bowl across a stream, then the real 2023 Hilary weather, 10 sim-h each;
 # prints p50/p95/max frame ms, every water_* / terrain_* section's avg + peak,
@@ -4090,6 +4094,23 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
 
     The water poll's worst frame went 26.6 → 10.1 ms (now erosion). Both
     state hashes are unchanged.
+- **The flow step** (fourth pass): 13.8 → 10.4 ms on Walton (378 items, 233
+  tanks, 288 wires; `tools/diag/flow_step_profile.gd`). State hashes
+  unchanged. The changes:
+  - The culvert pass asked `ConduitKinds.uses_culvert_kit` for every wire,
+    and that deep-copies the type's whole metadata (`type_meta`). It is now
+    asked once per type per step: 1.27 → 0.24 ms.
+  - `_tank_specs_view` reads a tank's specs in place when
+    `_migrate_resource_specs_if_needed` would only fill its two false
+    defaults. The timeline check (1.86 → 0.8 ms) and the tank loop use it.
+    The deficit and make-up paths, which write, get `_tank_specs_copy`.
+  - `_apply_tank_sample` collects the keys it writes and copies the specs
+    only when a value moved. The tank loop went 3.7 → 2.6 ms.
+  - Not changed: the habitats (~1.6 ms). Their working copy is most of it,
+    but with ideal supply on (the author's prefs) their import rates move
+    every step, so nearly every habitat writes and copies anyway. A
+    read-in-place path saved 0.1 ms and was dropped.
+  - Also not changed: Walton's one terraced field costs 0.8 ms a step.
 - Spans added: `npc_svc` / `_pos` / `_spots` / `_comfort` / `_nav`,
   `npc_walk`, `npc_full_tick` / `_post`, `tl_draw` / `_lanes` / `_mc` /
   `_clips` / `tl_draw_wave_<source>_<channel>`, `tl_clip_*`.
