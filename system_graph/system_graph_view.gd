@@ -124,6 +124,7 @@ var _element_history := ElementHistory.new()
 var _flow_history := FlowHistory.new()
 var _element_leds: Dictionary = {}   # scope id -> {led, ms}
 var _element_acc := 0.0
+var _element_wait := 0
 const _ELEMENT_INTERVAL := 1.0
 const SHOW_ALL := 400
 const SHOW_POWER := 401
@@ -16025,18 +16026,43 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 		# throttle display-only while suspended — the charge cap belongs to
 		# the bake.)
 		return
+	# The two heavy halves land on different frames (FramePacer): the people
+	# tick on the frame the flow step falls due, the flow step itself on a
+	# later one. Each was ~10 ms on Walton, and together they made a 25 ms
+	# frame four times a second. The demand rates the people set are what the
+	# flow step reads either way; the step covers the clock up to when it runs.
+	if _flow_step_due:
+		if not FramePacer.claim("flow", _flow_step_wait):
+			_flow_step_wait += 1
+			_resource_flow.call("accumulate", delta)
+			return
+		_flow_step_wait = 0
+		_flow_step_due = false
+		_begin_sim_writes()
+		if _sim_load_host != null and _sim_load_host.has_method("begin_bulk_sync"):
+			_sim_load_host.call("begin_bulk_sync")
+		_ambient_flow_step(delta, _replay_time_if_cached())
+		if _sim_load_host != null and _sim_load_host.has_method("end_bulk_sync"):
+			_sim_load_host.call("end_bulk_sync")
+		_end_sim_writes()
+		return
 	# The engine coalesces on its own 0.25 s / 0.5 s accumulator, so on most frames
 	# tick() just accumulates and early-returns. Only pay the bulk-sync + history-
 	# suppress + PerfMonitor overhead on frames where a step will actually run.
 	if _resource_flow.has_method("would_tick") and not _resource_flow.call("would_tick", delta):
 		_resource_flow.call("tick", delta)  # cheap: accumulate + early-out
 		return
+	if not FramePacer.claim("people", _people_tick_wait):
+		_people_tick_wait += 1
+		_resource_flow.call("accumulate", delta)
+		return
+	_people_tick_wait = 0
 	_begin_sim_writes()
 	if _sim_load_host != null and _sim_load_host.has_method("begin_bulk_sync"):
 		_sim_load_host.call("begin_bulk_sync")
 	# Inside a pre-rendered range this tick READS the caches instead of
-	# simulating (NaN = live). Decided once up front: camp power and the flow
-	# step both branch on it.
+	# simulating (NaN = live). Camp power branches on it here; the flow step
+	# decides again when it runs.
 	var replay_now := _replay_time_if_cached()
 	# NPC population: step agents + install this tick's habitat demand rates
 	# BEFORE the flow step consumes them (runs ambient, graph open or closed).
@@ -16093,6 +16119,22 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 		_graph_canvas.queue_redraw()
 	# (The Site Plan's old 5 s lighting re-capture lives in the preview's own
 	# clock-driven refresh policy now, for every lens and the Hydro Lab.)
+	# The flow step runs on the next frame FramePacer gives it.
+	_resource_flow.call("accumulate", delta)
+	_flow_step_due = true
+	if _sim_load_host != null and _sim_load_host.has_method("end_bulk_sync"):
+		_sim_load_host.call("end_bulk_sync")
+	_end_sim_writes()
+
+
+## The people tick ran on an earlier frame; this is the flow half. A due step
+## is held while another heavy job has the frame (`_flow_step_due`).
+var _flow_step_due := false
+var _flow_step_wait := 0
+var _people_tick_wait := 0
+
+
+func _ambient_flow_step(delta: float, replay_now: float) -> void:
 	if not is_nan(replay_now):
 		# REPLAY: keyframe (engine-written specs + wire flows + the engine's
 		# between-step state at that instant) first, then every tank off its
@@ -16100,6 +16142,7 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 		# `now` so a later live step continues from here. Nothing is simulated.
 		if not _replaying:
 			_enter_replay()
+		# (replay_at consumes the engine's accumulator, as a step would.)
 		PerfMonitor.begin("flow_replay")
 		_sim_renderer.cache.apply_at(model, _resource_flow, replay_now)
 		_resource_flow.call("replay_at", replay_now)
@@ -16110,9 +16153,6 @@ func _tick_resource_flow_ambient(delta: float) -> void:
 		PerfMonitor.begin("flow_engine")
 		_resource_flow.call("tick", delta)
 		PerfMonitor.end("flow_engine")
-	if _sim_load_host != null and _sim_load_host.has_method("end_bulk_sync"):
-		_sim_load_host.call("end_bulk_sync")
-	_end_sim_writes()
 
 
 # ---------------------------------------------------------------------------
@@ -23656,9 +23696,15 @@ func _tick_elements(delta: float) -> void:
 	_element_acc += delta
 	if _element_acc < _ELEMENT_INTERVAL:
 		return
-	_element_acc = 0.0
 	if model == null or _mp_is_replica() or _ambient_flow_suspended:
+		_element_acc = 0.0
 		return
+	# ~10 ms on a big site: not on a frame another heavy job already took.
+	if not FramePacer.claim("elements", _element_wait):
+		_element_wait += 1
+		return
+	_element_wait = 0
+	_element_acc = 0.0
 	_element_leds.clear()
 	var led := element_ledger("root")
 	_element_history.record(_closure_abs_hours(), led)

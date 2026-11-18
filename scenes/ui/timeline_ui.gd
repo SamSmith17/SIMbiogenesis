@@ -101,6 +101,7 @@ const UPDATE_INTERVAL := 0.1
 ## 200 ms in the graph view) once a second; they are status, not a readout.
 const NEEDS_INTERVAL := 1.0
 var _needs_accum := 0.0
+var _needs_wait := 0
 
 ## _draw_waveform_lane's TimelineBinning bins (exact over every sample) and
 ## the per-day WeatherService temperature-record loop in _draw_track both
@@ -730,15 +731,21 @@ func _perf_tick(delta: float) -> void:
 	if not _layout_enforced:
 		_request_bar_layout()
 		_layout_enforced = true
+	_run_lane_jobs()
 	_update_accum += delta
 	if _update_accum >= UPDATE_INTERVAL:
 		_update_accum = 0.0
 		_update_display()
 	_needs_accum += delta
-	if _needs_accum >= NEEDS_INTERVAL:
+	# The needs strip reads the closure metrics (~6 ms on a big site): not on
+	# a frame another heavy job already took.
+	if _needs_accum >= NEEDS_INTERVAL and FramePacer.claim("needs", _needs_wait):
 		_needs_accum = 0.0
+		_needs_wait = 0
 		_update_needs_strip()
 		_update_challenge_chip()
+	elif _needs_accum >= NEEDS_INTERVAL:
+		_needs_wait += 1
 
 
 func _input(event: InputEvent) -> void:
@@ -1542,6 +1549,12 @@ func _short_date_for_abs(abs_hours: float) -> String:
 	return ""
 
 func _draw_track() -> void:
+	PerfSpan.begin("tl_draw")
+	_draw_track_inner()
+	PerfSpan.end("tl_draw")
+
+
+func _draw_track_inner() -> void:
 	if _track == null:
 		return
 	var w := _track.size.x
@@ -1652,13 +1665,17 @@ func _draw_track() -> void:
 				_track.draw_string(fnt, Vector2(tx + 2.0, groove_y - 7.0),
 					lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 8, C_TEXT_M)
 
+	PerfSpan.begin("tl_draw_mc")
 	_draw_microclimate_strip(win_start, span, w, groove_y)
+	PerfSpan.end("tl_draw_mc")
 
 	# ── NLE lanes (clips + resizable sensor waveforms) ───────────────────────
 	var lanes_top := TimelineTrackLayout.RULER_HEIGHT
 	var lanes_bottom := lanes_top
 	var s := null if Engine.is_editor_hint() else _get_solar()
+	PerfSpan.begin("tl_draw_lanes")
 	lanes_bottom = _draw_track_lanes(win_start, span, w, fnt, s, lanes_top)
+	PerfSpan.end("tl_draw_lanes")
 	if s != null and s.has_method("get_selection_abs"):
 		var sel : PackedFloat64Array = s.call("get_selection_abs")
 		if not is_nan(sel[0]) and sel[1] > sel[0]:
@@ -1746,9 +1763,13 @@ func _draw_track_lanes(win_start : float, span : float, w : float, fnt : Font,
 		y += TimelineTrackLayout.TRACK_GAP
 		var lane_rect := Rect2(0.0, y, w, td.height)
 		if td.kind == TimelineTrackDef.KIND_CLIPS:
+			PerfSpan.begin("tl_draw_clips")
 			_draw_clips_lane(lane_rect, win_start, span, w, solar, fnt)
+			PerfSpan.end("tl_draw_clips")
 		else:
+			PerfSpan.begin("tl_draw_wave_" + td.source + "_" + td.channel)
 			_draw_waveform_lane(td, lane_rect, win_start, span, w, fnt, solar)
+			PerfSpan.end("tl_draw_wave_" + td.source + "_" + td.channel)
 		if td.kind != TimelineTrackDef.KIND_CLIPS:
 			_track.draw_line(Vector2(0.0, lane_rect.end.y), Vector2(w, lane_rect.end.y),
 				Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.65), 1.0)
@@ -1764,7 +1785,9 @@ func _draw_clips_lane(lane_rect : Rect2, win_start : float, span : float, w : fl
 	# = selected but not), like Premiere's bar above the sequence.
 	var strip_h := minf(RENDER_STRIP_H, maxf(lane_h - 8.0, 0.0))
 	if strip_h > 0.0:
+		PerfSpan.begin("tl_clip_strip")
 		_draw_render_strip(lane_y, strip_h, win_start, span, w, solar)
+		PerfSpan.end("tl_clip_strip")
 		lane_y += strip_h
 		lane_h -= strip_h
 	var quarter := lane_h / 4.0
@@ -1812,7 +1835,9 @@ func _draw_clips_lane(lane_rect : Rect2, win_start : float, span : float, w : fl
 		if not is_nan(vrng[0]):
 			_draw_clip(vrng[0], vrng[1], win_start, span, w, lane_y + quarter * 3.0, quarter, LANE_VID_FILL)
 	_clim_lane_rect = Rect2(0.0, lane_y + quarter * 2.0, w, quarter)
+	PerfSpan.begin("tl_clip_keys")
 	_draw_clim_keys(tl, win_start, span, w)
+	PerfSpan.end("tl_clip_keys")
 	_deploy_flag_band = Rect2(0.0, lane_y, w, quarter)
 	_draw_deploy_flags(lane_rect, lane_y, win_start, span, w, fnt)
 
@@ -1835,13 +1860,21 @@ func _draw_deploy_flags(lane_rect : Rect2, lane_y : float, win_start : float, sp
 		w : float, fnt : Font) -> void:
 	var sd := _site_deploy()
 	var evs : Array = sd.events() if sd != null else []
+	PerfSpan.begin("tl_clip_chip")
 	if sd != null:
 		_refresh_deploy_chip(sd)
+	PerfSpan.end("tl_clip_chip")
+	PerfSpan.begin("tl_clip_sets")
 	_draw_set_spans(lane_y, win_start, span, w, fnt)
+	PerfSpan.end("tl_clip_sets")
+	PerfSpan.begin("tl_clip_burns")
 	evs = evs + _burn_flag_events()
+	PerfSpan.end("tl_clip_burns")
 	if evs.is_empty():
 		return
+	PerfSpan.begin("tl_clip_status")
 	var st_active : Dictionary = sd.status() if sd != null else {}
+	PerfSpan.end("tl_clip_status")
 	var band_h := _deploy_flag_band.size.y
 	for e in evs:
 		var ev := e as Dictionary
@@ -1900,6 +1933,11 @@ func _draw_set_spans(lane_y : float, win_start : float, span : float, w : float,
 	var tl := _get_terrain_loader()
 	var reg : SpaceRegistry = tl.get("npc_spaces") if tl != null and tl.get("npc_spaces") is SpaceRegistry else null
 	if reg == null:
+		return
+	# A set lasts at most a day, and a span under a pixel is not drawn: zoomed
+	# out past a day a pixel, nothing below can draw. (A saved 38-year window
+	# on Walton held 42,156 sets: 113 ms to build, 28 ms every redraw to skip.)
+	if 24.0 * w / maxf(span, 1e-9) < 1.0:
 		return
 	var key := "%d|%d|%d" % [int(floor(win_start * 4.0)), int(span), reg.revision]
 	if key != _set_spans_key:
@@ -2445,6 +2483,65 @@ func _lane_bins_cached(td : TimelineTrackDef, g : Dictionary, ttl : float, make 
 	return out
 
 
+## Bins that are slow to make (a weather lane: ~1,000 weather samples, ~100
+## ms for a week of Walton) are made a slice at a time in _process, not inside
+## _draw: _draw runs in the frame's deferred-call flush, and the four weather
+## lanes refreshing together on their 10 s TTL made a ~480 ms frame. The lane
+## draws its last bins (or nothing yet) until the new ones are done. Bins on
+## the anchored grid do not depend on each other, so the slices put together
+## are the same numbers one call would give. `make_range` = Callable(i0, n).
+const LANE_JOB_BUDGET_US := 3000
+const LANE_JOB_CHUNK := 16
+var _lane_jobs: Dictionary = {}   # td.id -> {key, w, i0, n, make, done, mn, mean, mx}
+
+
+func _lane_bins_sliced(td : TimelineTrackDef, g : Dictionary, ttl : float, make_range : Callable) -> Dictionary:
+	var key : Array = [td.source, td.channel, g["w"], g["i0"], g["n"]]
+	var now := Time.get_ticks_msec() / 1000.0
+	var cached : Dictionary = _waveform_cache.get(td.id, {})
+	if cached.get("key", []) == key and now - float(cached.get("t", -1.0)) < ttl:
+		return cached.get("bins", {})
+	var job : Dictionary = _lane_jobs.get(td.id, {})
+	if job.is_empty() or job["key"] != key:
+		_lane_jobs[td.id] = {"key": key, "w": float(g["w"]), "i0": int(g["i0"]), "n": int(g["n"]),
+			"make": make_range, "done": 0, "mn": PackedFloat32Array(),
+			"mean": PackedFloat32Array(), "mx": PackedFloat32Array()}
+	return cached.get("bins", {})
+
+
+## Lane bins still being made (checks wait on it).
+func lane_jobs_pending() -> int:
+	return _lane_jobs.size()
+
+
+func _run_lane_jobs() -> void:
+	if _lane_jobs.is_empty():
+		return
+	var t0 := Time.get_ticks_usec()
+	for id in _lane_jobs.keys():
+		var job : Dictionary = _lane_jobs[id]
+		var n := int(job["n"])
+		while int(job["done"]) < n:
+			var k := mini(LANE_JOB_CHUNK, n - int(job["done"]))
+			var part : Dictionary = (job["make"] as Callable).call(int(job["i0"]) + int(job["done"]), k)
+			# (A packed array read out of a Dictionary is a copy: append to a
+			# local and put it back.)
+			for arr_key in ["mn", "mean", "mx"]:
+				var acc : PackedFloat32Array = job[arr_key]
+				acc.append_array(part.get(arr_key, PackedFloat32Array()))
+				job[arr_key] = acc
+			job["done"] = int(job["done"]) + k
+			if Time.get_ticks_usec() - t0 >= LANE_JOB_BUDGET_US:
+				return
+		_waveform_cache[id] = {"key": job["key"], "t": Time.get_ticks_msec() / 1000.0,
+			"bins": {"w": job["w"], "i0": job["i0"], "n": n,
+				"mn": job["mn"], "mean": job["mean"], "mx": job["mx"]}}
+		_lane_jobs.erase(id)
+		if _track != null:
+			_track.queue_redraw()
+		return   # one lane finished a frame: their redraws spread too
+
+
 ## Draw bins with an axis (or the empty note) and the range label.
 func _draw_bins_lane(td : TimelineTrackDef, lane_rect : Rect2, bins : Dictionary, win_start : float,
 		span : float, axis : Vector2, unit : String, empty_msg : String, fnt : Font) -> void:
@@ -2576,8 +2673,12 @@ func _draw_weather_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : fl
 	var g := _lane_grid(lane_rect, win_start, span, 0.0)
 	var reader := func(acc : String, m : int, d : int, h : float) -> float:
 		return float(ws.call(acc, m, d, h))
-	var bins : Dictionary = _lane_bins_cached(td, g, 10.0, func() -> Dictionary:
-		return TimelineWeatherChannels.bins_exact(td.channel, float(g["w"]), int(g["i0"]), int(g["n"]), reader))
+	var wch := td.channel
+	var ww := float(g["w"])
+	var bins : Dictionary = _lane_bins_sliced(td, g, 10.0, func(i0 : int, n : int) -> Dictionary:
+		return TimelineWeatherChannels.bins_exact(wch, ww, i0, n, reader))
+	if bins.is_empty():
+		return   # the first bins are still being made
 	var si_unit := str(ch["si"])
 	var imperial := _weather_imperial()
 	var unit := str(TimelineWeatherChannels.display(0.0, si_unit, imperial)["unit"])

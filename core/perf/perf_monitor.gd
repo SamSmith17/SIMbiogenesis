@@ -79,8 +79,9 @@ func is_enabled() -> bool:
 
 
 ## The last whole frame's sections (ms), unsmoothed — what a bench reads to
-## name the section behind one slow frame.
+## name the section behind one slow frame — and that frame's length (ms).
 var last_frame: Dictionary = {}
+var last_frame_ms := 0.0
 
 
 ## Machine-readable HUD state for playtest harness dumps (ms, not usec).
@@ -394,6 +395,7 @@ func _process(delta: float) -> void:
 			_display[section] = lerp(float(_display[section]), 0.0, SMOOTH)
 			_calls_display[section] = lerp(float(_calls_display.get(section, 0.0)), 0.0, SMOOTH)
 	last_frame = {}
+	last_frame_ms = delta * 1000.0
 	for section: String in _accum.keys():
 		last_frame[section] = float(_accum[section]) / 1000.0
 	_accum.clear()

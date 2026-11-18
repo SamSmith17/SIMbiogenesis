@@ -329,9 +329,8 @@ func _request_erosion_rebuild() -> void:
 
 func _process(delta: float) -> void:
 	_hyd_t -= delta
-	if _hyd_t <= 0.0 and _task_id < 0:
-		_hyd_t = HYDRAULICS_POLL_S
-		_poll_hydraulics()
+	if _task_id < 0 and (_hyd_phase > 0 or _hyd_t <= 0.0):
+		_step_hydraulics_poll()
 	_process_drainage(delta)
 	_process_remesh()
 	_drive_outlet_vfx(delta)
@@ -369,6 +368,15 @@ func is_busy() -> bool:
 
 func _start_rebuild(force: bool) -> void:
 	if loader == null or not is_instance_valid(loader) or not _bound:
+		return
+	if loader.has_method("osm_water_pending") and bool(loader.call("osm_water_pending")):
+		# This load's OSM water has not answered yet (another tile layer
+		# composing at load asks first): resolving now would find no mapped
+		# streams and wipe the channels loaded from the cache. Asked again
+		# after the debounce until it has.
+		_rebuild_pending = true
+		_rebuild_force = _rebuild_force or force
+		_debounce_t = DEBOUNCE_S
 		return
 	var osm_water: Array = loader.call("osm_water_items") if loader.has_method("osm_water_items") else []
 	_features = StreamNetwork.resolve(osm_water, layer)
@@ -890,7 +898,6 @@ func _accumulate_erosion() -> void:
 				half = _carve_half()
 			ec = _erosion_facts(f, prof, half)
 			_ero_cache[fid] = ec
-		var mask: PackedByteArray = ec["mask"]
 		var slope: PackedFloat32Array = ec["slope"]
 		var sec: Dictionary = f["section"]
 		var b := float(sec.get("bed_w", 2.0))
@@ -898,12 +905,8 @@ func _accumulate_erosion() -> void:
 		var ero := PackedFloat32Array()
 		var bins := int(ceil(s[s.size() - 1] / step)) + 1
 		var any := false
-		for i in range(1, states.size()):
-			if mask[i] == 0:
-				continue
+		for i in _erosion_candidates(fid, states, ec["mask"]):
 			var y := float((states[i] as Dictionary).get("depth_m", 0.0))
-			if y < 0.02:
-				continue
 			var rate := StreamHydraulics.erosion_rate_mps(StreamHydraulics.bed_shear_pa(b, z, y, slope[i]))
 			if rate <= 0.0:
 				continue
@@ -925,6 +928,30 @@ func _accumulate_erosion() -> void:
 			f["erosion"] = ero
 			touched.append(fid)
 	_maybe_erosion_recarve(touched, grew)
+
+
+## The stations of a stream that can erode now: carved, open, and with at
+## least 2 cm of water. The depths come from the flow states, which only
+## change when the flow is re-meshed, so the list is kept per states array
+## (`is_same`) and rebuilt when either it or the carve's mask is new. On a
+## dry day that leaves the erosion poll nothing to walk (it walked every
+## station of every stream: ~12 ms on Walton). Same stations, same order.
+var _ero_candidates: Dictionary = {}   # fid -> [states, mask, PackedInt32Array]
+
+
+func _erosion_candidates(fid: String, states: Array, mask: PackedByteArray) -> PackedInt32Array:
+	var c: Variant = _ero_candidates.get(fid, null)
+	if c is Array and is_same((c as Array)[0], states) and (c as Array)[1] == mask:
+		return (c as Array)[2]
+	var out := PackedInt32Array()
+	for i in range(1, states.size()):
+		if mask[i] == 0:
+			continue
+		if float((states[i] as Dictionary).get("depth_m", 0.0)) < 0.02:
+			continue
+		out.append(i)
+	_ero_candidates[fid] = [states, mask, out]
+	return out
 
 
 ## What erosion needs per station, fixed until the next carve: carved AND an
@@ -1387,22 +1414,43 @@ func _display_allows(f: Dictionary) -> bool:
 	return true
 
 
-func _poll_hydraulics() -> void:
+## The poll in three parts, each on a frame of its own (FramePacer): erosion
+## (~12 ms on Walton), the rain history and basins (~25 ms in rain at speed),
+## then the flow comparison. Together they were a 40 ms frame. They run in
+## the same order as before, a frame or two apart.
+var _hyd_phase := 0
+var _hyd_wait := 0
+
+
+func _step_hydraulics_poll() -> void:
+	if not FramePacer.claim("water", _hyd_wait):
+		_hyd_wait += 1
+		return
+	_hyd_wait = 0
 	PerfSpan.begin("water_poll")
-	_poll_hydraulics_inner()
+	match _hyd_phase:
+		0:
+			_hyd_t = HYDRAULICS_POLL_S
+			_sync_storm_fx()
+			if not (_features.is_empty() or _profiles.is_empty()):
+				PerfSpan.begin("water_erosion")
+				_accumulate_erosion()
+				PerfSpan.end("water_erosion")
+				_hyd_phase = 1 if not _basins.is_empty() else 2
+		1:
+			if not _basins.is_empty():
+				_ensure_rain_history()
+				_sync_basin_mesh()
+			_hyd_phase = 2
+		_:
+			_hyd_phase = 0
+			if not (_features.is_empty() or _profiles.is_empty()):
+				_poll_flow_changes()
 	PerfSpan.end("water_poll")
 
 
-func _poll_hydraulics_inner() -> void:
-	_sync_storm_fx()
-	if _features.is_empty() or _profiles.is_empty():
-		return
-	PerfSpan.begin("water_erosion")
-	_accumulate_erosion()
-	PerfSpan.end("water_erosion")
-	if not _basins.is_empty():
-		_ensure_rain_history()
-		_sync_basin_mesh()
+## The last part of the poll: which streams' flow moved, and re-mesh them.
+func _poll_flow_changes() -> void:
 	var rain := rain_mmh_now()
 	# Rain takes its travel time to reach each point, so the flow changes
 	# while the clock runs even at a steady rate: compare the discharge at a

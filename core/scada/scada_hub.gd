@@ -75,8 +75,16 @@ func _process(delta: float) -> void:
 	_acc += delta
 	if _acc < REFRESH_S:
 		return
+	# ~10 ms on a big site: not on a frame another heavy job already took.
+	if not FramePacer.claim("scada", _refresh_wait):
+		_refresh_wait += 1
+		return
+	_refresh_wait = 0
 	_acc = 0.0
 	refresh()
+
+
+var _refresh_wait := 0
 
 
 ## Gather now (the harness and the tag browser call it directly).

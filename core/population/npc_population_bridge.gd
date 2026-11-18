@@ -296,27 +296,38 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 	# Resolve every space's world position ONCE per tick; every query this
 	# tick (nearest restroom, venue choice, nav anchors) reads the cache
 	# instead of resolving a prop record per candidate.
+	PerfMonitor.begin("npc_svc")
 	if registry != null:
 		registry.ignore_capacity = PopTestPrefs.ignore_capacity()
+		PerfMonitor.begin("npc_svc_pos")
 		registry.refresh_positions(func(space: Dictionary) -> Variant:
 			return registry.resolve_position(space, main))
+		PerfMonitor.end("npc_svc_pos")
 	PerfMonitor.begin("npc_venues")
 	_service_firepits(main)
 	_resolve_venues(main, registry, abs_h, hour_of_day)
 	_service_djs(main, registry, abs_h, hour_of_day)
 	_service_burn_roles(main, registry, abs_h)
 	PerfMonitor.end("npc_venues")
+	PerfMonitor.begin("npc_svc_spots")
 	_resolve_sleep_spots(main, registry)
 	_resolve_seat_spots(main, registry)
+	PerfMonitor.end("npc_svc_spots")
+	PerfMonitor.begin("npc_svc_comfort")
 	_service_comfort(main, registry, abs_h, hour_of_day)
+	PerfMonitor.end("npc_svc_comfort")
 	_nav_queries_this_tick = 0
 	_nav_keyed_misses_this_tick = 0
+	PerfMonitor.begin("npc_svc_nav")
 	var region := _population_region(main, registry)
 	_last_region = region
 	_service_nav(main, registry, region)
+	PerfMonitor.end("npc_svc_nav")
 	# Deliberately NOT gated on the nav grid: tracing must start on the first
 	# tick, or the desire map misses everything walked during the bake.
 	_service_desire(abs_h, region)
+	PerfMonitor.end("npc_svc")
+	PerfMonitor.begin("npc_walk")
 	var seen: Dictionary = {}
 
 	# Every pop-driven habitat, INCLUDING those inside camp compounds (a
@@ -360,6 +371,7 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		for iid in _all_hands.keys() + _project_pins.keys() + _work_pins.keys():
 			if _tiers.has(iid):
 				_tiers[iid] = CrowdFocus.TIER_FULL
+	PerfMonitor.end("npc_walk")
 
 	for item in habitats:
 		var d: Dictionary = item
@@ -464,7 +476,10 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 				if _desire != null:
 					_desire.add_segment(a, b, channel, m),
 		}
+		PerfMonitor.begin("npc_full_tick")
 		var demand: Dictionary = engine.tick(abs_h, ctx)
+		PerfMonitor.end("npc_full_tick")
+		PerfMonitor.begin("npc_full_post")
 		flow_engine.set_habitat_demand(iid, demand)
 		_dispatch_chore_effects(engine, main)
 		_service_alarms(iid, engine, abs_h)
@@ -474,6 +489,7 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 		var store := _ensure_project_store(iid, specs)
 		store.sync(engine.chore_board, abs_h)
 		_push_build_progress(store, engine.chore_board, main)
+		PerfMonitor.end("npc_full_post")
 		PerfMonitor.begin("npc_persist")
 		_maybe_persist(model, iid, engine, abs_h)
 		PerfMonitor.end("npc_persist")

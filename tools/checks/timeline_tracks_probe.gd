@@ -19,8 +19,19 @@ func _ok(cond: bool, what: String) -> void:
 		_fails.append(what)
 
 
+## Frames, then until the timeline's weather lanes are made (they are made a
+## slice a frame: timeline_ui._run_lane_jobs).
+var _tl_node: Node = null
+
+
 func _settle(tree: SceneTree, frames: int) -> void:
 	for _i in frames:
+		await tree.process_frame
+	for _i in 600:
+		if _tl_node == null or not _tl_node.has_method("lane_jobs_pending"):
+			break
+		if int(_tl_node.call("lane_jobs_pending")) == 0:
+			break
 		await tree.process_frame
 
 
@@ -80,6 +91,7 @@ func _redraw(tl: Node) -> void:
 func run(main: Node, _harness: Node) -> Dictionary:
 	var tree := main.get_tree()
 	var tl: Node = main.get_node_or_null("UILayer/TimelineUI")
+	_tl_node = tl
 	_ok(tl != null, "the timeline exists")
 	if tl == null:
 		return {"ok": false, "fails": _fails}

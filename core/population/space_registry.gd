@@ -547,8 +547,28 @@ func resolve_position(space: Dictionary, main: Node) -> Variant:
 				return null
 			return loader.call("building_centroid_by_tag", str(target.get("building_tag", "")))
 		"area":
-			return area_interior_point(target.get("poly", []) as Array)
+			return area_point_memo(target.get("poly", []) as Array)
 	return null
+
+
+## area_interior_point is a pure function of the outline, and the population
+## tick resolves every space each tick (refresh_positions): on Walton's 82
+## areas that was ~9 ms a tick, ~2 ms for one concave camp outline. Keyed on
+## the outline's hash and checked by value, so an edit made anywhere is seen.
+static var _area_memo: Dictionary = {}
+const AREA_MEMO_MAX := 4096
+
+
+static func area_point_memo(poly: Array) -> Variant:
+	var h := poly.hash()
+	var e: Variant = _area_memo.get(h, null)
+	if e is Array and (e as Array)[0] == poly:
+		return (e as Array)[1]
+	var p: Variant = area_interior_point(poly)
+	if _area_memo.size() >= AREA_MEMO_MAX:
+		_area_memo.clear()
+	_area_memo[h] = [poly.duplicate(true), p]
+	return p
 
 
 ## A prop target's world XZ: the record's position, plus the target's local

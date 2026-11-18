@@ -2579,6 +2579,13 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/bench/flow_step_bench.g
 # use it in any script a selftest loads under --script; a bare `PerfMonitor`
 # there fails the compile). Baselines in plans/HARNESS_MATRIX.md:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/bench/first_person_bench.gd
+# Frame SPIKES (sandbox, graph closed, 1x and 60x, SPIKE_SPEEDS to change):
+# the frame-time spread, which sections and frame phases fill the slow
+# frames, the slowest frames spelled out, FramePacer waits. The phase that
+# names deferred work is `@after_scripts` (a Control's _draw lands there);
+# deferred_bisect_bench.gd finds the node behind it (BISECT_IN=UILayer).
+# See "Frame spikes: one heavy job a frame":
+tools\harness.ps1 -World walton -RunScript res://tools/bench/frame_spike_bench.gd
 # GPU isolation bench (sandbox): the renderer's measured GPU ms with ONE
 # feature or scene layer off at a time (SSIL, SSAO, volumetric fog, glow,
 # MSAA, sun shadow, vegetation, props, tiles, buildings, water, camps, people,
@@ -3961,6 +3968,92 @@ the fix was taking steady cost out. In order of size:
 - **What remains** in slow frames is mostly outside graph code: the stream
   network's `water_*` (it runs while the graph hides the world), SolarUI at
   7200×, and engine time.
+
+## Frame spikes: one heavy job a frame (perf pass, 2026-11-17)
+
+Walton, first person, graph closed, ran ~19 ms frames with 25–140 ms spikes
+several times a second. Measured with `tools/bench/frame_spike_bench.gd`
+(`SPIKE_SPEEDS=1,60`; per frame its length, every F3 section and the frame's
+PHASES; `SPIKE_PACER=0` turns the pacer off).
+- **Frame phases** (`tools/bench/frame_phase_probe.gd`, two nodes at
+  `process_priority` ±100000 plus `RenderingServer.frame_pre_draw` /
+  `frame_post_draw`): `scripts` (every `_process`), `after_scripts` (the
+  deferred-call flush, the delete queue, SceneTree timers, tweens),
+  `render_main`, `physics`, `between`. ⚠ **A Control's `_draw()` runs in
+  `after_scripts`**: `queue_redraw()` is a deferred call, so a slow `_draw`
+  shows up in no `_process` section. `tools/bench/deferred_bisect_bench.gd`
+  switches Main's children off one at a time (`BISECT_IN=UILayer` for
+  UILayer's) and finds the node behind that window.
+- **`FramePacer`** (`core/perf/frame_pacer.gd`, static, autoload-free):
+  `claim(job, waited)`. At most one heavy periodic job runs a frame; a job
+  that finds the frame taken waits for the next and asks again, and after
+  `MAX_WAIT_FRAMES` (6) runs anyway. Only WHEN a job runs moves, never what it
+  computes. Jobs on it:
+  - the ambient tick's two halves (`SystemGraphView._tick_resource_flow_ambient`):
+    the people tick runs on the frame the flow step falls due, and the flow
+    step on a later frame (`_flow_step_due`, `_ambient_flow_step`). The flow
+    engine counts the held frame's time (`ResourceFlowEngine.accumulate`), so
+    the step still covers the clock up to when it runs;
+  - the SCADA hub's 1 Hz tag gather, the element ledger, the timeline's needs
+    strip;
+  - the water network's hydraulics poll, now three phases a frame apart
+    (`_step_hydraulics_poll`): erosion, then the rain history and basins,
+    then the flow comparison, in the old order.
+- **The timeline track.** It redraws at least every `TRACK_IDLE_REDRAW_MS`
+  (500 ms), and its `_draw` had two slow parts:
+  - The four weather lanes each read ~1,000 weather samples (~100 ms a lane),
+    all together on their 10 s TTL: a ~480 ms frame. Weather bins are now
+    made a slice at a time in `_process` (`_lane_bins_sliced`,
+    `_run_lane_jobs`, `LANE_JOB_BUDGET_US` 3 ms). The lane draws its last bins
+    until the new ones are done, and nothing on the very first draw. Bins on
+    the anchored grid do not depend on each other, so the numbers are the
+    same. Checks that read `_waveform_cache` wait on `lane_jobs_pending()`.
+  - `_draw_set_spans` looped over every venue set in the window. Walton's
+    saved window was 337,221 hours (~38 years): 42,156 sets, 113 ms to build
+    and 28 ms to skip on every redraw. Past a day a pixel nothing there can
+    draw, so it returns.
+- **`SpaceRegistry.area_point_memo`**: an area target's interior point is a
+  pure function of its outline (the concave fallback grid-samples 625
+  points). The population tick resolved all 82 of Walton's areas every tick
+  (~9 ms); memoized on the outline's hash, checked by value.
+- **Water at load.** Every Walton load carved the stream channels twice. Other
+  tile layers composing at load asked the network to rebuild before this
+  load's OSM water had answered, so it resolved 0 features, wiped the 425
+  cached channel tiles, and the next carve cut them all again. Each pass sent
+  425 tiles through the height field at ~15 ms each. The loader now reports
+  `osm_water_pending()` (`_osm_water_settled`, set when the OSM fetch answers,
+  fails or the load ends), and `WaterNetwork._start_rebuild` holds the carve
+  until then.
+- **Erosion** walks only the stations that can erode (carved, open, ≥ 2 cm of
+  water; `_erosion_candidates`, cached per flow-states array, which is always
+  replaced and never edited), in the same order.
+- **Result** (Walton, same session, before → after; flow_step_bench state
+  hash unchanged on both worlds, `873bbca3849e25ca` / `c196d8df62f4dee6`):
+
+  | | 1x | 60x |
+  |---|---|---|
+  | p90 | 46.9 → 25.0 ms | 39.1 → 27.5 ms |
+  | p99 | 80.6 → 32.5 ms | 65.2 → 46.1 ms |
+  | worst | 146.7 → 43.5 ms | 139.2 → 61.3 ms |
+  | frames over 33 / 50 ms in 20 s | 195 / 46 → 8 / 0 | 135 / 50 → 35 / 4 |
+
+  The median stays ~19 ms. flow_step_bench's own 60x median frame on Walton
+  went 42.7 → 20.2 ms. Its "full specs digest" is NOT a pin: it holds live
+  display stamps (panel output, battery SOC, `dc_*_w`) and differs between
+  two runs of the same code; the state hash is the pin.
+- Spans added: `npc_svc` / `_pos` / `_spots` / `_comfort` / `_nav`,
+  `npc_walk`, `npc_full_tick` / `_post`, `tl_draw` / `_lanes` / `_mc` /
+  `_clips` / `tl_draw_wave_<source>_<channel>`, `tl_clip_*`.
+  `PerfMonitor.last_frame_ms` is the delta that goes with `last_frame`.
+- **Still open:**
+  - A terrain tile rebuild is ~15 ms on its own (the first build samples the
+    base ground 67² times), more than the 6 ms budget.
+  - The one remaining load carve still recuts all 425 Walton tiles (~10 s on
+    a worker). The cached feature signatures do not match; the cause was not
+    found.
+  - The basin phase of the water poll is ~20 ms in rain at speed.
+  - The 1 Hz SCADA (~10 ms) and element ledger (~10 ms) jobs are each one
+    job, not sliced.
 
 ## One site, many power systems (system_graph/data/graph_systems.gd, 2026-11-04)
 

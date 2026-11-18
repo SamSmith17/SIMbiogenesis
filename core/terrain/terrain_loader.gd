@@ -1221,6 +1221,7 @@ func _settle_gpu(frames: int = SETTLE_FRAMES) -> void:
 
 func _run_load_sequence() -> void:
 	_load_sequence_active = true
+	_osm_water_settled = false
 	auto_veg_ready = false
 	_detail_img_retry_zoom = -1
 	# Seed the near-field detail choice BEFORE anything builds a terrain material,
@@ -1337,6 +1338,7 @@ func _run_load_sequence() -> void:
 	await _run_vegetation_load_phase()
 
 	_load_sequence_active = false
+	_settle_osm_water()
 	_apply_late_dems()
 	_check_load_complete()
 	_maybe_opentopo_hint()
@@ -4903,6 +4905,7 @@ func _on_osm_vectors_ready(_key: String, payload: Dictionary) -> void:
 	_osm_vectors_raw = payload
 	_maybe_autoseed_brc_osm_offset()
 	_rebind_osm_registration(false)
+	_settle_osm_water()
 	if _load_sequence_active:
 		_phase_resolve("osm_map", true)
 		return
@@ -4930,6 +4933,7 @@ func _apply_osm_vectors_after_fetch() -> void:
 
 func _on_buildings_failed(reason: String) -> void:
 	push_warning("TerrainLoader: OSM buildings unavailable (%s)" % reason)
+	_settle_osm_water()
 	_toast("OSM building/water data unavailable — map will load without them.", ToastUI.Level.WARN)
 	if _load_sequence_active:
 		_phase_resolve("osm_map", false)
@@ -7779,6 +7783,22 @@ func _request_water_network_rebuild(force: bool = false) -> void:
 	var wn := _water_network()
 	if wn != null:
 		wn.request_rebuild(force)
+
+
+## False from a load's start until its OSM fetch answers (or fails, or the
+## load ends). Until then the water network holds its carves: resolving would
+## find no mapped streams and wipe the channels loaded from the cache, and
+## the next carve would cut them all again (425 tiles on Walton: two carves
+## and ~6 s of 15 ms tile rebuilds after every load).
+var _osm_water_settled := true
+
+
+func osm_water_pending() -> bool:
+	return not _osm_water_settled
+
+
+func _settle_osm_water() -> void:
+	_osm_water_settled = true
 
 
 ## OSM water items only (the network resolves lines from their centrelines;

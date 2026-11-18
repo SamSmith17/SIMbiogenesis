@@ -573,6 +573,12 @@ func would_tick(delta: float) -> bool:
 	return (_tick_accum + delta) >= _wall_tick_interval()
 
 
+## Count a frame's time toward the next step without stepping (the view
+## holds a due step over a frame so it does not land on the people tick's).
+func accumulate(delta: float) -> void:
+	_tick_accum += delta
+
+
 func tick(delta: float) -> void:
 	if _model == null or _host == null:
 		return
