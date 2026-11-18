@@ -10,11 +10,12 @@ extends SceneTree
 ## Each variant is shot from the same cameras (close, eye height, across the
 ## field) and its GPU time over 90 frames is printed, so the picture and the
 ## cost can be compared. PNGs to --out=<dir> (default user://grass_ab/).
-##   Godot --path . --windowed --resolution 1280x720 --script res://tools/diag/grass_scissor_diag.gd -- --out=<dir> [--species=grass_field|grass_lawn] [--only=ship,s50]
+##   Godot --path . --windowed --resolution 1280x720 --script res://tools/diag/grass_scissor_diag.gd -- --out=<dir> [--species=grass_field|grass_lawn] [--only=ship,s50] [--ssao=0]
 
 var _out := "user://grass_ab"
 var _species := "grass_field"
 var _only: PackedStringArray = PackedStringArray()
+var _ssao := true
 var _cam: Camera3D
 var _root: Node3D
 var _batches: Array = []   # [MultiMeshInstance3D, tier]
@@ -25,6 +26,13 @@ const VARIANTS := {
 	"s50": "ALPHA_SCISSOR_THRESHOLD = 0.5;",
 	# Diagnostics: still the transparent pass, but no partial alpha.
 	"a1": "ALPHA = 1.0;",
+	# Still the transparent pass, but writing depth: within the batch the
+	# nearest blade wins instead of the instance drawn last.
+	"dda": "rm:depth_draw_always",
+	# The opaque pass with the colour taken from a blade k times as high.
+	"ch70": "ch:0.70",
+	"ch80": "ch:0.80",
+	"ch90": "ch:0.90",
 }
 
 const SHOTS := [
@@ -44,6 +52,8 @@ func _initialize() -> void:
 			_species = a.substr(10)
 		elif a.begins_with("--only="):
 			_only = a.substr(7).split(",", false)
+		elif a == "--ssao=0":
+			_ssao = false
 	var abs_out := ProjectSettings.globalize_path(_out) if _out.begins_with("user://") else _out
 	DirAccess.make_dir_recursive_absolute(abs_out)
 	_out = abs_out
@@ -62,7 +72,7 @@ func _studio() -> void:
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	e.ambient_light_energy = 0.8
 	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	e.ssao_enabled = true
+	e.ssao_enabled = _ssao
 	env.environment = e
 	_root.add_child(env)
 	var sun := DirectionalLight3D.new()
@@ -134,6 +144,20 @@ func _variant_shader(code_line: String) -> Shader:
 		return base
 	var sh := Shader.new()
 	var code := base.code
+	if code_line.begins_with("ch:"):
+		var k := code_line.substr(3)
+		var at_b := code.find("vec3 base = mix(root_color, tip_color, v_height_t);")
+		var at_a := code.rfind("ALPHA = alpha;")
+		if at_b < 0 or at_a < 0:
+			push_error("grassab: colour section not found")
+			return base
+		var mid := code.substr(at_b, at_a - at_b).replace("v_height_t", "ch_t")
+		sh.code = code.substr(0, at_b) + ("float ch_t = v_height_t * %s;\n\t" % k) + mid \
+			+ "ALPHA = alpha;\n\tALPHA_SCISSOR_THRESHOLD = 0.04;" + code.substr(at_a + "ALPHA = alpha;".length())
+		return sh
+	if code_line.begins_with("rm:"):
+		sh.code = code.replace("render_mode cull_disabled;", "render_mode cull_disabled, %s;" % code_line.substr(3))
+		return sh
 	var at := code.rfind("ALPHA = alpha;")
 	if at < 0:
 		push_error("grassab: no 'ALPHA = alpha;' in grass.gdshader")
