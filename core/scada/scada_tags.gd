@@ -80,45 +80,66 @@ static func graph_tags(model: Object) -> Array:
 	var out: Array = []
 	if model == null:
 		return out
+	if _skel.size() > SKEL_MAX:
+		_skel.clear()
 	for item: Dictionary in model.get("items"):
 		var ty := str(item.get("type", ""))
+		var tank := ty == "resource"
+		var sw := not tank and ty in SWITCHABLE
+		var specs: Dictionary = item.get("specs", {}) as Dictionary
+		if not tank and not sw and not (ty == "compound" and bool(specs.get("greenhouse_system", false)) \
+				and specs.has("gh_t_air")):
+			continue
 		var iid := str(item.get("id", ""))
 		if iid.is_empty():
 			continue
-		var specs: Dictionary = item.get("specs", {}) as Dictionary
 		var nm := str(specs.get("name", "")).strip_edges()
 		if nm.is_empty():
 			nm = iid
-		if ty == "resource":
+		if tank:
 			var lvl := clampf(float(specs.get("level", 0.0)), 0.0, 1.0)
-			out.append(make("tank.%s.level" % iid, "Level", "%", KIND_SENSOR, lvl * 100.0,
-					{"group": nm, "item": iid, "lo": 0.0, "hi": 100.0,
-					"alias": "tank.%s.level" % slug(nm)}))
-			if not bool(specs.get("unlimited_capacity", false)):
-				var cap := float(specs.get("capacity_qty", 0.0))
-				out.append(make("tank.%s.stock" % iid, "Amount", str(specs.get("capacity_unit", "")),
-						KIND_SENSOR, lvl * cap,
-						{"group": nm, "item": iid, "lo": 0.0, "hi": cap}))
-			out.append(make("tank.%s" % iid, "Overflowing", "", KIND_BINARY,
-					1.0 if bool(specs.get("overflowing", false)) else 0.0,
-					{"group": nm, "item": iid,
-					"text": "overflow" if bool(specs.get("overflowing", false)) else "ok",
-					"alias": "tank.%s" % slug(nm)}))
-		elif ty in SWITCHABLE:
+			var unlimited := bool(specs.get("unlimited_capacity", false))
+			var cap := float(specs.get("capacity_qty", 0.0))
+			var unit := str(specs.get("capacity_unit", ""))
+			var sk: Dictionary = _skel.get(iid, {})
+			if sk.is_empty() or str(sk["ty"]) != ty or str(sk["nm"]) != nm \
+					or bool(sk["unl"]) != unlimited or str(sk["unit"]) != unit \
+					or (not unlimited and float(sk["cap"]) != cap):
+				sk = {"ty": ty, "nm": nm, "unl": unlimited, "unit": unit, "cap": cap,
+					"level": [make("tank.%s.level" % iid, "Level", "%", KIND_SENSOR, 0.0,
+						{"group": nm, "item": iid, "lo": 0.0, "hi": 100.0,
+						"alias": "tank.%s.level" % slug(nm)}), {}],
+					"stock": [] if unlimited else [make("tank.%s.stock" % iid, "Amount", unit, KIND_SENSOR, 0.0,
+						{"group": nm, "item": iid, "lo": 0.0, "hi": cap}), {}],
+					"over": [make("tank.%s" % iid, "Overflowing", "", KIND_BINARY, 0.0,
+						{"group": nm, "item": iid, "text": "ok", "alias": "tank.%s" % slug(nm)}), {}]}
+				_skel[iid] = sk
+			out.append(_tag_of(sk["level"], lvl * 100.0, ""))
+			if not unlimited:
+				out.append(_tag_of(sk["stock"], lvl * cap, ""))
+			var over := bool(specs.get("overflowing", false))
+			out.append(_tag_of(sk["over"], 1.0 if over else 0.0, "overflow" if over else "ok"))
+		elif sw:
 			var on := str(specs.get("requested_state", specs.get("current_state", "off"))).to_lower() == "on"
 			var st := str(specs.get("node_state", ""))
 			var word := "on" if on else "off"
 			if st == "starved" or st == "blocked":
 				word = st
-			out.append(make("node.%s" % iid, "Running", "", KIND_SWITCH, 1.0 if on else 0.0,
-					{"group": nm, "item": iid, "text": word, "alias": "node.%s" % slug(nm)}))
 			# A control valve's (or a variable pump's) opening is a number a
 			# loop can drive.
-			if str(specs.get("role", "")) == "flowctl" and bool(specs.get("throttle", false)):
-				out.append(make("valve.%s.open" % iid, "Opening", "%", KIND_NUMBER,
-						clampf(float(specs.get("open", 1.0)), 0.0, 1.0) * 100.0,
-						{"group": nm, "item": iid, "lo": 0.0, "hi": 100.0, "alias": "valve.%s.open" % slug(nm)}))
-		elif ty == "compound" and bool(specs.get("greenhouse_system", false)) and specs.has("gh_t_air"):
+			var valve := str(specs.get("role", "")) == "flowctl" and bool(specs.get("throttle", false))
+			var sk2: Dictionary = _skel.get(iid, {})
+			if sk2.is_empty() or str(sk2["ty"]) != ty or str(sk2["nm"]) != nm or bool(sk2["valve"]) != valve:
+				sk2 = {"ty": ty, "nm": nm, "valve": valve,
+					"node": [make("node.%s" % iid, "Running", "", KIND_SWITCH, 0.0,
+						{"group": nm, "item": iid, "text": "off", "alias": "node.%s" % slug(nm)}), {}],
+					"open": [] if not valve else [make("valve.%s.open" % iid, "Opening", "%", KIND_NUMBER, 0.0,
+						{"group": nm, "item": iid, "lo": 0.0, "hi": 100.0, "alias": "valve.%s.open" % slug(nm)}), {}]}
+				_skel[iid] = sk2
+			out.append(_tag_of(sk2["node"], 1.0 if on else 0.0, word))
+			if valve:
+				out.append(_tag_of(sk2["open"], clampf(float(specs.get("open", 1.0)), 0.0, 1.0) * 100.0, ""))
+		else:
 			var g := {"group": nm, "item": iid}
 			for row in [["temp", "Air temperature", "°C", "gh_t_air"], ["rh", "Humidity", "%", "gh_rh"],
 					["dli", "Light today", "mol/m²", "gh_dli"], ["vent", "Vents open", "%", "gh_vent_pct"],
@@ -137,9 +158,41 @@ static func graph_tags(model: Object) -> Array:
 		if kind.is_empty() or not conn.has("flow_rate"):
 			continue
 		var cid := str(conn.get("id", ""))
-		out.append(make("wire.%s.flow" % cid, "Flow", "/h", KIND_SENSOR, float(conn.get("flow_rate", 0.0)),
-				{"group": "%s line" % kind.capitalize(), "item": cid}))
+		var wk := "w|" + cid
+		var sk3: Dictionary = _skel.get(wk, {})
+		if sk3.is_empty() or str(sk3["kind"]) != kind:
+			sk3 = {"kind": kind, "flow": [make("wire.%s.flow" % cid, "Flow", "/h", KIND_SENSOR, 0.0,
+				{"group": "%s line" % kind.capitalize(), "item": cid}), {}]}
+			_skel[wk] = sk3
+		out.append(_tag_of(sk3["flow"], float(conn.get("flow_rate", 0.0)), ""))
 	return out
+
+
+## A graph tag's fixed part (id, label, unit, group, alias, range: they change
+## only with the item's name, kind or capacity) is made once per item; make()
+## and its string formatting were most of the gather (~1000 tags a second on
+## a big site). Each slot is [fixed part, the tag handed out last]. A tag
+## whose live value, text and availability are all as last time is that same
+## dict again (nothing writes into a tag but ScadaHub.command, whose writes the
+## comparison sees); otherwise it is a fresh copy of the fixed part.
+static var _skel: Dictionary = {}
+const SKEL_MAX := 20000
+
+
+static func _tag_of(slot: Array, value: float, text: String) -> Dictionary:
+	var last: Dictionary = slot[1]
+	if not last.is_empty():
+		var lv := float(last["value"])
+		# 0.0 and -0.0 compare equal; 1/x tells them apart.
+		if lv == value and (value != 0.0 or 1.0 / value == 1.0 / lv) and bool(last["available"]) \
+				and str(last["text"]) == text:
+			return last
+	var t: Dictionary = (slot[0] as Dictionary).duplicate()
+	t["value"] = value
+	t["available"] = not is_nan(value)
+	t["text"] = text
+	slot[1] = t
+	return t
 
 
 ## Site energy readings. `d` = {battery_pct, solar_w, load_w} (missing = left out).

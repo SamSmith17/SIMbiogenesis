@@ -1846,6 +1846,18 @@ tools\harness.ps1 -World walton -RunScript res://tools/diag/erosion_parity.gd -T
 # one, in order, inside the sim-write bracket at 60x; mean / worst ms per
 # stage, the costliest items. FSP_STEPS sets the step count (default 40):
 tools\harness.ps1 -World walton -RunScript res://tools/diag/flow_step_profile.gd -Timeout 900
+# The two once-a-second jobs piece by piece (sandbox): ScadaHub.refresh
+# (graph tags, book, history) and the element tick (ElementLedger.compute's
+# own passes, histories). SEP_RUNS sets the repeats (default 10):
+tools\harness.ps1 -World walton -RunScript res://tools/diag/scada_elements_profile.gd -Timeout 900
+# ScadaTags.graph_tags and ElementLedger's stock pass against frozen copies
+# of the code before their caches, on the live world over 8 refreshes, every
+# tag and row identical (sandbox), and the kind caches offline (every kind,
+# alias and quantity; ResourceKinds' lookups against kind_meta). Run both
+# after ANY change to graph_tags, CompositionCatalog.embodied / kind_factors
+# or ResourceKinds' display_name / default_unit / wire_color / flow_ref_rate:
+tools\harness.ps1 -World walton -RunScript res://tools/diag/scada_ledger_parity.gd -Timeout 900
+Godot.exe.exe --headless --path . --script tools/diag/kind_factor_parity.gd
 # Rain + stream frame bench (Bombay Beach = w6ad922917357): a 100 mm/h storm,
 # a bowl across a stream, then the real 2023 Hilary weather, 10 sim-h each;
 # prints p50/p95/max frame ms, every water_* / terrain_* section's avg + peak,
@@ -4129,6 +4141,34 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
     the end and the last element need not). Gate:
     `core/resource_timeline_selftest.gd`; a deliberately broken index
     fails it at op 282.
+- **The two once-a-second jobs** (fifth pass, same day), with results the
+  same tag for tag and row for row (`tools/diag/scada_ledger_parity.gd`,
+  `tools/diag/kind_factor_parity.gd`; profiler
+  `tools/diag/scada_elements_profile.gd`):
+  - **Element ledger 9.9 → 6.0 ms.** Its stock pass asked the composition
+    catalog ~15 times per tank, and each `canonical()` goes through
+    ResourceKinds. `CompositionCatalog.kind_factors(kind)` keeps each kind's
+    constants (material, known, kg per unit, element profile, lhv +
+    sensible, water share, food MJ, clean water), cleared when
+    `ResourceKinds.kinds_rev` moves (bumped wherever the user kinds
+    change). `embodied` / `embodied_kg` multiply the same numbers in the
+    same order.
+  - `ResourceKinds.display_name / default_unit / wire_color /
+    flow_ref_rate` read the kind's own entry (`_meta_ref`) instead of
+    `kind_meta`, which deep-copies it on every call.
+  - **SCADA refresh 7.3 → 5.3 ms** (graph tags 7.7 → 4.2, the book 2.3 →
+    0.8): see `ScadaTags` in the SCADA section.
+  - Walton, before → after:
+
+    | | 60x | 1x |
+    |---|---|---|
+    | `gv_elements` worst | 10.3 → 7.3 ms | 10.8 → 7.0 ms |
+    | `scada_hub` worst in a slow frame | 11.3 → 6.8 ms | 12.4 → none |
+    | frames over 33 ms | 9 → 6 | 4 → 8 (other jobs; noise) |
+    | worst frame | 44.0 → 38.2 ms | 42.2 → 44.7 ms |
+
+    Neither job is in a 1x slow frame any more. Both state hashes are
+    unchanged.
 - Spans added: `npc_svc` / `_pos` / `_spots` / `_comfort` / `_nav`,
   `npc_walk`, `npc_full_tick` / `_post`, `tl_draw` / `_lanes` / `_mc` /
   `_clips` / `tl_draw_wave_<source>_<channel>`, `tl_clip_*`.
@@ -4139,8 +4179,9 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
   - The one remaining load carve still recuts all 425 Walton tiles (~10 s on
     a worker). The cached feature signatures do not match; the cause was not
     found.
-  - The 1 Hz SCADA (~10 ms) and element ledger (~10 ms) jobs are each one
-    job, not sliced.
+  - The timeline's lane draw (`tl_draw_lanes`) still takes ~7.5 ms on
+    some frames, and the flow step ~8 ms at 1x: together they are most of
+    Walton's remaining frames over 33 ms.
 
 ## One site, many power systems (system_graph/data/graph_systems.gd, 2026-11-04)
 
@@ -17522,6 +17563,14 @@ Power / Network layers, breakers, wiring tools, checks, instruments). Phase 4 (c
   `site_tags`, `esp_tags`, `tc_tags`, `ha_tags`. `context(tags)` =
   {numeric_values, device_states} with name aliases; `display(tag)`; the
   instance is the registry (`search`, `value`).
+  - `graph_tags` makes each tag's fixed part once per item (`_skel`, keyed
+    by item / wire id, rebuilt when the name, type, capacity, unit or
+    "is a throttle valve" changes) and hands out a copy with the live
+    value. A tag whose value (sign of zero included), text and availability
+    are all as last time is the SAME dict as last time (`_tag_of`).
+  - ⚠ So a tag dict may be shared between two refreshes. Nothing may write
+    into a tag except `ScadaHub.command` (its writes are what the reuse
+    test compares). A new writer must copy the tag first.
 - **`ScadaHistorian`** (pure): change-only samples per tag on the SIM clock
   (deadband 0.2 % of the seen range, keep-alive 1 h), a scrub back drops the
   future, NAN = a gap, `bins_exact` through `TimelineBinning.from_steps`.

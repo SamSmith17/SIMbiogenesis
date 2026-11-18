@@ -147,7 +147,10 @@ static func _stocks(items: Array, out: Dictionary) -> void:
 			continue
 		var specs: Dictionary = d.get("specs", {})
 		var kind := str(specs.get("resource_kind", ""))
-		if kind.is_empty() or not CompositionCatalog.is_material(kind):
+		if kind.is_empty():
+			continue
+		var fac := CompositionCatalog.kind_factors(kind)
+		if not bool(fac["mat"]):
 			continue
 		# Infinite supplies and outlet sinks are the site's edge, not its stock.
 		if bool(specs.get("unlimited_capacity", false)) or bool(specs.get("outlet_sink", false)) \
@@ -167,14 +170,14 @@ static func _stocks(items: Array, out: Dictionary) -> void:
 		(out["stores"] as Array).append(row)
 		st["kg"] = float(st["kg"]) + float(emb["kg"])
 		var wkg := float(emb["water_kg"])
-		if CompositionCatalog.is_clean_water(kind):
+		if bool(fac["clean"]):
 			st["usable_water_kg"] = float(st["usable_water_kg"]) + wkg
 		elif wkg > 0.0:
 			st["bound_water_kg"] = float(st["bound_water_kg"]) + wkg
 			var bk: Dictionary = st["bound_by_kind"]
 			bk[kind] = float(bk.get(kind, 0.0)) + wkg
 		st["energy_mj"] = float(st["energy_mj"]) + float(emb["energy_mj"])
-		st["food_mj"] = float(st["food_mj"]) + float(emb["kg"]) * CompositionCatalog.food_mj_per_kg(kind)
+		st["food_mj"] = float(st["food_mj"]) + float(emb["kg"]) * float(fac["food"])
 		_add_elements(st["elements"], emb["elements"])
 
 

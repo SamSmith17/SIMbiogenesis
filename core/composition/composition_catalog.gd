@@ -28,6 +28,11 @@ const H_FG_MJ_KG := 2.443
 
 static var _comp_cache: Dictionary = {}
 static var _kind_cache: Dictionary = {}
+## What embodied() multiplies by, per kind as asked: canonical() goes through
+## ResourceKinds on every call and a ledger asked ~15 times per tank. Cleared
+## with the other caches and when the user's kinds change.
+static var _fac_cache: Dictionary = {}
+static var _fac_rev: int = -1
 
 
 # --- formulas -----------------------------------------------------------------
@@ -305,14 +310,37 @@ static func food_mj_per_kg(kind: String) -> float:
 ## What `qty` of the kind's unit holds. known = false: the composition is
 ## unknown and only qty is meaningful.
 static func embodied(kind: String, qty: float) -> Dictionary:
-	var out := {"known": true, "kg": 0.0, "water_kg": 0.0, "elements": {}, "energy_mj": 0.0}
-	if not is_material(kind):
-		return out
-	if row(kind).is_empty():
-		out["known"] = false
-		return out
-	var kg := kg_per_unit(kind) * qty
-	return _embodied_kg(kind, kg)
+	var f := kind_factors(kind)
+	if not bool(f["mat"]):
+		return {"known": true, "kg": 0.0, "water_kg": 0.0, "elements": {}, "energy_mj": 0.0}
+	if not bool(f["known"]):
+		return {"known": false, "kg": 0.0, "water_kg": 0.0, "elements": {}, "energy_mj": 0.0}
+	return _embodied_from(f, float(f["kgpu"]) * qty)
+
+
+## The kind's constants, worked out once: mat (is_material), known (a
+## composition row), and for a known kind kgpu (kg_per_unit), prof
+## (elements_of), e (lhv + sensible MJ/kg), wf (water_fraction), food
+## (food_mj_per_kg), clean (is_clean_water). Read-only: never change it.
+static func kind_factors(kind: String) -> Dictionary:
+	if _fac_rev != ResourceKinds.kinds_rev:
+		_fac_cache.clear()
+		_fac_rev = ResourceKinds.kinds_rev
+	var hit: Variant = _fac_cache.get(kind)
+	if hit != null:
+		return hit
+	var mat := is_material(kind)
+	var known := mat and not row(kind).is_empty()
+	var f := {"mat": mat, "known": known}
+	if known:
+		f["kgpu"] = kg_per_unit(kind)
+		f["prof"] = elements_of(kind)
+		f["e"] = lhv_mj_per_kg(kind) + sensible_mj_per_kg(kind)
+		f["wf"] = water_fraction(kind)
+		f["food"] = food_mj_per_kg(kind)
+		f["clean"] = is_clean_water(kind)
+	_fac_cache[kind] = f
+	return f
 
 
 ## A gas kind with its own mix: `moles` = {component: mole fraction}
@@ -353,12 +381,16 @@ static func embodied_kg(kind: String, kg: float) -> Dictionary:
 
 
 static func _embodied_kg(kind: String, kg: float) -> Dictionary:
+	return _embodied_from(kind_factors(kind), kg)
+
+
+static func _embodied_from(f: Dictionary, kg: float) -> Dictionary:
 	var el: Dictionary = {}
-	var prof: Dictionary = elements_of(kind)
+	var prof: Dictionary = f["prof"]
 	for e in prof.keys():
 		el[e] = kg * float(prof[e])
-	var energy := kg * (lhv_mj_per_kg(kind) + sensible_mj_per_kg(kind))
-	return {"known": true, "kg": kg, "water_kg": kg * water_fraction(kind), "elements": el,
+	var energy := kg * float(f["e"])
+	return {"known": true, "kg": kg, "water_kg": kg * float(f["wf"]), "elements": el,
 		"energy_mj": energy}
 
 
@@ -396,6 +428,7 @@ static func uncomposed_builtin_kinds() -> Array:
 static func clear_cache() -> void:
 	_comp_cache.clear()
 	_kind_cache.clear()
+	_fac_cache.clear()
 
 
 # --- the profile walk ---------------------------------------------------------

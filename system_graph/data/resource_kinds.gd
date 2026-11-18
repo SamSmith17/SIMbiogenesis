@@ -450,6 +450,9 @@ static var _loaded: bool = false
 ## runs for every tank and port of every ledger (the Festival board walks
 ## forty camps a second). Cleared whenever the user kinds change.
 static var _norm_cache: Dictionary = {}
+## Moves whenever the user kinds change (load, add, remove), so caches built
+## on kinds elsewhere (CompositionCatalog's factors) know to start again.
+static var kinds_rev: int = 0
 
 
 static func _ensure_loaded() -> void:
@@ -458,6 +461,7 @@ static func _ensure_loaded() -> void:
 	_loaded = true
 	_extra.clear()
 	_norm_cache.clear()
+	kinds_rev += 1
 	if not FileAccess.file_exists(CONFIG_PATH):
 		return
 	var cfg := ConfigFile.new()
@@ -527,6 +531,7 @@ static func add_custom_kind(display: String, unit: String, abbrev: String,
 	}
 	_extra[kid] = entry
 	_norm_cache.clear()
+	kinds_rev += 1
 
 	var cfg := ConfigFile.new()
 	if FileAccess.file_exists(CONFIG_PATH):
@@ -549,6 +554,7 @@ static func remove_custom_kind(kind_id: String) -> bool:
 		return false
 	_extra.erase(kind_id)
 	_norm_cache.clear()
+	kinds_rev += 1
 	if FileAccess.file_exists(CONFIG_PATH):
 		var cfg := ConfigFile.new()
 		if cfg.load(CONFIG_PATH) == OK and cfg.has_section(kind_id):
@@ -592,22 +598,36 @@ static func kind_meta(kind_id: String) -> Dictionary:
 	}
 
 
+## The kind's own entry, NOT a copy (kind_meta copies every call): for the
+## read-only lookups below, which run per tank and per wire. {} = no such kind.
+static func _meta_ref(kind_id: String) -> Dictionary:
+	_ensure_loaded()
+	if BUILTIN.has(kind_id):
+		return BUILTIN[kind_id]
+	if _extra.has(kind_id):
+		return _extra[kind_id]
+	return {}
+
+
 static func wire_color(kind_id: String) -> Color:
 	if kind_id.is_empty():
 		return Color(0.580, 0.639, 0.722, 1.0)
-	return kind_meta(kind_id).get("color", Color(0.580, 0.639, 0.722, 1.0)) as Color
+	return _meta_ref(kind_id).get("color", Color(0.580, 0.639, 0.722, 1.0)) as Color
 
 
 static func display_name(kind_id: String) -> String:
-	return str(kind_meta(kind_id).get("display", kind_id))
+	var m := _meta_ref(kind_id)
+	if m.is_empty():
+		return kind_id.capitalize()
+	return str(m.get("display", kind_id))
 
 
 static func default_unit(kind_id: String) -> String:
-	return str(kind_meta(kind_id).get("unit", "unit"))
+	return str(_meta_ref(kind_id).get("unit", "unit"))
 
 
 static func flow_ref_rate(kind_id: String) -> float:
-	return float(kind_meta(kind_id).get("flow_ref_rate", 10.0))
+	return float(_meta_ref(kind_id).get("flow_ref_rate", 10.0))
 
 
 ## Canonical id for compatibility checks (water ↔ potable_water via aliases).
