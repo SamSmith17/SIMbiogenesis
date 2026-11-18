@@ -9420,6 +9420,12 @@ it only ever writes the procedural CHANNEL tile layer.
   `area_for_volume` must be made in both, and
   `tools/diag/basin_series_parity.gd` (which keeps the plain loop) must
   still say bit-identical.
+  ⚠ Basins are only found again when drainage reruns, and a terrain edit
+  (sculpt, undo, earthworks, terrace digging) asks for that in
+  `on_terrain_tiles_changed` (`request_drainage`, debounced 2 s, on a
+  worker). From da2ed2b (2026-11-10) to 2026-11-17 that call sat after the
+  `return` of `_holes_sig`, so no edit reran drainage, a bowl dug across a
+  stream was never a basin, and `stream_basin_check` failed.
 - **Erosion** (`StreamHydraulics.bed_shear_pa` / `erosion_rate_mps`,
   excess-shear model, k_d 2e-6 m³/(N·s), τc 4 Pa): while the clock runs
   FORWARD (steps ≤ 1 h; a scrub or jump erodes nothing) every carved open

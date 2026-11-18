@@ -2230,6 +2230,7 @@ func on_terrain_tiles_changed(_keys: Array) -> void:
 		_surf_masks = {}
 		_surf_arrays = {}
 	request_rebuild()
+	request_drainage()
 
 
 ## Where a stream's water surface is drawn: its open spans, less every
@@ -2260,7 +2261,6 @@ func _holes_sig() -> String:
 	for h in _structure_holes():
 		parts.append("%s|%s" % [str(h.get("id", "")), str(h.get("poly", []))])
 	return ";".join(parts)
-	request_drainage()
 
 
 # ---------------------------------------------------------------------------
