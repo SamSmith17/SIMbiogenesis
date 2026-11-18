@@ -8455,10 +8455,18 @@ CAMERA-based detail range (`tree_detail_distance_m`, per-quality-tier default
 beyond it. The old SoI ring system and the large-map `auto_force_far_canopy`
 flattening are GONE — force_far was why a 30 km map never rendered a real 3D
 tree at ANY distance. Its prim-guard duty moved to `VegLodPolicy`: the loader
-computes a budget-shrunk `tree_detail_eff_m` per rebuild (worst-case near-set
-tree count over 256 m chunk neighbourhoods vs the tier's `tree_near_budget`
-400/800/1500/4000, 60 m floor) and injects it via
-`_auto_veg_runtime_settings`. Visibility ranges are BUILD-time only (AMD
+computes a budget-shrunk `tree_detail_eff_m` per rebuild and injects it via
+`_auto_veg_runtime_settings`: the largest distance (a 10 m step, 60 m floor)
+at which no viewpoint has more than the tier's `tree_near_budget`
+400/800/1500/4000 full-mesh trees within it. Since 2026-11-17 that is
+MEASURED (`measured_detail_distance` over `detail_grid(detail_points(...))`:
+trees on a 16 m grid with a summed-area table, a disc counted round every
+occupied cell, ~90 ms for 36k trees) and counts only species whose full mesh
+the distance ends (`detail_controls`: a chain starting with the mesh and
+having a far band, LOD handoff on); a species set to full mesh only is the
+player's choice and outside the budget. The 256 m chunk sums it replaced
+read Mount Vernon's budget as spent at 60 m (real worst case 202 of 400);
+measured it is 150 m, same mean GPU, ~1 ms more on the heaviest views. Visibility ranges are BUILD-time only (AMD
 Vulkan hard-crashes on live sweeps); the slider triggers the debounced
 rebuild. Impostors are baked IN-PROCESS (no GLBs exist — meshes are
 procedural): 8 yaw + 1 top view into a 1024² 3×3 atlas + a foliage-vs-bark

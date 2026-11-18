@@ -10,15 +10,9 @@ extends RefCounted
 ## exactly the prim bomb the old force_far flattening existed to prevent (by
 ## never showing a real tree at all). Instead of flattening, SHRINK the
 ## effective range until the worst-case count of full-mesh trees around any
-## single viewpoint fits the quality tier's budget.
-##
-## Deterministic and cheap: counts are aggregated per 256 m chunk once per
-## rebuild; the worst-case near set for a viewpoint in chunk C is the sum of
-## records in every chunk whose centre lies within (range + chunk diagonal)
-## of C's centre. O(chunks²) with a few hundred chunks.
+## single viewpoint fits the quality tier's budget (measured_detail_distance).
 
 const MIN_DETAIL_M := 60.0
-const SHRINK_STEP := 0.85
 
 ## --- Configurable LOD ladder (Overhaul v2.1) --------------------------------
 ## The player picks the ORDER of tree representations per species and may
@@ -119,57 +113,204 @@ static func chain_bands(chain: Array, detail_m: float, photocard_m: float,
 	return bands
 
 
-## chunk_counts: {Vector2i chunk coord -> int tree records}. Returns the
-## largest distance ≤ requested_m whose worst-case near-set count fits the
-## budget (never below MIN_DETAIL_M).
-static func effective_detail_distance(chunk_counts: Dictionary, requested_m: float,
-		budget: int, chunk_size_m: float = 256.0) -> float:
-	if chunk_counts.is_empty() or budget <= 0:
-		return requested_m
-	var centers: Array[Vector2] = []
-	var counts: Array[int] = []
-	for key in chunk_counts:
-		var c: Vector2i = key
-		centers.append((Vector2(c) + Vector2(0.5, 0.5)) * chunk_size_m)
-		counts.append(int(chunk_counts[key]))
-	var d := maxf(requested_m, MIN_DETAIL_M)
-	var diag := chunk_size_m * 1.42
-	while d > MIN_DETAIL_M:
-		var worst := 0
-		var reach := d + diag
-		var reach2 := reach * reach
-		for i in centers.size():
-			var total := 0
-			for j in centers.size():
-				if centers[i].distance_squared_to(centers[j]) <= reach2:
-					total += counts[j]
-			worst = maxi(worst, total)
-			if worst > budget:
-				break
-		if worst <= budget:
-			return d
-		d *= SHRINK_STEP
-	return MIN_DETAIL_M
+## --- The detail budget ------------------------------------------------------
+## The detail distance is the largest distance <= the requested one at which
+## no viewpoint has more than `budget` full-mesh trees within it. MEASURED:
+## the trees the distance controls are binned on a fine grid, and for every
+## occupied cell the trees whose cell centre lies within the distance of its
+## centre are counted (a disc, row by row through a summed-area table; a
+## square round the disc rules most cells out first). Deterministic.
+##
+## What it replaced (2026-11-17) summed whole 256 m chunks out to the distance
+## plus 363 m, and counted species drawn as full meshes at every distance,
+## which the distance does not touch. On Mount Vernon that read the budget of
+## 400 as spent at 60 m, where the real worst case was 202 trees (89 of them
+## species the distance controls), and floored the distance there; measured,
+## it is 168 m, for the same average GPU time.
+
+const BUDGET_CELL_M := 16.0
+## The grid covers the trees' bounding box; its cell doubles until it fits.
+const BUDGET_MAX_CELLS := 262144
+## The answer is a multiple of this: the distance rides the settings dict,
+## which is the mesh cache key, so it should not move with every tree painted.
+const BUDGET_STEP_M := 10.0
+const _KEY_SHIFT := 4194304
 
 
-## Convenience: aggregate per-chunk tree-record counts from one or more layer
-## `bulk` dictionaries (species slot -> record array). Only tree families
-## count — grass/shrub never build the expensive NEAR mesh.
-static func chunk_tree_counts(bulks: Array, chunk_size_m: float = 256.0) -> Dictionary:
-	var out := {}
-	for bulk in bulks:
-		if not (bulk is Dictionary):
+## Does the detail distance decide where this species' full mesh ends? Not
+## for a chain that does not start with the mesh, a mesh-only chain, or a
+## style with the LOD handoff off: those draw the same at any distance.
+static func detail_controls(species: String, settings: Dictionary) -> bool:
+	var fam := VegSpeciesCatalog.mesh_family(species)
+	if fam != "deciduous" and fam != "pine":
+		return false
+	var bs := VegSpeciesCatalog.settings_with_variant(species, settings,
+		VegetationCardFactory.SPECS)
+	if not VegetationCardFactory.canopy_lod_enabled(species, bs):
+		return false
+	var chain := VegetationCardFactory.lod_chain(species, bs)
+	return chain.size() > 1 and str(chain[0]) == REP_MESH
+
+
+## Positions of the trees the detail distance controls, from one or more layer
+## `bulk` dictionaries (slot -> records). resolvers[i], when a valid Callable,
+## turns bulks[i]'s slot into its species (the generated layer stores aliases).
+static func detail_points(bulks: Array, settings: Dictionary,
+		resolvers: Array = []) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for i in bulks.size():
+		if not (bulks[i] is Dictionary):
 			continue
-		for slot in (bulk as Dictionary):
-			var fam := VegSpeciesCatalog.mesh_family(str(slot))
-			if fam != "deciduous" and fam != "pine":
+		var bulk: Dictionary = bulks[i]
+		var res: Variant = resolvers[i] if i < resolvers.size() else null
+		for slot in bulk:
+			var sp := str(slot)
+			if res is Callable and (res as Callable).is_valid():
+				sp = str((res as Callable).call(sp))
+			if not detail_controls(sp, settings):
 				continue
-			for item in (bulk as Dictionary)[slot]:
-				if not (item is Dictionary):
-					continue
-				var d: Dictionary = item
-				var key := Vector2i(
-					int(floor(float(d.get("x", 0.0)) / chunk_size_m)),
-					int(floor(float(d.get("z", 0.0)) / chunk_size_m)))
-				out[key] = int(out.get(key, 0)) + 1
+			for item in bulk[slot]:
+				if item is Dictionary:
+					var d: Dictionary = item
+					out.append(Vector2(float(d.get("x", 0.0)), float(d.get("z", 0.0))))
 	return out
+
+
+## The trees binned for the budget: a dense grid over their bounding box with
+## a summed-area table. {} for no trees.
+static func detail_grid(points: PackedVector2Array) -> Dictionary:
+	if points.is_empty():
+		return {}
+	var mn := points[0]
+	var mx := points[0]
+	for p in points:
+		mn = Vector2(minf(mn.x, p.x), minf(mn.y, p.y))
+		mx = Vector2(maxf(mx.x, p.x), maxf(mx.y, p.y))
+	var cell := BUDGET_CELL_M
+	var w := 1
+	var h := 1
+	while true:
+		w = int(floor((mx.x - mn.x) / cell)) + 1
+		h = int(floor((mx.y - mn.y) / cell)) + 1
+		if w * h <= BUDGET_MAX_CELLS:
+			break
+		cell *= 2.0
+	var counts := PackedInt32Array()
+	counts.resize(w * h)
+	for p in points:
+		var ix := mini(int((p.x - mn.x) / cell), w - 1)
+		var iz := mini(int((p.y - mn.y) / cell), h - 1)
+		counts[iz * w + ix] += 1
+	var sw := w + 1
+	var sat := PackedInt32Array()
+	sat.resize(sw * (h + 1))
+	var occ := PackedInt32Array()
+	for z in h:
+		var run := 0
+		var row := z * w
+		var srow := (z + 1) * sw
+		var prow := z * sw
+		for x in w:
+			var c := counts[row + x]
+			if c > 0:
+				occ.append(row + x)
+			run += c
+			sat[srow + x + 1] = sat[prow + x + 1] + run
+	return {"cell": cell, "w": w, "h": h, "sat": sat, "occ": occ, "n": points.size()}
+
+
+## Trees in the inclusive cell rectangle (clamped to the grid).
+static func _grid_rect(g: Dictionary, x0: int, z0: int, x1: int, z1: int) -> int:
+	var w := int(g["w"])
+	var h := int(g["h"])
+	x0 = maxi(x0, 0)
+	z0 = maxi(z0, 0)
+	x1 = mini(x1, w - 1)
+	z1 = mini(z1, h - 1)
+	if x0 > x1 or z0 > z1:
+		return 0
+	var sat: PackedInt32Array = g["sat"]
+	var sw := w + 1
+	return sat[(z1 + 1) * sw + x1 + 1] - sat[z0 * sw + x1 + 1] \
+		- sat[(z1 + 1) * sw + x0] + sat[z0 * sw + x0]
+
+
+## Trees whose cell centre lies within d of cell (cx, cz)'s centre.
+static func _grid_disc(g: Dictionary, cx: int, cz: int, d: float, stop_above: int) -> int:
+	var cell := float(g["cell"])
+	var r := int(floor(d / cell))
+	var total := 0
+	for dz in range(-r, r + 1):
+		var off := float(dz) * cell
+		var rem := d * d - off * off
+		if rem < 0.0:
+			continue
+		var hw := int(floor(sqrt(rem) / cell))
+		total += _grid_rect(g, cx - hw, cz + dz, cx + hw, cz + dz)
+		if total > stop_above:
+			break
+	return total
+
+
+## The most trees within d of any occupied cell's centre (for checks and
+## diagnostics; the budget search uses the pruned test below).
+static func worst_near_count(g: Dictionary, d: float) -> int:
+	if g.is_empty():
+		return 0
+	var w := int(g["w"])
+	var worst := 0
+	for i in (g["occ"] as PackedInt32Array):
+		worst = maxi(worst, _grid_disc(g, i % w, i / w, d, 1 << 30))
+	return worst
+
+
+## Does no viewpoint have more than `budget` trees within d? Cells whose
+## surrounding square already fits are skipped; the rest are tested most
+## crowded first, so an overflow is found early.
+static func _fits(g: Dictionary, d: float, budget: int) -> bool:
+	if int(g["n"]) <= budget:
+		return true
+	var w := int(g["w"])
+	var r := int(floor(d / float(g["cell"])))
+	var keys := PackedInt64Array()
+	for i in (g["occ"] as PackedInt32Array):
+		var cx := i % w
+		var cz := i / w
+		var sq := _grid_rect(g, cx - r, cz - r, cx + r, cz + r)
+		if sq > budget:
+			keys.append(int(sq) * _KEY_SHIFT + i)
+	if keys.is_empty():
+		return true
+	keys.sort()
+	for k in range(keys.size() - 1, -1, -1):
+		var i := int(keys[k] % _KEY_SHIFT)
+		if _grid_disc(g, i % w, i / w, d, budget) > budget:
+			return false
+	return true
+
+
+## The detail distance: the requested one when it fits the budget, else the
+## largest multiple of BUDGET_STEP_M that does, never below MIN_DETAIL_M.
+static func measured_detail_distance(g: Dictionary, requested_m: float, budget: int) -> float:
+	var hi := maxf(requested_m, MIN_DETAIL_M)
+	if g.is_empty() or budget <= 0 or _fits(g, hi, budget):
+		return hi
+	var lo := MIN_DETAIL_M
+	if not _fits(g, lo, budget):
+		return MIN_DETAIL_M
+	var best := lo
+	var a := int(ceil(lo / BUDGET_STEP_M))
+	var b := int(floor(hi / BUDGET_STEP_M))
+	# Largest step multiple in [lo, hi) that fits (fits is monotone in d).
+	while a <= b:
+		var mid := (a + b) / 2
+		var dm := float(mid) * BUDGET_STEP_M
+		if dm >= hi:
+			b = mid - 1
+			continue
+		if _fits(g, dm, budget):
+			best = maxf(best, dm)
+			a = mid + 1
+		else:
+			b = mid - 1
+	return best

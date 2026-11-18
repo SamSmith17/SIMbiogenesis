@@ -21,7 +21,8 @@ func _initialize() -> void:
 	_test_sparse_keeps_requested()
 	_test_dense_shrinks()
 	_test_never_below_floor()
-	_test_chunk_counts()
+	_test_detail_points()
+	_test_budget_speed()
 	_test_chain_parsing()
 	_test_chain_bands()
 	_test_chain_resolution()
@@ -34,72 +35,118 @@ func _initialize() -> void:
 		quit(1)
 
 
+func _grid_of(pts: PackedVector2Array) -> Dictionary:
+	return VegLodPolicy.detail_grid(pts)
+
+
+## Deterministic scatter: n points in a square of side `side` round `at`.
+func _scatter(n: int, side: float, at: Vector2, seed_v: int) -> PackedVector2Array:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_v
+	var out := PackedVector2Array()
+	for _i in n:
+		out.append(at + Vector2(rng.randf() * side, rng.randf() * side))
+	return out
+
+
+## The most trees within d of any of every k-th tree, by exact distances.
+func _brute_worst(pts: PackedVector2Array, d: float, k: int) -> int:
+	var worst := 0
+	var i := 0
+	while i < pts.size():
+		var n := 0
+		for q in pts:
+			if q.distance_squared_to(pts[i]) <= d * d:
+				n += 1
+		worst = maxi(worst, n)
+		i += k
+	return worst
+
+
 func _test_sparse_keeps_requested() -> void:
-	# A handful of light chunks: the user's requested range is affordable.
-	var counts := {Vector2i(0, 0): 40, Vector2i(4, 4): 30, Vector2i(-3, 2): 25}
-	var d := VegLodPolicy.effective_detail_distance(counts, 220.0, 1500)
+	var pts := PackedVector2Array([Vector2(10, 10), Vector2(900, 40), Vector2(-500, 300)])
+	var d := VegLodPolicy.measured_detail_distance(_grid_of(pts), 220.0, 1500)
 	_check("sparse map keeps the requested distance", is_equal_approx(d, 220.0),
 		"got %.1f" % d)
-	_check("empty map keeps the requested distance",
-		is_equal_approx(VegLodPolicy.effective_detail_distance({}, 400.0, 100), 400.0))
+	_check("no trees keeps the requested distance",
+		is_equal_approx(VegLodPolicy.measured_detail_distance({}, 400.0, 100), 400.0))
 
 
 func _test_dense_shrinks() -> void:
-	# A 10x10 block of 256 m chunks at 200 trees each = 20k trees. A 400 m
-	# request would put thousands of full meshes in the near set; the policy
-	# must shrink until the worst-case fits the budget.
-	var counts := {}
-	for x in 10:
-		for z in 10:
-			counts[Vector2i(x, z)] = 200
-	var d := VegLodPolicy.effective_detail_distance(counts, 400.0, 800)
+	# 20k trees over 1.6 km: a 400 m request puts thousands in the near set.
+	var pts := _scatter(20000, 1600.0, Vector2(-300.0, 200.0), 7)
+	var g := _grid_of(pts)
+	var d := VegLodPolicy.measured_detail_distance(g, 400.0, 800)
 	_check("dense map shrinks the distance", d < 400.0, "got %.1f" % d)
-	# ...and the shrunk distance really is affordable: worst-case near set at
-	# distance d must be <= budget (re-derive with the policy's own metric).
-	var worst := 0
-	var reach := d + 256.0 * 1.42
-	for a in counts:
-		var total := 0
-		var ca := (Vector2(Vector2i(a)) + Vector2(0.5, 0.5)) * 256.0
-		for b in counts:
-			var cb := (Vector2(Vector2i(b)) + Vector2(0.5, 0.5)) * 256.0
-			if ca.distance_to(cb) <= reach:
-				total += int(counts[b])
-		worst = maxi(worst, total)
-	# The floor may win over the budget (trees within arm's reach are always
-	# real): the distance either fits the budget OR sits at the floor.
-	_check("shrunk distance fits the budget (or bottomed at the floor)",
-		worst <= 800 or is_equal_approx(d, VegLodPolicy.MIN_DETAIL_M),
-		"worst near-set %d at %.1f m" % [worst, d])
-	# A bigger budget must never yield a SHORTER distance.
-	var d_big := VegLodPolicy.effective_detail_distance(counts, 400.0, 4000)
-	_check("bigger budget never shortens", d_big >= d,
-		"%.1f < %.1f" % [d_big, d])
+	_check("the distance is a whole step",
+		is_equal_approx(fmod(d, VegLodPolicy.BUDGET_STEP_M), 0.0), "got %.2f" % d)
+	var at := VegLodPolicy.worst_near_count(g, d)
+	var past := VegLodPolicy.worst_near_count(g, d + VegLodPolicy.BUDGET_STEP_M)
+	_check("the distance fits the budget", at <= 800, "%d trees at %.0f m" % [at, d])
+	_check("one step further does not", past > 800, "%d trees at %.0f m" % [past, d + 10.0])
+	# The grid count against exact distances from real tree positions.
+	var brute := _brute_worst(pts, d, 97)
+	_check("grid worst case matches exact distances within 15 %",
+		absf(float(at - brute)) <= 0.15 * float(brute),
+		"grid %d, exact %d at %.0f m" % [at, brute, d])
+	var d_big := VegLodPolicy.measured_detail_distance(g, 400.0, 4000)
+	_check("bigger budget never shortens", d_big >= d, "%.1f < %.1f" % [d_big, d])
+	# A clump of trees far from the rest decides the distance: the worst
+	# viewpoint, not the average one.
+	var clump := pts.duplicate()
+	clump.append_array(_scatter(3000, 120.0, Vector2(5000.0, 5000.0), 9))
+	var d_clump := VegLodPolicy.measured_detail_distance(_grid_of(clump), 400.0, 800)
+	_check("a dense clump shortens the distance", d_clump < d,
+		"%.0f m vs %.0f m" % [d_clump, d])
 
 
 func _test_never_below_floor() -> void:
-	# Absurd density: the floor holds so close-range trees are always real.
-	var counts := {Vector2i(0, 0): 100000}
-	var d := VegLodPolicy.effective_detail_distance(counts, 300.0, 100)
-	_check("distance never drops below the floor", d >= VegLodPolicy.MIN_DETAIL_M - 0.01,
-		"got %.1f" % d)
+	var pts := _scatter(20000, 40.0, Vector2.ZERO, 3)
+	var d := VegLodPolicy.measured_detail_distance(_grid_of(pts), 300.0, 100)
+	_check("distance never drops below the floor",
+		is_equal_approx(d, VegLodPolicy.MIN_DETAIL_M), "got %.1f" % d)
 
 
-func _test_chunk_counts() -> void:
+## Only trees whose full mesh the distance ends count.
+func _test_detail_points() -> void:
 	var bulk := {
 		"deciduous": [{"x": 10.0, "z": 10.0}, {"x": 300.0, "z": 10.0}],
 		"spruce": [{"x": 20.0, "z": 20.0}],
 		"shrub": [{"x": 30.0, "z": 30.0}],       # not a tree family
 		"grass_lawn": [{"x": 40.0, "z": 40.0}],  # not a tree family
 	}
-	var counts := VegLodPolicy.chunk_tree_counts([bulk])
-	_check("trees counted per chunk", int(counts.get(Vector2i(0, 0), 0)) == 2,
-		"got %s" % str(counts))
-	_check("second chunk counted", int(counts.get(Vector2i(1, 0), 0)) == 1)
-	var total := 0
-	for k in counts:
-		total += int(counts[k])
-	_check("grass/shrub never counted", total == 3, "total %d" % total)
+	_check("trees with a handoff count, shrubs and grass do not",
+		VegLodPolicy.detail_points([bulk], {}).size() == 3,
+		str(VegLodPolicy.detail_points([bulk], {}).size()))
+	var mesh_pines := {"pine_detail_chain": "mesh"}
+	_check("a full-mesh-only species is left out",
+		VegLodPolicy.detail_points([bulk], mesh_pines).size() == 2)
+	_check("a style with the deciduous handoff off is left out",
+		VegLodPolicy.detail_points([bulk], {"deciduous_leaf_lod_enabled": false}).size() == 1)
+	_check("a chain without the mesh first is left out",
+		VegLodPolicy.detail_points([bulk], {"pine_detail_chain": "impostor"}).size() == 2)
+	var as_shrub := func(_slot: String) -> String: return "shrub"
+	_check("a resolver names the slot's species",
+		VegLodPolicy.detail_points([bulk], {}, [as_shrub]).size() == 0)
+	var auto_res := Callable(AutoVegetationRuntime, "_resolve_species")
+	_check("the generated layer's resolver is callable",
+		str(auto_res.call("conifer")) != "" and auto_res.is_valid(),
+		str(auto_res.call("conifer")))
+	_check("detail_controls: default chain", VegLodPolicy.detail_controls("maple", {}))
+	_check("detail_controls: mesh only", not VegLodPolicy.detail_controls(
+		"maple", {"deciduous_detail_chain": "mesh"}))
+
+
+func _test_budget_speed() -> void:
+	var pts := _scatter(30000, 8000.0, Vector2.ZERO, 11)
+	pts.append_array(_scatter(6000, 300.0, Vector2(2000.0, 2000.0), 12))
+	var t0 := Time.get_ticks_usec()
+	var g := _grid_of(pts)
+	var d := VegLodPolicy.measured_detail_distance(g, 400.0, 1500)
+	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	print("  budget: 36k trees over 8 km -> %.0f m in %.0f ms (cell %.0f m)" % [
+		d, ms, float(g["cell"])])
+	_check("the budget for 36k trees takes under a second", ms < 1000.0, "%.0f ms" % ms)
 
 
 ## --- Overhaul v2.1: configurable LOD ladder ---------------------------------

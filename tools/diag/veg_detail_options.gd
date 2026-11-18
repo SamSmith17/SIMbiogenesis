@@ -70,11 +70,11 @@ func run(main: Node, harness: Node) -> Dictionary:
 			if chain == [VegLodPolicy.REP_MESH] or not VegetationCardFactory.canopy_lod_enabled(sp, s0):
 				if sp not in full_mesh:
 					full_mesh.append(sp)
-	var d_cur := VegLodPolicy.effective_detail_distance(
-		VegLodPolicy.chunk_tree_counts(bulks), requested, budget)
+	var d_cur := float(s0.get("tree_detail_eff_m", requested))
+	print("vegopt the old 256 m chunk estimate would pick %.0f m" % _old_estimate(bulks, requested, budget))
 	var pts_all := _points(bulks, [])
 	var pts_handoff := _points(bulks, full_mesh)
-	print("vegopt requested %.0f m, budget %d, policy picks %.0f m; full-mesh species %s" % [
+	print("vegopt requested %.0f m, budget %d, the game uses %.0f m; full-mesh species %s" % [
 		requested, budget, d_cur, str(full_mesh)])
 	print("vegopt trees: %d handoff, %d full-mesh" % [pts_handoff.size(),
 		pts_all.size() - pts_handoff.size()])
@@ -348,3 +348,38 @@ func _sample(tree: SceneTree, rid: RID) -> Dictionary:
 	var nf := maxf(float(frames), 1.0)
 	return {"gpu": gpu[gpu.size() / 2], "cpu": cpu[cpu.size() / 2],
 		"draws": draws / nf, "prims": prims / nf}
+
+
+## The estimate VegLodPolicy used before 2026-11-17: 256 m chunk sums out to
+## the distance plus a chunk diagonal, every tree species counted.
+func _old_estimate(bulks: Array, requested: float, budget: int) -> float:
+	var counts := {}
+	for b in bulks:
+		for slot in (b as Dictionary):
+			var fam := VegSpeciesCatalog.mesh_family(str(slot))
+			if fam != "deciduous" and fam != "pine":
+				continue
+			for item in (b as Dictionary)[slot]:
+				if item is Dictionary:
+					var key := Vector2i(int(floor(float(item.get("x", 0.0)) / 256.0)),
+						int(floor(float(item.get("z", 0.0)) / 256.0)))
+					counts[key] = int(counts.get(key, 0)) + 1
+	var centers: Array = []
+	var cnt: Array = []
+	for key in counts:
+		centers.append((Vector2(key) + Vector2(0.5, 0.5)) * 256.0)
+		cnt.append(int(counts[key]))
+	var d := maxf(requested, VegLodPolicy.MIN_DETAIL_M)
+	while d > VegLodPolicy.MIN_DETAIL_M:
+		var reach := d + 256.0 * 1.42
+		var worst := 0
+		for i in centers.size():
+			var t := 0
+			for j in centers.size():
+				if (centers[i] as Vector2).distance_to(centers[j]) <= reach:
+					t += int(cnt[j])
+			worst = maxi(worst, t)
+		if worst <= budget:
+			return d
+		d *= 0.85
+	return VegLodPolicy.MIN_DETAIL_M

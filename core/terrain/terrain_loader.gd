@@ -10189,15 +10189,22 @@ func _auto_veg_runtime_settings() -> Dictionary:
 	# tree_detail_distance_m is honoured wherever affordable; on dense maps the
 	# worst-case near-set of full 3D trees is capped by the quality tier's
 	# budget (VegLodPolicy shrinks the range, never flattens the forest).
+	# Measured over the trees the distance controls (species drawn as full
+	# meshes at every distance are outside it); the generated layer's slots
+	# are aliases, resolved as its runtime resolves them.
 	var bulks: Array = []
+	var resolvers: Array = []
 	if _vegetation_layer != null:
 		bulks.append(_vegetation_layer.bulk)
+		resolvers.append(null)
 	if _auto_veg_layer != null:
 		bulks.append(_auto_veg_layer.bulk)
+		resolvers.append(Callable(AutoVegetationRuntime, "_resolve_species"))
 	var requested := float(s.get("tree_detail_distance_m", 220.0))
 	var budget := int(s.get("tree_near_budget", 1500))
-	s["tree_detail_eff_m"] = VegLodPolicy.effective_detail_distance(
-		VegLodPolicy.chunk_tree_counts(bulks), requested, budget)
+	s["tree_detail_eff_m"] = VegLodPolicy.measured_detail_distance(
+		VegLodPolicy.detail_grid(VegLodPolicy.detail_points(bulks, s, resolvers)),
+		requested, budget)
 	# Far tier reach for the Globe lens / snowglobe (see _impostor_reach_m).
 	# Never SHORTER than the style's own cull end.
 	# Only the FULL rebuilds record the reach as built (see
