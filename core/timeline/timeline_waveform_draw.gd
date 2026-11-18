@@ -23,9 +23,53 @@ static func draw_label(canvas : Control, rect : Rect2, text : String, col : Colo
 ## curve), and the mean line. Gaps where nothing is known.
 static func draw_bins(canvas : Control, rect : Rect2, b : Dictionary, view_t0 : float,
 		view_span : float, v_min : float, v_max : float, color : Color) -> void:
+	replay(canvas, bins_ops(rect, b, view_t0, view_span, v_min, v_max, color))
+
+
+## draw_bins for a lane that redraws with nothing changed (the timeline track
+## redraws every 500 ms and on every half-pixel move of the playhead): the
+## draw operations are kept in `cache` (the lane's own dictionary) and only
+## replayed while the bins are the same dict and every other input is equal.
+## A bins dict is never changed once a producer hands it over (TimelineBinning
+## makes a fresh one per call). Same picture: the operations are the ones
+## draw_bins would issue.
+static func draw_bins_cached(canvas : Control, rect : Rect2, b : Dictionary, view_t0 : float,
+		view_span : float, v_min : float, v_max : float, color : Color, cache : Dictionary) -> void:
+	var key : Array = [rect, view_t0, view_span, v_min, v_max, color]
+	if not is_same(cache.get("b"), b) or cache.get("key", []) != key:
+		cache["b"] = b
+		cache["key"] = key
+		cache["ops"] = bins_ops(rect, b, view_t0, view_span, v_min, v_max, color)
+	replay(canvas, cache["ops"])
+
+
+const _OP_RECT := 0
+const _OP_LINE := 1
+const _OP_TRI := 2
+const _OP_POLY := 3
+
+
+## Issue recorded operations, in order.
+static func replay(canvas : Control, ops : Array) -> void:
+	for op : Array in ops:
+		match int(op[0]):
+			_OP_RECT:
+				canvas.draw_rect(op[1], op[2], true)
+			_OP_LINE:
+				canvas.draw_line(op[1], op[2], op[3], op[4])
+			_OP_TRI:
+				RenderingServer.canvas_item_add_triangle_array(canvas.get_canvas_item(), op[1], op[2], op[3])
+			_OP_POLY:
+				canvas.draw_polyline(op[1], op[2], op[3], true)
+
+
+## What draw_bins draws, as operations (see replay).
+static func bins_ops(rect : Rect2, b : Dictionary, view_t0 : float,
+		view_span : float, v_min : float, v_max : float, color : Color) -> Array:
+	var ops : Array = []
 	var n := int(b.get("n", 0))
 	if n <= 0 or rect.size.x <= 1.0 or rect.size.y <= 1.0 or view_span <= 0.0:
-		return
+		return ops
 	var w := float(b["w"])
 	var i0 := int(b["i0"])
 	var mn : PackedFloat32Array = b["mn"]
@@ -49,17 +93,18 @@ static func draw_bins(canvas : Control, rect : Rect2, b : Dictionary, view_t0 : 
 			lo_pts.append(Vector2(x, _y(mn[k], v_min, span, inner)))
 			continue
 		if not known or k == n:
-			_flush_run(canvas, inner, mean_pts, hi_pts, lo_pts, color, px_per_h * w)
+			_flush_run(ops, inner, mean_pts, hi_pts, lo_pts, color, px_per_h * w)
 			mean_pts = PackedVector2Array()
 			hi_pts = PackedVector2Array()
 			lo_pts = PackedVector2Array()
+	return ops
 
 
 static func _y(v : float, v_min : float, span : float, inner : Rect2) -> float:
 	return inner.end.y - clampf((v - v_min) / span, 0.0, 1.0) * inner.size.y
 
 
-static func _flush_run(canvas : Control, inner : Rect2, mean_pts : PackedVector2Array,
+static func _flush_run(ops : Array, inner : Rect2, mean_pts : PackedVector2Array,
 		hi_pts : PackedVector2Array, lo_pts : PackedVector2Array, color : Color, bin_px : float) -> void:
 	var m := mean_pts.size()
 	if m == 0:
@@ -67,9 +112,9 @@ static func _flush_run(canvas : Control, inner : Rect2, mean_pts : PackedVector2
 	if m == 1:
 		var half := maxf(bin_px * 0.5, 1.5)
 		var p := mean_pts[0]
-		canvas.draw_rect(Rect2(p.x - half, hi_pts[0].y, half * 2.0, maxf(lo_pts[0].y - hi_pts[0].y, 1.0)),
-			Color(color.r, color.g, color.b, 0.30), true)
-		canvas.draw_line(Vector2(p.x - half, p.y), Vector2(p.x + half, p.y), Color(color.r, color.g, color.b, 0.95), 1.5)
+		ops.append([_OP_RECT, Rect2(p.x - half, hi_pts[0].y, half * 2.0, maxf(lo_pts[0].y - hi_pts[0].y, 1.0)),
+			Color(color.r, color.g, color.b, 0.30)])
+		ops.append([_OP_LINE, Vector2(p.x - half, p.y), Vector2(p.x + half, p.y), Color(color.r, color.g, color.b, 0.95), 1.5])
 		return
 	# Soft fill under the mean, then the min–max band. Both are strips between
 	# two edges sharing x, built as explicit triangles: a polygon outline can
@@ -79,14 +124,14 @@ static func _flush_run(canvas : Control, inner : Rect2, mean_pts : PackedVector2
 	floor_pts.resize(m)
 	for i in m:
 		floor_pts[i] = Vector2(mean_pts[i].x, inner.end.y)
-	_strip(canvas, mean_pts, floor_pts, Color(color.r, color.g, color.b, 0.18))
-	_strip(canvas, hi_pts, lo_pts, Color(color.r, color.g, color.b, 0.32))
-	canvas.draw_polyline(mean_pts, Color(color.r, color.g, color.b, 0.95), 1.5, true)
+	_strip(ops, mean_pts, floor_pts, Color(color.r, color.g, color.b, 0.18))
+	_strip(ops, hi_pts, lo_pts, Color(color.r, color.g, color.b, 0.32))
+	ops.append([_OP_POLY, mean_pts, Color(color.r, color.g, color.b, 0.95), 1.5])
 
 
 ## The band between two edges with the same x (top[i].x == bottom[i].x) as one
 ## triangle list — no triangulation, one draw call.
-static func _strip(canvas : Control, top : PackedVector2Array, bottom : PackedVector2Array, col : Color) -> void:
+static func _strip(ops : Array, top : PackedVector2Array, bottom : PackedVector2Array, col : Color) -> void:
 	var m := top.size()
 	if m < 2:
 		return
@@ -102,7 +147,7 @@ static func _strip(canvas : Control, top : PackedVector2Array, bottom : PackedVe
 	var cols := PackedColorArray()
 	cols.resize(pts.size())
 	cols.fill(col)
-	RenderingServer.canvas_item_add_triangle_array(canvas.get_canvas_item(), idx, pts, cols)
+	ops.append([_OP_TRI, idx, pts, cols])
 
 
 ## A track's scale, small at the right end of the lane ("12 – 31 °F").

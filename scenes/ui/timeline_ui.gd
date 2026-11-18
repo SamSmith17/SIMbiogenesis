@@ -2542,6 +2542,28 @@ func _run_lane_jobs() -> void:
 		return   # one lane finished a frame: their redraws spread too
 
 
+## What a lane's redraw keeps between redraws, per track id: "geo" (the
+## draw operations, TimelineWaveformDraw.draw_bins_cached), the value range
+## of the bins dict it was taken from, and a weather lane's unit-mapped bins.
+## Each is keyed on the bins dict itself (a producer never changes one it has
+## handed over), so the lane draws exactly what it drew before.
+var _lane_draw: Dictionary = {}
+
+
+func _lane_draw_of(id : String) -> Dictionary:
+	if _lane_draw.size() > 64 and not _lane_draw.has(id):
+		_lane_draw.clear()
+	return _lane_draw.get_or_add(id, {})
+
+
+func _bins_range(id : String, b : Dictionary) -> Vector2:
+	var lc := _lane_draw_of(id)
+	if not is_same(lc.get("range_src"), b):
+		lc["range_src"] = b
+		lc["range"] = TimelineBinning.value_range(b)
+	return lc["range"]
+
+
 ## Draw bins with an axis (or the empty note) and the range label.
 func _draw_bins_lane(td : TimelineTrackDef, lane_rect : Rect2, bins : Dictionary, win_start : float,
 		span : float, axis : Vector2, unit : String, empty_msg : String, fnt : Font) -> void:
@@ -2550,7 +2572,8 @@ func _draw_bins_lane(td : TimelineTrackDef, lane_rect : Rect2, bins : Dictionary
 			_track.draw_string(fnt, Vector2(lane_rect.position.x + 140.0, lane_rect.position.y + lane_rect.size.y * 0.5 + 4.0),
 				empty_msg, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.6, 0.65, 0.72, 0.8))
 		return
-	TimelineWaveformDraw.draw_bins(_track, lane_rect, bins, win_start, span, axis.x, axis.y, td.color)
+	TimelineWaveformDraw.draw_bins_cached(_track, lane_rect, bins, win_start, span, axis.x, axis.y, td.color,
+		_lane_draw_of(td.id).get_or_add("geo", {}))
 	var txt := "off – on" if unit == "bool" else "%s – %s %s" % [_fmt_axis(axis.x), _fmt_axis(axis.y), unit]
 	TimelineWaveformDraw.draw_range_label(_track, lane_rect, txt.strip_edges(), td.color, fnt)
 
@@ -2585,7 +2608,7 @@ func _draw_power_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : floa
 	var bins : Dictionary = _lane_bins_cached(td, g, WAVEFORM_CACHE_TTL, func() -> Dictionary:
 		return solar.call("get_timeline_bins", td.source, td.channel, float(g["w"]), int(g["i0"]), int(g["n"])))
 	var cap := float(solar.call("get_timeline_capacity_kwh")) if solar.has_method("get_timeline_capacity_kwh") else 16.0
-	var r := TimelineBinning.value_range(bins)
+	var r := _bins_range(td.id, bins)
 	var axis := _axis_for(r, true)
 	var unit := str(TimelineTrackDef.lookup_channel(td.channel).get("unit", ""))
 	if not is_nan(r.x):
@@ -2607,7 +2630,7 @@ func _draw_ha_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : float, 
 		return linker.call("observed_bins_exact", td.channel, float(g["w"]), int(g["i0"]), int(g["n"])))
 	var t : Dictionary = linker.call("target", td.channel)
 	var unit := str(t.get("unit", ""))
-	var r := TimelineBinning.value_range(bins)
+	var r := _bins_range(td.id, bins)
 	var axis := _axis_for(r, unit in ["W", "kW", "kWh", "%", "L"])
 	if unit == "bool" and not is_nan(r.x):
 		axis = Vector2(-0.05, 1.05)
@@ -2629,7 +2652,7 @@ func _draw_tag_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : float,
 	var tg : Dictionary = (hub.call("book") as ScadaTags).tag(td.channel)
 	var unit := str(tg.get("unit", ""))
 	var binary := ScadaTags.is_bool_kind(str(tg.get("kind", "")))
-	var r := TimelineBinning.value_range(bins)
+	var r := _bins_range(td.id, bins)
 	var axis := _axis_for(r, unit in ["W", "%", "L", "kg", "/h"])
 	if tg.has("lo") and tg.has("hi") and unit == "%" and not is_nan(r.x):
 		axis = Vector2(float(tg["lo"]), float(tg["hi"]))
@@ -2651,7 +2674,7 @@ func _draw_ha_entity_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : 
 	var row : Dictionary = svc.call("catalog_entry", td.channel)
 	var unit := str(row.get("unit", ""))
 	var binary := td.channel.get_slice(".", 0) in ["switch", "binary_sensor", "input_boolean", "light", "fan"]
-	var r := TimelineBinning.value_range(bins)
+	var r := _bins_range(td.id, bins)
 	var axis := _axis_for(r, unit in ["W", "kW", "kWh", "Wh", "%", "L", "mm", "mm/h", "in", "in/h"])
 	if binary and not is_nan(r.x):
 		axis = Vector2(-0.05, 1.05)
@@ -2684,9 +2707,16 @@ func _draw_weather_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : fl
 	var unit := str(TimelineWeatherChannels.display(0.0, si_unit, imperial)["unit"])
 	var shown := bins
 	if unit != si_unit:
-		shown = TimelineBinning.mapped(bins, func(v : float) -> float:
-			return float(TimelineWeatherChannels.display(v, si_unit, imperial)["value"]))
-	var r := TimelineBinning.value_range(shown)
+		# Mapped once per bins dict and unit (it was ~1.4 ms a redraw per lane).
+		var lc := _lane_draw_of(td.id)
+		var mk : Array = [si_unit, imperial]
+		if not is_same(lc.get("map_src"), bins) or lc.get("map_key", []) != mk:
+			lc["map_src"] = bins
+			lc["map_key"] = mk
+			lc["map"] = TimelineBinning.mapped(bins, func(v : float) -> float:
+				return float(TimelineWeatherChannels.display(v, si_unit, imperial)["value"]))
+		shown = lc["map"]
+	var r := _bins_range(td.id, shown)
 	var axis := _axis_for(r, bool(ch.get("floor_zero", false)))
 	var fixed : Variant = ch.get("fixed", null)
 	if fixed is Array and not is_nan(r.x):
@@ -2705,7 +2735,7 @@ func _draw_composition_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start 
 	var g := _lane_grid(lane_rect, win_start, span, 0.0)
 	var bins : Dictionary = _lane_bins_cached(td, g, 5.0, func() -> Dictionary:
 		return gv.call("composition_track_bins", td.channel, float(g["w"]), int(g["i0"]), int(g["n"])))
-	var r := TimelineBinning.value_range(bins)
+	var r := _bins_range(td.id, bins)
 	var axis := _axis_for(r, bool(ch.get("floor_zero", false)))
 	var fixed : Variant = ch.get("fixed", null)
 	if fixed is Array and not is_nan(r.x):

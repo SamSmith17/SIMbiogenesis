@@ -1858,6 +1858,14 @@ tools\harness.ps1 -World walton -RunScript res://tools/diag/scada_elements_profi
 # or ResourceKinds' display_name / default_unit / wire_color / flow_ref_rate:
 tools\harness.ps1 -World walton -RunScript res://tools/diag/scada_ledger_parity.gd -Timeout 900
 Godot.exe.exe --headless --path . --script tools/diag/kind_factor_parity.gd
+# Timeline lanes (sandbox): every shown waveform lane drawn with a frozen copy
+# of the old draw_bins and with the cached path into SubViewports, pixels
+# compared byte for byte (the replay too); the kept value ranges and
+# unit-mapped weather bins against fresh ones. Then what one track redraw
+# costs, lane by lane (TL_RUNS, default 30). Run both after ANY change to
+# TimelineWaveformDraw or a timeline lane's drawing:
+tools\harness.ps1 -World walton -RunScript res://tools/diag/timeline_lane_parity.gd -Timeout 900
+tools\harness.ps1 -World walton -RunScript res://tools/diag/timeline_lane_profile.gd -Timeout 900
 # Rain + stream frame bench (Bombay Beach = w6ad922917357): a 100 mm/h storm,
 # a bowl across a stream, then the real 2023 Hilary weather, 10 sim-h each;
 # prints p50/p95/max frame ms, every water_* / terrain_* section's avg + peak,
@@ -4169,6 +4177,34 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
 
     Neither job is in a 1x slow frame any more. Both state hashes are
     unchanged.
+- **The timeline's lanes** (sixth pass, same day; pixel-identical,
+  `tools/diag/timeline_lane_parity.gd`). The track redraws every 500 ms and
+  on each half-pixel playhead move. Each redraw rebuilt every lane's
+  triangle strips, value range and (imperial units) unit-mapped weather
+  bins from bins that had not changed: ~6.4 ms a redraw on Walton's 8
+  lanes × 503 bins. Now:
+  - `TimelineWaveformDraw.draw_bins_cached` keeps a lane's draw operations
+    (`bins_ops` → `replay`).
+  - `_bins_range` keeps its value range.
+  - The weather lane keeps its mapped bins.
+
+  Each is held per track id in `_lane_draw` and keyed on the bins DICT
+  itself (`is_same`) plus every other input. ⚠ So a bins dict must never
+  change once a producer hands it over; every producer builds a fresh one
+  through TimelineBinning.
+
+  Walton, before → after: one track redraw 6.4 → 1.4 ms
+  (`timeline_lane_profile.gd`), and the frame spike bench:
+
+  | | 60x | 1x |
+  |---|---|---|
+  | worst frame | 42.6 → 34.7 ms | 42.0 → 34.5 ms |
+  | frames over 25 ms | 56 → 37 | 51 → 30 |
+  | frames over 33 ms | 6 → 3 | 5 → 5 |
+  | `tl_draw` worst in a slow frame | 8.4 → 3.4 ms | 8.3 → 5.0 ms |
+
+  What is left of a redraw is ~0.15 ms per weather lane, ~0.04 ms per power
+  lane and 0.35 ms for the clips lane.
 - Spans added: `npc_svc` / `_pos` / `_spots` / `_comfort` / `_nav`,
   `npc_walk`, `npc_full_tick` / `_post`, `tl_draw` / `_lanes` / `_mc` /
   `_clips` / `tl_draw_wave_<source>_<channel>`, `tl_clip_*`.
@@ -4179,9 +4215,11 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
   - The one remaining load carve still recuts all 425 Walton tiles (~10 s on
     a worker). The cached feature signatures do not match; the cause was not
     found.
-  - The timeline's lane draw (`tl_draw_lanes`) still takes ~7.5 ms on
-    some frames, and the flow step ~8 ms at 1x: together they are most of
-    Walton's remaining frames over 33 ms.
+  - The flow step (~8 ms) is most of Walton's remaining frames over 33 ms.
+  - Two timeline checks fail on HEAD before the lane pass too:
+    `--capture=timeline` (a centre-cluster label drifts 1.00 px) and
+    `timeline_bar_modes_check` ("Ctrl+wheel down shrinks it": the track
+    is already at its 12 px floor).
 
 ## One site, many power systems (system_graph/data/graph_systems.gd, 2026-11-04)
 
