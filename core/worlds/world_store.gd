@@ -391,7 +391,10 @@ static func record_save(id: String, snap: Dictionary, summary: Dictionary = {},
 	var rec := get_world(id, root)
 	if rec.is_empty():
 		return false
-	var s := snap.duplicate(true)
+	# Only top-level keys change, and the copy is only serialized: a shallow
+	# copy (the deep copy cloned the whole snapshot, the graph's included, on
+	# every save just to drop that key).
+	var s := snap.duplicate(false)
 	s.erase("system_graph")
 	s["world_id"] = id
 	if not write_snapshot(id, s, root):
