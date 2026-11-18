@@ -142,8 +142,8 @@ func _veg_groups(main: Node) -> Dictionary:
 			var nm := String(child.name)
 			if not nm.begins_with("Bulk_"):
 				continue
-			var parts := nm.split("_")
-			# Drop the trailing two chunk coordinates.
+			# Drop the tree-cell token and the trailing two chunk coordinates.
+			var parts := VegetationRuntime.batch_group_name(nm).split("_")
 			var key := "_".join(parts.slice(0, maxi(parts.size() - 2, 1)))
 			key = String(root.name) + "/" + key
 			var arr: Array = groups.get(key, [])

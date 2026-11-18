@@ -133,7 +133,10 @@ func _refresh_emitters(cam_pos: Vector3, season: Dictionary) -> void:
 		return
 	# Candidate chunks: NEAR-ring leaf-shell batches of a shedding family, close
 	# enough to see an individual leaf.
-	var candidates: Array = []
+	# Tree batches are cut into 64 m cells (VegetationRuntime.TREE_CELL_M);
+	# the cells of one batch in a chunk are merged back, so an emitter still
+	# covers what it covered before.
+	var groups: Dictionary = {}
 	for root in roots:
 		for child in (root as Node3D).get_children():
 			var mi := child as MultiMeshInstance3D
@@ -141,12 +144,17 @@ func _refresh_emitters(cam_pos: Vector3, season: Dictionary) -> void:
 				continue
 			if not _is_shedding_near_batch(mi):
 				continue
-			var aabb := mi.get_aabb()
-			var center: Vector3 = mi.global_transform * aabb.get_center()
-			var d := center.distance_to(cam_pos)
-			if d > RANGE_M:
-				continue
-			candidates.append({"mi": mi, "dist": d, "aabb": aabb, "center": center})
+			var box: AABB = mi.global_transform * mi.get_aabb()
+			var gkey := "%d|%s" % [(root as Node).get_instance_id(),
+				VegetationRuntime.batch_group_name(str(mi.name))]
+			groups[gkey] = (groups[gkey] as AABB).merge(box) if groups.has(gkey) else box
+	var candidates: Array = []
+	for gkey in groups:
+		var box: AABB = groups[gkey]
+		var d := box.get_center().distance_to(cam_pos)
+		if d > RANGE_M:
+			continue
+		candidates.append({"key": gkey, "dist": d, "aabb": box})
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return float(a["dist"]) < float(b["dist"]))
 
@@ -154,15 +162,14 @@ func _refresh_emitters(cam_pos: Vector3, season: Dictionary) -> void:
 	var leaf_col := _leaf_color(season)
 	for i in mini(candidates.size(), MAX_EMITTERS):
 		var c: Dictionary = candidates[i]
-		var mi: MultiMeshInstance3D = c["mi"]
-		var key := mi.get_instance_id()
+		var key: String = c["key"]
 		keep[key] = true
 		var p: GPUParticles3D = _emitters.get(key, null)
 		if p == null or not is_instance_valid(p):
 			p = _make_emitter()
 			add_child(p)
 			_emitters[key] = p
-		_place_emitter(p, c["aabb"] as AABB, mi.global_transform, leaf_col)
+		_place_emitter(p, c["aabb"] as AABB, Transform3D.IDENTITY, leaf_col)
 
 	for key in _emitters.keys():
 		if keep.has(key):

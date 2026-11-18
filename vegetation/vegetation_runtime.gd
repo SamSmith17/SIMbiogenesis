@@ -12,6 +12,16 @@ const GRASS_VISIBILITY_END := 600.0
 ## under a canopy — past a couple of hundred metres they are sub-pixel.
 const UNDERSTORY_VISIBILITY_END := 220.0
 const CHUNK_SIZE_M := 256.0
+## Tree batches are cut again into TREE_CELL_M cells inside each chunk.
+## Godot measures a batch's visibility range to its AABB centre, so with
+## 256 m batches the mesh / impostor handoff was decided per chunk: trees far
+## past the detail distance drew as full meshes and trees right beside the
+## camera drew as impostors (median nearest impostor 4.6 m on Mount Vernon,
+## with a 60 m detail distance). Small batches also let the view frustum
+## drop the trees behind the camera: in-view tree triangles fell 44 % on
+## average there (tools/diag/veg_handoff_probe.gd), for ~40 more draws.
+## The chunk stays the unit of names, incremental rebuilds and the budget.
+const TREE_CELL_M := 64.0
 
 
 static func ensure_root(terrain: Node3D) -> Node3D:
@@ -71,12 +81,61 @@ static func variant_index(d: Dictionary, n: int) -> int:
 	return clampi(int((hh - floor(hh)) * float(n)), 0, n - 1)
 
 
-## The species segment of a batch node name: "fir" or "fir_v1".
-static func _batch_species_tag(species: String, settings: Dictionary) -> String:
+## The species segment of a batch node name: "fir", "fir_v1", or with a tree
+## cell "fir_v1_c12x-5". The cell is never put in the settings: those are
+## the mesh / material cache keys, and a key per cell would build a mesh,
+## a material and an impostor bake per cell.
+static func _batch_species_tag(species: String, settings: Dictionary,
+		cell: String = "") -> String:
 	var suf := str(settings.get(KEY_BATCH_SUFFIX, ""))
 	var look := str(settings.get(KEY_LOOK_TAG, ""))
 	var tag := species if suf.is_empty() else "%s_%s" % [species, suf]
-	return tag if look.is_empty() else "%s_%s" % [tag, look]
+	if not look.is_empty():
+		tag = "%s_%s" % [tag, look]
+	return tag if cell.is_empty() else "%s_%s" % [tag, cell]
+
+
+## The cell token of a tree batch: "c<gx>x<gz>", global 64 m cell coords.
+static func tree_cell_tag(x: float, z: float) -> String:
+	return "c%dx%d" % [int(floor(x / TREE_CELL_M)), int(floor(z / TREE_CELL_M))]
+
+
+static func _is_cell_token(tok: String) -> bool:
+	if tok.length() < 4 or not tok.begins_with("c"):
+		return false
+	var parts := tok.substr(1).split("x")
+	return parts.size() == 2 and str(parts[0]).is_valid_int() \
+			and str(parts[1]).is_valid_int()
+
+
+## A batch node's name without its tree-cell token: every cell of one
+## species / variant / tier in a chunk shares it (what leaf fall and the
+## GPU bench group by, as they did before tree cells).
+static func batch_group_name(node_name: String) -> String:
+	var out: PackedStringArray = []
+	for t in node_name.split("_"):
+		if not _is_cell_token(str(t)):
+			out.append(t)
+	return "_".join(out)
+
+
+## Records grouped by tree cell, in first-seen order: [[tag, records], ...].
+static func _partition_tree_cells(records: Array) -> Array:
+	var groups := {}
+	var order: Array = []
+	for item in records:
+		if not (item is Dictionary):
+			continue
+		var d: Dictionary = item
+		var tag := tree_cell_tag(float(d.get("x", 0.0)), float(d.get("z", 0.0)))
+		if not groups.has(tag):
+			groups[tag] = []
+			order.append(tag)
+		(groups[tag] as Array).append(d)
+	var out: Array = []
+	for tag in order:
+		out.append([tag, groups[tag]])
+	return out
 
 
 ## Dither-fade band on every visibility-range edge. Godot's DEFAULT fade mode
@@ -166,7 +225,8 @@ static func _build_grass_bulk_batches(root: Node3D, species: String, records: Ar
 ## (VegLodPolicy); the raw user slider is the fallback.
 static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, records: Array,
 		ground_y_at: Callable, align_to_surface: bool, settings: Dictionary,
-		visibility_end_m: float, chunk_x: int = 0, chunk_z: int = 0) -> void:
+		visibility_end_m: float, chunk_x: int = 0, chunk_z: int = 0,
+		cell: String = "") -> void:
 	# Instance variants (2026-10-15): a stand of one species used to be ONE
 	# mesh repeated, rotated and scaled. Each tree now draws one of
 	# `tree_variants` seeded meshes, picked by its POSITION (so a tree keeps
@@ -189,8 +249,14 @@ static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, record
 			sk["%s_variant_index" % fam] = k
 			sk[KEY_BATCH_SUFFIX] = "v%d" % k
 			_build_canopy_lod_bulk_batches(root, species, groups[k], ground_y_at,
-				align_to_surface, sk, visibility_end_m, chunk_x, chunk_z)
+				align_to_surface, sk, visibility_end_m, chunk_x, chunk_z, cell)
 		return
+	# Tree cells (TREE_CELL_M): every band of one cell is built from the same
+	# records, so its mesh and impostor batches share one AABB centre and the
+	# handoff between them stays exact, as it was per chunk. Each band
+	# resolves its mesh and look once and then builds one batch per cell.
+	var cells: Array = [[cell, records]] if not cell.is_empty() \
+			else _partition_tree_cells(records)
 	# Overhaul v2.1: the per-species LOD LADDER — the player orders the
 	# representations (mesh / photocard / impostor) and may disable any; the
 	# default chain "mesh,impostor" reproduces the shipped two-band model
@@ -222,7 +288,7 @@ static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, record
 				_build_canopy_single_batch(root, species, records, ground_y_at,
 					align_to_surface, settings, b_end,
 					VegetationCardFactory.CanopyLodTier.NEAR,
-					chunk_x, chunk_z, range_begin, null, "", margins)
+					chunk_x, chunk_z, range_begin, null, "", margins, cells)
 			VegLodPolicy.REP_PHOTOCARD:
 				var photo_mesh := VegetationCardFactory.photocard_mesh(species, settings)
 				if photo_mesh != null:
@@ -230,13 +296,13 @@ static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, record
 						align_to_surface, settings, b_end,
 						VegetationCardFactory.CanopyLodTier.FAR,
 						chunk_x, chunk_z, range_begin,
-						photo_mesh, "photo", margins)
+						photo_mesh, "photo", margins, cells)
 			VegLodPolicy.REP_IMPOSTOR:
 				var iset := VegImpostorBaker.cached_set(species, settings)
 				if iset != null and iset.is_usable():
 					_build_impostor_batch(root, species, records, ground_y_at,
 						align_to_surface, settings, b_end, iset,
-						chunk_x, chunk_z, range_begin, margins)
+						chunk_x, chunk_z, range_begin, margins, cells)
 				else:
 					# Bake pending (or permanently headless): crossed-card
 					# stand-in, deterministic — the completed bake debounces
@@ -245,7 +311,7 @@ static func _build_canopy_lod_bulk_batches(root: Node3D, species: String, record
 					_build_canopy_single_batch(root, species, records, ground_y_at,
 						align_to_surface, settings, b_end,
 						VegetationCardFactory.CanopyLodTier.FAR,
-						chunk_x, chunk_z, range_begin, null, "", margins)
+						chunk_x, chunk_z, range_begin, null, "", margins, cells)
 
 
 ## OUTER-ring impostor batch: one camera-facing baked quad per tree (2 tris vs
@@ -257,57 +323,68 @@ static func _build_impostor_batch(root: Node3D, species: String, records: Array,
 		ground_y_at: Callable, align_to_surface: bool, settings: Dictionary,
 		visibility_end_m: float, iset: VegImpostorSet,
 		chunk_x: int = 0, chunk_z: int = 0,
-		range_begin: float = -1.0, margins: Vector2 = Vector2(-1.0, -1.0)) -> void:
+		range_begin: float = -1.0, margins: Vector2 = Vector2(-1.0, -1.0),
+		cells: Array = []) -> void:
 	var mesh := VegImpostorBaker.quad_mesh_for(iset)
 	VegImpostorBaker.stamp_snag(mesh, species, settings)
 	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
 	var vert_off := VegetationLayer.vertical_offset_for(species, settings)
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	# Growth rides the instance, not the transform: the shader scales each
-	# plant from its birth year (veg_growth.gdshaderinc). Must be set while
-	# instance_count is still 0.
-	mm.use_custom_data = true
 	var growth_bp := VegetationGrowth.batch_params(species, settings)
-	mm.mesh = mesh
-	mm.instance_count = records.size()
-	var i := 0
-	for item in records:
-		if not (item is Dictionary):
+	var env := _env_sync()
+	for cg in (cells if not cells.is_empty() else [["", records]]):
+		var group: Array = cg[1]
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		# Growth rides the instance, not the transform: the shader scales each
+		# plant from its birth year (veg_growth.gdshaderinc). Must be set while
+		# instance_count is still 0.
+		mm.use_custom_data = true
+		mm.mesh = mesh
+		mm.instance_count = group.size()
+		var i := 0
+		for item in group:
+			if not (item is Dictionary):
+				continue
+			var d: Dictionary = item
+			var x := float(d.get("x", 0.0))
+			var z := float(d.get("z", 0.0))
+			var yaw := float(d.get("yaw", 0.0))
+			var scale := float(d.get("scale", 1.0)) * species_scale
+			var record_vert := float(d.get("vert_off", vert_off))
+			var gy: float = float(ground_y_at.call(x, z))
+			mm.set_instance_transform(i, VegetationPaint.build_transform(
+				x, gy, z, yaw, scale, align_to_surface, Vector3.UP, record_vert, 0.0))
+			mm.set_instance_custom_data(i, VegetationGrowth.custom_for(growth_bp, d))
+			i += 1
+		mm.instance_count = i
+		if i == 0:
 			continue
-		var d: Dictionary = item
-		var x := float(d.get("x", 0.0))
-		var z := float(d.get("z", 0.0))
-		var yaw := float(d.get("yaw", 0.0))
-		var scale := float(d.get("scale", 1.0)) * species_scale
-		var record_vert := float(d.get("vert_off", vert_off))
-		var gy: float = float(ground_y_at.call(x, z))
-		mm.set_instance_transform(i, VegetationPaint.build_transform(
-			x, gy, z, yaw, scale, align_to_surface, Vector3.UP, record_vert, 0.0))
-		mm.set_instance_custom_data(i, VegetationGrowth.custom_for(growth_bp, d))
-		i += 1
-	mm.instance_count = i
-	if i == 0:
-		return
-	var mi := MultiMeshInstance3D.new()
-	mi.name = "Bulk_%s_imp_%d_%d" % [_batch_species_tag(species, settings), chunk_x, chunk_z]
-	mi.set_meta(&"veg_species", species)  # Select-tool species glow (TerrainLoader.set_veg_species_glow)
-	mi.multimesh = mm
-	# A regrown generation stands up to a metre off the original spot
-	# (veg_growth.gdshaderinc), outside the AABB the transforms imply.
-	mi.extra_cull_margin = 2.0
-	mi.material_override = null
-	# A 2-tri billboard casts a plank shadow — never cast from impostors.
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	apply_visibility_range(mi,
-		range_begin if range_begin >= 0.0 else VISIBILITY_BEGIN, visibility_end_m,
-		margins.x if margins.x >= 0.0 else LOD_FADE_MARGIN_M, margins.y)
-	root.add_child(mi)
-	var tree := Engine.get_main_loop()
-	if tree is SceneTree:
-		var env := (tree as SceneTree).root.get_node_or_null("VegetationEnvironmentSync")
-		if env != null and env.has_method("register_multimesh_instance"):
+		var mi := MultiMeshInstance3D.new()
+		mi.name = "Bulk_%s_imp_%d_%d" % [_batch_species_tag(species, settings, str(cg[0])),
+			chunk_x, chunk_z]
+		mi.set_meta(&"veg_species", species)  # Select-tool species glow (TerrainLoader.set_veg_species_glow)
+		mi.multimesh = mm
+		# A regrown generation stands up to a metre off the original spot
+		# (veg_growth.gdshaderinc), outside the AABB the transforms imply.
+		mi.extra_cull_margin = 2.0
+		mi.material_override = null
+		# A 2-tri billboard casts a plank shadow — never cast from impostors.
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		apply_visibility_range(mi,
+			range_begin if range_begin >= 0.0 else VISIBILITY_BEGIN, visibility_end_m,
+			margins.x if margins.x >= 0.0 else LOD_FADE_MARGIN_M, margins.y)
+		root.add_child(mi)
+		if env != null:
 			env.register_multimesh_instance(mi, species)
+
+
+## VegetationEnvironmentSync (seasonal / wind uniforms), or null headless.
+static func _env_sync() -> Node:
+	var tree := Engine.get_main_loop()
+	if not (tree is SceneTree):
+		return null
+	var env := (tree as SceneTree).root.get_node_or_null("VegetationEnvironmentSync")
+	return env if env != null and env.has_method("register_multimesh_instance") else null
 
 
 static func _build_canopy_single_batch(root: Node3D, species: String, records: Array,
@@ -315,59 +392,60 @@ static func _build_canopy_single_batch(root: Node3D, species: String, records: A
 		visibility_end_m: float, tier: VegetationCardFactory.CanopyLodTier,
 		chunk_x: int = 0, chunk_z: int = 0,
 		range_begin: float = -1.0, mesh_override: ArrayMesh = null,
-		name_tag: String = "", margins: Vector2 = Vector2(-1.0, -1.0)) -> void:
+		name_tag: String = "", margins: Vector2 = Vector2(-1.0, -1.0),
+		cells: Array = []) -> void:
 	var mesh := mesh_override if mesh_override != null \
 			else VegetationCardFactory.mesh_for_canopy_lod(species, settings, tier)
 	var species_scale := VegetationCardFactory.species_bulk_scale(species, settings)
 	var foot_y := VegetationCardFactory.foot_local_y(species, settings)
 	var vert_off := VegetationLayer.vertical_offset_for(species, settings)
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	# Growth rides the instance, not the transform: the shader scales each
-	# plant from its birth year (veg_growth.gdshaderinc). Must be set while
-	# instance_count is still 0.
-	mm.use_custom_data = true
 	var growth_bp := VegetationGrowth.batch_params(species, settings)
-	mm.mesh = mesh
-	mm.instance_count = records.size()
-	var i := 0
-	for item in records:
-		if not (item is Dictionary):
+	var env := _env_sync()
+	for cg in (cells if not cells.is_empty() else [["", records]]):
+		var group: Array = cg[1]
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		# Growth rides the instance, not the transform: the shader scales each
+		# plant from its birth year (veg_growth.gdshaderinc). Must be set while
+		# instance_count is still 0.
+		mm.use_custom_data = true
+		mm.mesh = mesh
+		mm.instance_count = group.size()
+		var i := 0
+		for item in group:
+			if not (item is Dictionary):
+				continue
+			var d: Dictionary = item
+			var x := float(d.get("x", 0.0))
+			var z := float(d.get("z", 0.0))
+			var yaw := float(d.get("yaw", 0.0))
+			var scale := float(d.get("scale", 1.0)) * species_scale
+			var record_vert := float(d.get("vert_off", vert_off))
+			var gy: float = float(ground_y_at.call(x, z))
+			mm.set_instance_transform(i, VegetationPaint.build_transform(
+				x, gy, z, yaw, scale, align_to_surface, Vector3.UP, record_vert, foot_y))
+			mm.set_instance_custom_data(i, VegetationGrowth.custom_for(growth_bp, d))
+			i += 1
+		mm.instance_count = i
+		if i == 0:
 			continue
-		var d: Dictionary = item
-		var x := float(d.get("x", 0.0))
-		var z := float(d.get("z", 0.0))
-		var yaw := float(d.get("yaw", 0.0))
-		var scale := float(d.get("scale", 1.0)) * species_scale
-		var record_vert := float(d.get("vert_off", vert_off))
-		var gy: float = float(ground_y_at.call(x, z))
-		mm.set_instance_transform(i, VegetationPaint.build_transform(
-			x, gy, z, yaw, scale, align_to_surface, Vector3.UP, record_vert, foot_y))
-		mm.set_instance_custom_data(i, VegetationGrowth.custom_for(growth_bp, d))
-		i += 1
-	mm.instance_count = i
-	if i == 0:
-		return
-	var mi := MultiMeshInstance3D.new()
-	var sp_tag := _batch_species_tag(species, settings)
-	mi.name = "Bulk_%s_%d_%d_%d" % [sp_tag, tier, chunk_x, chunk_z] \
-			if name_tag.is_empty() \
-			else "Bulk_%s_%s_%d_%d" % [sp_tag, name_tag, chunk_x, chunk_z]
-	mi.set_meta(&"veg_species", species)  # Select-tool species glow (TerrainLoader.set_veg_species_glow)
-	mi.multimesh = mm
-	# A regrown generation stands up to a metre off the original spot
-	# (veg_growth.gdshaderinc), outside the AABB the transforms imply.
-	mi.extra_cull_margin = 2.0
-	mi.material_override = null
-	VegetationShadowPolicy.apply(mi, species)
-	apply_visibility_range(mi,
-		range_begin if range_begin >= 0.0 else VISIBILITY_BEGIN, visibility_end_m,
-		margins.x if margins.x >= 0.0 else LOD_FADE_MARGIN_M, margins.y)
-	root.add_child(mi)
-	var tree := Engine.get_main_loop()
-	if tree is SceneTree:
-		var env := (tree as SceneTree).root.get_node_or_null("VegetationEnvironmentSync")
-		if env != null and env.has_method("register_multimesh_instance"):
+		var mi := MultiMeshInstance3D.new()
+		var sp_tag := _batch_species_tag(species, settings, str(cg[0]))
+		mi.name = "Bulk_%s_%d_%d_%d" % [sp_tag, tier, chunk_x, chunk_z] \
+				if name_tag.is_empty() \
+				else "Bulk_%s_%s_%d_%d" % [sp_tag, name_tag, chunk_x, chunk_z]
+		mi.set_meta(&"veg_species", species)  # Select-tool species glow (TerrainLoader.set_veg_species_glow)
+		mi.multimesh = mm
+		# A regrown generation stands up to a metre off the original spot
+		# (veg_growth.gdshaderinc), outside the AABB the transforms imply.
+		mi.extra_cull_margin = 2.0
+		mi.material_override = null
+		VegetationShadowPolicy.apply(mi, species)
+		apply_visibility_range(mi,
+			range_begin if range_begin >= 0.0 else VISIBILITY_BEGIN, visibility_end_m,
+			margins.x if margins.x >= 0.0 else LOD_FADE_MARGIN_M, margins.y)
+		root.add_child(mi)
+		if env != null:
 			env.register_multimesh_instance(mi, species)
 
 

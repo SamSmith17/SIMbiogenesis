@@ -8472,6 +8472,23 @@ via `_on_impostor_bake_completed`. The impostor shader is unshaded (day/night
 from the env-sync uniforms), billboards manually in vertex (spatial shaders
 have no billboard render_mode), and seasonally recolors/thins ONLY
 mask-flagged foliage pixels. Selftest: `vegetation/veg_lod_policy_selftest.gd`.
+**Tree cells (2026-11-17).** Inside each 256 m chunk every tree band is cut
+again into 64 m cells (`VegetationRuntime.TREE_CELL_M`, `_partition_tree_cells`):
+Godot measures a batch's visibility range to its AABB centre, so with whole
+chunks the handoff was ragged (Mount Vernon, detail 60 m: the nearest drawn
+impostor was a median 4.6 m from the camera) and a chunk touching the view
+drew all its trees. Every band of one cell holds the same records, so its
+mesh and impostor batches share an AABB centre and hand off exactly. Names
+carry a cell token, `Bulk_fir_v1_c12x-5_0_3_-2` (`tree_cell_tag`, global
+64 m coords): `chunk_of_batch_node`, `species_from_bulk_name` and leaf fall's
+tier token still parse; `batch_group_name` drops it (leaf fall merges a
+chunk's cells back into one emitter area; the GPU bench groups by it). The
+cell is NEVER put in the settings dict: that is the mesh / material / bake
+cache key. The chunk stays the unit of incremental rebuilds and of the
+budget. Measure with `tools/diag/veg_handoff_probe.gd` (RunScript: drawn
+mesh trees, in-view triangles and draw calls from 320 spots; `VEGPROBE_SUB`
+sets the cell size it simulates) and `tools/bench/veg_spots_bench.gd` (GPU /
+CPU / draws / primitives from 32 forest views).
 
 **Seasonal phenology (Phase 6).** `SeasonModel.season_signals` now damps every
 signal by ABSOLUTE latitude (`seasonality_strength`: 0 below ~15°, 1 by ~35°,
@@ -8879,7 +8896,8 @@ Mount Vernon reference photos (second-growth Douglas-fir / cedar / hemlock,
 bigleaf maple and red alder turning gold, sword fern and blackberry, logging
 stumps and mossy logs). Four pieces, each reusable on any map:
 - **The Globe lens no longer drops whole chunks of trees.** Visibility range
-  is measured to each 256 m chunk's AABB CENTRE, and the far (impostor /
+  is measured to each batch's AABB CENTRE (256 m chunks then; 64 m tree
+  cells since 2026-11-17, see "Tree cells"), and the far (impostor /
   photocard) tier used to stop at the first-person cull end (480 m on large
   maps) while the Globe / snowglobe orbit up to 4.5 x the SoI radius out: the
   back of the sphere blinked in and out by chunk as the camera orbited. The

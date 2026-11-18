@@ -65,6 +65,7 @@ func _initialize() -> void:
 	_test_area_fill_edits()
 	_test_area_fill_scatter()
 	_test_incremental_chunk_rebuild()
+	_test_tree_cells()
 	_test_deciduous_branch_distribution()
 	_test_preview_parity()
 	if _failures == 0:
@@ -1528,6 +1529,75 @@ func _test_incremental_chunk_rebuild() -> void:
 	full_terrain.queue_free()
 	inc_terrain.queue_free()
 	ref_terrain.queue_free()
+
+
+
+## Tree batches are cut into TREE_CELL_M cells inside each 256 m chunk, so
+## the mesh / impostor handoff and frustum culling work per cell. Every band
+## of a cell holds the same trees; the chunk stays in the name; one mesh per
+## band is shared by all cells (the cell must never reach the cache key).
+func _test_tree_cells() -> void:
+	var cell := VegetationRuntime.TREE_CELL_M
+	var ground := func(_x: float, _z: float) -> float: return 0.0
+	var settings := {"auto_visibility_end_m": 800.0, "tree_variants": 1}
+	var layer := AutoVegetationLayer.create_empty()
+	# One chunk, three cells, two pines in each.
+	for i in 2:
+		layer.add_bulk("pine", 10.0 + float(i), 10.0, 0.0, 1.0, 10.0)
+		layer.add_bulk("pine", cell + 10.0 + float(i), 10.0, 0.0, 1.0, 10.0)
+		layer.add_bulk("pine", 10.0, cell * 3.0 + 10.0 + float(i), 0.0, 1.0, 10.0)
+	var terrain := Node3D.new()
+	get_root().add_child(terrain)
+	AutoVegetationRuntime.rebuild(terrain, layer, ground, settings)
+	var cells_per_group := {}
+	var meshes_per_group := {}
+	var per_cell := {}
+	var parse_ok := true
+	var count_ok := true
+	var nodes := terrain.find_children("Bulk_pine*", "MultiMeshInstance3D", true, false)
+	for node in nodes:
+		var mi := node as MultiMeshInstance3D
+		var nm := str(mi.name)
+		var ck: Variant = VegetationRuntime.chunk_of_batch_node(nm)
+		if ck != Vector2i(0, 0) or VegetationRuntime.species_from_bulk_name(nm) != "pine":
+			parse_ok = false
+		if mi.multimesh.instance_count != 2:
+			count_ok = false
+		var g := VegetationRuntime.batch_group_name(nm)
+		cells_per_group[g] = int(cells_per_group.get(g, 0)) + 1
+		var ids: Dictionary = meshes_per_group.get(g, {})
+		ids[mi.multimesh.mesh.get_instance_id()] = true
+		meshes_per_group[g] = ids
+		for t in nm.split("_"):
+			if str(t).begins_with("c") and str(t).contains("x"):
+				per_cell[str(t)] = int(per_cell.get(str(t), 0)) + 1
+	_check("tree cells: one batch per band per cell", nodes.size() == 6,
+		"%d nodes: %s" % [nodes.size(), str(cells_per_group)])
+	_check("tree cells: names keep chunk and species", parse_ok)
+	_check("tree cells: each cell batch holds its own two trees", count_ok)
+	var three := true
+	for g in cells_per_group:
+		three = three and int(cells_per_group[g]) == 3
+	_check("tree cells: every band is cut into the three cells", three,
+		str(cells_per_group))
+	var shared := true
+	for g in meshes_per_group:
+		shared = shared and (meshes_per_group[g] as Dictionary).size() == 1
+	_check("tree cells: one mesh per band, shared by its cells", shared)
+	var both := per_cell.size() == 3
+	for t in per_cell:
+		both = both and int(per_cell[t]) == 2
+	_check("tree cells: each cell has a near and a far batch", both, str(per_cell))
+	_check("tree cell tag is global 64 m coords",
+		VegetationRuntime.tree_cell_tag(-1.0, cell + 1.0) == "c-1x1",
+		VegetationRuntime.tree_cell_tag(-1.0, cell + 1.0))
+	_check("group name drops the cell token",
+		VegetationRuntime.batch_group_name("Bulk_fir_v1_c12x-5_0_3_-2") == "Bulk_fir_v1_0_3_-2"
+		and VegetationRuntime.batch_group_name("Bulk_pine_imp_-1_4") == "Bulk_pine_imp_-1_4",
+		VegetationRuntime.batch_group_name("Bulk_fir_v1_c12x-5_0_3_-2"))
+	_check("a celled name still parses its chunk and tier",
+		VegetationRuntime.chunk_of_batch_node("Bulk_fir_v1_c12x-5_0_3_-2") == Vector2i(3, -2))
+	terrain.queue_free()
 
 
 func _batch_name_set(terrain: Node3D) -> Dictionary:
