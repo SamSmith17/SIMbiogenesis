@@ -115,6 +115,14 @@ func record() -> Dictionary:
 ## undo what it un-crossed, replay a finished event the clock is inside,
 ## hand out pending work, push camp fractions, keep the vehicles scheduled.
 func tick(main: Node, bridge, abs_h: float) -> void:
+	# Every prop this tick changes is written to the props file ONCE, at the
+	# end (a fired deploy or a rewind touches every structure).
+	PlacedPropService.begin_batch()
+	_tick(main, bridge, abs_h)
+	PlacedPropService.end_batch()
+
+
+func _tick(main: Node, bridge, abs_h: float) -> void:
 	bind(main, bridge)
 	if _bridge == null or _loader == null or is_nan(abs_h):
 		return
@@ -313,6 +321,13 @@ func status() -> Dictionary:
 ## scheduled build, or "I just want it packed"). Cancels any site project in
 ## flight and clears its event's stamp; a finished event loses its replay.
 func apply_instant(action: String) -> int:
+	PlacedPropService.begin_batch()
+	var n := _apply_instant(action)
+	PlacedPropService.end_batch()
+	return n
+
+
+func _apply_instant(action: String) -> int:
 	bind(_main)
 	if _loader == null:
 		return 0
@@ -1017,6 +1032,13 @@ func _heal_stale(rec: Dictionary, live: Dictionary) -> bool:
 ## Heal every stuck prop on the site now (the chip's "Fix stuck builds").
 ## Returns how many.
 func fix_stuck() -> int:
+	PlacedPropService.begin_batch()
+	var n := _fix_stuck()
+	PlacedPropService.end_batch()
+	return n
+
+
+func _fix_stuck() -> int:
 	bind(_main)
 	if _loader == null or not _loader.has_method("placed_prop_records"):
 		return 0

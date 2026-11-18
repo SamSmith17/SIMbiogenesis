@@ -46,12 +46,14 @@ func save_path_for_map(lat: float, lon: float) -> String:
 	return WorldPaths.site_file("placed_props", lat, lon)
 
 
-func save(lat: float, lon: float) -> void:
+## False when the file could not be opened for writing.
+func save(lat: float, lon: float) -> bool:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://maps"))
 	var f := FileAccess.open(save_path_for_map(lat, lon), FileAccess.WRITE)
 	if f == null:
-		return
+		return false
 	f.store_string(JSON.stringify(serialize()))
+	return true
 
 
 func load_for_map(lat: float, lon: float) -> bool:

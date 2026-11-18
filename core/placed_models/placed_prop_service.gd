@@ -1908,6 +1908,19 @@ static func _layer_for_main(main: Node) -> PlacedPropLayer:
 static func _merge_disk_props_if_disjoint(layer: PlacedPropLayer, lat: float, lon: float) -> void:
 	if layer == null or is_nan(lat) or is_nan(lon):
 		return
+	# The file is still the one we last wrote (same modified time): its ids are
+	# known without reading and parsing it again. Only an overlap of zero needs
+	# the props themselves, and then it is read as before.
+	var path := WorldPaths.site_file("placed_props", lat, lon)
+	var w: Variant = _written.get(path)
+	if w is Dictionary and FileAccess.file_exists(path) \
+			and FileAccess.get_modified_time(path) == int((w as Dictionary)["mtime"]):
+		var ids: Dictionary = (w as Dictionary)["ids"]
+		if ids.is_empty():
+			return
+		for item in layer.props:
+			if item is Dictionary and ids.has(str((item as Dictionary).get("id", ""))):
+				return
 	var disk := PlacedPropLayer.create_empty()
 	if not disk.load_for_map(lat, lon) or disk.props.is_empty():
 		return
@@ -1931,7 +1944,40 @@ static func _merge_disk_props_if_disjoint(layer: PlacedPropLayer, lat: float, lo
 			layer.props.append(item3)
 
 
+## What this process last wrote to each props file: {path: {mtime, ids}}.
+## Lets the disjoint-wipe guard skip re-reading a file nobody else changed.
+static var _written: Dictionary = {}
+
+## Batched saves: between begin_batch() and the matching end_batch() a save
+## only marks its layer; end_batch writes each marked layer once. A deploy
+## changing forty props wrote (and re-read) the whole props file forty times.
+static var _batch_depth := 0
+static var _batch_pending: Array = []   # [[main, layer]]
+
+
+static func begin_batch() -> void:
+	_batch_depth += 1
+
+
+static func end_batch() -> void:
+	_batch_depth = maxi(_batch_depth - 1, 0)
+	if _batch_depth > 0:
+		return
+	var pending := _batch_pending
+	_batch_pending = []
+	for pair in pending:
+		var m: Node = pair[0]
+		if is_instance_valid(m):
+			_save_layer(m, pair[1] as PlacedPropLayer)
+
+
 static func _save_layer(main: Node, layer: PlacedPropLayer) -> void:
+	if _batch_depth > 0:
+		for pair in _batch_pending:
+			if is_same(pair[1], layer):
+				return
+		_batch_pending.append([main, layer])
+		return
 	var loader := TerrainSurfaceQuery.find_terrain_loader(main)
 	if loader != null and "_lat" in loader and "_lon" in loader:
 		var lat := float(loader.get("_lat"))
@@ -1950,7 +1996,18 @@ static func _save_layer(main: Node, layer: PlacedPropLayer) -> void:
 		else:
 			# Guard against Site-twin / fallback-layer wipes (disjoint sets).
 			_merge_disk_props_if_disjoint(layer, lat, lon)
-		layer.save(lat, lon)
+		var path := WorldPaths.site_file("placed_props", lat, lon)
+		if not layer.save(lat, lon):
+			# Not written: what is on disk is not what memory holds.
+			_written.erase(path)
+			return
+		var ids: Dictionary = {}
+		for item in layer.props:
+			if item is Dictionary:
+				var pid := str((item as Dictionary).get("id", ""))
+				if not pid.is_empty():
+					ids[pid] = true
+		_written[path] = {"mtime": FileAccess.get_modified_time(path), "ids": ids}
 		return
 	layer.save_for_scene(_layer_key(main))
 
