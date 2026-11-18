@@ -410,7 +410,34 @@ func _resolve_main() -> void:
 
 
 static func _current_calendar_year() -> int:
-	return int(Time.get_date_dict_from_system().year)
+	_read_system_date()
+	return _sys_year
+
+
+## The computer's date and hour, read from the OS at most every
+## SYS_DATE_TTL_MS. sample() asked for them up to five times a call (a
+## Dictionary each), and the water network's rain history makes ~330 samples
+## in one go. They only decide which dataset a date reads from (the forecast
+## window, the current year's archive), which follows the wall clock anyway.
+const SYS_DATE_TTL_MS := 200
+static var _sys_ms := -1
+static var _sys_year := 0
+static var _sys_month := 1
+static var _sys_day := 1
+static var _sys_hour := 0
+
+
+static func _read_system_date() -> void:
+	var ms := Time.get_ticks_msec()
+	if _sys_ms >= 0 and ms - _sys_ms < SYS_DATE_TTL_MS:
+		return
+	var d := Time.get_date_dict_from_system()
+	var t := Time.get_time_dict_from_system()
+	_sys_year = int(d.year)
+	_sys_month = int(d.month)
+	_sys_day = int(d.day)
+	_sys_hour = int(t.hour)
+	_sys_ms = ms
 
 
 static func _today_date_str() -> String:
@@ -644,9 +671,8 @@ func _calendar_hoy(month: int, day: int, hour: float) -> int:
 
 
 func _current_calendar_hoy() -> int:
-	var d := Time.get_date_dict_from_system()
-	var t := Time.get_time_dict_from_system()
-	return _calendar_hoy(int(d.month), int(d.day), float(t.hour))
+	_read_system_date()
+	return _calendar_hoy(_sys_month, _sys_day, float(_sys_hour))
 
 
 ## Real forecast overrides generated/climate data for now … now+FORECAST_OVERRIDE_DAYS.

@@ -830,6 +830,46 @@ func rain_mmh_at(abs_h: float) -> float:
 	return float(ws.call("rain_rate_mmh", int(d["month"]), int(d["day"]), float(d["day_time"])))
 
 
+## rain_mmh_at for the rain history's samples, now_h − (k + 0.5)·HISTORY_STEP_H
+## for k in 0..samples−1, with the lookups that do not change between samples
+## made once and the date worked out once a day (the samples are minutes
+## apart): the same values, about half the cost.
+func rain_mmh_series(now_h: float, samples: int) -> PackedFloat64Array:
+	var out := PackedFloat64Array()
+	out.resize(maxi(samples, 0))
+	if samples <= 0:
+		return out
+	if rain_override_mmh >= 0.0:
+		out.fill(rain_override_mmh)
+		return out
+	var main: Node = loader.get("_main") if loader != null else null
+	if main == null:
+		return out
+	var ws := get_node_or_null("/root/WeatherService")
+	var clock: Variant = main.get("clock")
+	if ws == null or not ws.has_method("rain_rate_mmh") or clock == null:
+		return out
+	var lat := float(main.get("latitude")) if main.get("latitude") != null else 0.0
+	var lon := float(main.get("longitude")) if main.get("longitude") != null else 0.0
+	if ws.has_method("covers") and not bool(ws.call("covers", lat, lon)):
+		return out
+	var day_n := -1
+	var mo := 1
+	var dd := 1
+	for k in samples:
+		var h := now_h - (float(k) + 0.5) * StreamRunoff.HISTORY_STEP_H
+		# CelestialClock.abs_hours_to_date's day and day_time.
+		var total_days := int(floor(h / CelestialClock.HOURS_IN_DAY))
+		if total_days != day_n:
+			var d: Dictionary = (clock as Object).call("abs_hours_to_date", h)
+			mo = int(d["month"])
+			dd = int(d["day"])
+			day_n = total_days
+		var rem := h - float(total_days) * CelestialClock.HOURS_IN_DAY
+		out[k] = float(ws.call("rain_rate_mmh", mo, dd, rem))
+	return out
+
+
 ## Rebuild the rain history when the clock has moved (it is a pure function of
 ## the clock, so a scrub back simply reads the past again).
 func _ensure_rain_history() -> void:
@@ -852,7 +892,7 @@ func _ensure_rain_history() -> void:
 	var samples := clampi(int(ceil(span / StreamRunoff.HISTORY_STEP_H)) + 1, 2,
 		int(ceil((StreamRunoff.TC_MAX_H + BASIN_HORIZON_H) / StreamRunoff.HISTORY_STEP_H)) + 1)
 	PerfSpan.begin("water_hist")
-	_hist_prefix = StreamRunoff.history_prefix(Callable(self, "rain_mmh_at"), now, samples)
+	_hist_prefix = StreamRunoff.history_prefix_values(rain_mmh_series(now, samples))
 	PerfSpan.end("water_hist")
 	_hist_now_h = now
 	PerfSpan.begin("water_basins")
@@ -1069,11 +1109,23 @@ func _carve_half() -> float:
 ## the inflow at the station above it (held back by basins further up) less
 ## infiltration, clamped at full. Basins in downstream order, so a lower one
 ## sees the upper ones' spill.
+##
+## This is _q_at at the station above each basin and StreamBasins.step_volume,
+## with everything that does not change from step to step worked out once per
+## basin (_inflow_plan) and the per-step arithmetic written out in the same
+## order, so the series is bit for bit what those two functions give
+## (tools/diag/basin_series_parity.gd compares them). Calling them 721 times
+## a basin was ~19 ms every sim-minute on Walton (8 basins).
 func _refresh_basin_series() -> void:
 	if _basins.is_empty():
 		return
 	var steps := int(ceil(BASIN_HORIZON_H / BASIN_STEP_H))
 	var t0 := _hist_now_h - BASIN_HORIZON_H
+	var hp := _hist_prefix
+	var hn := hp.size() - 1
+	var now_h := _hist_now_h
+	var cc := clampf(StreamHydraulics.RUNOFF_C_DEFAULT, 0.0, 1.0)
+	var infil_k := StreamBasins.INFIL_MMH / 1000.0
 	for fid in _basins.keys():
 		var f := feature(str(fid))
 		if f.is_empty():
@@ -1088,16 +1140,166 @@ func _refresh_basin_series() -> void:
 			full.resize(steps + 1)
 			var cap := float(bd["capacity_m3"])
 			var stage: PackedVector3Array = bd["stage"]
-			var i_in := maxi(int(bd["i0"]) - 1, 0)
+			var sn := stage.size()
+			# Stage volumes rise with level, so the first row holding v can be
+			# found by halving; checked, or the plain scan is used.
+			var sorted_stage := true
+			for r in range(1, sn):
+				if stage[r].y < stage[r - 1].y:
+					sorted_stage = false
+					break
+			var plan := _inflow_plan(f, maxi(int(bd["i0"]) - 1, 0))
+			var zero: bool = plan["zero"]
+			var tc: float = plan["tc"]
+			var base_lps: float = plan["base"]
+			var a_top: float = plan["a_top"]
+			var ups: Array = plan["ups"]
+			var sts: Array = plan["storms"]
 			var v := 0.0
 			for k in steps + 1:
 				var tau := t0 + float(k) * BASIN_STEP_H
 				if k > 0:
-					v = StreamBasins.step_volume(v, _q_at(f, i_in, tau), BASIN_STEP_H, stage, cap)
+					# --- _q_at(f, i_in, tau) ---
+					var q := 0.0
+					if not zero:
+						# StreamRunoff.window_mean_offset(prefix, now - tau, tc)
+						var mean := 0.0
+						if hn > 0 and tc > 0.0:
+							var off := now_h - tau
+							var k0 := clampf(off / StreamRunoff.HISTORY_STEP_H, 0.0, float(hn))
+							var k1 := clampf((off + tc) / StreamRunoff.HISTORY_STEP_H, 0.0, float(hn))
+							if not (k1 - k0 < 1e-6):
+								var i1 := int(floor(k1))
+								var p1: float = hp[hn] if i1 >= hn else lerpf(hp[i1], hp[i1 + 1], k1 - float(i1))
+								var i0 := int(floor(k0))
+								var p0: float = hp[hn] if i0 >= hn else lerpf(hp[i0], hp[i0 + 1], k0 - float(i0))
+								mean = (p1 - p0) / (k1 - k0)
+						var gate := 1.0
+						var a_below := a_top
+						for u_v in ups:
+							var u: Array = u_v
+							var a_in: float = u[0]
+							var da := maxf(a_below - a_in, 0.0)
+							var r1 := 0.0 if (mean <= 0.0 or da <= 0.0) else cc * (mean / 1000.0 / 3600.0) * da
+							q += gate * r1 * 1000.0
+							gate *= _full_at(u[2], u[3], tau - float(u[1]))
+							a_below = a_in
+							if gate <= 0.0:
+								break
+						var r2 := 0.0 if (mean <= 0.0 or a_below <= 0.0) else cc * (mean / 1000.0 / 3600.0) * a_below
+						q += gate * (r2 * 1000.0 + base_lps)
+						for s_v in sts:
+							var s: Array = s_v
+							var g2 := 1.0
+							for g_v in (s[6] as Array):
+								var g: Array = g_v
+								g2 *= _full_at(g[1], g[2], tau - float(g[0]))
+							if g2 <= 0.0:
+								continue
+							var smean := StreamRunoff.storm_arrival_mean(float(s[2]), float(s[3]),
+								float(s[4]), tau, float(s[1]), float(s[5]))
+							var a2: float = s[0]
+							var r3 := 0.0 if (smean <= 0.0 or a2 <= 0.0) else cc * (smean / 1000.0 / 3600.0) * a2
+							q += g2 * r3 * 1000.0
+					# --- StreamBasins.step_volume(v, q, BASIN_STEP_H, stage, cap) ---
+					var area := 0.0
+					if sn > 0 and not (v <= 0.0):
+						var row := -1
+						if sorted_stage:
+							var lo := 1
+							var hi := sn
+							while lo < hi:
+								var mid := (lo + hi) >> 1
+								if v <= stage[mid].y:
+									hi = mid
+								else:
+									lo = mid + 1
+							row = lo if lo < sn else -1
+						else:
+							for r in range(1, sn):
+								if v <= stage[r].y:
+									row = r
+									break
+						if row < 0:
+							area = stage[sn - 1].z
+						else:
+							var sa := stage[row - 1]
+							var sb := stage[row]
+							var t := (v - sa.y) / maxf(sb.y - sa.y, 1e-9)
+							area = lerpf(sa.z, sb.z, clampf(t, 0.0, 1.0))
+					var infil := infil_k * area
+					var nv := v + (maxf(q, 0.0) * 3.6 - infil) * BASIN_STEP_H
+					v = clampf(nv, 0.0, cap)
 				vol[k] = v
 				full[k] = 1 if v >= cap * 0.995 else 0
 			bd["vol"] = vol
 			bd["full"] = full
+
+
+## What _q_at(f, i, tau) needs that does not depend on tau, in the order it
+## uses it: the station's Tc, its area and base flow, each basin above it (its
+## inlet area, the travel time from it, its fill flags) bottom-up, and each
+## storm draining here (its area, travel lag, timing, and the basins it waits
+## on). `zero` = the station is inside a basin (nothing flows as a stream).
+func _inflow_plan(f: Dictionary, i: int) -> Dictionary:
+	var fid: String = f["id"]
+	var tcs: PackedFloat32Array = station_tc[fid]
+	var n := tcs.size()
+	i = clampi(i, 0, n - 1)
+	var basins: Array = _basins.get(fid, [])
+	var plan := {"zero": false, "tc": 0.0, "base": 0.0, "a_top": 0.0, "ups": [], "storms": []}
+	for bv in basins:
+		if i >= int((bv as Dictionary)["i0"]) and i <= int((bv as Dictionary)["i1"]):
+			plan["zero"] = true
+			return plan
+	var areas: PackedFloat32Array = station_area.get(fid, PackedFloat32Array())
+	var trv: PackedFloat32Array = station_travel.get(fid, PackedFloat32Array())
+	plan["a_top"] = areas[mini(i, areas.size() - 1)] if areas.size() > 0 else 0.0
+	plan["tc"] = tcs[i]
+	plan["base"] = float(f.get("base_lps", 0.0))
+	var ups: Array = []
+	for k in range(basins.size() - 1, -1, -1):
+		var bd: Dictionary = basins[k]
+		if int(bd["i1"]) >= i:
+			continue
+		var a_in: float = areas[maxi(int(bd["i0"]) - 1, 0)] if areas.size() > 0 else 0.0
+		var lag_b: float = (trv[i] - trv[int(bd["i1"])]) if trv.size() == n else 0.0
+		ups.append([a_in, lag_b, bd.get("full", null), float(bd.get("t0", 0.0))])
+	plan["ups"] = ups
+	var sts: Array = []
+	for st_v in _storms:
+		var st: Dictionary = st_v
+		var sa: Variant = (st["areas"] as Dictionary).get(fid, null)
+		if not (sa is PackedFloat32Array) or (sa as PackedFloat32Array).is_empty():
+			continue
+		var a2: float = (sa as PackedFloat32Array)[mini(i, (sa as PackedFloat32Array).size() - 1)]
+		if a2 <= 0.0:
+			continue
+		var entry := int((st["entry"] as Dictionary).get(fid, 0))
+		var lag := 0.0
+		if trv.size() == n:
+			lag = maxf(trv[i] - trv[clampi(entry, 0, n - 1)], 0.0)
+		var gates: Array = []
+		for bv2 in basins:
+			var bd2: Dictionary = bv2
+			if int(bd2["i0"]) >= entry and int(bd2["i1"]) < i:
+				var lag_b2: float = (trv[i] - trv[int(bd2["i1"])]) if trv.size() == n else 0.0
+				gates.append([lag_b2, bd2.get("full", null), float(bd2.get("t0", 0.0))])
+		sts.append([a2, lag, float(st["start_h"]), float(st["end_h"]), float(st["rate_mmh"]),
+			float(st["patch_tc_h"]), gates])
+	plan["storms"] = sts
+	return plan
+
+
+## _basin_full_at on a basin's fill flags and start, taken out of its record.
+static func _full_at(full: Variant, t0: float, tau: float) -> float:
+	if not (full is PackedByteArray) or (full as PackedByteArray).is_empty():
+		return 0.0
+	var k := int(floor((tau - t0) / BASIN_STEP_H))
+	if k < 0:
+		return 0.0
+	var fa: PackedByteArray = full
+	return float(fa[mini(k, fa.size() - 1)])
 
 
 ## Water in a basin now (m³), and its level.

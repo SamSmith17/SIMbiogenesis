@@ -97,6 +97,18 @@ static func history_prefix(rain_at: Callable, now_h: float, samples: int) -> Pac
 	return prefix
 
 
+## history_prefix from rain already sampled: values[k] is the rain at
+## now_h − (k + 0.5)·HISTORY_STEP_H, as history_prefix would ask for it.
+static func history_prefix_values(values: PackedFloat64Array) -> PackedFloat32Array:
+	var prefix := PackedFloat32Array()
+	prefix.resize(values.size() + 1)
+	var acc := 0.0
+	for k in values.size():
+		acc += maxf(values[k], 0.0)
+		prefix[k + 1] = acc
+	return prefix
+
+
 ## Mean rain intensity (mm/h) over the last `tc_h` from a history prefix.
 static func window_mean(prefix: PackedFloat32Array, tc_h: float) -> float:
 	var k_f := tc_h / HISTORY_STEP_H

@@ -23,7 +23,7 @@ extends SceneTree
 ## Run: Godot.exe.exe --headless --path . --script core/water/water_features_selftest.gd
 ## (run --import first after adding a class_name).
 
-const EXPECTED_CHECKS := 124
+const EXPECTED_CHECKS := 125
 
 var _fails := 0
 var _checks := 0
@@ -529,6 +529,14 @@ func _test_runoff() -> void:
 	_check("rising limb: half a Tc in, half the flow", _near(StreamRunoff.window_mean(pre2, 1.0), 5.0, 0.5),
 		"%.2f" % StreamRunoff.window_mean(pre2, 1.0))
 	_check("a short-Tc point is already full", _near(StreamRunoff.window_mean(pre2, 0.25), 10.0, 0.5))
+	# history_prefix_values (rain sampled first, WaterNetwork.rain_mmh_series)
+	# gives the same prefix bit for bit.
+	var wavy := func(h: float) -> float: return maxf(0.0, 7.3 * sin(h * 1.7) + 1.1 * cos(h * 5.3))
+	var vals := PackedFloat64Array()
+	for k in 40:
+		vals.append(float(wavy.call(100.0 - (float(k) + 0.5) * StreamRunoff.HISTORY_STEP_H)))
+	_check("history prefix from sampled values is the same",
+		StreamRunoff.history_prefix_values(vals) == StreamRunoff.history_prefix(wavy, 100.0, 40))
 	# Storm hydrograph: 10 mm/h from 0 to 2 h at a 1 h-Tc point.
 	_check("storm: rising", _near(StreamRunoff.storm_mean(0.0, 2.0, 10.0, 0.5, 1.0), 5.0, 1e-3))
 	_check("storm: full", _near(StreamRunoff.storm_mean(0.0, 2.0, 10.0, 1.5, 1.0), 10.0, 1e-3))

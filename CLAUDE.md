@@ -1823,6 +1823,13 @@ tools\harness.ps1 -World <world> -RunScript res://tools/checks/stream_storm_chec
 # soaks away; a large storm cuts the bed and is re-carved; Reset erosion:
 tools\harness.ps1 -World <world> -RunScript res://tools/checks/stream_basin_check.gd -Label <dir>
 tools\harness.ps1 -World <world> -RunScript res://tools/checks/stream_erosion_check.gd
+# Basins and rain history against the plain loops they replaced (sandbox,
+# read-only; a world with no basin gets a bowl dug): the rain history at 73
+# clocks over a year and each basin's 24 h series (as saved, 30 mm/h rain,
+# storms, dry between storms) must be bit-identical; prints ms new vs old.
+# Run it after ANY change to _refresh_basin_series, _q_at, step_volume,
+# rain_mmh_at or WeatherService.sample:
+tools\harness.ps1 -World walton -RunScript res://tools/diag/basin_series_parity.gd -Timeout 900
 # Rain + stream frame bench (Bombay Beach = w6ad922917357): a 100 mm/h storm,
 # a bowl across a stream, then the real 2023 Hilary weather, 10 sim-h each;
 # prints p50/p95/max frame ms, every water_* / terrain_* section's avg + peak,
@@ -4041,6 +4048,29 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
   went 42.7 → 20.2 ms. Its "full specs digest" is NOT a pin: it holds live
   display stamps (panel output, battery SOC, `dc_*_w`) and differs between
   two runs of the same code; the state hash is the pin.
+- **The basin phase** (second pass, same day) was ~25 ms once a sim-minute
+  at speed, now ~7 ms, with results the same bit for bit:
+  - `_refresh_basin_series` has `_q_at` and `step_volume` written out, with
+    the per-basin constants worked out once (`_inflow_plan`) and the stage
+    row found by halving: 17.5 → 4.9 ms on Walton's 8 basins.
+  - The rain history is sampled by `rain_mmh_series` (lookups made once, the
+    date once a day) and summed by `StreamRunoff.history_prefix_values`.
+  - `WeatherService` reads the computer's date and hour at most every 200 ms
+    (`_read_system_date`; sample() asked the OS up to five times a call).
+  - Together the rain history went 4.4 → 1.7 ms.
+  - Gate: `tools/diag/basin_series_parity.gd` keeps the plain loops and
+    compares.
+  - Walton frame-spike A/B:
+
+    | | before | after |
+    |---|---|---|
+    | 60x p99 / max | 42.4 / 56.2 ms | 34.4 / 51.7 ms |
+    | 60x frames over 33 ms | 36 | 13 |
+    | 1x max | 51.0 ms | 37.8 ms |
+    | 1x frames over 33 ms | 15 | 6 |
+
+    The water poll's worst frame went 26.6 → 10.1 ms (now erosion). Both
+    state hashes are unchanged.
 - Spans added: `npc_svc` / `_pos` / `_spots` / `_comfort` / `_nav`,
   `npc_walk`, `npc_full_tick` / `_post`, `tl_draw` / `_lanes` / `_mc` /
   `_clips` / `tl_draw_wave_<source>_<channel>`, `tl_clip_*`.
@@ -4051,7 +4081,6 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
   - The one remaining load carve still recuts all 425 Walton tiles (~10 s on
     a worker). The cached feature signatures do not match; the cause was not
     found.
-  - The basin phase of the water poll is ~20 ms in rain at speed.
   - The 1 Hz SCADA (~10 ms) and element ledger (~10 ms) jobs are each one
     job, not sliced.
 
@@ -9384,6 +9413,13 @@ it only ever writes the procedural CHANNEL tile layer.
   moves, its surface meshed flat at the level (`StreamBasins` node). Found in
   `_update_station_areas` (after every carve / drainage pass, so a sculpt
   shows up once drainage reruns). Verify: `tools/checks/stream_basin_check.gd`.
+  ⚠ `_refresh_basin_series` does NOT call `_q_at` or `step_volume`: it has
+  their arithmetic written out, with what does not change between steps
+  worked out once per basin (`_inflow_plan`, `_full_at`; 2026-11-17, 17.5 →
+  4.9 ms on Walton's 8 basins). A change to `_q_at`, `step_volume` or
+  `area_for_volume` must be made in both, and
+  `tools/diag/basin_series_parity.gd` (which keeps the plain loop) must
+  still say bit-identical.
 - **Erosion** (`StreamHydraulics.bed_shear_pa` / `erosion_rate_mps`,
   excess-shear model, k_d 2e-6 m³/(N·s), τc 4 Pa): while the clock runs
   FORWARD (steps ≤ 1 h; a scrub or jump erodes nothing) every carved open
