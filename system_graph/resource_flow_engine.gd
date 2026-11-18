@@ -261,6 +261,7 @@ func setup(model: GraphModel, host: Node) -> void:
 	_model = model
 	_host = host
 	_timelines.clear()
+	_ensure_key = []
 	_conn_flow.clear()
 	_processor_states.clear()
 	_last_abs_hours = -1.0
@@ -268,6 +269,7 @@ func setup(model: GraphModel, host: Node) -> void:
 
 func clear_timelines() -> void:
 	_timelines.clear()
+	_ensure_key = []
 	_conn_flow.clear()
 	_processor_states.clear()
 	_last_abs_hours = -1.0
@@ -706,7 +708,17 @@ func _ensure_timelines() -> void:
 	_ensure_timelines_at(_get_abs_hours())
 
 
+## _ensure_timelines_at walked every tank every step to find a new one;
+## the walk can only change its answer when the graph's structure, a user edit,
+## the item list or the timeline map has changed since the last walk.
+var _ensure_key: Array = []
+var _ensure_items: Array = []
+
+
 func _ensure_timelines_at(abs_hours: float) -> void:
+	var ekey: Array = [_model.struct_rev, _model.user_rev, _model.items.size(), _timelines.size()]
+	if not _ensure_key.is_empty() and is_same(_ensure_items, _model.items) and _ensure_key == ekey:
+		return
 	var live_ids: Dictionary = {}
 	var anchor_h: float = abs_hours if abs_hours >= 0.0 else 0.0
 	for item: Dictionary in _model.items_of_type("resource"):
@@ -732,6 +744,8 @@ func _ensure_timelines_at(abs_hours: float) -> void:
 	for iid: String in _timelines.keys():
 		if not live_ids.has(iid):
 			_timelines.erase(iid)
+	_ensure_key = [_model.struct_rev, _model.user_rev, _model.items.size(), _timelines.size()]
+	_ensure_items = _model.items
 
 
 func _read_all_tanks_at(abs_hours: float) -> void:
@@ -761,67 +775,33 @@ static func stage_area_at_level(curve: Array, level_m: float) -> float:
 func _apply_tank_sample(item: Dictionary, sample: Dictionary,
 		tl: ResourceTimeline = null, abs_hours: float = -1.0) -> void:
 	var orig_specs: Dictionary = item.get("specs", {}) as Dictionary
-	# The keys this step writes, in the order it writes them. The specs are
-	# copied (and these merged over the copy) only when something the UI reads
-	# has moved: on most steps an idle tank's values are where they were, and
-	# copying every tank's specs to find that out was a copy of all 233 of
-	# Walton's every step.
-	var p: Dictionary = {}
-	p["level"] = float(sample.get("level", orig_specs.get("level", 0.0)))
-	p["inflow_rate"] = float(sample.get("inflow_rate", 0.0))
-	p["outflow_rate"] = float(sample.get("outflow_rate", 0.0))
-	# Pond twin: Auto fill keeps stock_l in lockstep with tank level.
-	# Mesh surface uses bathymetric inverse via SystemGraphView.push_pond_levels_to_mesh
-	# → terrain_loader.set_pond_stock_l_by_tag; level_m here is a linear Elev fallback.
-	if bool(orig_specs.get("pond_storage", false)) \
-			and str(orig_specs.get("fill_mode", "auto")) != "manual":
-		var cap := maxf(float(orig_specs.get("capacity_qty", 100.0)), 0.001)
-		p["stock_l"] = clampf(float(p["level"]), 0.0, 1.0) * cap
-		# ONE level authority: the basin's stage–storage curve (stamped by the
-		# view from the same bathymetry the 3D water uses). Linear floor→rim
-		# only when no curve is known (offline / a pond with no terrain).
-		var curve: Variant = orig_specs.get("stage_curve", null)
-		var lvl_curve := NAN
-		if curve is Array and (curve as Array).size() >= 2:
-			lvl_curve = stage_level_for_stock(curve as Array, float(p["stock_l"]))
-		if not is_nan(lvl_curve):
-			p["level_m"] = lvl_curve
-		else:
-			var rim := float(orig_specs.get("rim_m", NAN))
-			var floor_y := float(orig_specs.get("floor_m", NAN))
-			if not is_nan(rim) and not is_nan(floor_y):
-				var span := maxf(rim - floor_y, 0.05)
-				p["level_m"] = floor_y + clampf(float(p["level"]), 0.0, 1.0) * span
+	# What this step would write is worked out into locals first; the patch
+	# (and the specs copy it is merged over) is built only when something the
+	# UI reads has moved: on most steps an idle tank's values are where they
+	# were. The keys are written in the same order either way.
+	var lvl := float(sample.get("level", orig_specs.get("level", 0.0)))
+	var inr := float(sample.get("inflow_rate", 0.0))
+	var outr := float(sample.get("outflow_rate", 0.0))
 	var iid := str(item.get("id", ""))
 	var overflow_flip := false
 	var over := false
+	var has_over := false
+	var oq := 0.0
 	var prev_state := str(orig_specs.get("node_state", ""))
 	if tl != null and abs_hours >= 0.0:
+		has_over = true
 		# Conceptual / unlimited tanks never overflow — inflow is always kept.
-		if _tank_is_unlimited(orig_specs):
-			over = false
-			p["overflowing"] = false
-			p["overflow_qty"] = 0.0
-		else:
+		if not _tank_is_unlimited(orig_specs):
 			over = tl.is_overflowing_at(abs_hours)
 			overflow_flip = over != bool(orig_specs.get("overflowing", false))
-			p["overflowing"] = over
-			p["overflow_qty"] = 0.0 if not over else tl.total_overflow_qty
+			oq = 0.0 if not over else tl.total_overflow_qty
 	# Tanks carry an OVERFLOW node state (drives the shared alert overlay); no
 	# state otherwise (nominal — level fill speaks for itself).
 	var new_state := GraphNodeState.OVERFLOW if over else ""
-	p["node_state"] = new_state
-	if new_state != prev_state:
-		p["node_state_reason"] = GraphNodeState.REASON_TANK_FULL if over else ""
-		p["node_state_kinds"] = []
-
 	# Pond water budget for this step (inflow breakdown + spill), stamped so the
 	# inspector can say where the water came from and where it went.
-	if _pond_budget.has(str(item.get("id", ""))):
-		var b: Dictionary = _pond_budget[str(item.get("id", ""))]
-		p["budget_rain_lph"] = float(b.get("rain", 0.0))
-		p["budget_stream_lph"] = float(b.get("stream", 0.0))
-		p["budget_spill_lph"] = float(b.get("spill", 0.0))
+	var b: Dictionary = _pond_budget.get(iid, {})
+	var has_b := _pond_budget.has(iid)
 	# Skip the model write (and the redraw/telemetry cascade it triggers) when
 	# nothing the UI actually reads has moved beyond float noise — an idle
 	# tank's level/rates are unchanged tick to tick. The sample/overflow
@@ -829,20 +809,62 @@ func _apply_tank_sample(item: Dictionary, sample: Dictionary,
 	# write, mirroring _tick_graph_renewables' change-gated update_item.
 	const EPS := 0.0005
 	var value_changed := new_state != prev_state \
-		or absf(float(p.get("level", orig_specs.get("level", 0.0))) - float(orig_specs.get("level", 0.0))) > EPS \
-		or absf(float(p.get("inflow_rate", orig_specs.get("inflow_rate", 0.0))) - float(orig_specs.get("inflow_rate", 0.0))) > EPS \
-		or absf(float(p.get("outflow_rate", orig_specs.get("outflow_rate", 0.0))) - float(orig_specs.get("outflow_rate", 0.0))) > EPS \
-		or bool(p.get("overflowing", orig_specs.get("overflowing", false))) != bool(orig_specs.get("overflowing", false)) \
-		or absf(float(p.get("overflow_qty", orig_specs.get("overflow_qty", 0.0))) - float(orig_specs.get("overflow_qty", 0.0))) > EPS \
-		or absf(float(p.get("budget_spill_lph", orig_specs.get("budget_spill_lph", 0.0))) - float(orig_specs.get("budget_spill_lph", 0.0))) > 1.0 \
-		or absf(float(p.get("budget_rain_lph", orig_specs.get("budget_rain_lph", 0.0))) - float(orig_specs.get("budget_rain_lph", 0.0))) > 1.0 \
-		or absf(float(p.get("budget_stream_lph", orig_specs.get("budget_stream_lph", 0.0))) - float(orig_specs.get("budget_stream_lph", 0.0))) > 1.0
+		or absf(lvl - float(orig_specs.get("level", 0.0))) > EPS \
+		or absf(inr - float(orig_specs.get("inflow_rate", 0.0))) > EPS \
+		or absf(outr - float(orig_specs.get("outflow_rate", 0.0))) > EPS
+	if not value_changed and has_over:
+		value_changed = over != bool(orig_specs.get("overflowing", false)) \
+			or absf(oq - float(orig_specs.get("overflow_qty", 0.0))) > EPS
+	if not value_changed and has_b:
+		value_changed = absf(float(b.get("spill", 0.0)) - float(orig_specs.get("budget_spill_lph", 0.0))) > 1.0 \
+			or absf(float(b.get("rain", 0.0)) - float(orig_specs.get("budget_rain_lph", 0.0))) > 1.0 \
+			or absf(float(b.get("stream", 0.0)) - float(orig_specs.get("budget_stream_lph", 0.0))) > 1.0
+	var reason := ""
 	if value_changed:
+		var p: Dictionary = {}
+		p["level"] = lvl
+		p["inflow_rate"] = inr
+		p["outflow_rate"] = outr
+		# Pond twin: Auto fill keeps stock_l in lockstep with tank level.
+		# Mesh surface uses bathymetric inverse via SystemGraphView.push_pond_levels_to_mesh
+		# → terrain_loader.set_pond_stock_l_by_tag; level_m here is a linear Elev fallback.
+		if bool(orig_specs.get("pond_storage", false)) \
+				and str(orig_specs.get("fill_mode", "auto")) != "manual":
+			var cap := maxf(float(orig_specs.get("capacity_qty", 100.0)), 0.001)
+			p["stock_l"] = clampf(lvl, 0.0, 1.0) * cap
+			# ONE level authority: the basin's stage–storage curve (stamped by the
+			# view from the same bathymetry the 3D water uses). Linear floor→rim
+			# only when no curve is known (offline / a pond with no terrain).
+			var curve: Variant = orig_specs.get("stage_curve", null)
+			var lvl_curve := NAN
+			if curve is Array and (curve as Array).size() >= 2:
+				lvl_curve = stage_level_for_stock(curve as Array, float(p["stock_l"]))
+			if not is_nan(lvl_curve):
+				p["level_m"] = lvl_curve
+			else:
+				var rim := float(orig_specs.get("rim_m", NAN))
+				var floor_y := float(orig_specs.get("floor_m", NAN))
+				if not is_nan(rim) and not is_nan(floor_y):
+					var span := maxf(rim - floor_y, 0.05)
+					p["level_m"] = floor_y + clampf(lvl, 0.0, 1.0) * span
+		if has_over:
+			p["overflowing"] = over
+			p["overflow_qty"] = oq
+		p["node_state"] = new_state
+		if new_state != prev_state:
+			p["node_state_reason"] = GraphNodeState.REASON_TANK_FULL if over else ""
+			p["node_state_kinds"] = []
+		if has_b:
+			p["budget_rain_lph"] = float(b.get("rain", 0.0))
+			p["budget_stream_lph"] = float(b.get("stream", 0.0))
+			p["budget_spill_lph"] = float(b.get("spill", 0.0))
+		reason = str(p.get("node_state_reason", orig_specs.get("node_state_reason", "")))
 		var specs: Dictionary = orig_specs.duplicate(false)
 		specs.merge(p, true)
 		_model.update_item(iid, {"specs": specs})
 	if new_state != prev_state:
-		node_state_changed.emit(iid, new_state, str(p.get("node_state_reason", orig_specs.get("node_state_reason", ""))), [])
+		# A changed state always writes (value_changed), which set the reason.
+		node_state_changed.emit(iid, new_state, reason, [])
 	if overflow_flip:
 		tank_overflow_changed.emit(iid, over)
 
@@ -1090,13 +1112,19 @@ func _process_terrace(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 	var field_flood := bool(specs.get("flooded", true))
 	var loss := PackedFloat64Array()
 	loss.resize(n)
+	# paddy_loss_mm_h is pure and resolves the whole field record per call:
+	# worked out once per (crop, flooded, crop standing) this step.
+	var loss_memo: Dictionary = {}
 	for i in n:
 		var lrow: Array = table[i]
 		var stg := str((fps[i] as Dictionary).get("st", ""))
-		loss[i] = TerraceField.paddy_loss_mm_h(rec,
-			str(lrow[6]) if lrow.size() > 6 else field_crop,
-			bool(lrow[7]) if lrow.size() > 7 else field_flood, temp_c,
-			stg == TerraceFarm.STAGE_GROW or stg == TerraceFarm.STAGE_HARVEST)
+		var l_crop := str(lrow[6]) if lrow.size() > 6 else field_crop
+		var l_flood := bool(lrow[7]) if lrow.size() > 7 else field_flood
+		var l_grow := stg == TerraceFarm.STAGE_GROW or stg == TerraceFarm.STAGE_HARVEST
+		var lk: Array = [l_crop, l_flood, l_grow]
+		if not loss_memo.has(lk):
+			loss_memo[lk] = TerraceField.paddy_loss_mm_h(rec, l_crop, l_flood, temp_c, l_grow)
+		loss[i] = float(loss_memo[lk])
 	# --- The intake: the store on water_in, as much as the gate asks ---
 	var want := TerraceField.intake_lph(rec, table, store, rain, loss, dt_hours)
 	var src_id := _tank_at_port(iid, "water_in", true)
@@ -1104,8 +1132,8 @@ func _process_terrace(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 	var no_source := src_id.is_empty()
 	var src_dry := false
 	if not no_source and want > 0.0:
-		var src_specs: Dictionary = (_model.get_item(src_id).get("specs", {}) as Dictionary).duplicate(true)
-		_rk.migrate_resource_specs(src_specs)
+		# Read only: the tank's specs as they are (a migrated copy if not yet).
+		var src_specs: Dictionary = _tank_specs_view(_model.get_item(src_id))
 		var stl: ResourceTimeline = _timelines.get(src_id) as ResourceTimeline
 		var ok: bool = _tank_has_supply(src_specs, stl, abs_h) \
 				or (stl == null and bool(src_specs.get("allow_negative", false)))
@@ -1123,8 +1151,7 @@ func _process_terrace(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 	var runoff := out_lph
 	var out_id := _tank_at_port(iid, "water_out", false)
 	if not out_id.is_empty() and out_lph > 0.0:
-		var os: Dictionary = (_model.get_item(out_id).get("specs", {}) as Dictionary).duplicate(true)
-		_rk.migrate_resource_specs(os)
+		var os: Dictionary = _tank_specs_view(_model.get_item(out_id))
 		var otl: ResourceTimeline = _timelines.get(out_id) as ResourceTimeline
 		if _tank_accepts_inflow(os, otl, abs_h):
 			net_rates[out_id] = float(net_rates.get(out_id, 0.0)) + out_lph
@@ -1151,8 +1178,7 @@ func _process_terrace(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 	if labour == "machines":
 		var fid0 := _tank_at_port(iid, "fuel_in", true)
 		if not fid0.is_empty():
-			var fsp: Dictionary = (_model.get_item(fid0).get("specs", {}) as Dictionary).duplicate(true)
-			_rk.migrate_resource_specs(fsp)
+			var fsp: Dictionary = _tank_specs_view(_model.get_item(fid0))
 			fuel_ok = _tank_has_supply(fsp, _timelines.get(fid0) as ResourceTimeline, abs_h)
 	var fr := TerraceFarm.step(table, fs, abs_h, dt_hours, {
 		"fuel_ok": fuel_ok,

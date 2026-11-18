@@ -4153,6 +4153,14 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
     every step, so nearly every habitat writes and copies anyway. A
     read-in-place path saved 0.1 ms and was dropped.
   - Also not changed: Walton's one terraced field costs 0.8 ms a step.
+  - Sixth pass (2026-11-18), 10.62 → 9.47 ms (state hashes unchanged):
+    `_ensure_timelines_at` returns at once while struct_rev, user_rev,
+    the item array and the timeline count are as last time (0.79 → 0.02
+    ms); `_apply_tank_sample` reads into locals and builds its patch only
+    when a value moved, in the old key order (tanks 2.62 → 2.26 ms); a
+    terraced field's paddy losses are memoised per (crop, flooded,
+    growing) within a step and its stores are read in place (0.76 → 0.64
+    ms; `tools/diag/terrace_step_profile.gd` times its parts).
   - **Full tank histories.** Once a tank's `ResourceTimeline` held
     `MAX_SAMPLES` (14 sim-days, ~14 real minutes at 1440x), every step
     copied its three arrays to drop the oldest sample: 16.5 µs a step
