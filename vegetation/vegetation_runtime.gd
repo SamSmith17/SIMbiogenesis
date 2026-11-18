@@ -158,7 +158,13 @@ static func apply_visibility_range(mi: GeometryInstance3D, begin_m: float, end_m
 	var end_margin := end_margin_m if end_margin_m >= 0.0 else margin_m
 	mi.visibility_range_begin_margin = margin_m if begin_m > 0.0 else 0.0
 	mi.visibility_range_end_margin = end_margin if end_m > 0.0 else 0.0
-	mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	mi.visibility_range_fade_mode = fade_mode as GeometryInstance3D.VisibilityRangeFadeMode
+
+
+## The fade every vegetation batch is built with. Only a bench changes it
+## (tools/bench/veg_fade_bench.gd, then a rebuild): set at build time, never
+## swept on live nodes (AMD Vulkan has hard-crashed on live range changes).
+static var fade_mode: int = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 
 
 static func _build_grass_bulk_batches(root: Node3D, species: String, records: Array,
