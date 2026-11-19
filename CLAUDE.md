@@ -8752,7 +8752,16 @@ pattern):**
   mips + DXT1); now the call returns in ~1 ms and the worst frame is 48–87 ms
   (the upload); the texture arrives ~0.3 s later and its bytes are the same
   (`tools/diag/drape_hitch_probe.gd` hashes them). This was every load, tier
-  change and Shoreline capture switch.
+  change and Shoreline capture switch. Not done: a CPU copy of each drape for
+  the four rare `get_image()` readers (landcover gate, Detect, the AI crop):
+  ~100 MB of RAM held for good to save a read-back once per scatter.
+- **Vegetation MultiMeshes stay filled instance by instance.**
+  `tools/diag/multimesh_fill_bench.gd` (run it WINDOWED: a headless
+  MultiMesh keeps no transforms): 60,000 instances cost 6.5 ms by
+  `set_instance_transform` + `set_instance_custom_data` and 19.6 ms written
+  into one PackedFloat32Array in GDScript (byte-identical buffers). The fill
+  loops' time is building the transforms and sampling the ground, not the
+  calls.
 - `core/terrain/ai_imagery_service.gd` (`AiImageryService` autoload): **opt-in**
   AI "hero patch" — after the hyper drape lands, `terrain_loader._maybe_request_ai_hero()`
   crops the central ~100 m square (`AI_HERO_HALF_EXTENT_DEFAULT` 50 m) out of
