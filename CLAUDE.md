@@ -8864,6 +8864,11 @@ via `_on_impostor_bake_completed`. The impostor shader is unshaded (day/night
 from the env-sync uniforms), billboards manually in vertex (spatial shaders
 have no billboard render_mode), and seasonally recolors/thins ONLY
 mask-flagged foliage pixels. Selftest: `vegetation/veg_lod_policy_selftest.gd`.
+The mask atlas is R8 (2026-11-18): the shader reads only `.r` and the mask
+has no mipmaps, so it is the same bytes in a quarter of the memory
+(`_mask_to_r8`; a set cached as RGBA8 is converted on load and saved back
+once). Mount Vernon's 16 sets: masks 64 → 16 MB, texture memory
+1524 → 1476 MB (`tools/diag/impostor_mask_probe.gd` checks every red byte).
 **Tree cells (2026-11-17).** Inside each 256 m chunk every tree band is cut
 again into 64 m cells (`VegetationRuntime.TREE_CELL_M`, `_partition_tree_cells`):
 Godot measures a batch's visibility range to its AABB centre, so with whole

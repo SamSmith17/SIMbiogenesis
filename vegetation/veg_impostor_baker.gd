@@ -123,9 +123,29 @@ static func cached_set(species: String, settings: Dictionary) -> VegImpostorSet:
 		var res: Variant = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_REUSE)
 		if res is VegImpostorSet and (res as VegImpostorSet).bake_version == BAKE_VERSION \
 				and (res as VegImpostorSet).is_usable():
+			if _mask_to_r8(res as VegImpostorSet):
+				# Saved back once, so the next load is already R8.
+				ResourceSaver.save(res as VegImpostorSet, path)
 			_sets[key] = res
 			return res
 	return null
+
+
+## The mask atlas as R8: the shader reads only its red channel and it has no
+## mipmaps, so R8 holds exactly the same bytes in a quarter of the memory
+## (1024² RGBA8 = 4 MB a set; Mount Vernon's 16 sets 64 -> 16 MB). True when
+## a set baked before this was converted.
+static func _mask_to_r8(iset: VegImpostorSet) -> bool:
+	if iset.mask == null:
+		return false
+	var im := iset.mask.get_image()
+	if im == null or im.is_empty() or im.get_format() == Image.FORMAT_R8:
+		return false
+	if im.is_compressed() or im.has_mipmaps():
+		return false
+	im.convert(Image.FORMAT_R8)
+	iset.mask.set_image(im)
+	return true
 
 
 ## Queue a bake for a missing set. No-op when headless or no baker node exists.
@@ -338,6 +358,8 @@ func _bake(species: String, settings: Dictionary, key: String) -> VegImpostorSet
 	iset.key = key
 	iset.species = species
 	iset.atlas = ImageTexture.create_from_image(atlas)
+	# Only the red channel is read (see _mask_to_r8).
+	mask_img.convert(Image.FORMAT_R8)
 	iset.mask = ImageTexture.create_from_image(mask_img)
 	iset.frames_x = GRID
 	iset.frames_y = GRID
