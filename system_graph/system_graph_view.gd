@@ -17995,9 +17995,37 @@ func _set_score_color(key: String, color: Color) -> void:
 ## file defaults: summed max utilized PV power (`max_pv_watts`) and AC overload
 ## (`overload_watts`) over every non-packed, non-destroyed controller that has
 ## PV wired to it. Empty when no controller has PV (SolarUI keeps its own).
+## Cached on what the answer reads: the wiring and edits (struct_rev,
+## user_rev, the arrays' sizes and identity), the sandbox, and each
+## controller's own flags (destroyed / packed / ratings can move in sim
+## writes). It rebuilt the flat connections and walked every controller's PV
+## strings on every SolarUI sync: 2.3 of the sync's 4 ms on Walton.
+var _limits_cache: Dictionary = {}
+var _limits_key: Array = []
+var _limits_items: Array = []
+
+
 func _controller_power_limits() -> Dictionary:
 	if model == null:
 		return {}
+	var key: Array = [model.struct_rev, model.user_rev, model.connections.size(),
+		model.items.size(), _sandbox_active]
+	for c_it: Dictionary in model.items_of_type("controller"):
+		var c_sp: Dictionary = c_it.get("specs", {}) as Dictionary
+		key.append([str(c_it.get("id", "")), str(c_it.get("scope_id", "")),
+			bool(c_it.get("is_virtual", false)), bool(c_sp.get("destroyed", false)),
+			bool(c_sp.get("packed_3d", false)), float(c_sp.get("max_pv_watts", 0.0)),
+			float(c_sp.get("overload_watts", 0.0))])
+	if is_same(_limits_items, model.items) and key == _limits_key:
+		return _limits_cache.duplicate()
+	var res := _controller_power_limits_now()
+	_limits_key = key
+	_limits_items = model.items
+	_limits_cache = res
+	return res.duplicate()
+
+
+func _controller_power_limits_now() -> Dictionary:
 	var pv_w := 0.0
 	var ac_w := 0.0
 	var flat := GraphNesting.flat_connections(model)

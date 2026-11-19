@@ -4026,6 +4026,14 @@ the fix was taking steady cost out. In order of size:
 - **What remains** in slow frames is mostly outside graph code: the stream
   network's `water_*` (it runs while the graph hides the world), SolarUI at
   7200×, and engine time.
+- **Controller limits** (2026-11-18): `_controller_power_limits` (what each
+  SolarUI sync reads for `pv_limit_kw` / `ac_overload_w`) rebuilt the flat
+  connections and walked every controller's PV strings each call, 2.3 of the
+  sync's 4.0 ms on Walton. It is cached on struct_rev, user_rev, the arrays'
+  sizes and identity, the sandbox and each controller's own flags and
+  ratings (`_controller_power_limits_now` is the old body); whole sync
+  4.0 → 1.5 ms. `tools/diag/solar_sync_profile.gd` times each part and checks
+  cached == fresh.
 
 ## Frame spikes: one heavy job a frame (perf pass, 2026-11-17)
 
