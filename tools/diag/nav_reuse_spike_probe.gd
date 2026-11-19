@@ -27,7 +27,8 @@ func run(main: Node, _harness: Node) -> Dictionary:
 			break
 	if grid == null or not bool(grid.call("is_ready")):
 		return {"ok": false, "why": "nav grid never ready"}
-	print("navspike: grid %d x %d x %d ready" % [int(grid.get("nx")), int(grid.get("nz")), int(grid.get("layers"))])
+	print("navspike: grid %d x %d x %d ready %.1f s after the script started" % [int(grid.get("nx")),
+		int(grid.get("nz")), int(grid.get("layers")), float(Time.get_ticks_msec() - t0) / 1000.0])
 	var worst_all := 0.0
 	for rep in 3:
 		grid = bridge.get("_nav_grid")

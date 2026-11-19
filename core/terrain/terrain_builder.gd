@@ -110,15 +110,17 @@ static func sample_bilinear(src: PackedFloat32Array, src_cols: int, src_rows: in
 	var v10 := src[y0 * src_cols + x1]
 	var v01 := src[y1 * src_cols + x0]
 	var v11 := src[y1 * src_cols + x1]
-	# Fall back to any finite neighbour if a corner is NAN.
-	var samples := [v00, v10, v01, v11]
-	var first_finite := NAN
-	for s in samples:
-		if not is_nan(s):
-			first_finite = s
-			break
+	# Fall back to any finite neighbour if a corner is NAN (the first finite
+	# in this order; no Array: this runs for every ground-height query).
+	var first_finite := v00
 	if is_nan(first_finite):
-		return 0.0
+		first_finite = v10
+		if is_nan(first_finite):
+			first_finite = v01
+			if is_nan(first_finite):
+				first_finite = v11
+				if is_nan(first_finite):
+					return 0.0
 	if is_nan(v00): v00 = first_finite
 	if is_nan(v10): v10 = first_finite
 	if is_nan(v01): v01 = first_finite
@@ -156,24 +158,28 @@ static func sample_footing_height(x: float, z: float, coarse: PackedFloat32Array
 	var detail_half := detail_extent_m * 0.5 if detail_extent_m > 0.0 else 0.0
 	var has_detail := not detail.is_empty() and detail_cols > 1 and detail_rows > 1 and detail_half > 0.0
 	var in_detail := detail_half > 0.0 and absf(x) <= detail_half and absf(z) <= detail_half
-	var coarse_y := 0.0
 	var has_coarse := not coarse.is_empty() and coarse_res > 1
-	if has_coarse:
-		coarse_y = height_at_world_xz(coarse, coarse_res, coarse_extent_m, center_elev, x, z)
+	# Each grid is sampled only where its height is returned (deep inside the
+	# detail patch, the coarse one is not): the same numbers, half the work.
 	if in_detail and not has_detail and not detail_fallback_coarse.is_empty() and coarse_res > 1:
 		return height_at_world_xz(
 			detail_fallback_coarse, coarse_res, coarse_extent_m, center_elev, x, z)
 	if not has_detail:
 		if has_coarse:
-			return coarse_y
+			return height_at_world_xz(coarse, coarse_res, coarse_extent_m, center_elev, x, z)
 		return 0.0
-	var detail_y := height_at_world_xz_rect(
-		detail, detail_cols, detail_rows, detail_extent_m, center_elev, x, z)
 	var dist_in := maxf(absf(x), absf(z))
 	if dist_in >= detail_half:
-		return coarse_y
+		if not has_coarse:
+			return 0.0
+		return height_at_world_xz(coarse, coarse_res, coarse_extent_m, center_elev, x, z)
+	var detail_y := height_at_world_xz_rect(
+		detail, detail_cols, detail_rows, detail_extent_m, center_elev, x, z)
 	if crossfade_m <= 0.0 or dist_in <= detail_half - crossfade_m:
 		return detail_y
+	var coarse_y := 0.0
+	if has_coarse:
+		coarse_y = height_at_world_xz(coarse, coarse_res, coarse_extent_m, center_elev, x, z)
 	var edge_dist := detail_half - dist_in
 	var t := clampf(edge_dist / crossfade_m, 0.0, 1.0)
 	return lerpf(coarse_y, detail_y, t)

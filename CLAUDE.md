@@ -4243,9 +4243,19 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
   (`_steep_near`), tested on the stored value as before. Gate:
   `tools/diag/nav_reuse_parity.gd` (offline, frozen copy of the old loops,
   byte for byte); in the world `tools/diag/nav_reuse_spike_probe.gd`.
+- **Ground-height queries cost half** (2026-11-18): every one goes through
+  `TerrainBuilder.sample_footing_height` → `sample_bilinear`, which built a
+  4-element Array per call for its NaN fallback and sampled the coarse grid
+  even deep inside the detail patch where only the detail height is
+  returned. Now no Array (same first finite corner, same order) and each
+  grid is sampled only where its height is returned: 3.22 → 1.62 µs a query,
+  bit-identical on 240,000 queries incl. NaN corners and the crossfade band
+  (`tools/diag/footing_sampler_parity.gd`). Walton's full nav bake (~600k
+  queries, time-budgeted per frame) is ready 13 s sooner (76.8 → 63.5 s).
 - **Still open:**
   - A terrain tile rebuild is ~15 ms on its own (the first build samples the
-    base ground 67² times), more than the 6 ms budget.
+    base ground 67² times), more than the 6 ms budget. Each of those samples
+    halved on 2026-11-18 (below), so roughly 9 ms now; not re-measured.
   - The load carve that recuts all 425 Walton tiles (~10 s on a worker) in
     the harness: the sandbox always starts from the player's real channel
     cache, saved 2026-10-31 by older code that computed other beds. The real
