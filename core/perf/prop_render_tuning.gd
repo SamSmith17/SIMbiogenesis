@@ -50,6 +50,12 @@ const SHADOW_DETAIL_THRESHOLDS: Array[float] = [0.0, 0.12, 0.35, 0.9]
 const LARGE_PROP_RADIUS_M := 6.0
 ## Extra cull distance granted per metre of prop bounding radius.
 const SIZE_FACTOR := 12.0
+## A sub-mesh stops drawing once it is under a pixel across: at distance d a
+## 4K frame's pixel is d / 1408 m at a 75 deg field of view, so a part of
+## radius r (2r across) is sub-pixel past 2816 r; 4000 r holds down to a
+## ~55 deg view. Distant camps of the player's own SketchUp models were
+## ~1,700 draws on Walton, ~40 % of them parts under a pixel.
+const SUBPIXEL_K := 4000.0
 
 static var _loaded := false
 
@@ -86,7 +92,6 @@ static func apply_to_prop(prop: Node, local_radius: float = 0.0) -> void:
 	if model == null:
 		return
 	var end_d := 0.0 if preview_active else _cull_distance_for_radius(local_radius)
-	var margin := clampf(end_d * 0.12, 6.0, 45.0) if end_d > 0.0 else 0.0
 	# Per-prop shadow override (set on the node by PlacedPropRuntime from the
 	# prop's record): "all" forces every mesh to cast, "off" none, "" uses the
 	# global fine-detail threshold.
@@ -98,8 +103,13 @@ static func apply_to_prop(prop: Node, local_radius: float = 0.0) -> void:
 		var mi := node as MeshInstance3D
 		if mi == null or mi.name == "OutlinePass":
 			continue
-		mi.visibility_range_end = end_d
-		mi.visibility_range_end_margin = margin
+		var mesh_end := end_d
+		if not preview_active:
+			var sub_end := SUBPIXEL_K * _mesh_radius_cached(mi, model)
+			if sub_end > 0.0 and (mesh_end <= 0.0 or sub_end < mesh_end):
+				mesh_end = sub_end
+		mi.visibility_range_end = mesh_end
+		mi.visibility_range_end_margin = clampf(mesh_end * 0.12, 6.0, 45.0) if mesh_end > 0.0 else 0.0
 		mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 		# Remember each mesh's authored shadow setting once, so restoring shadows
 		# honours per-mesh intent (glow cards / thin meshes stay OFF).
@@ -124,9 +134,19 @@ static func apply_to_prop(prop: Node, local_radius: float = 0.0) -> void:
 			want = orig
 		elif orig != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF and threshold > 0.0:
 			# Drop only fine-detail sub-meshes; large structural meshes still cast.
-			if _mesh_prop_local_radius(mi, model) < threshold:
+			if _mesh_radius_cached(mi, model) < threshold:
 				want = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		mi.cast_shadow = want
+
+
+## _mesh_prop_local_radius, kept on the mesh (a re-apply on a settings change
+## walks every sub-mesh of every prop).
+static func _mesh_radius_cached(mi: MeshInstance3D, model: Node3D) -> float:
+	if mi.has_meta("_perf_radius"):
+		return float(mi.get_meta("_perf_radius"))
+	var r := _mesh_prop_local_radius(mi, model)
+	mi.set_meta("_perf_radius", r)
+	return r
 
 
 ## Bounding radius (metres) of one sub-mesh in prop-local space, composed from

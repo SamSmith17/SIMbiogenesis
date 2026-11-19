@@ -4252,6 +4252,14 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
   bit-identical on 240,000 queries incl. NaN corners and the crossfade band
   (`tools/diag/footing_sampler_parity.gd`). Walton's full nav bake (~600k
   queries, time-budgeted per frame) is ready 13 s sooner (76.8 → 63.5 s).
+- **Sub-pixel prop parts** (2026-11-18): `PropRenderTuning.apply_to_prop`
+  gives every prop sub-mesh a draw distance of `SUBPIXEL_K` (4000) × its
+  radius (under a pixel across at 4K down to a ~55° view), capped by the
+  prop's own; none while a graph lens preview is up. The player's SketchUp
+  models carry hundreds of surfaces each (827 on one): Walton's 19, 430–570 m
+  out, drew 1,723 surfaces; now ~500 fewer draws, ~0.15 ms CPU, pictures the
+  same. Triangles were not the cost (hiding all 424k of Mount Vernon's saves
+  0.05 ms GPU), so user GLBs still get no LODs.
 - **Still open:**
   - A terrain tile rebuild is ~15 ms on its own (the first build samples the
     base ground 67² times), more than the 6 ms budget. Each of those samples
