@@ -4034,6 +4034,21 @@ the fix was taking steady cost out. In order of size:
   ratings (`_controller_power_limits_now` is the old body); whole sync
   4.0 → 1.5 ms. `tools/diag/solar_sync_profile.gd` times each part and checks
   cached == fresh.
+- **Node drags** (2026-11-18): a freeform drag wrote `update_item` per node
+  per mouse motion, and each ran the view's whole change cascade (telemetry,
+  SolarUI sync, AC fault, world inventory, the DC cache, MP notify) and bumped
+  user_rev, which also emptied every user_rev cache: 21 ms of handling a
+  motion on Walton. `_on_item_drag_move` now writes x / y IN PLACE (the
+  canvas and the Live layout read positions straight off the item dicts) and
+  `_commit_drag_moves` makes them ONE `GraphModel.move_items` edit (one bump,
+  one "update_item" signal) wherever a drag ends: release, a cancelled
+  pointer, a press an overlay took, the next press. Walton: motion 21 → 2.3 ms
+  (the same as hovering), frame 29 → 14 ms, user_rev 124 → 5 over four drags,
+  one undo entry a drag. Multiplayer peers see the move on release. The
+  release (~82 ms: the history snapshot and the immediate graph autosave) is
+  unchanged. Gate: `tools/diag/graph_drag_cost_probe.gd` (real mouse events,
+  checks the move, the undo entries and Ctrl+Z). Site Plan / Elevation drags
+  keep their own paths.
 
 ## Frame spikes: one heavy job a frame (perf pass, 2026-11-17)
 

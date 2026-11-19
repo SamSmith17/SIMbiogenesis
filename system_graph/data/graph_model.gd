@@ -310,6 +310,27 @@ func get_item(item_id: String) -> Dictionary:
 	return {}
 
 
+## Several items' canvas positions as ONE edit: {id: Vector2} (graph x / y),
+## one revision bump and one "update_item" signal, so the view's change
+## cascade runs once for a whole group (a node drag's release).
+func move_items(moves: Dictionary) -> void:
+	var any := false
+	for iid in moves:
+		var item := get_item(str(iid))
+		if item.is_empty():
+			continue
+		var p: Vector2 = moves[iid]
+		item["x"] = p.x
+		item["y"] = p.y
+		if not sim_writing:
+			mp_touched_items[str(iid)] = true
+		any = true
+	if not any:
+		return
+	_bump(false, "move_items %s" % str(moves.keys()) if trace_user_rev else "")
+	changed.emit("update_item")
+
+
 func update_item(item_id: String, updates: Dictionary) -> void:
 	var item := get_item(item_id)
 	if item.is_empty():

@@ -1824,6 +1824,7 @@ func _cancel_pointer_interaction() -> void:
 		_wire_snap_valid = false
 		_wire_hub_drop = {}
 	if _item_dragging:
+		_commit_drag_moves()
 		_item_dragging = false
 		_item_drag_id = ""
 		_item_drag_ids.clear()
@@ -3380,6 +3381,7 @@ func _end_hub_port_drag() -> void:
 
 
 func _begin_item_press(screen_pos: Vector2, hit: Dictionary) -> void:
+	_commit_drag_moves()
 	var hit_id: String = hit.get("id", "") as String
 	_item_press_toggle = _press_ctrl or Input.is_key_pressed(KEY_CTRL) \
 			or Input.is_key_pressed(KEY_META)
@@ -3501,6 +3503,7 @@ var _press_consumed := false
 
 func _consume_press() -> void:
 	_press_consumed = true
+	_commit_drag_moves()
 	_item_dragging = false
 	_item_drag_id = ""
 	_item_drag_ids.clear()
@@ -3555,6 +3558,7 @@ func _on_lmb_release(screen_pos: Vector2) -> void:
 		return
 
 	if _item_dragging:
+		_commit_drag_moves()
 		var dist := screen_pos.distance_to(_item_drag_start_px)
 		var moved := dist >= _effective_drag_threshold()
 		var drag_id := _item_drag_id
@@ -3674,11 +3678,43 @@ func _on_item_drag_move(screen_pos: Vector2) -> void:
 		return
 	var delta_gr  := delta_px / _zoom
 	delta_gr = _pv_snap_delta(delta_gr)
+	# Moved IN PLACE while the button is held (the canvas and the Live layout
+	# read positions straight off the item dicts) and committed as one edit on
+	# release (_commit_drag_moves). An update_item per item per motion ran the
+	# view's whole change cascade each time: 21 ms a motion on Walton.
 	for iid: String in _item_drag_ids:
 		var start_pos: Vector2 = _item_drag_start_map.get(iid, Vector2.ZERO) as Vector2
 		var new_pos := start_pos + delta_gr
-		model.update_item(iid, {"x": new_pos.x, "y": new_pos.y})
+		var it := model.get_item(iid)
+		if it.is_empty():
+			continue
+		it["x"] = new_pos.x
+		it["y"] = new_pos.y
+		_drag_moved[iid] = new_pos
 	queue_redraw()
+
+
+## Items a freeform drag has moved in place and not yet committed: {id: pos}.
+var _drag_moved: Dictionary = {}
+
+
+## The drag's moves as one model edit. Run when a drag ends however it ends
+## (release, a cancelled pointer, a press an overlay took).
+func _commit_drag_moves() -> void:
+	if _drag_moved.is_empty():
+		return
+	var ids := _drag_moved.keys()
+	_drag_moved = {}
+	if model == null:
+		return
+	# Where the items are NOW (an undo between a lost release and this would
+	# otherwise be overwritten by the drag's last positions).
+	var moves := {}
+	for iid in ids:
+		var it := model.get_item(str(iid))
+		if not it.is_empty():
+			moves[iid] = Vector2(float(it.get("x", 0.0)), float(it.get("y", 0.0)))
+	model.move_items(moves)
 
 
 ## Solar grid snap on the freeform canvas (PvGridSnap, the same rule the 3D
