@@ -39,8 +39,12 @@ var _http: HTTPRequest = null
 ## Attribution per layer tag for the mosaic that tag last received (the
 ## sources its tiles actually came from — see ImagerySources).
 var _attrib_by_tag: Dictionary = {}
-## BC7 compression tasks in flight (key → WorkerThreadPool task id).
+## Drape compression tasks in flight (sequence number → WorkerThreadPool
+## task id). Keyed by a sequence number, not the layer: a second request for
+## the same layer before the first finished would otherwise overwrite the id,
+## and that task was never waited on (an un-waited task crashed on quit).
 var _hq_tasks: Dictionary = {}
+var _task_seq := 0
 var _busy: bool = false
 var _job: Dictionary = {}
 ## Pending jobs (base + detail layers serialise through the single HTTPRequest).
@@ -139,29 +143,16 @@ func request_imagery(lat: float, lon: float, half_extent_m: float,
 	var z := GeoMath.pick_zoom(bbox, target_px, max_zoom)
 	var chain: Array = sources.duplicate() if not sources.is_empty() else ImagerySources.default_chain()
 	var key := layer_key(lat, lon, half_extent_m, target_px, max_zoom, sources)
-	var cache_path := cache_path_for(key)
 	if not force_refetch and TerrainCacheSettings.cache_enabled():
-		var img := Image.new()
-		var loaded := false
-		var from := ""
+		var cands := PackedStringArray()
 		for cand in cache_candidates(key):
-			if FileAccess.file_exists(cand) and img.load(cand) == OK:
-				loaded = true
-				from = cand
-				break
-		if loaded:
-			var pk := plain_key(key)
-			var plain := not pk.is_empty() and (from == cache_path_for(pk)
-				or from == cache_path_for(pk).replace("img_v3_", "img_v1_"))
-			if from != cache_path:
-				print("ImageryService: '%s' layer from an older cache file (%s)" % [tag, from.get_file()])
-			print("ImageryService: '%s' layer served from cache (%s, z%d) — no download" % [tag, key, z])
-			# A pre-source-chain file is a plain ESRI mosaic.
-			_attrib_by_tag[tag] = ImagerySources.attribution_for(["esri"] if plain else _cached_sources(key, chain))
-			if hq:
-				_emit_hq_async(key, img, tag)
-			else:
-				imagery_ready.emit.call_deferred(key, _make_drape_texture(img), tag)
+			if FileAccess.file_exists(cand):
+				cands.append(cand)
+		if not cands.is_empty():
+			# Decoded and compressed on a worker (a 7556² detail PNG was ~0.75 s
+			# to decode and ~0.4 s to mip + DXT1, all on the main thread).
+			_load_cached_async(key, cands, tag, z, chain, hq,
+				[lat, lon, half_extent_m, target_px, tag, max_zoom, true, sources, hq])
 			return
 	print("ImageryService: '%s' layer not cached — fetching z%d tiles …" % [tag, z])
 
@@ -346,7 +337,7 @@ func _finish() -> void:
 	if hq:
 		_emit_hq_async(key, region, tag)
 	else:
-		imagery_ready.emit(key, _make_drape_texture(region), tag)
+		_emit_drape(key, region, tag, false)
 	_start_next()
 
 
@@ -355,21 +346,93 @@ func _finish() -> void:
 ## BC7 is unavailable on this platform.
 func _emit_hq_async(key: String, img: Image, tag: String) -> void:
 	var work := img.duplicate() as Image
+	_task_seq += 1
+	var seq := _task_seq
 	var task := func() -> void:
 		if not work.has_mipmaps():
 			work.generate_mipmaps()
 		if can_compress_bc() and work.compress(Image.COMPRESS_BPTC, Image.COMPRESS_SOURCE_SRGB) != OK:
 			work.compress(Image.COMPRESS_S3TC, Image.COMPRESS_SOURCE_GENERIC)
-		_emit_hq_done.call_deferred(key, work, tag)
-	_hq_tasks[key] = WorkerThreadPool.add_task(task, false, "imagery_bc7_%s" % tag)
+		_emit_hq_done.call_deferred(key, work, tag, seq)
+	_hq_tasks[seq] = WorkerThreadPool.add_task(task, false, "imagery_bc7_%s" % tag)
 
 
-func _emit_hq_done(key: String, img: Image, tag: String) -> void:
+## A cached layer: the first of `cands` that decodes is mipped and
+## compressed on a worker thread (BC7 for an HQ layer, else DXT1 as
+## _make_drape_texture does), then _cached_done reports it on the main thread
+## exactly as the synchronous path did. If none decodes, the layer is
+## downloaded (`fetch_args` = this request_imagery call with force_refetch),
+## as when the old loop found no loadable file.
+func _load_cached_async(key: String, cands: PackedStringArray, tag: String, z: int,
+		chain: Array, hq: bool, fetch_args: Array) -> void:
+	_task_seq += 1
+	var seq := _task_seq
+	var task := func() -> void:
+		var img := Image.new()
+		var from := ""
+		for cand in cands:
+			if img.load(cand) == OK:
+				from = cand
+				break
+		if from.is_empty():
+			_cached_done.call_deferred(key, null, tag, seq, "", z, chain, fetch_args)
+			return
+		if hq:
+			if not img.has_mipmaps():
+				img.generate_mipmaps()
+			if can_compress_bc() and img.compress(Image.COMPRESS_BPTC, Image.COMPRESS_SOURCE_SRGB) != OK:
+				img.compress(Image.COMPRESS_S3TC, Image.COMPRESS_SOURCE_GENERIC)
+		else:
+			_compress_drape(img)
+		_cached_done.call_deferred(key, img, tag, seq, from, z, chain, fetch_args)
+	_hq_tasks[seq] = WorkerThreadPool.add_task(task, false, "imagery_cache_%s" % tag)
+
+
+func _cached_done(key: String, img: Variant, tag: String, seq: int, from: String, z: int,
+		chain: Array, fetch_args: Array) -> void:
+	if _hq_tasks.has(seq):
+		WorkerThreadPool.wait_for_task_completion(int(_hq_tasks[seq]))
+		_hq_tasks.erase(seq)
+	if not (img is Image):
+		callv("request_imagery", fetch_args)
+		return
+	var pk := plain_key(key)
+	var plain := not pk.is_empty() and (from == cache_path_for(pk)
+		or from == cache_path_for(pk).replace("img_v3_", "img_v1_"))
+	if from != cache_path_for(key):
+		print("ImageryService: '%s' layer from an older cache file (%s)" % [tag, from.get_file()])
+	print("ImageryService: '%s' layer served from cache (%s, z%d) — no download" % [tag, key, z])
+	# A pre-source-chain file is a plain ESRI mosaic.
+	_attrib_by_tag[tag] = ImagerySources.attribution_for(["esri"] if plain else _cached_sources(key, chain))
+	imagery_ready.emit(key, ImageTexture.create_from_image(img as Image), tag)
+
+
+## A plain (DXT1) drape: the mipmaps and the compression on a worker thread
+## when the image is big enough to be compressed (a 7556² detail layer took
+## ~0.5 s of the main thread), then the texture is made on the main thread
+## exactly as _make_drape_texture makes it. The image is handed over: the
+## callers never touch it again. Smaller images stay synchronous.
+func _emit_drape(key: String, img: Image, tag: String, deferred: bool) -> void:
+	if img.get_width() < DRAPE_COMPRESS_MIN_PX:
+		if deferred:
+			imagery_ready.emit.call_deferred(key, _make_drape_texture(img), tag)
+		else:
+			imagery_ready.emit(key, _make_drape_texture(img), tag)
+		return
+	_task_seq += 1
+	var seq := _task_seq
+	var task := func() -> void:
+		_compress_drape(img)
+		_emit_hq_done.call_deferred(key, img, tag, seq)
+	_hq_tasks[seq] = WorkerThreadPool.add_task(task, false, "imagery_dxt_%s" % tag)
+
+
+func _emit_hq_done(key: String, img: Image, tag: String, seq: int) -> void:
 	# Every WorkerThreadPool task must be waited on; an un-waited one crashed
 	# the engine on quit (0xC0000005). The task is at its last line here.
-	if _hq_tasks.has(key):
-		WorkerThreadPool.wait_for_task_completion(int(_hq_tasks[key]))
-		_hq_tasks.erase(key)
+	if _hq_tasks.has(seq):
+		WorkerThreadPool.wait_for_task_completion(int(_hq_tasks[seq]))
+		_hq_tasks.erase(seq)
 	imagery_ready.emit(key, ImageTexture.create_from_image(img), tag)
 
 
@@ -440,12 +503,21 @@ static func _region_is_placeholder(img: Image) -> bool:
 ## Disk cache stays PNG — only the GPU copy is compressed, so cache files and
 ## every existing code path that loads them are unchanged.
 static func _make_drape_texture(img: Image) -> ImageTexture:
-	if img.get_width() >= 1024:
+	_compress_drape(img)
+	return ImageTexture.create_from_image(img)
+
+
+const DRAPE_COMPRESS_MIN_PX := 1024
+
+
+## Mipmaps + DXT1 in place for a drape of DRAPE_COMPRESS_MIN_PX or more
+## (thread-safe: touches only `img`).
+static func _compress_drape(img: Image) -> void:
+	if img.get_width() >= DRAPE_COMPRESS_MIN_PX:
 		if not img.has_mipmaps():
 			img.generate_mipmaps()
 		if can_compress_bc():
 			img.compress(Image.COMPRESS_S3TC, Image.COMPRESS_SOURCE_GENERIC)
-	return ImageTexture.create_from_image(img)
 
 
 ## Godot's BC compressors (cvtt / betsy) are editor-only modules: an exported

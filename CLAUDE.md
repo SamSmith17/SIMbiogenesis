@@ -8739,6 +8739,20 @@ pattern):**
   checkerboard) for smooth fBm. ⚠ BC7 runs on WorkerThreadPool and every task
   must be waited on (`_hq_tasks`, `_exit_tree`): an un-waited task crashed
   the engine on quit (0xC0000005).
+- **Drapes are read and compressed off the main thread (2026-11-18).** A
+  cached layer is decoded, mipped and compressed on a worker
+  (`_load_cached_async`: BC7 for an HQ layer, DXT1 by `_compress_drape`
+  otherwise); `_cached_done` then sets the attribution, prints the same
+  "served from cache" lines and makes the texture on the main thread. If no
+  cache file decodes, the layer is downloaded, as before. A downloaded plain
+  layer of 1024 px or more is compressed on a worker too (`_emit_drape`).
+  Tasks are keyed by a sequence number (`_task_seq`), so a second request for
+  the same layer can no longer leave a task un-waited. Mount Vernon's 7556²
+  detail drape blocked the main thread for ~1.0–1.2 s (0.75 s PNG decode +
+  mips + DXT1); now the call returns in ~1 ms and the worst frame is 48–87 ms
+  (the upload); the texture arrives ~0.3 s later and its bytes are the same
+  (`tools/diag/drape_hitch_probe.gd` hashes them). This was every load, tier
+  change and Shoreline capture switch.
 - `core/terrain/ai_imagery_service.gd` (`AiImageryService` autoload): **opt-in**
   AI "hero patch" — after the hyper drape lands, `terrain_loader._maybe_request_ai_hero()`
   crops the central ~100 m square (`AI_HERO_HALF_EXTENT_DEFAULT` 50 m) out of
