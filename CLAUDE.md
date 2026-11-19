@@ -4049,6 +4049,20 @@ the fix was taking steady cost out. In order of size:
   unchanged. Gate: `tools/diag/graph_drag_cost_probe.gd` (real mouse events,
   checks the move, the undo entries and Ctrl+Z). Site Plan / Elevation drags
   keep their own paths.
+- **Port hit test on hover** (2026-11-18): every hover motion ran
+  `_port_at_screen`, which built every visible node's ports. In freeform it
+  now skips a node whose card, grown by the grab radius, half the card's size
+  and `PORT_CULL_SLACK_PX`, misses the pointer (`port_hit_cull`; every port
+  measured sits on or inside its card). Hover motion 1.44 → 0.41 ms on Walton,
+  the port test 5.9 → 0.29 ms on Closed Loop Ten. Gate:
+  `tools/diag/graph_hover_cost_probe.gd` (each hover piece timed; culled vs
+  full scan over a grid and round every port: 0 differences on both worlds).
+- **Older failures, not from this pass** (each seen identically on 6ba73d7,
+  before it started): `--capture=bootcamp` "energy readouts disagree:
+  dashboard Making ~500 W vs ~400 W" on levels 8, 10 and 11 while running;
+  `--capture=pvsnap` "Line up this array moved 4 racks onto the anchor's
+  yaw"; `graph_schema_layout_check` "Live ring: the dropped store keeps its
+  new place (~80 px off)".
 
 ## Frame spikes: one heavy job a frame (perf pass, 2026-11-17)
 

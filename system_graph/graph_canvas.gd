@@ -5256,6 +5256,12 @@ func _get_interactive_handle_infos(item: Dictionary, center: Vector2) -> Array:
 	return out
 
 
+## The port hit test's node cull (off = every node's ports are built, which
+## the hover probe compares against).
+var port_hit_cull := true
+const PORT_CULL_SLACK_PX := 8.0
+
+
 ## Returns the nearest port within `radius` screen pixels, excluding one handle.
 func _port_at_screen(screen_pos: Vector2,
 		skip_item: String, skip_handle: String, radius: float) -> Dictionary:
@@ -5278,7 +5284,17 @@ func _port_at_screen(screen_pos: Vector2,
 	var best:       Dictionary = {}
 	var water_drag := _wire_src_polarity == "resource" \
 			and ResourceKinds.normalize_kind(_wire_src_resource_kind) == "water"
+	# Freeform: a node whose card (grown by the grab radius and half its own
+	# size, more than any port sits outside it) misses the pointer has no port
+	# in reach, so its ports are not built. Building every visible node's
+	# ports on each hover motion was 1.3 ms of a 1.4 ms motion on Walton.
+	var cull := view_mode == GraphSiteLayout.VIEW_FREEFORM and port_hit_cull
 	for item: Dictionary in _visible_items():
+		if cull:
+			var sz := _item_screen_size(item)
+			var grow := radius + 0.5 * maxf(absf(sz.x), absf(sz.y)) + PORT_CULL_SLACK_PX
+			if not Rect2(_item_screen_tl(item, center), sz).abs().grow(grow).has_point(screen_pos):
+				continue
 		for h: Dictionary in _get_interactive_handle_infos(item, center):
 			if h["item_id"] == skip_item and h["handle_id"] == skip_handle:
 				continue
