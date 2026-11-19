@@ -4283,6 +4283,20 @@ PHASES; `SPIKE_PACER=0` turns the pacer off).
   out, drew 1,723 surfaces; now ~500 fewer draws, ~0.15 ms CPU, pictures the
   same. Triangles were not the cost (hiding all 424k of Mount Vernon's saves
   0.05 ms GPU), so user GLBs still get no LODs.
+- **Chore hours asked when read** (2026-11-18): the full-tier engine
+  scanned the whole chore board twice per person per substep
+  (`_assigned_hours_for`) for a number only the enrichment test reads, after
+  several early outs. The engine now hands agents `ctx.assigned_chore_h_of`
+  (a Callable) and `_has_free_time` asks it there, same arguments; nothing a
+  person does earlier in its step changes what the scans read (a claim
+  changes only the workers). The scans' one side effect, re-arming a re-due
+  chore's cycle, still runs before every person's step (`board.arm_all`), and
+  `_arm_cycle` tests `cycle_day` before `_is_due`. Closed Loop Ten (10
+  people, 43 chores): `npc_full_tick` 1.77 → 0.93 ms median; it grows with
+  people × chores. The NPC probes (time use default + festival, spacing
+  default + festival) print the same text before and after
+  (`plans/perf_logs/chore_lazy_ab.sh`). `tools/diag/chore_hours_cost_probe.gd`
+  measures it in a world (Walton as saved has no full-tier camp).
 - **Still open:**
   - A terrain tile rebuild is ~15 ms on its own (the first build samples the
     base ground 67² times), more than the 6 ms budget. Each of those samples

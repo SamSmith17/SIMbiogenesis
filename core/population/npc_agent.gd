@@ -2105,7 +2105,11 @@ func _row_place(chore: Dictionary, slot_i: int) -> void:
 
 
 func _has_free_time(ctx: Dictionary) -> bool:
-	return free_hours(float(ctx.get("assigned_chore_h", 0.0))) >= ENRICHMENT_MIN_FREE_H
+	var h := float(ctx.get("assigned_chore_h", 0.0))
+	var fn: Variant = ctx.get("assigned_chore_h_of")
+	if fn is Callable and (fn as Callable).is_valid():
+		h = float((fn as Callable).call(id, float(ctx.get("abs_hours", 0.0))))
+	return free_hours(h) >= ENRICHMENT_MIN_FREE_H
 
 
 ## Tiers 1-2 of the priority ladder: the most urgent CRITICAL need past its

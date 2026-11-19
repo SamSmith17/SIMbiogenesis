@@ -300,11 +300,20 @@ func tick(abs_hours: float, ctx_in: Dictionary) -> Dictionary:
 		# with an id tiebreak, never a RNG.
 		var ranks := _fair_ranks(t)
 		ctx["fair_ranks"] = ranks
+		# A person's assigned chore hours (two scans of the board) are read
+		# only by the enrichment test, which most steps never reach: asked
+		# then, through this callable, with the same arguments. Nothing a
+		# person does before that test changes what the scans read (a claim
+		# changes only the workers). The scans' one side effect, re-arming a
+		# re-due chore's cycle, still runs before every person's step.
+		ctx["assigned_chore_h_of"] = _assigned_hours_for
 		for agent in _ask_order(ranks):
-			ctx["assigned_chore_h"] = _assigned_hours_for(agent.id, t)
+			if chore_board != null:
+				chore_board.arm_all(t)
 			var c: Dictionary = agent.step(t, sub, ctx)
 			for kind in c:
 				demand[kind] = float(demand.get(kind, 0.0)) + float(c[kind]) * w
+	ctx.erase("assigned_chore_h_of")
 	_separate(dt, ctx)
 	_process_consequences(abs_hours, ctx)
 	_process_departures(abs_hours, ctx)

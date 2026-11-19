@@ -439,6 +439,10 @@ func _arm_cycle(chore: Dictionary, abs_hours: float) -> void:
 		return
 	if float(chore.get("progress_h", 0.0)) <= 0.0:
 		return
+	# Already armed this cycle: the cheap test first (every test here is a
+	# pure read, so the order does not change the answer).
+	if int(chore.get("cycle_day", -1)) == day_index(abs_hours):
+		return
 	if not _is_due(chore, abs_hours):
 		return
 	# ONCE PER CYCLE, not once per credit.
@@ -454,11 +458,18 @@ func _arm_cycle(chore: Dictionary, abs_hours: float) -> void:
 	#
 	# It hid because every test of completion used repeat:"once", where
 	# _is_due goes false after the first finish and this never runs at all.
-	var today := day_index(abs_hours)
-	if int(chore.get("cycle_day", -1)) == today:
-		return
 	chore["progress_h"] = 0.0
-	chore["cycle_day"] = today
+	chore["cycle_day"] = day_index(abs_hours)
+
+
+## Every chore's cycle armed at `abs_hours` (what assigned_hours_for and
+## shared_hours_per_agent do on their way through the board), on its own.
+## The engine runs it before each person's step so a re-due chore is reset at
+## the same moment it always was, and asks the hours themselves only when the
+## person reads them.
+func arm_all(abs_hours: float) -> void:
+	for c in chores:
+		_arm_cycle(c as Dictionary, abs_hours)
 
 
 ## Chores this agent could pick up right now, best first. Filters by
