@@ -31,8 +31,12 @@ const TARGETS := ["water", "N", "P", "K", "C"]
 const TARGET_LABELS := {"water": "Water", "N": "Nitrogen", "P": "Phosphorus", "K": "Potassium", "C": "Carbon"}
 
 const CLASSES := {
+	# Not wood vinegar: its acetic acid boils at 118 °C and comes over with
+	# the water (relative volatility ~1.8 at the water-rich end), so a farm
+	# still gives a sour distillate, not clean water. Freeze it instead.
 	"distillation": {"reject": "brine", "label": "Distillation", "what": "Boil the water off and condense it; the solids stay behind.",
-		"accepts": ["family:water", "kind:urine", "kind:wood_vinegar"],
+		"accepts": ["family:water", "kind:urine"],
+		"refuses": ["kind:wood_vinegar"],
 		"gives": [{"target": "water", "to": "distilled_water", "recovery": 0.90}],
 		"kwh_per_kg": 0.80, "kwh_min": 0.627, "per": "water",
 		"src": "latent heat 2257 kJ/kg = 0.627 kWh/kg (steam tables); 0.7–1.0 typical for a single-effect still"},
@@ -55,6 +59,12 @@ const CLASSES := {
 	"disinfection": {"label": "Disinfection", "what": "Kill what lives in it (UV, chlorine, heat). Separates nothing.",
 		"accepts": ["family:water"], "gives": [], "kwh_per_kg": 0.00004, "kwh_min": NAN, "per": "feed",
 		"src": "UV ~40 Wh/m³, est"},
+	"freeze_concentration": {"reject": "wood_acid", "label": "Freeze concentration",
+		"what": "Freeze the water out as ice; the acids and sugars stay in the liquid that is left.",
+		"accepts": ["kind:wood_vinegar"],
+		"gives": [{"target": "water", "to": "irrigation_water", "recovery": 0.70}],
+		"kwh_per_kg": 0.08, "kwh_min": 0.010, "per": "water",
+		"src": "latent heat of fusion 334 kJ/kg = 0.093 kWh/kg of heat moved; a freezer's COP ~1.5 in desert heat puts ~0.06–0.08 kWh/kg of ice on the meter (est); floor = 0.093 kWh/kg ÷ Carnot COP 9 (0 °C to 30 °C)"},
 	"drying": {"label": "Drying", "what": "Drive the water off into the air with heat.",
 		"accepts": ["family:organic", "family:carbon", "family:mineral", "kind:food_waste", "kind:manure"],
 		"gives": [{"target": "water", "to": "air", "recovery": 0.90}],

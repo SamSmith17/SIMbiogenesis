@@ -97,6 +97,8 @@ static func place_model_at_xz(main: Node, model_id: String, x: float, z: float,
 		_auto_tag_space(main, prop_id, "fire_circle", SpaceRegistry.CAPACITY_AUTO, "Firepit")
 	elif model_id == ToiletBankBuilder.MODEL_ID:
 		_auto_tag_toilet_bank(main, prop_id)
+	elif model_id == ShowerHouseBuilder.MODEL_ID:
+		_auto_tag_shower_house(main, prop_id)
 	elif model_id == CampKitchenBuilder.MODEL_ID:
 		_auto_tag_space(main, prop_id, "kitchen", SpaceRegistry.CAPACITY_AUTO, "Camp kitchen")
 	elif model_id == DomeLabBuilder.MODEL_ID:
@@ -775,6 +777,8 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 		_auto_tag_space(main, prop_id, "fire_circle", SpaceRegistry.CAPACITY_AUTO, "Firepit")
 	elif model_id == ToiletBankBuilder.MODEL_ID:
 		_auto_tag_toilet_bank(main, prop_id)
+	elif model_id == ShowerHouseBuilder.MODEL_ID:
+		_auto_tag_shower_house(main, prop_id)
 	elif model_id == CampKitchenBuilder.MODEL_ID:
 		_auto_tag_space(main, prop_id, "kitchen", SpaceRegistry.CAPACITY_AUTO, "Camp kitchen")
 	elif model_id == DomeLabBuilder.MODEL_ID:
@@ -871,6 +875,16 @@ static func _auto_tag_toilet_bank(main: Node, prop_id: String) -> void:
 		return
 	var spec := ToiletBankBuilder.resolve(rec.get("toilet_spec", {}) as Dictionary)
 	_auto_tag_space(main, prop_id, "restroom", int(spec["stalls"]), "Toilets")
+
+
+## A shower house is a shower space with one stall per shower — unless it was
+## placed FOR a shower area (`showers_for`), which is then the space.
+static func _auto_tag_shower_house(main: Node, prop_id: String) -> void:
+	var rec := get_prop_record(main, prop_id)
+	if not str(rec.get("showers_for", "")).is_empty():
+		return
+	var spec := ShowerHouseBuilder.resolve(rec.get("shower_spec", {}) as Dictionary)
+	_auto_tag_space(main, prop_id, "shower", int(spec["stalls"]), "Shower house")
 
 
 ## A living vehicle is a home: its beds are a sleep space (people lie ON them,

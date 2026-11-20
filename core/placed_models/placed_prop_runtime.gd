@@ -249,6 +249,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		_maybe_attach_stream_intake_flow(prop, rec)
 		_maybe_attach_firepit_fire(prop, rec)
 		_maybe_attach_toilet_bank(prop, rec)
+		_maybe_attach_shower_house(prop, rec)
 		KitchenSite.attach(prop, rec)
 		_maybe_attach_vehicle(prop, model, rec)
 		VehicleDriveRuntime.attach(prop, model, rec)
@@ -593,6 +594,19 @@ static func _maybe_attach_toilet_bank(prop: PlacedProp, rec: Dictionary) -> void
 	model.add_child(rt)
 
 
+## A shower house's curtains and water follow who is in each stall.
+static func _maybe_attach_shower_house(prop: PlacedProp, rec: Dictionary) -> void:
+	if str(rec.get("model_id", "")) != ShowerHouseBuilder.MODEL_ID:
+		return
+	var model := prop.get_node_or_null("ModelRoot")
+	if model == null or model.get_node_or_null("ShowerHouseRuntime") != null:
+		return
+	var rt := ShowerHouseRuntime.new()
+	rt.name = "ShowerHouseRuntime"
+	rt.configure(str(rec.get("id", "")))
+	model.add_child(rt)
+
+
 ## The firepit's own small fire (FirepitFire): lit at night when it is cold.
 static func _maybe_attach_firepit_fire(prop: PlacedProp, rec: Dictionary) -> void:
 	if str(rec.get("model_id", "")) != FirepitBuilder.MODEL_ID:
@@ -925,6 +939,11 @@ static func model_extras(rec: Dictionary) -> Dictionary:
 		extras["pvlab_spec"] = rec.get("pvlab_spec", {})
 	if rec.has("box_spec"):
 		extras["box_spec"] = rec.get("box_spec", {})
+	# Without these a placed 8-stall toilet bank (or a festival's shower
+	# house) built the default four.
+	for key in ["toilet_spec", "shower_spec", "kitchen_spec"]:
+		if rec.has(key):
+			extras[key] = rec.get(key, {})
 	if rec.has("tank_spec"):
 		extras["tank_spec"] = rec.get("tank_spec", {})
 	# Without this a placed container ALWAYS renders as the 20' default,

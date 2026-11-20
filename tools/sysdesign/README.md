@@ -157,3 +157,17 @@ times slower.
   step's draw. Keep `capacity × 0.001` above the largest draw per step, or
   gate the consumer with a rule.
 - A rain catchment needs the Rain source wired into it.
+- An OPTIONAL output (a filter's backwash, a kitchen's washing-up water)
+  drains on site when unwired; it never borrows the node's other tank
+  (2026-11-18: before, a Greywater Filter's 3 L/h backwash capped the whole
+  filter at 3 L/h). The Greywater Filter is `io_absolute`: 17 L/h of greywater
+  in, 14.45 L/h of water out per unit, so three filters serve ten people.
+- A full waste tank overflows (the toilets keep being used), and the
+  "no waste overflowed" check sees it. Size digesters for the inflow:
+  ten people with agents make ~4.7 L/h of brownwater, more than one 3 m³
+  digester's 4 L/h.
+- Rules can read `sensor.outdoor_temperature` (°C, the site's weather at that
+  instant), so an AC can run only on hot afternoons.
+- A full store stops its rain catchment. In a desert the winter storms come
+  in a few days: size the cistern to bank them (bombay_ten_v10: 1,200 m³
+  holding 400 m³ on day one), not just the catchment.

@@ -260,6 +260,28 @@ static func in_range(v: float, above: Variant, below: Variant) -> bool:
 	return true
 
 
+## The automation key for the outdoor air temperature (°C, the site's
+## weather at the rule's instant). A cool room's AC can then run only when it
+## is hot instead of every afternoon of the year.
+const OUTDOOR_TEMP_KEY := "sensor.outdoor_temperature"
+
+
+## Outdoor air temperature (°C) at absolute hour `abs_h`, from the
+## WeatherService autoload, or NAN with no weather. `clock` is a
+## CelestialClock (for the calendar date). The autoload is found by path:
+## this file also loads under --script, where its bare name does not compile.
+static func outdoor_temp_c(clock: Object, abs_h: float) -> float:
+	if clock == null or not clock.has_method("abs_hours_to_date"):
+		return NAN
+	var tree := Engine.get_main_loop() as SceneTree
+	var ws: Node = tree.root.get_node_or_null("WeatherService") if tree != null else null
+	if ws == null or not ws.has_method("temperature_c"):
+		return NAN
+	var d: Dictionary = clock.call("abs_hours_to_date", abs_h)
+	return float(ws.call("temperature_c", int(d.get("month", 1)), int(d.get("day", 1)),
+		float(d.get("day_time", 12.0))))
+
+
 ## 0 = Sunday. Absolute day 0 (1 Jan of year 1, proleptic Gregorian) is a Monday.
 static func weekday_of(abs_h: float) -> int:
 	return (int(floor(abs_h / 24.0)) + 1) % 7

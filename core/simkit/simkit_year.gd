@@ -259,6 +259,9 @@ func _step() -> void:
 		numeric["sensor.solar_power"] = solar_kw * 1000.0
 		numeric["sensor.load_power"] = load_kw * 1000.0
 		numeric["sensor.total_ac_load"] = load_kw * 1000.0
+		var t_out := AutomationSim.outdoor_temp_c(main.get("clock") as Object, t1)
+		if is_finite(t_out):
+			numeric[AutomationSim.OUTDOOR_TEMP_KEY] = t_out
 		var ctx := {"numeric": numeric, "states": states,
 			"sun": Vector2(6.0, 18.0), "weekday": AutomationSim.weekday_of(t1)}
 		auto_log_n += automations.step(t0, t1, ctx, _apply_command)

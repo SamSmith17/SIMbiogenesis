@@ -202,12 +202,10 @@ func _cable_end(g: BattParts.Geo, e: Dictionary, col: Color) -> void:
 			pass
 
 
-## An RJ45 plug pushed into a port facing +Z, its boot behind it.
+## An RJ45 plug pushed into a port facing +Z, its boot behind it (the
+## shared connector kit's "rj45_plug").
 func _rj45(g: BattParts.Geo, at: Vector3, boot: Color) -> void:
-	var z := Vector3(0, 0, 1)
-	BattParts.abox(g, at + z * 9.0, Vector3(11.7, 8.0, 18.0), Color(0.85, 0.88, 0.9, 1.0), "plastic")
-	BattParts.abox(g, at + z * 22.0, Vector3(13.0, 9.5, 12.0), boot, "rubber")
-	BattParts.abox(g, at + Vector3(0, 4.6, 6.0), Vector3(6.0, 1.2, 9.0), Color(0.8, 0.82, 0.85), "plastic")
+	ConnectorParts.build(g, "rj45_plug", Transform3D(Basis.IDENTITY, at), {"boot": boot})
 
 
 ## The busbars: each pole's bars laid together, round-ended, on standoff

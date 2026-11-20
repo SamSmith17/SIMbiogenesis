@@ -41,7 +41,7 @@ const KIND_DOMAIN := {
 	"stormwater": WATER, "irrigation_water": WATER, "brine": WATER,
 	"rainwater": WATER, "distilled_water": WATER, "wash_water": WATER,
 	"seawater": WATER, "brownwater": WATER,
-	"urine": FOOD, "packaged_food": FOOD, "wood_vinegar": FOOD, "green_waste": FOOD,
+	"urine": FOOD, "packaged_food": FOOD, "wood_vinegar": FOOD, "wood_acid": FOOD, "green_waste": FOOD,
 	"tar": FUEL, "plastic_oil": FUEL, "gasoline": FUEL, "diesel": FUEL,
 	"filament": MATERIALS,
 	"food": FOOD, "meal": FOOD, "biomass": FOOD, "food_waste": FOOD, "manure": FOOD,

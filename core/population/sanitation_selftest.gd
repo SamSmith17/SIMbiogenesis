@@ -4,6 +4,9 @@ extends SceneTree
 ##   NpcSeatPose — a chair pose only ON a seat; ground poses elsewhere.
 ##   ToiletBankBuilder — stall spots face the door, sit inside the stall, one
 ##     door per stall, a line in front, two rows past eight.
+##   ShowerHouseBuilder — a standing spot per stall facing its shower head,
+##     a curtain and a spray per stall, a line in front of the porch; the full
+##     tier showering one to a stall, on the deck, facing the head.
 ##   SpaceRegistry — stalls cap a restroom at one person per stall, ONE
 ##     first-come line, the expected wait priced into the choice of restroom.
 ##   Both tiers on a synthetic site with a 2-stall bank: never more than two
@@ -14,7 +17,7 @@ extends SceneTree
 ## test function while PASS still prints).
 ##   Godot --headless --path . --script core/population/sanitation_selftest.gd
 
-const EXPECTED_CHECKS := 49
+const EXPECTED_CHECKS := 65
 
 var _checks := 0
 var _failures := 0
@@ -29,6 +32,8 @@ func _initialize() -> void:
 	_test_full_tier_stalls()
 	_test_light_tier_stalls()
 	_test_bathroom_physiology()
+	_test_shower_house_geometry()
+	_test_shower_house_stalls()
 	if _checks != EXPECTED_CHECKS:
 		_failures += 1
 		print("  FAIL: ran %d checks, expected %d (a test function aborted?)" % [_checks, EXPECTED_CHECKS])
@@ -390,3 +395,148 @@ func _test_bathroom_physiology() -> void:
 	var poo := NpcBathroom.visit_h(b, true, "1")
 	_check("pee shorter than poo, poo 6-11 min",
 		pee < poo and poo * 60.0 >= 6.0 and poo * 60.0 <= 11.0 + 1e-6, "%.1f / %.1f min" % [pee * 60.0, poo * 60.0])
+
+
+# --- ShowerHouseBuilder ------------------------------------------------------------
+
+func _test_shower_house_geometry() -> void:
+	var spots := ShowerHouseBuilder.stall_spots({"stalls": 4})
+	_check("shower house: one standing spot per stall", spots.size() == 4)
+	var ok_kind := true
+	var faces_head := true
+	var inside := true
+	var door_ahead := true
+	for sp: Dictionary in spots:
+		var pos: Vector3 = sp["pos"]
+		var door: Vector3 = sp["door"]
+		if str(sp["kind"]) != NpcSeatPose.KIND_STAND or not bool(sp.get("shower", false)):
+			ok_kind = false
+		var yaw := float(sp["yaw"])
+		var facing := Vector3(-sin(yaw), 0.0, -cos(yaw))
+		# The head is on the back wall: row 0's back is -Z.
+		if facing.dot(Vector3(0.0, 0.0, -1.0)) < 0.95:
+			faces_head = false
+		if absf(pos.z) > ShowerHouseBuilder.STALL_D * 0.5:
+			inside = false
+		if door.z <= pos.z + ShowerHouseBuilder.STALL_D * 0.5:
+			door_ahead = false
+	_check("shower house: spots are standing shower spots", ok_kind)
+	_check("shower house: everyone faces the shower head", faces_head)
+	_check("shower house: every spot is inside its stall", inside)
+	_check("shower house: every door point is out past the porch", door_ahead)
+	_check("shower house: standing on the deck", is_equal_approx(
+		float(((spots[0] as Dictionary)["pos"] as Vector3).y), ShowerHouseBuilder.FLOOR_Y))
+	var big := ShowerHouseBuilder.resolve({"stalls": 9})
+	_check("shower house: nine stalls stand in two rows (5 + 4)", int(big["rows"]) == 2
+		and ShowerHouseBuilder.row_count(big, 0) == 5 and ShowerHouseBuilder.row_count(big, 1) == 4)
+	var back := 0
+	for sp: Dictionary in ShowerHouseBuilder.stall_spots({"stalls": 9}):
+		if int(sp["row"]) == 1 and float((sp["door"] as Vector3).z) < float((sp["pos"] as Vector3).z):
+			back += 1
+	_check("shower house: the back row faces the other way", back == 4)
+	var node := ShowerHouseBuilder.build_node({"stalls": 4})
+	var curtains := node.get_node_or_null("Curtains")
+	var sprays := node.get_node_or_null("Sprays")
+	var sprays_off := sprays != null and sprays.get_child_count() == 4
+	if sprays != null:
+		for c in sprays.get_children():
+			if not (c is GPUParticles3D) or (c as GPUParticles3D).emitting:
+				sprays_off = false
+	_check("shower house: a curtain and a spray per stall, the water off",
+		curtains != null and curtains.get_child_count() == 4 and sprays_off)
+	var cloth := node.get_node_or_null("Curtains/C0/Cloth")
+	_check("shower house: curtains never collide", cloth != null and bool(cloth.get_meta("skip_prop_collision", false)))
+	var line := ShowerHouseBuilder.queue_line({"stalls": 4})
+	_check("shower house: the line starts in front of the porch",
+		float((line["origin"] as Vector3).z) > ShowerHouseBuilder.STALL_D * 0.5 + ShowerHouseBuilder.PORCH)
+	node.free()
+
+
+const SHOWER_AT := Vector2(-45.0, -45.0)
+
+
+func _shower_spots() -> Array:
+	var out: Array = []
+	for sp: Dictionary in ShowerHouseBuilder.stall_spots({"stalls": 2}):
+		var p: Vector3 = sp["pos"]
+		var d: Vector3 = sp["door"]
+		out.append({"pos": SHOWER_AT + Vector2(p.x, p.z), "yaw": float(sp["yaw"]), "elev": p.y,
+			"kind": NpcSeatPose.KIND_STAND, "door": SHOWER_AT + Vector2(d.x, d.z)})
+	return out
+
+
+func _test_shower_house_stalls() -> void:
+	var reg := _site()
+	var shid := str((reg.spaces_of_type("shower")[0] as Dictionary)["id"])
+	reg.set_stalls(shid, 2)
+	var base := _ctx_extras(reg)
+	var rid := _restroom_id(reg)
+	var spots := _shower_spots()
+	var line := ShowerHouseBuilder.queue_line({"stalls": 2})
+	var seat_toilet: Callable = base["seat_spot_of"]
+	var queue_toilet: Callable = base["queue_spot_of"]
+	var extras := {
+		"seat_spot_of": func(sid: String, k: int) -> Dictionary:
+			if sid == shid:
+				return spots[k % spots.size()]
+			return seat_toilet.call(sid, k),
+		"queue_spot_of": func(sid: String, k: int) -> Variant:
+			if sid == shid:
+				var q := ShowerHouseBuilder.queue_point(line, k)
+				return SHOWER_AT + Vector2(q.x, q.z)
+			return queue_toilet.call(sid, k),
+	}
+	var e := NpcPopulationEngine.new()
+	e.configure(24, "shower", Vector2.ZERO)
+	e.routine = NpcRoutine.default_day()
+	var pos_of := func(space: Dictionary) -> Variant:
+		return reg.resolve_position(space, null)
+	var t := 7.0
+	var step := 1.0 / 60.0
+	var max_inside := 0
+	var visits := 0
+	var off_spot := 0
+	var not_facing := 0
+	var wrong_elev := 0
+	var two_in_one := 0
+	while t < 7.0 + 26.0:
+		var ctx := {"registry": reg, "pos_of": pos_of, "hour_of_day": fposmod(t, 24.0),
+			"abs_hours": t, "camp_home": Vector2.ZERO, "camp_seed": "shower", "routine": e.routine}
+		ctx.merge(extras)
+		e.tick(t, ctx)
+		max_inside = maxi(max_inside, reg.occupant_count(shid))
+		var at: Array = [0, 0]
+		for a: NpcAgent in e.agents:
+			if a.state != NpcAgent.State.DOING or a.activity != "hygiene":
+				continue
+			visits += 1
+			var best := -1
+			var best_d := INF
+			for k in spots.size():
+				var d := a.pos.distance_to((spots[k] as Dictionary)["pos"])
+				if d < best_d:
+					best_d = d
+					best = k
+			if best_d > 0.3:
+				off_spot += 1
+				continue
+			at[best] = int(at[best]) + 1
+			var yaw := float((spots[best] as Dictionary)["yaw"])
+			var face := a.face_anchor - a.pos if a.face_anchor != Vector2.INF else Vector2.ZERO
+			if face.length() > 0.1 and face.normalized().dot(Vector2(-sin(yaw), -cos(yaw))) < 0.9:
+				not_facing += 1
+			if not is_equal_approx(a.seat_elev, ShowerHouseBuilder.FLOOR_Y):
+				wrong_elev += 1
+		for c in at:
+			if int(c) > 1:
+				two_in_one += 1
+		t += step
+	print("  shower house: inside max %d, samples %d, off-spot %d, not facing %d, elev %d"
+		% [max_inside, visits, off_spot, not_facing, wrong_elev])
+	_check("shower house: never more showering than stalls", max_inside <= 2)
+	_check("shower house: people shower in it", visits > 0)
+	_check("shower house: never two in one stall", two_in_one == 0)
+	_check("shower house: everyone showering stands on a stall's spot", off_spot == 0,
+		"%d of %d" % [off_spot, visits])
+	_check("shower house: facing the head, on the deck", not_facing == 0 and wrong_elev == 0,
+		"facing %d elev %d" % [not_facing, wrong_elev])

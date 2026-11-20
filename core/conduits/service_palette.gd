@@ -34,7 +34,7 @@ const _KIND_SERVICE: Dictionary = {
 	"urine": "drain", "brine": "drain", "stormwater": "drain", "runoff": "drain",
 	"liquid_fertilizer": "reclaimed", "nutrients": "reclaimed",
 	"woodgas": "fuel", "biogas": "fuel", "propane": "fuel", "gasoline": "fuel",
-	"diesel": "fuel", "plastic_oil": "fuel", "wood_vinegar": "fuel", "tar": "fuel",
+	"diesel": "fuel", "plastic_oil": "fuel", "wood_vinegar": "fuel", "wood_acid": "fuel", "tar": "fuel",
 	"electric": "power_ac", "dc_electricity": "power_dc",
 }
 

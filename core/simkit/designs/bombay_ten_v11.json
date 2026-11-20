@@ -1,0 +1,2368 @@
+{
+ "name": "Bombay Beach ten v11: tar-fired reactor, wood vinegar freeze-concentrated, wood acid digested to biogas",
+ "people": 10,
+ "start": {
+  "year": 2024,
+  "month": 1,
+  "day": 1,
+  "hour": 6.0
+ },
+ "days": 366,
+ "step_min": 6,
+ "start_soc": 0.8,
+ "infinite_labor": false,
+ "nodes": [
+  {
+   "id": "hab",
+   "preset": "Population (urine-diverting toilets)",
+   "set": {
+    "name": "The Ten",
+    "occupants": 10,
+    "pop_driven": true,
+    "pop_consequence": "leave"
+   }
+  },
+  {
+   "id": "ctl_a",
+   "preset": "EG4 6000XP",
+   "set": {
+    "name": "Inverter A (EG4 6000XP)"
+   }
+  },
+  {
+   "id": "ctl_b",
+   "preset": "EG4 6000XP",
+   "set": {
+    "name": "Inverter B (EG4 6000XP)"
+   }
+  },
+  {
+   "id": "bat_a",
+   "preset": "EG4 48V 20.8 kWh Bank",
+   "set": {
+    "name": "Battery Bank A"
+   }
+  },
+  {
+   "id": "bat_b",
+   "preset": "EG4 48V 20.8 kWh Bank",
+   "set": {
+    "name": "Battery Bank B"
+   }
+  },
+  {
+   "id": "rain",
+   "preset": "Ground Catchment (200 m²)",
+   "set": {
+    "name": "Rain Apron",
+    "area_m2": 18000
+   }
+  },
+  {
+   "id": "cistern",
+   "preset": "Water Tank (250 gal)",
+   "set": {
+    "name": "Rain Cistern (raw)",
+    "capacity": "1200 m³",
+    "capacity_qty": 1200000,
+    "level": 0.3333333
+   }
+  },
+  {
+   "id": "sandfilter",
+   "preset": "Sand Filter + UV",
+   "state": "off",
+   "set": {
+    "name": "Sand Filter + UV"
+   },
+   "automations": [
+    {
+     "alias": "Treat rainwater when the day tank runs down",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.potable.level",
+       "below": 70.0
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "above": 20.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ],
+     "conditions": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.potable.level",
+       "below": 70.0
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "above": 20.0
+      }
+     ]
+    },
+    {
+     "alias": "Stop when the day tank is full",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.potable.level",
+       "above": 95.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    },
+    {
+     "alias": "Stop treating when the battery is nearly flat",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "below": 15.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "potable",
+   "preset": "Water Tank (250 gal)",
+   "set": {
+    "name": "Drinking Water Day Tank",
+    "capacity": "2000 L",
+    "capacity_qty": 2000.0,
+    "level": 0.6
+   }
+  },
+  {
+   "id": "reclaim",
+   "preset": "Reclaimed Water Tank",
+   "set": {
+    "name": "Reclaimed Water (irrigation only)",
+    "capacity": "8000 L",
+    "capacity_qty": 8000.0,
+    "level": 0.125
+   }
+  },
+  {
+   "id": "grey",
+   "preset": "Greywater Tank",
+   "set": {
+    "capacity": "6000 L",
+    "capacity_qty": 6000,
+    "level": 0
+   }
+  },
+  {
+   "id": "black",
+   "preset": "Blackwater Tank",
+   "set": {
+    "capacity": "6000 L",
+    "capacity_qty": 6000.0,
+    "level": 0.0,
+    "name": "Brownwater Tank",
+    "resource_kind": "brownwater"
+   }
+  },
+  {
+   "id": "bwdig",
+   "preset": "Brownwater Digester (3 m³)",
+   "count": 2
+  },
+  {
+   "id": "urine",
+   "preset": "Urine Storage Tank (1000 L)",
+   "set": {
+    "level": 0.0
+   }
+  },
+  {
+   "id": "unr",
+   "preset": "Urine Nutrient Recovery",
+   "state": "off",
+   "automations": [
+    {
+     "alias": "Process urine once a batch has collected",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.urine.level",
+       "above": 8.0
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "above": 45.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ],
+     "conditions": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.urine.level",
+       "above": 8.0
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "above": 45.0
+      }
+     ]
+    },
+    {
+     "alias": "Stop when the tank is nearly empty",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.urine.level",
+       "below": 2.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    },
+    {
+     "alias": "Stop when the battery is low",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "below": 30.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "saltpan",
+   "preset": "Salt Pan (brine)",
+   "set": {
+    "capacity": "4000 L",
+    "capacity_qty": 4000,
+    "name": "Salt Pan (holds ~16 years of brine; evaporation not modelled)"
+   }
+  },
+  {
+   "id": "gfilter",
+   "preset": "Greywater Filter",
+   "count": 3,
+   "automations": [
+    {
+     "alias": "Filter once some greywater has collected",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.grey.level",
+       "above": 8
+      },
+      {
+       "kind": "time",
+       "at_hour": 8
+      },
+      {
+       "kind": "time",
+       "at_hour": 14
+      },
+      {
+       "kind": "time",
+       "at_hour": 20
+      }
+     ],
+     "conditions": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.grey.level",
+       "above": 8
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "Rest before the tank runs dry",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.grey.level",
+       "below": 3
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "food",
+   "preset": "Food Store (50 kg)",
+   "set": {
+    "name": "Pantry + dry store",
+    "capacity": "2500 kg",
+    "capacity_qty": 2500.0,
+    "level": 0.06
+   }
+  },
+  {
+   "id": "supplies",
+   "preset": "Supply Stores (packaged food)",
+   "set": {
+    "name": "Supply Stores (packaged food)",
+    "capacity": "1500 kg",
+    "capacity_qty": 1500.0,
+    "level": 1.0
+   }
+  },
+  {
+   "id": "unpack",
+   "preset": "Unpack & Sort Supplies",
+   "state": "off",
+   "automations": [
+    {
+     "alias": "Open supplies when the pantry runs low",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.food.level",
+       "below": 20.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "Stop once the pantry has enough",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.food.level",
+       "above": 30.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "meals",
+   "preset": "Meal Counter (40 meals)",
+   "set": {
+    "capacity": "150 meals",
+    "capacity_qty": 150.0,
+    "level": 0.2
+   }
+  },
+  {
+   "id": "kitchen",
+   "preset": "Kitchen",
+   "automations": [
+    {
+     "alias": "Cook when the counter is half empty",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.meals.level",
+       "below": 50
+      },
+      {
+       "kind": "time",
+       "at_hour": 6
+      },
+      {
+       "kind": "time",
+       "at_hour": 11
+      },
+      {
+       "kind": "time",
+       "at_hour": 16
+      }
+     ],
+     "conditions": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.meals.level",
+       "below": 50
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "One batch at a time: stop once it is on the counter",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.meals.level",
+       "above": 55
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ],
+   "recipe_def": {
+    "id": "sysd_camp_cook2",
+    "label": "Cook two days of meals for the camp (64 servings)",
+    "compatible_roles": [
+     "kitchen"
+    ],
+    "batch_time_hrs": 3,
+    "failure_mode": "pause_and_resume",
+    "inputs": [
+     {
+      "kind": "food",
+      "qty": 32,
+      "mode": "frontloaded"
+     },
+     {
+      "kind": "water",
+      "qty": 80,
+      "mode": "continuous"
+     },
+     {
+      "kind": "electric",
+      "qty": 1500,
+      "mode": "continuous"
+     }
+    ],
+    "outputs": [
+     {
+      "kind": "meal",
+      "qty": 64,
+      "mode": "end_batch"
+     },
+     {
+      "kind": "food_waste",
+      "qty": 6.4,
+      "mode": "end_batch"
+     },
+     {
+      "kind": "greywater",
+      "qty": 72,
+      "mode": "end_batch"
+     }
+    ],
+    "steps": [
+     {
+      "id": "prep",
+      "label": "Prep two days of ingredients",
+      "at_frac": 0,
+      "chore_hours": 1.5
+     },
+     {
+      "id": "cook",
+      "label": "Cook",
+      "at_frac": 0,
+      "chore_hours": 0
+     },
+     {
+      "id": "serve",
+      "label": "Portion, store, serve and wash up",
+      "at_frac": 1,
+      "chore_hours": 1
+     }
+    ],
+    "note": "Batch cooking: one session makes two days of meals for ten, kept in the fridge on the counter. The washing-up water goes to the greywater tank."
+   }
+  },
+  {
+   "id": "fwaste",
+   "preset": "Food Waste Bin",
+   "set": {
+    "level": 0.0
+   }
+  },
+  {
+   "id": "pack",
+   "preset": "Packaging Waste Bin",
+   "set": {
+    "name": "Card & Tin Bin",
+    "capacity": "400 kg",
+    "capacity_qty": 400.0,
+    "level": 0.0
+   }
+  },
+  {
+   "id": "plasticbin",
+   "preset": "Waste Plastic Bin",
+   "set": {
+    "name": "Waste Plastic Bin",
+    "level": 0.0
+   }
+  },
+  {
+   "id": "ghb",
+   "preset": "Greenhouse Keyhole Beds (20 m dome)",
+   "count": 15,
+   "set": {
+    "planted_abs_h": "@start",
+    "protected_season": 0.7,
+    "water_l_per_kg": 50.0
+   }
+  },
+  {
+   "id": "nutr",
+   "preset": "Nutrient Store",
+   "set": {
+    "name": "Nutrient Store (N+P+K)",
+    "capacity": "100 kg",
+    "capacity_qty": 100.0,
+    "capacity_unit": "kg",
+    "level": 0.15
+   },
+   "sync_reset_level": true
+  },
+  {
+   "id": "compost_bays",
+   "preset": "Hot Compost Bays",
+   "state": "off",
+   "automations": [
+    {
+     "alias": "Compost while there is biomass",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.biomass.level",
+       "above": 8.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "Pause when biomass is nearly gone",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.biomass.level",
+       "below": 4.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ],
+   "count": 6
+  },
+  {
+   "id": "digfilter",
+   "preset": "Digestate Nitrification Filter",
+   "state": "on",
+   "automations": [
+    {
+     "alias": "Rest the aerator when the battery is low",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "below": 30.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    },
+    {
+     "alias": "Back on once the battery recovers",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "above": 45.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    }
+   ],
+   "count": 2
+  },
+  {
+   "id": "plot_black",
+   "preset": "Garden Plot (50 m²)",
+   "count": 4,
+   "set": {
+    "name": "Willow Bed (reclaimed water)"
+   }
+  },
+  {
+   "id": "plot_fert",
+   "preset": "Garden Plot (50 m²)",
+   "set": {
+    "name": "Coppice Plot (reclaimed water)"
+   }
+  },
+  {
+   "id": "plot_water",
+   "preset": "Garden Plot (50 m²)",
+   "count": 12,
+   "set": {
+    "name": "Biomass Plot"
+   }
+  },
+  {
+   "id": "biomass",
+   "preset": "Biomass Store",
+   "set": {
+    "capacity": "1000 kg",
+    "capacity_qty": 1000.0,
+    "level": 0.2
+   }
+  },
+  {
+   "id": "reactor",
+   "preset": "Biochar Reactor (tar-fired)",
+   "recipe_file": "biochar_reactor_tarfired",
+   "state": "off",
+   "automations": [
+    {
+     "alias": "Run while there is biomass and tar to fire it",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.biomass.level",
+       "above": 35
+      },
+      {
+       "kind": "time",
+       "at_hour": 8
+      },
+      {
+       "kind": "time",
+       "at_hour": 14
+      }
+     ],
+     "conditions": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.biomass.level",
+       "above": 35
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "tank.oil.level",
+       "above": 0.3
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "above": 30
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "Stop when the battery is low",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "below": 22
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    },
+    {
+     "alias": "Leave the compost its share",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.biomass.level",
+       "below": 25
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "char",
+   "preset": "Biochar Store",
+   "set": {
+    "capacity": "2000 kg",
+    "capacity_qty": 2000.0,
+    "level": 0.0
+   }
+  },
+  {
+   "id": "vinegar",
+   "preset": "Liquid Fertilizer Tank",
+   "set": {
+    "name": "Wood Vinegar",
+    "resource_kind": "wood_vinegar",
+    "capacity": "1000 L",
+    "capacity_qty": 1000.0,
+    "level": 0.0
+   }
+  },
+  {
+   "id": "oil",
+   "preset": "Fuel Store (Diesel, 275 gal tote)",
+   "set": {
+    "name": "Pyrolysis Oil Tote",
+    "resource_kind": "tar",
+    "capacity_unit": "kg",
+    "level": 0.012
+   }
+  },
+  {
+   "id": "gas",
+   "preset": "Biogas Store",
+   "set": {
+    "name": "Gas Holder",
+    "resource_kind": "woodgas",
+    "level": 0.0
+   }
+  },
+  {
+   "id": "genset",
+   "preset": "Woodgas DC Generator",
+   "state": "off",
+   "automations": [
+    {
+     "alias": "Burn the gas holder down into the battery bank",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.gas.level",
+       "above": 30
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "Low battery: burn whatever gas there is",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "below": 60
+      },
+      {
+       "kind": "time",
+       "at_hour": 18
+      },
+      {
+       "kind": "time",
+       "at_hour": 21
+      },
+      {
+       "kind": "time",
+       "at_hour": 0
+      },
+      {
+       "kind": "time",
+       "at_hour": 3
+      }
+     ],
+     "conditions": [
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "below": 60
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "tank.gas.level",
+       "above": 15
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "Stop before the holder is empty",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.gas.level",
+       "below": 8
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "biogas",
+   "preset": "HomeBiogas 2.0"
+  },
+  {
+   "id": "fert",
+   "preset": "Liquid Fertilizer Tank",
+   "set": {
+    "name": "Digestate Tank",
+    "capacity": "2000 L",
+    "capacity_qty": 2000,
+    "level": 0
+   }
+  },
+  {
+   "id": "shredder",
+   "preset": "PP Shredder",
+   "recipe_def": {
+    "id": "sysd_shred_batch",
+    "label": "Shred a bin of plastic (5 kg)",
+    "batch_time_hrs": 1.0,
+    "failure_mode": "pause_and_resume",
+    "inputs": [
+     {
+      "kind": "plastic_waste",
+      "qty": 5.0,
+      "mode": "frontloaded"
+     },
+     {
+      "kind": "electric",
+      "qty": 600.0,
+      "mode": "continuous"
+     }
+    ],
+    "outputs": [
+     {
+      "kind": "plastic_flake",
+      "qty": 5.0,
+      "mode": "end_batch"
+     }
+    ],
+    "steps": [
+     {
+      "id": "sort",
+      "label": "Sort and feed the shredder",
+      "at_frac": 0.0,
+      "chore_hours": 0.4
+     },
+     {
+      "id": "bag",
+      "label": "Bag the flake",
+      "at_frac": 1.0,
+      "chore_hours": 0.1
+     }
+    ]
+   }
+  },
+  {
+   "id": "flake",
+   "preset": "Plastic Flake Store",
+   "set": {
+    "level": 0.0
+   }
+  },
+  {
+   "id": "molder",
+   "preset": "PP Injection Molder",
+   "state": "off",
+   "automations": [
+    {
+     "alias": "Mould parts when there is flake to spare",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.flake.level",
+       "above": 6.0
+      }
+     ],
+     "conditions": [
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "above": 50.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "Leave the retort its share",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.flake.level",
+       "below": 4.5
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "parts",
+   "preset": "Finished Parts Bin",
+   "set": {
+    "capacity": "5000 units",
+    "capacity_qty": 5000.0,
+    "level": 0.0
+   }
+  },
+  {
+   "id": "domerain",
+   "preset": "Roof Catchment (50 m²)",
+   "set": {
+    "name": "Dome roof gutters",
+    "area_m2": 3600.0,
+    "runoff_coeff": 0.8
+   }
+  },
+  {
+   "id": "fridge",
+   "preset": "Refrigerator",
+   "count": 2,
+   "set": {
+    "avg_watts": 60.0
+   }
+  },
+  {
+   "id": "devices",
+   "preset": "Custom Load",
+   "set": {
+    "name": "Phones, laptops, Starlink",
+    "avg_watts": 150.0
+   }
+  },
+  {
+   "id": "lights",
+   "preset": "Custom Load",
+   "set": {
+    "name": "Camp lighting",
+    "avg_watts": 120.0
+   },
+   "state": "off",
+   "automations": [
+    {
+     "alias": "Lights on at sunset",
+     "triggers": [
+      {
+       "kind": "sun",
+       "event": "sunset",
+       "offset_hours": 0.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "Lights off at 23:00",
+     "triggers": [
+      {
+       "kind": "time",
+       "at_hour": 23.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "coolroom",
+   "preset": "Window AC",
+   "count": 2,
+   "set": {
+    "name": "Cool room inverter mini-split",
+    "avg_watts": 500
+   },
+   "state": "off",
+   "automations": [
+    {
+     "alias": "Cool the afternoon when it is hot and the battery can carry it",
+     "triggers": [
+      {
+       "kind": "time",
+       "at_hour": 11
+      },
+      {
+       "kind": "time",
+       "at_hour": 13
+      },
+      {
+       "kind": "time",
+       "at_hour": 15
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.outdoor_temperature",
+       "above": 30
+      }
+     ],
+     "conditions": [
+      {
+       "kind": "time",
+       "after_hour": 11,
+       "before_hour": 19
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.outdoor_temperature",
+       "above": 30
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "above": 45
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "Off in the evening",
+     "triggers": [
+      {
+       "kind": "time",
+       "at_hour": 19
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    },
+    {
+     "alias": "Off once it cools down",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.outdoor_temperature",
+       "below": 27
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    },
+    {
+     "alias": "Off when the battery runs low",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "below": 35
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "ghtank",
+   "preset": "Water Tank (250 gal)",
+   "set": {
+    "name": "Greenhouse Irrigation Tank",
+    "capacity": "6000 L",
+    "capacity_qty": 6000.0,
+    "level": 0.5
+   }
+  },
+  {
+   "id": "irrig",
+   "preset": "Sand Filter + UV",
+   "count": 2,
+   "set": {
+    "name": "Irrigation Transfer Pump"
+   },
+   "automations": [
+    {
+     "alias": "Top up the greenhouse tank while the cistern holds a drinking reserve",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.ghtank.level",
+       "below": 80.0
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "tank.cistern.level",
+       "above": 12.0
+      },
+      {
+       "kind": "time",
+       "at_hour": 6.0
+      },
+      {
+       "kind": "time",
+       "at_hour": 14.0
+      }
+     ],
+     "conditions": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.cistern.level",
+       "above": 12.0
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "tank.ghtank.level",
+       "below": 80.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "Stop when the greenhouse tank is full",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.ghtank.level",
+       "above": 95.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    },
+    {
+     "alias": "Drought: keep the last of the cistern for drinking",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.cistern.level",
+       "below": 10.0
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "plotpump",
+   "preset": "Sand Filter + UV",
+   "set": {
+    "name": "Plot Irrigation Pump (rain surplus)"
+   },
+   "automations": [
+    {
+     "alias": "Water the biomass plots from rain surplus",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.reclaim.level",
+       "below": 20
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "tank.cistern.level",
+       "above": 45
+      },
+      {
+       "kind": "time",
+       "at_hour": 7
+      }
+     ],
+     "conditions": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.cistern.level",
+       "above": 45
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "tank.reclaim.level",
+       "below": 20
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "Stop when the reclaimed tank recovers",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.reclaim.level",
+       "above": 60
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    },
+    {
+     "alias": "Rain surplus only: stop below 42 % cistern (500 m³)",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.cistern.level",
+       "below": 42
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "reusepump",
+   "preset": "Sand Filter + UV",
+   "set": {
+    "name": "Greywater Reuse Pump (to greenhouses)"
+   },
+   "automations": [
+    {
+     "alias": "Send reclaimed greywater to the greenhouses before the tank fills",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.reclaim.level",
+       "above": 70
+      },
+      {
+       "kind": "time",
+       "at_hour": 9
+      }
+     ],
+     "conditions": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.reclaim.level",
+       "above": 70
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "tank.ghtank.level",
+       "below": 95
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "Stop at half a tank, leave the rest for the plots",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.reclaim.level",
+       "below": 50
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "tank.ghtank.level",
+       "above": 97
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "fconc",
+   "preset": "Wood Vinegar Freeze Concentrator",
+   "state": "off",
+   "automations": [
+    {
+     "alias": "Freeze the vinegar down on spare sun",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "above": 88
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "tank.vinegar.level",
+       "above": 5
+      },
+      {
+       "kind": "time",
+       "at_hour": 11
+      }
+     ],
+     "conditions": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.vinegar.level",
+       "above": 3
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "above": 85
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_on"
+      }
+     ]
+    },
+    {
+     "alias": "Stop when the vinegar is done or the sun goes",
+     "triggers": [
+      {
+       "kind": "numeric",
+       "entity_id": "tank.vinegar.level",
+       "below": 0.5
+      },
+      {
+       "kind": "numeric",
+       "entity_id": "sensor.battery_level",
+       "below": 70
+      }
+     ],
+     "actions": [
+      {
+       "kind": "scene_node",
+       "command": "turn_off"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "acid",
+   "preset": "Wood Acid Drum (200 L)"
+  },
+  {
+   "id": "acidig",
+   "preset": "Wood Acid Digester (1 m³, biochar bed)"
+  }
+ ],
+ "solar": [
+  {
+   "id": "pv_a",
+   "name": "South Array A",
+   "panel": "JA Solar 380W",
+   "series": 10,
+   "parallel": 2,
+   "controller": "ctl_a",
+   "tilt_deg": 40.0,
+   "azimuth_deg": 180.0
+  },
+  {
+   "id": "pv_b",
+   "name": "South Array B",
+   "panel": "JA Solar 380W",
+   "series": 10,
+   "parallel": 2,
+   "controller": "ctl_b",
+   "tilt_deg": 40.0,
+   "azimuth_deg": 180.0
+  }
+ ],
+ "dc": [
+  [
+   "ctl_a",
+   "bat_a"
+  ],
+  [
+   "ctl_b",
+   "bat_b"
+  ]
+ ],
+ "ac": {
+  "ctl_a": [
+   "gfilter",
+   "kitchen",
+   "sandfilter",
+   "unr",
+   "digfilter",
+   "fridge",
+   "devices",
+   "lights",
+   "irrig",
+   "plotpump",
+   "reusepump"
+  ],
+  "ctl_b": [
+   "reactor",
+   "shredder",
+   "molder",
+   "coolroom",
+   "fconc"
+  ]
+ },
+ "wires": [
+  [
+   "pbi_rain",
+   "rain",
+   "water"
+  ],
+  [
+   "rain",
+   "cistern",
+   "water"
+  ],
+  [
+   "cistern",
+   "sandfilter",
+   "water"
+  ],
+  [
+   "sandfilter",
+   "potable",
+   "water"
+  ],
+  [
+   "potable",
+   "hab",
+   "water"
+  ],
+  [
+   "food",
+   "hab",
+   "food"
+  ],
+  [
+   "meals",
+   "hab",
+   "meal"
+  ],
+  [
+   "biomass",
+   "hab",
+   "biomass"
+  ],
+  [
+   "hab",
+   "grey",
+   "greywater"
+  ],
+  [
+   "hab",
+   "black",
+   "brownwater"
+  ],
+  [
+   "hab",
+   "urine",
+   "urine"
+  ],
+  [
+   "hab",
+   "biomass",
+   "biomass"
+  ],
+  [
+   "grey",
+   "gfilter",
+   "greywater"
+  ],
+  [
+   "gfilter",
+   "reclaim",
+   "water"
+  ],
+  [
+   "supplies",
+   "unpack",
+   "packaged_food"
+  ],
+  [
+   "unpack",
+   "food",
+   "food"
+  ],
+  [
+   "unpack",
+   "plasticbin",
+   "plastic_waste"
+  ],
+  [
+   "unpack",
+   "pack",
+   "packaging_waste"
+  ],
+  [
+   "food",
+   "kitchen",
+   "food"
+  ],
+  [
+   "potable",
+   "kitchen",
+   "water"
+  ],
+  [
+   "kitchen",
+   "meals",
+   "meal"
+  ],
+  [
+   "kitchen",
+   "fwaste",
+   "food_waste"
+  ],
+  [
+   "urine",
+   "unr",
+   "urine"
+  ],
+  [
+   "unr",
+   "nutr",
+   "nutrients"
+  ],
+  [
+   "unr",
+   "reclaim",
+   "irrigation_water"
+  ],
+  [
+   "unr",
+   "saltpan",
+   "brine"
+  ],
+  [
+   "black",
+   "bwdig",
+   "brownwater"
+  ],
+  [
+   "bwdig",
+   "fert",
+   "liquid_fertilizer"
+  ],
+  [
+   "bwdig",
+   "gas",
+   "biogas"
+  ],
+  [
+   "fwaste",
+   "biogas",
+   "food_waste"
+  ],
+  [
+   "reclaim",
+   "biogas",
+   "irrigation_water>water"
+  ],
+  [
+   "biogas",
+   "gas",
+   "biogas"
+  ],
+  [
+   "biogas",
+   "fert",
+   "liquid_fertilizer"
+  ],
+  [
+   "fert",
+   "digfilter",
+   "liquid_fertilizer"
+  ],
+  [
+   "digfilter",
+   "nutr",
+   "nutrients"
+  ],
+  [
+   "digfilter",
+   "reclaim",
+   "irrigation_water"
+  ],
+  [
+   "biomass",
+   "compost_bays",
+   "biomass"
+  ],
+  [
+   "compost_bays",
+   "nutr",
+   "nutrients"
+  ],
+  [
+   "nutr",
+   "ghb",
+   "nutrients"
+  ],
+  [
+   "ghb",
+   "food",
+   "food"
+  ],
+  [
+   "ghb",
+   "biomass",
+   "biomass"
+  ],
+  [
+   "reclaim",
+   "plot_black",
+   "irrigation_water>water"
+  ],
+  [
+   "reclaim",
+   "plot_fert",
+   "irrigation_water>water"
+  ],
+  [
+   "reclaim",
+   "plot_water",
+   "irrigation_water>water"
+  ],
+  [
+   "plot_black",
+   "biomass",
+   "biomass"
+  ],
+  [
+   "plot_fert",
+   "biomass",
+   "biomass"
+  ],
+  [
+   "plot_water",
+   "biomass",
+   "biomass"
+  ],
+  [
+   "biomass",
+   "reactor",
+   "biomass"
+  ],
+  [
+   "reactor",
+   "char",
+   "biochar"
+  ],
+  [
+   "reactor",
+   "gas",
+   "woodgas"
+  ],
+  [
+   "reactor",
+   "vinegar",
+   "wood_vinegar"
+  ],
+  [
+   "reactor",
+   "oil",
+   "tar"
+  ],
+  [
+   "plasticbin",
+   "shredder",
+   "plastic_waste"
+  ],
+  [
+   "shredder",
+   "flake",
+   "plastic_flake"
+  ],
+  [
+   "flake",
+   "molder",
+   "plastic_flake"
+  ],
+  [
+   "molder",
+   "parts",
+   "finished_part"
+  ],
+  [
+   "gas",
+   "genset",
+   "woodgas"
+  ],
+  [
+   "genset",
+   "bat_a",
+   "dc"
+  ],
+  [
+   "pbi_rain",
+   "domerain",
+   "water"
+  ],
+  [
+   "domerain",
+   "cistern",
+   "water"
+  ],
+  [
+   "cistern",
+   "irrig",
+   "water"
+  ],
+  [
+   "irrig",
+   "ghtank",
+   "water"
+  ],
+  [
+   "ghtank",
+   "ghb",
+   "water"
+  ],
+  [
+   "cistern",
+   "plotpump",
+   "water"
+  ],
+  [
+   "plotpump",
+   "reclaim",
+   "water>irrigation_water"
+  ],
+  [
+   "reclaim",
+   "reusepump",
+   "irrigation_water>water"
+  ],
+  [
+   "reusepump",
+   "ghtank",
+   "water"
+  ],
+  [
+   "kitchen",
+   "grey",
+   "greywater"
+  ],
+  [
+   "gfilter",
+   "reclaim",
+   "greywater>irrigation_water"
+  ],
+  [
+   "oil",
+   "reactor",
+   "tar"
+  ],
+  [
+   "vinegar",
+   "fconc",
+   "wood_vinegar"
+  ],
+  [
+   "fconc",
+   "reclaim",
+   "irrigation_water"
+  ],
+  [
+   "fconc",
+   "acid",
+   "wood_acid"
+  ],
+  [
+   "acid",
+   "acidig",
+   "wood_acid"
+  ],
+  [
+   "char",
+   "acidig",
+   "biochar"
+  ],
+  [
+   "acidig",
+   "gas",
+   "biogas"
+  ],
+  [
+   "acidig",
+   "reclaim",
+   "irrigation_water"
+  ],
+  [
+   "acidig",
+   "char",
+   "biochar"
+  ]
+ ],
+ "spaces": [
+  {
+   "type": "sleep",
+   "at": [
+    0,
+    -14
+   ],
+   "size": [
+    16,
+    10
+   ],
+   "capacity": 12,
+   "label": "Bunk tents"
+  },
+  {
+   "type": "kitchen",
+   "at": [
+    10,
+    4
+   ],
+   "size": [
+    6,
+    5
+   ],
+   "capacity": 10,
+   "label": "Camp kitchen"
+  },
+  {
+   "type": "water_point",
+   "at": [
+    4,
+    6
+   ],
+   "size": [
+    3,
+    3
+   ],
+   "capacity": 4,
+   "label": "Water point"
+  },
+  {
+   "type": "restroom",
+   "at": [
+    -12,
+    6
+   ],
+   "size": [
+    5,
+    3
+   ],
+   "capacity": 4,
+   "label": "Toilets"
+  },
+  {
+   "type": "shower",
+   "at": [
+    -12,
+    11
+   ],
+   "size": [
+    5,
+    3
+   ],
+   "capacity": 4,
+   "label": "Showers"
+  },
+  {
+   "type": "quiet",
+   "at": [
+    -4,
+    16
+   ],
+   "size": [
+    8,
+    6
+   ],
+   "capacity": 0,
+   "label": "Shade lounge"
+  },
+  {
+   "type": "movement",
+   "at": [
+    8,
+    18
+   ],
+   "size": [
+    10,
+    8
+   ],
+   "capacity": 0,
+   "label": "Yoga deck"
+  },
+  {
+   "type": "workshop_social",
+   "at": [
+    22,
+    4
+   ],
+   "size": [
+    8,
+    6
+   ],
+   "capacity": 0,
+   "label": "Workshop"
+  }
+ ],
+ "world": {
+  "start_hour": 8.0,
+  "time_scale": 0.0166667,
+  "skip_area_spaces": [
+   "sleep",
+   "kitchen"
+  ],
+  "gate": {
+   "at": [
+    0,
+    110
+   ],
+   "yaw": 0
+  },
+  "player": {
+   "at": [
+    6,
+    62
+   ],
+   "look_at": [
+    0,
+    0
+   ]
+  },
+  "vehicles": [
+   {
+    "preset": "school_bus",
+    "at": [
+     -12,
+     -8
+    ],
+    "yaw": 0
+   },
+   {
+    "preset": "rv",
+    "at": [
+     -3,
+     -8
+    ],
+    "yaw": 0
+   },
+   {
+    "preset": "van",
+    "at": [
+     5,
+     -8
+    ],
+    "yaw": 0
+   }
+  ],
+  "container": {
+   "at": [
+    -26,
+    14
+   ],
+   "yaw": 90
+  },
+  "twins": [
+   {
+    "node": "ghb",
+    "model": "grow_bed",
+    "positions": [
+     [
+      -70,
+      40
+     ],
+     [
+      -46,
+      40
+     ],
+     [
+      -22,
+      40
+     ],
+     [
+      22,
+      40
+     ],
+     [
+      46,
+      40
+     ],
+     [
+      70,
+      40
+     ],
+     [
+      -70,
+      64
+     ],
+     [
+      -46,
+      64
+     ],
+     [
+      -22,
+      64
+     ],
+     [
+      22,
+      64
+     ],
+     [
+      46,
+      64
+     ],
+     [
+      70,
+      64
+     ]
+    ],
+    "face_centre": true,
+    "walk_in": true,
+    "with_dome": "greenhouse_20m"
+   },
+   {
+    "node": "plot_black",
+    "at": [
+     30,
+     2
+    ],
+    "step": [
+     8.5,
+     8.5
+    ],
+    "cols": 4,
+    "stow": true,
+    "bed": {
+     "layout": "plot",
+     "area_m2": 50.0,
+     "crops": "willow"
+    }
+   },
+   {
+    "node": "plot_fert",
+    "at": [
+     64,
+     2
+    ],
+    "stow": true,
+    "bed": {
+     "layout": "plot",
+     "area_m2": 50.0,
+     "crops": "willow"
+    }
+   },
+   {
+    "node": "plot_water",
+    "at": [
+     30,
+     11
+    ],
+    "step": [
+     8.5,
+     8.5
+    ],
+    "cols": 4,
+    "stow": true,
+    "bed": {
+     "layout": "plot",
+     "area_m2": 50.0,
+     "crops": "sorghum"
+    }
+   },
+   {
+    "node": "reactor",
+    "at": [
+     -44,
+     -6
+    ],
+    "yaw": 90,
+    "stow": true
+   },
+   {
+    "node": "retort",
+    "at": [
+     -44,
+     -13
+    ],
+    "yaw": 90,
+    "stow": true
+   },
+   {
+    "node": "biogas",
+    "at": [
+     -44,
+     2
+    ],
+    "yaw": 90,
+    "stow": true
+   },
+   {
+    "node": "shredder",
+    "at": [
+     -36,
+     -16
+    ],
+    "yaw": 0
+   }
+  ],
+  "pv": [
+   {
+    "solar": "pv_a",
+    "at": [
+     -16,
+     -34
+    ],
+    "count": 20,
+    "cols": 10,
+    "rows": 2,
+    "tilt_deg": 40.0
+   },
+   {
+    "solar": "pv_b",
+    "at": [
+     16,
+     -34
+    ],
+    "count": 20,
+    "cols": 10,
+    "rows": 2,
+    "tilt_deg": 40.0
+   }
+  ],
+  "props": [
+   {
+    "model": "ez_up",
+    "at": [
+     14,
+     6
+    ],
+    "bind": "kitchen",
+    "space": "kitchen",
+    "capacity": 10,
+    "label": "Camp kitchen",
+    "stow": true
+   },
+   {
+    "model": "ez_up",
+    "at": [
+     -4,
+     16
+    ],
+    "stow": true
+   },
+   {
+    "model": "carport",
+    "at": [
+     -36,
+     -12
+    ]
+   }
+  ],
+  "chores": [
+   {
+    "label": "Tend greenhouse {n}",
+    "node": "ghb",
+    "each": true,
+    "hours": 0.4,
+    "start_h": 7.0,
+    "end_h": 12.0,
+    "min_workers": 1,
+    "max_workers": 2,
+    "exposure": "sheltered"
+   },
+   {
+    "label": "Harvest and resow greenhouse {n}",
+    "node": "ghb",
+    "each": true,
+    "hours": 1.0,
+    "repeat": "weekly",
+    "start_h": 7.0,
+    "end_h": 16.0,
+    "min_workers": 1,
+    "max_workers": 2,
+    "exposure": "sheltered"
+   },
+   {
+    "label": "Check willow bed {n}",
+    "node": "plot_black",
+    "each": true,
+    "hours": 0.25,
+    "repeat": "weekly",
+    "start_h": 14.0,
+    "end_h": 18.0
+   },
+   {
+    "label": "Check the coppice plot",
+    "node": "plot_fert",
+    "each": true,
+    "hours": 0.25,
+    "repeat": "weekly",
+    "start_h": 14.0,
+    "end_h": 18.0
+   },
+   {
+    "label": "Weed and water sorghum plot {n}",
+    "node": "plot_water",
+    "each": true,
+    "hours": 0.3,
+    "repeat": "weekly",
+    "start_h": 14.0,
+    "end_h": 18.0
+   },
+   {
+    "label": "Carry the scraps to the digester",
+    "hours": 0.25,
+    "node": "biogas",
+    "start_h": 14.0,
+    "end_h": 18.0
+   },
+   {
+    "label": "Brush the dust off the panels",
+    "hours": 0.75,
+    "node": "pv_a",
+    "start_h": 9.0,
+    "end_h": 12.0,
+    "repeat": "weekly"
+   },
+   {
+    "label": "Walk the water system",
+    "hours": 0.5,
+    "at": [
+     -12,
+     8
+    ],
+    "start_h": 9.0,
+    "end_h": 17.0
+   }
+  ]
+ }
+}

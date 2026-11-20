@@ -1284,6 +1284,16 @@ Godot.exe.exe --headless --path . --script tools/diag/tc_chain_probe.gd -- --hou
 # off), a placed reactor's node taking the fitted batch by a real click on
 # "Use this run on the graph", UiAudit clean (run at 720 too):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/tc_process_check.gd -Label tc_process
+# Connector kit (offline — core/connectors/, Controller Lab Phase 0): every
+# catalog entry resolves, draws, winds clockwise, has sane pins and (power)
+# a rating; mates_with resolves; parametric strips / MCBs / bars / knockouts
+# size from opts; the Battery Lab's RJ45 plug and front stud drawn by the
+# kit are vertex-identical to the frozen old code; PvLab leads use the kit.
+# EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/connectors/connector_selftest.gd
+# Every connector on one look sheet (WINDOWED, APPDATA at a scratch folder;
+# -- --out=<png> --only=a,b --cell=220):
+Godot.exe.exe --path . --windowed --resolution 220x220 --script tools/diag/connector_look_diag.gd
 # Battery Lab data (offline — core/batterylab/, plans/BATTERY_LAB_PLAN.md
 # Phase 0): BattChem's six chemistries (FLA / SLA / AGM / GEL / LFP / NMC:
 # ordered charge voltages, monotone OCV + its inverse, temperature
@@ -7088,11 +7098,73 @@ designed numbers under their old labels; brand names in presets are
   size and drop (the bank's own model then draws only a stub). A
   controller with no place in the world can't be routed to: the run stays the
   typed length (the graph's "Place it here" gives it one).
+- **Wiring and hardware as built (realism pass, 2026-11-19).** `BattWire`
+  (cable OD by gauge, bend radius 4 × OD silicone / 5 × battery / 3 ×
+  balance, ring lugs by conductor and stud) and `BattParts` (tube, ring lug
+  with crimp and heat-shrink, nut, washer, stud, SAE post and clamp,
+  rounded busbar, prisms; every triangle wound to its normal) draw the
+  pack (part 1) and the bank:
+  - The pack layout gives its OUTSIDE landing: terminals `pos_out` /
+    `neg_out` / `n_out` / `out_kind` (stud | post) / `stud`. The bank builds
+    its pack with `BattBuilder.build_from_design(d, true)` (bare studs: the
+    bank puts its own lug, washer and nut on).
+  - Every bank cable (`BankDesign._cable` / `_route_cable`) is a cubic out
+    of each lug barrel, its handles as long as it takes to bend no tighter
+    than its own radius; when the obvious way is too tight the lugs are
+    tried turned the other ways on their faces. A lug on a top post rises
+    off the lid. Cables keep `ends` [{kind, p, n, t, s, lug, reach}], `pts`
+    (the path), `od`, `r_bend`, `min_r`, `tight`; length = path + both
+    reaches; re-routed after a drop upsize. Same-length wiring stretches the
+    handles so the cable really is that long (`coiled` only when it can't).
+    The check "N cables bent tighter than …" names them.
+  - Bus: the − bar nearer the packs, the + bar outside it and `NEG_STEP_MM`
+    further forward, both facing +Z on standoffs off an insulating board
+    flush with the pack fronts; bars stacked n deep, bolt heads behind every
+    landing. Fuses by family: Class T / ANL holders bolted to the + bar
+    reaching AWAY from the packs (cable lands on the far stud), MRBF on the
+    pack's + stud, MEGA inside a distributor (a stud pair per string + one
+    for the mains). The disconnect switch is bolted to the + take-off; the
+    main + leaves from its output stud. Comms: RJ45 patch cables that sag,
+    one to the inverter, a terminator on the last pack (BOM counts the
+    cables as drawn).
+  - Look sheet `batterylab_look_diag.gd -- --banks=1 [--only=cab_1s4p,…]`
+    (whole, bus, terminal, fuse; prints tight cables per case).
 - Tour stop `18p_battery_lab` (burningman, with the bench); modal audit entry
   `batterylab`.
 - Not built: cell-level effects in the live sim (pack level only, by the
   user's choice), cell spread inside a pack on the bank bench (pack-level
   cells), an inverter model to place (it is a grey box).
+
+## Connector kit (core/connectors/, 2026-11-19)
+
+Phase 0 of the Controller Lab plan (`plans/CONTROLLER_LAB_PLAN.md`): one set
+of connector and terminal standards every designer draws from.
+- `ConnectorCatalog` (pure data, 63 entries): solar (MC4, MC4-Evo 2, H4;
+  panel and inline), DC (Powerpole 15/30/45, SB50/120/175, XT60/90, SAE,
+  barrel jacks, 12 V socket, bolt stud, binding post, box lug, Class T and
+  ANL fuses), AC (NEMA 5-15/5-20 single, duplex, GFCI, L14-30, TT-30,
+  Schuko, BS 1363, AS/NZS, IEC C13/C14/C19/C20, rocker, push breaker),
+  wiring bay (screw terminal strips 5.08 / 3.5 / power / AC L-N-G, WAGO 221,
+  DIN rail, miniature breakers, N / PE bus bars, ground lug), data (RJ45
+  jack + plug, RJ11, USB-A/C, DB9, VE.Direct, antenna), fittings (glands
+  M16/M20/M25/PG7, conduit knockouts by trade size) and front panel (LED,
+  LCD square or round with a ring, button, DIP switch). Each: domain,
+  `body` (mm), pins `{id, label, role, pos, dir}`, rating, source
+  ("estimate" where no data sheet), `mates_with`. `resolve(id, opts)` fills
+  parametric ones (poles, pitch, labels, amps, screws, trade size, stud).
+- LOCAL frame, mm: the panel surface is z = 0, +Z out of the panel (the way
+  a mating plug arrives), +Y up, +X right; parts behind the panel at z < 0.
+- `ConnectorParts.build(g: BattParts.Geo, id, xf, opts)` draws into a
+  BattParts Geo (orthonormal `xf`, mm) and returns `{pins, labels, aabb,
+  entry}` with pins in the placed frame. Text is NOT in the mesh: `labels`
+  are {text, pos, normal, up, size, color} for the caller to make Label3Ds.
+  `mesh(id)` for one connector, `append_to(ArrayMesh, Geo)` to add a Geo's
+  surfaces to an existing mesh.
+- Callers moved onto it: `BankBuilder._rj45` ("rj45_plug"),
+  `BattBuilder._front_terminal` ("stud"; both proven vertex-identical by the
+  selftest's frozen copies) and PvLab module leads
+  (`PvLabBuilder._lead_connector`: MC4 / Evo 2 inline, a single Powerpole
+  per lead, XT60 / SAE on the + lead).
 
 ## ESP board designer (core/esplab/, 2026-11-07)
 
@@ -7741,6 +7813,55 @@ designs into the game, secure, no AI inside the game, easy for local LLMs.
   the cost; nothing draws.
 - Not simulated in the kernel yet: terrain ponds / streams, panel shade from
   trees and buildings, camp power; observed (HA) data is not served.
+- **v10 pass (2026-11-18, `core/simkit/designs/bombay_ten_v10.json`, submitted
+  as `bt_v10m`; four years with rates also 8 of 8).** v9 on that day's code with people simulated: 6 of 8 checks
+  (cistern 400 → 133 m³ in 2024's 56 mm; the reclaimed tank over-drawn), 39
+  kWh/day, battery low 23 %, no cooked meal 2,120 h. v10: 8 of 8, cistern
+  400 → 490 m³, 19.6 kWh/day, battery low 61 % on two banks (also sustained
+  on the base world with dust). What mattered: the cistern (800 m³) was FULL
+  by day 30, so later storms were lost: 1,200 m³ holding the same 400 m³ on
+  day one; a kitchen batch of 64 so the meal counter can stock up; the cool
+  room on a thermostat. Engine / check fixes the runs exposed, each pinned:
+  - an OPTIONAL output (`_out_port_tank`) never borrows the node's other tank
+    (a Greywater Filter treated 2.55 L/h, not 17; a Kitchen's washing-up
+    went into the meal counter); the Greywater Filter is `io_absolute`;
+  - a habitat's waste into a FULL tank overflows (it used to vanish), and
+    `brownwater` is in the report's WASTE_KINDS;
+  - rules can read `sensor.outdoor_temperature`
+    (`AutomationSim.outdoor_temp_c`; live engine, A/B worlds, simkit, the
+    inspector's signal list).
+  - the 500 L Salt Pan has no evaporation, so it filled in year two and
+    stopped the urine processor (v9's "sustained" four-year run lost ~1,000 L
+    of urine uncounted); v10 sizes it at 4,000 L. Wood vinegar and pyrolysis
+    oil also fill their stores in ~5-6 years (closed in v11, below).
+- **The pyrolysis loop closed (2026-11-19, `bombay_ten_v11`).**
+  - **Tar fires the reactor**: preset "Biochar Reactor (tar-fired)" and
+    recipe `biochar_reactor_tarfired.json`. The electric run's 4.5 kWh
+    (16.2 MJ) comes from a drip-fed burner under a fire jacket at ~50 %
+    (est): 2.0 kg of tar (16 MJ/kg) of the 2.6 kg a charge gives back, 90 W
+    for the blower. It needs a few kg of tar to light (the design primes the
+    tote). Air mode "burn".
+  - **Wood vinegar is freeze-concentrated, not distilled**: acetic acid co-
+    distils with water (relative volatility ~1.8 at the water-rich end), so a
+    farm still gives sour water. "Wood Vinegar Freeze Concentrator" (110 W):
+    per litre 0.62 L of melt water (irrigation) + 0.38 L of `wood_acid`
+    (~18 % acetic, the vinegar's solutes × 2.55; new kind + composition).
+    UnitOps `freeze_concentration`; `distillation` now refuses wood vinegar.
+  - **The acid becomes biogas**: "Wood Acid Digester (1 m³, biochar bed)":
+    acetate, methanol and sugar tars by Buswell at 80 % (est), the phenols
+    held by a biochar bed (Torri & Fabbri 2014); 0.15 L/h → 0.027 m³/h biogas
+    into the gas holder (the genset), treated water to the beds, the char
+    back to the char store. "Wood Acid Drum (200 L)".
+  - Results (agents, 2024, site w6ad922917357 with dust; v10m re-run there
+    as the baseline, run r20261119_023006_280f76 vs r20261119_032712_aeb7a8,
+    submitted as bt_v11): both sustained; load 19.6 → 18.6 kWh/day; other
+    generation 474 → 500 kWh; tar tote +203 → +14 kg a year; vinegar tank
+    234 → 5 L at year end; lowest battery 54 → 50 %. The genset also starts
+    on a low battery (gas over 15 %): starting only at a 30 % holder made the
+    lowest battery hang on threshold timing (45 % without it). Four years
+    with rates: sustained, tar 12 → 55 kg, vinegar under 40 L.
+  ⚠ Python on Windows reads files as cp1252 unless told: "m³" in a design
+  shows as "mÂ³" — that is the reader, not the file.
 
 ## Whole-system design harness + the closed-loop world (tools/sysdesign/, 2026-11-09)
 
@@ -16593,6 +16714,25 @@ work Gini 0.13, every toilet visit a chair sit with no seat).
     portable toilet for 168 people made a line of 14-36; a 4-stall bank placed
     25 m away filled (4 inside, a line of 11). That is a SIZING answer for the
     site, not a bug.
+- **Shower houses** (`ShowerHouseBuilder`, catalog `shower_house`, record key
+  `shower_spec` {stalls 1..12, rows (auto 2 past 6), style timber | tin,
+  heater solar | none}; 2026-11-19): curtained stalls on a slatted deck
+  (`FLOOR_Y` 0.18) under a shed roof, a black batch solar tank on the roof.
+  Same meta shapes as the toilet bank (`stall_spots` kind "stand", elev = the
+  deck, facing the head on the back wall; `queue_line`), so the bridge's stall
+  code serves both: `_resolve_seat_spots` sets a shower space's stalls from its
+  house (a vehicle's shower stays a plain space), `stalls_busy(prop_id)`
+  (`toilet_stalls_busy` is an alias), and a shower AREA gets a house placed in
+  it like a restroom area (`bank_prop`, record `showers_for`). A house placed
+  by hand tags itself a shower (`_auto_tag_shower_house`). `ShowerHouseRuntime`
+  draws the curtain (`Curtains/C<k>` scale x) and runs the spray
+  (`Sprays/S<k>` GPUParticles3D) while a stall is taken; paused, the water
+  stops mid-fall. The water is still the person's (hygiene ~12 L, billed to
+  their habitat). ⚠ `PlacedPropRuntime.model_extras` never passed
+  `toilet_spec` (or `kitchen_spec`): every placed bank built the default four
+  stalls whatever its record said. It passes `toilet_spec`, `shower_spec`,
+  `kitchen_spec` now. Gates: `sanitation_selftest` (`_test_shower_house_*`)
+  and `tools\harness.ps1 -World w6af22bac295d -RunScript res://tools/checks/shower_house_check.gd -Label shower_house -Timeout 1200`.
 
 - **Bathroom physiology (Phase 4, `NpcBathroom`, pure).** Each person has
   their own pee count (3-6 a day, `pees_per_day`) and 1 or 2 poos

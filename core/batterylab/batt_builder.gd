@@ -896,26 +896,9 @@ func _bms_detail(g: BattParts.Geo, bms: Dictionary) -> void:
 func _front_terminal(g: BattParts.Geo, f: Dictionary, pos: bool) -> void:
 	var c: Vector3 = f["c"]
 	var s: Vector3 = f["s"]
-	var col := C_RED if pos else C_BLACK
-	var zn := Vector3(0, 0, 1)
-	var fz := c.z - s.z * 0.5
-	var cc := Vector3(c.x, c.y, fz)
-	var brass := Color(0.84, 0.66, 0.36)
-	var r := s.x * 0.5
-	BattParts.lathe(g, cc, zn, [Vector2(0, 0), Vector2(r + 2.0, 0), Vector2(r + 2.0, 1.5), Vector2(r, 2.5),
-		Vector2(r, 9.5), Vector2(r - 1.5, 11.0), Vector2(0, 11.0)], col, "plastic", 28)
-	BattParts.disc(g, cc + zn * 11.0, zn, 8.5, 2.5, brass, "metal", 20)
-	BattParts.threaded_stud(g, cc + zn * 13.5, zn, 8.0, 12.0 if not bare_studs else 22.0, brass.lightened(0.15))
-	if not bare_studs:
-		var wt := BattParts.washer(g, cc + zn * 13.5, zn, 8.0)
-		BattParts.hex_nut(g, cc + zn * (13.5 + wt), zn, 8.0)
-	var ip := Vector3(c.x, c.y, fz - 15.0)
-	BattParts.disc(g, ip, zn, 9.0, 15.0, brass, "metal", 18)
-	BattParts.threaded_stud(g, ip, -zn, 8.0, 11.0, brass.lightened(0.15))
-	var mk := cc + Vector3(0, r + 9.0, 0.3)
-	BattParts.abox(g, mk, Vector3(9.0, 2.0, 0.6), col, "plastic")
-	if pos:
-		BattParts.abox(g, mk, Vector3(2.0, 9.0, 0.6), col, "plastic")
+	var cc := Vector3(c.x, c.y, c.z - s.z * 0.5)
+	ConnectorParts.build(g, "stud", Transform3D(Basis.IDENTITY, cc), {"stud": 8.0, "boss_r": s.x * 0.5,
+		"polarity": "+" if pos else "-", "color": C_RED if pos else C_BLACK, "bare": bare_studs, "inner": true})
 
 
 ## An SAE tapered post on the lid, a moulded + or − beside it, the lead

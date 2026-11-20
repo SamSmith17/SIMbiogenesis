@@ -1928,16 +1928,18 @@ func _resolve_seat_spots(main: Node, registry: SpaceRegistry) -> void:
 		var tgt: Dictionary = space.get("target", {})
 		var stype := str(space.get("space_type", ""))
 		var prop_id := str(tgt.get("prop_id", "")) if str(tgt.get("kind", "")) == "prop" else ""
-		# A restroom AREA is served by the toilet bank placed for it.
-		if prop_id.is_empty() and stype == "restroom":
+		var stalled := stype == "restroom" or stype == "shower"
+		# A restroom AREA is served by the toilet bank placed for it, a shower
+		# AREA by its shower house.
+		if prop_id.is_empty() and stalled:
 			prop_id = str(space.get("bank_prop", ""))
 		if prop_id.is_empty():
-			if stype == "restroom":
+			if stalled:
 				registry.set_stalls(sid, 0)
 			continue
 		var prop := PlacedPropRuntime.find_by_prop_id(main, prop_id)
 		if prop == null:
-			if stype == "restroom":
+			if stalled:
 				registry.set_stalls(sid, 0)
 			continue
 		var spots: Array = []
@@ -1945,6 +1947,10 @@ func _resolve_seat_spots(main: Node, registry: SpaceRegistry) -> void:
 			spots = furniture_spots(prop)
 		elif prop.model_id == ToiletBankBuilder.MODEL_ID:
 			spots = toilet_spots(prop)
+			_queue_lines[sid] = _queue_line_world(prop)
+			_bank_space[prop_id] = sid
+		elif prop.model_id == ShowerHouseBuilder.MODEL_ID:
+			spots = shower_spots(prop)
 			_queue_lines[sid] = _queue_line_world(prop)
 			_bank_space[prop_id] = sid
 		elif VehicleBuilder.handles(prop.model_id):
@@ -1963,6 +1969,10 @@ func _resolve_seat_spots(main: Node, registry: SpaceRegistry) -> void:
 				if str((sp as Dictionary).get("kind", "")) == NpcSeatPose.KIND_TOILET:
 					n += 1
 			registry.set_stalls(sid, n)
+		elif stype == "shower":
+			# A shower house's stalls; a vehicle's shower (one fixture spot)
+			# stays an ordinary space.
+			registry.set_stalls(sid, spots.size() if prop.model_id == ShowerHouseBuilder.MODEL_ID else 0)
 	_ensure_restroom_banks(main, registry)
 
 
@@ -1978,6 +1988,11 @@ static func toilet_spots(prop: Node3D) -> Array:
 	if node == null:
 		return []
 	return _spots_world(node, node.get_meta("stall_spots", []))
+
+
+## A shower house's stalls in world space (kind "stand", elev = the deck).
+static func shower_spots(prop: Node3D) -> Array:
+	return toilet_spots(prop)
 
 
 ## Stalls for a prop that is not a toilet bank: `n` seats side by side across
@@ -2044,6 +2059,11 @@ func queue_spot(sid: String, k: int) -> Variant:
 
 ## Which stalls of a toilet bank are taken right now (for its doors and flags).
 func toilet_stalls_busy(prop_id: String) -> Array:
+	return stalls_busy(prop_id)
+
+
+## Which stalls of a toilet bank or a shower house are taken right now.
+func stalls_busy(prop_id: String) -> Array:
 	var sid := str(_bank_space.get(prop_id, ""))
 	var reg: SpaceRegistry = _registry_ref
 	if sid.is_empty() or reg == null:
@@ -2072,18 +2092,19 @@ var _registry_ref: SpaceRegistry = null
 
 
 ## A restroom AREA gets a real toilet bank placed in it (the player's choice:
-## restrooms are stalls). Idempotent: the space remembers its bank
-## (`bank_prop`); a bank the player deletes is not put back — the area is
-## left with no stalls and a warning in the space list — unless they clear
-## the space's `bank_prop` themselves. Stalls = the area's `units` (festival
-## mode sets them), else 4. Doors face the site's middle.
+## restrooms are stalls), a shower AREA a shower house. Idempotent: the space
+## remembers its building (`bank_prop`); one the player deletes is not put
+## back — the area is left with no stalls and a warning in the space list —
+## unless they clear the space's `bank_prop` themselves. Stalls = the area's
+## `units` (festival mode sets them), else 4. Doors face the site's middle.
 func _ensure_restroom_banks(main: Node, registry: SpaceRegistry) -> void:
 	_registry_ref = registry
 	if main == null or not main.has_node("Terrain/TerrainLoader") and _find_terrain_loader(main) == null:
 		return
 	for item in registry.spaces:
 		var space: Dictionary = item
-		if str(space.get("space_type", "")) != "restroom":
+		var stype := str(space.get("space_type", ""))
+		if stype != "restroom" and stype != "shower":
 			continue
 		var tgt: Dictionary = space.get("target", {})
 		if str(tgt.get("kind", "")) != "area" or space.has("bank_prop"):
@@ -2092,14 +2113,18 @@ func _ensure_restroom_banks(main: Node, registry: SpaceRegistry) -> void:
 		var p: Variant = registry.cached_position(sid)
 		if not (p is Vector2):
 			continue
+		var shower := stype == "shower"
 		var n := clampi(int(space.get("units", 0)) if int(space.get("units", 0)) > 1 else 4,
-			1, ToiletBankBuilder.MAX_STALLS)
+			1, ShowerHouseBuilder.MAX_STALLS if shower else ToiletBankBuilder.MAX_STALLS)
 		var centre := SiteCentre.xz(main)
 		var dir: Vector2 = centre - (p as Vector2)
 		var yaw_deg := rad_to_deg(atan2(dir.x, dir.y)) if dir.length() > 1.0 else 0.0
-		var res := PlacedPropService.place_model_at_xz(main, ToiletBankBuilder.MODEL_ID,
-			(p as Vector2).x, (p as Vector2).y, {"yaw": yaw_deg, "toilet_spec": {"stalls": n},
-				"restroom_for": sid})
+		var extra := {"yaw": yaw_deg, "toilet_spec": {"stalls": n}, "restroom_for": sid}
+		if shower:
+			extra = {"yaw": yaw_deg, "shower_spec": {"stalls": n}, "showers_for": sid}
+		var res := PlacedPropService.place_model_at_xz(main,
+			ShowerHouseBuilder.MODEL_ID if shower else ToiletBankBuilder.MODEL_ID,
+			(p as Vector2).x, (p as Vector2).y, extra)
 		# Remember even a failed placement (no layer): never retry every second.
 		registry.set_space_fields(sid, {"bank_prop": str(res.get("prop_id", "")) if bool(res.get("ok", false)) else ""})
 

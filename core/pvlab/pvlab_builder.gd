@@ -314,13 +314,17 @@ static func module_mesh(module: Dictionary, overlay: bool = false) -> ArrayMesh:
 		var bp := Vector3(float(buv.x) * w, y_back - bsz.y * 0.5, float(buv.y) * h)
 		_box(plastic, bp, bsz)
 		_box(plastic, bp + Vector3(0, -bsz.y * 0.5 - 0.0015, 0), Vector3(bsz.x * 0.7, 0.003, bsz.z * 0.7))
+	# The lead connectors come from the shared connector kit (mm, local +Z
+	# along the lead, out of the cable).
+	var kg := BattParts.Geo.new()
+	var ckind := str(m["jbox"]["connector"])
 	for kname in ["plus", "minus"]:
 		var uv: Vector2 = jb[kname]
 		var sx2 := 1.0 if kname == "plus" else -1.0
 		var gland := Vector3(uv.x * w + sx2 * 0.02, y_back - 0.01, uv.y * h + bsz.z * 0.5)
 		_cyl(plastic, gland, gland + Vector3(0, 0, 0.012), 0.006, 8)
 		var cp := Vector3(uv.x * w + sx2 * 0.07, y_back - 0.012, uv.y * h + 0.04)
-		_cyl(conn, cp + Vector3(0, 0, -0.03), cp + Vector3(0, 0, 0.03), 0.009, 8)
+		_lead_connector(kg, ckind, kname == "plus", (cp + Vector3(0, 0, -0.03)) * 1000.0)
 		_box(plastic, Vector3(uv.x * w + sx2 * 0.045, y_back - 0.008, uv.y * h + 0.03),
 			Vector3(0.05, 0.006, 0.006))
 	var mesh := ArrayMesh.new()
@@ -332,6 +336,7 @@ static func module_mesh(module: Dictionary, overlay: bool = false) -> ArrayMesh:
 	var cc: Color = (PvLabModule.CONNECTORS[str(m["jbox"]["connector"])] as Dictionary)["color"]
 	_commit_to(mesh, conn, _std(cc if str(m["frame"]["style"]) != "clips" else Color(0.8, 0.82, 0.84), 0.2, 0.5))
 	_commit_to(mesh, metal, _std(Color(0.78, 0.8, 0.82), 0.9, 0.3))
+	ConnectorParts.append_to(mesh, kg)
 	if _mesh_cache.size() > 48:
 		_mesh_cache.clear()
 	_mesh_cache[key] = mesh
@@ -371,6 +376,23 @@ static func _face_poly(acc: _Acc, ol: PackedVector2Array, w: float, h: float, y:
 		var b := ol[(i + 1) % ol.size()]
 		acc.tri(Vector3(0, y, 0), Vector3(a.x, y, a.y), Vector3(b.x, y, b.y), nrm, uv.call(Vector2.ZERO),
 			uv.call(a), uv.call(b))
+
+
+## A module lead's connector at `at` (mm, the cable's end), the lead running
+## along +Z. Two-pole kinds (XT60, SAE) sit on the + lead only.
+static func _lead_connector(kg: BattParts.Geo, kind: String, plus: bool, at: Vector3) -> void:
+	var xf := Transform3D(Basis(Vector3(-1, 0, 0), Vector3(0, -1, 0), Vector3(0, 0, 1)), at)
+	match kind:
+		"mc4":
+			ConnectorParts.build(kg, "mc4_inline", xf, {"sex": "female" if plus else "male"})
+		"mc4_evo2":
+			ConnectorParts.build(kg, "mc4_evo2_inline", xf, {"sex": "female" if plus else "male"})
+		"anderson":
+			ConnectorParts.build(kg, "powerpole_30", xf, {"single": true,
+				"colors": [ConnectorCatalog.C_RED if plus else ConnectorCatalog.C_BLACK]})
+		"xt60", "sae":
+			if plus:
+				ConnectorParts.build(kg, kind, xf)
 
 
 ## A closed cylinder from a to b.

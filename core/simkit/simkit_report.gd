@@ -4,7 +4,9 @@ extends RefCounted
 ## `assess(year, design)` -> {verdict, checks, ...}; `markdown(...)` the
 ## readable sheet; `csv(...)` one row per sim day.
 
-const WASTE_KINDS := ["greywater", "blackwater", "food_waste", "packaging_waste",
+## Brownwater (a urine-diverting toilet's flush) is waste like blackwater:
+## before it was listed, a full toilet tank never failed a design.
+const WASTE_KINDS := ["greywater", "blackwater", "brownwater", "food_waste", "packaging_waste",
 	"plastic_waste", "manure", "urine", "brine"]
 const SUPPLY_KINDS := ["water", "food", "meal"]
 

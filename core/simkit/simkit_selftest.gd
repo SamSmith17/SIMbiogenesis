@@ -12,8 +12,9 @@ const Compact := preload("res://core/simkit/simkit_compact.gd")
 const Inbox := preload("res://core/simkit/simkit_inbox.gd")
 const Catalog := preload("res://core/simkit/simkit_catalog.gd")
 const Site := preload("res://core/simkit/simkit_site.gd")
+const Report := preload("res://core/simkit/simkit_report.gd")
 
-const EXPECTED_CHECKS := 39
+const EXPECTED_CHECKS := 41
 
 var _n := 0
 var _fails := 0
@@ -26,6 +27,7 @@ func _initialize() -> void:
 	_test_inbox()
 	_test_catalog()
 	_test_mode()
+	_test_waste_kinds()
 	if _n != EXPECTED_CHECKS:
 		_check(false, "ran %d checks, expected %d (a test function aborted?)" % [_n, EXPECTED_CHECKS])
 	print("SIMKIT SELFTEST %s (%d checks, %d failed)" % ["PASS" if _fails == 0 else "FAIL", _n, _fails])
@@ -164,3 +166,11 @@ func _rm(dir: String) -> void:
 	for f in d.get_files():
 		d.remove(f)
 	DirAccess.remove_absolute(dir)
+
+
+## Every toilet stream counts as waste in "no waste overflowed": brownwater
+## (urine-diverting toilets) was missing, so a full toilet tank passed.
+func _test_waste_kinds() -> void:
+	_check("brownwater" in Report.WASTE_KINDS, "brownwater is a waste kind")
+	_check("blackwater" in Report.WASTE_KINDS and "urine" in Report.WASTE_KINDS,
+		"blackwater and urine are waste kinds")

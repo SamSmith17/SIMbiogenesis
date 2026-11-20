@@ -177,6 +177,12 @@ func _update_context() -> void:
 			numeric_values["sensor.load_power"] = float(solar_ui.current_load_kw) * 1000.0
 			# Total AC output in watts for overload-style numeric triggers
 			numeric_values["sensor.total_ac_load"] = solar_ui.current_load_kw * 1000.0
+	# The site's outdoor air temperature (°C) at the clock's instant.
+	if _main_node != null and is_instance_valid(_main_node) and _context.has("abs_hours"):
+		var t_out := AutomationSim.outdoor_temp_c(_main_node.get("clock") as Object,
+			float(_context["abs_hours"]))
+		if is_finite(t_out):
+			numeric_values[AutomationSim.OUTDOOR_TEMP_KEY] = t_out
 
 	# Graph resource state (tank levels %, starvation, overflow) so automations
 	# can react to the resource sim — e.g. "tank.water.level < 20 → turn off pump".

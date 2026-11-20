@@ -234,6 +234,9 @@ func before_step(t: float, soc_kwh: float, ac_on: bool) -> void:
 		numeric["sensor.solar_power"] = _last_solar_kw * 1000.0
 		numeric["sensor.load_power"] = _last_load_kw * 1000.0
 		numeric["sensor.total_ac_load"] = _last_load_kw * 1000.0
+		var t_out := AutomationSim.outdoor_temp_c(_clock_ref, t)
+		if is_finite(t_out):
+			numeric[AutomationSim.OUTDOOR_TEMP_KEY] = t_out
 		var ctx := {"numeric": numeric, "states": _node_states, "sun": sun_times(t),
 			"weekday": weekday(t)}
 		automations.step(t0, t, ctx, apply_command)

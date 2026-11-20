@@ -330,6 +330,14 @@ const KINDS := {
 	"wood_vinegar": {"kg_per_unit": 1.02, "mix": {"acetic": 0.07, "methanol": 0.015,
 		"levoglucosan": 0.04, "guaiacol": 0.015}, "rest": "H2O", "family": "water", "grade": 0,
 		"src": "Mathew & Zakaria 2015, est split", "est": true},
+	# Wood vinegar freeze-concentrated: per litre of vinegar (1.02 kg) 0.62 kg
+	# of water leaves as ice and 98 % of the solutes stay in the liquid (the
+	# ice drained and its first melt returned, est), leaving 0.40 kg of
+	# concentrate (~1.05 kg/L): the vinegar's solutes at 2.55 × their share.
+	# Its freezing point is ~ -10 °C, inside a chest freezer's -18 °C.
+	"wood_acid": {"kg_per_unit": 1.05, "mix": {"acetic": 0.1785, "methanol": 0.0383,
+		"levoglucosan": 0.102, "guaiacol": 0.0383}, "rest": "H2O", "family": "organic",
+		"src": "wood_vinegar × 2.55 (freeze concentration), est", "est": true},
 	# Allothermal pyrolysis gas, dry, by mole: ~10 MJ/Nm³ like the TC Process
 	# Lab's runs (7–13 MJ/Nm³). est
 	"woodgas": {"moles": {"CO": 0.30, "CO2": 0.25, "H2": 0.20, "CH4": 0.12, "C2H4": 0.03, "N2": 0.10},

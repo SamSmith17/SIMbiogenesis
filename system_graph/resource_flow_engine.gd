@@ -3777,9 +3777,7 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 				continue
 			any_io_rate = true
 			var out_kind := ResourceKinds.normalize_kind(str(outp.get("kind", "")))
-			var tank_id := _tank_at_port(proc_id, "res_out_%d" % i, false)
-			if tank_id.is_empty():
-				tank_id = _tank_at_port(proc_id, "output", false)
+			var tank_id := _out_port_tank(proc_id, i, outp)
 			if tank_id.is_empty():
 				if not out_kind.is_empty() and not unconnected_out.has(out_kind):
 					unconnected_out.append(out_kind)
@@ -3927,9 +3925,7 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 		var portion: float = (rate * throughput) if io_absolute \
 				else throughput * (rate / maxf(out_total, 0.001))
 		portion *= est
-		var tank_id := _tank_at_port(str(item.get("id", "")), "res_out_%d" % i, false)
-		if tank_id.is_empty():
-			tank_id = _tank_at_port(str(item.get("id", "")), "output", false)
+		var tank_id := _out_port_tank(str(item.get("id", "")), i, outp)
 		if tank_id.is_empty():
 			continue
 		net_rates[tank_id] = float(net_rates.get(tank_id, 0.0)) + portion
@@ -4765,7 +4761,12 @@ func _process_habitat(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 			if ideal_out:
 				ideal_exports[kind] = float(ideal_exports.get(kind, 0.0)) + credit
 				flows_out[kind] = float(flows_out.get(kind, 0.0)) + credit
-			continue
+				continue
+			# People do not stop using the toilet because its tank is full:
+			# the waste goes in and the tank overflows (its timeline books
+			# the overflow). It used to vanish here unrecorded, so a site
+			# whose brownwater tank sat full for weeks still read "no waste
+			# overflowed".
 		net_rates[tank_id] = float(net_rates.get(tank_id, 0.0)) + credit
 		flows_out[kind] = float(flows_out.get(kind, 0.0)) + credit
 		for conn: Dictionary in _connections_from_handle(iid, "res_out_%d" % i):
@@ -5417,6 +5418,28 @@ func _tank_at_port(proc_id: String, handle_id: String, want_input: bool) -> Stri
 				if not tgt2.is_empty() and str(tgt2.get("type", "")) == "resource":
 					return str(tgt2.get("id", ""))
 	return ""
+
+
+## The tank a proportional processor's output `i` delivers into. A normal
+## output falls back to the legacy single "output" handle and then to any
+## store wired out of the node (old saves wired one port). An OPTIONAL output
+## (a filter's backwash, a kitchen's washing-up water, a reactor's cooling
+## heat) takes only a tank wired to its own port: with the fallback it was
+## handed the node's OTHER output store, so a Greywater Filter's 3 L/h
+## backwash capped the whole filter at 3 L/h and was poured into the
+## reclaimed-water tank, and a Kitchen's washing-up litres landed in the meal
+## counter.
+func _out_port_tank(proc_id: String, i: int, outp: Dictionary) -> String:
+	if bool(outp.get("optional", false)):
+		for conn: Dictionary in _connections_from_handle(proc_id, "res_out_%d" % i):
+			var tgt := _model.get_item(str(conn.get("target_item_id", "")))
+			if not tgt.is_empty() and str(tgt.get("type", "")) == "resource":
+				return str(tgt.get("id", ""))
+		return ""
+	var tank_id := _tank_at_port(proc_id, "res_out_%d" % i, false)
+	if tank_id.is_empty():
+		tank_id = _tank_at_port(proc_id, "output", false)
+	return tank_id
 
 
 func _connections_from_handle(item_id: String, handle_id: String) -> Array:

@@ -2196,6 +2196,7 @@ func _numeric_signal_options() -> Array:
 		{"label": "Battery SOC %", "key": "sensor.battery_level"},
 		{"label": "Solar power (W)", "key": "sensor.solar_power"},
 		{"label": "Load power (W)", "key": "sensor.load_power"},
+		{"label": "Outdoor temperature (°C)", "key": AutomationSim.OUTDOOR_TEMP_KEY},
 	]
 	for n: Dictionary in _iter_graph_neighbors():
 		var nid: String = str(n.get("id", ""))

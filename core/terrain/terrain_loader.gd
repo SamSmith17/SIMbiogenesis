@@ -6362,7 +6362,7 @@ func nav_solid_footprints(enterable: Dictionary = {}) -> Array:
 				continue
 			# A toilet bank's stalls are walked into through their doors
 			# (the agents route door -> seat themselves).
-			if str(rec.get("model_id", "")) == ToiletBankBuilder.MODEL_ID:
+			if str(rec.get("model_id", "")) in [ToiletBankBuilder.MODEL_ID, ShowerHouseBuilder.MODEL_ID]:
 				continue
 			# A structure with an opening in the ground: its walls and door
 			# come from earthworks_nav_entries instead.
@@ -15734,7 +15734,10 @@ func duplicate_prop_record(copy: Dictionary, rebuild: bool = true) -> String:
 			# A copy is its own thing: no delivery, hitch, schedule or load.
 			"delivery", "towing", "hitched_to", "arrival", "departure", "fork_load_id",
 			"stowed_in", "stow_local", "unload_rank", "delivery_id", "delivery_slot", "camp_id",
-			"dup_of"]:
+			"dup_of",
+			# Nor does it serve the restroom / shower area its source was
+			# placed for (it is tagged a space of its own).
+			"restroom_for", "showers_for"]:
 		patch.erase(k)
 	if not patch.is_empty():
 		_placed_prop_layer.update_prop(new_id, patch)

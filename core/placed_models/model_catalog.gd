@@ -252,6 +252,8 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		return FirepitBuilder.build_node(extras)
 	if model_id == ToiletBankBuilder.MODEL_ID:
 		return ToiletBankBuilder.build_node(extras.get("toilet_spec", extras) as Dictionary)
+	if model_id == ShowerHouseBuilder.MODEL_ID:
+		return ShowerHouseBuilder.build_node(extras.get("shower_spec", {}) as Dictionary)
 	if model_id == CampKitchenBuilder.MODEL_ID:
 		return CampKitchenBuilder.build_node(extras.get("kitchen_spec", {}) as Dictionary)
 	if model_id == SiteGateBuilder.MODEL_ID:
@@ -574,6 +576,13 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "toilet_bank", "label": "Toilet bank",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 2.3},
+		# Procedural SHOWER HOUSE: curtained stalls on a timber deck, a shed
+		# roof and a solar water tank (ShowerHouseBuilder); one person per
+		# stall, a first-come line in front. Placing one tags it a shower;
+		# a shower AREA gets one placed in it.
+		{"id": "shower_house", "label": "Shower house",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 2.9},
 		# Procedural CAMP KITCHEN: the stations a meal is cooked at (store,
 		# prep, stove, wash, serving table; CampKitchenBuilder) under a
 		# shade. Placing one tags a kitchen space; cooks work the meal there

@@ -154,7 +154,9 @@ patch can change.
 ### The design format
 
 A design is data: library presets by label, inspector fields under `set`, wires
-by kind, automations as WHEN / IF / THEN cards that switch nodes, and
+by kind, automations as WHEN / IF / THEN cards that switch nodes (they can read
+`sensor.battery_level`, `sensor.solar_power`, `sensor.load_power`,
+`sensor.outdoor_temperature` in °C and `tank.<node id>.level`), and
 `logic`: a list of control blocks (on / off band, PID, interlock, timer,
 counter, sequence, duty pair) whose tags name design nodes
 (`tank.<node id>.level`, `node.<node id>`, `valve.<node id>.open`); the

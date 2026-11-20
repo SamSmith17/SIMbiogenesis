@@ -480,6 +480,102 @@ const PROCESSORS: Array = [
 		},
 	},
 	{
+		# The Biochar Reactor with its heating elements swapped for a drip-fed
+		# oil burner under a fire jacket: it burns the tar it makes to heat the
+		# next charge (a fired retort; the Adam and Exeter retorts burn their
+		# pyrolysis vapours under the drum the same way). The electric reactor
+		# puts ~1.1–1.2 kW into the charge; a fired jacket passes about half
+		# of the fuel's heat (est), so it burns ~2.4 kW of tar at 16 MJ/kg
+		# (Bridgwater 2012) = 0.55 kg/h at these rates. A lab batch (10 kg of
+		# chips, 4.5 kWh: core/simkit/recipes/biochar_reactor_tarfired.json)
+		# burns 2.0 of the 2.6 kg of tar its charge gives back.
+		# 90 W runs the blower, the drip pump and the controller. Start it
+		# with a few kilograms of tar from an electric run. The flue's CO2 and
+		# water close the balance (air "burn").
+		"type": "processor", "label": "Biochar Reactor (tar-fired)", "icon": "🔥",
+		"width": 150.0, "height": 140.0,
+		"specs": {
+			"name": "Biochar Reactor (tar-fired)", "watts": 90.0, "cost": 2600.0,
+			"energy_source": "ac",
+			"efficiency": 0.88,
+			"unit_ops": ["pyrolysis", "combustion"],
+			"air": "burn",
+			"daily_note": "Biomass 8 kg/h + tar 0.55 kg/h + 90 W → 2.24 kg/h biochar + 0.5 m³/h gas + 2.5 L/h wood vinegar + 2.5 kg/h tar. Needs a few kg of tar to light.",
+			"inputs": [
+				{"kind": "biomass", "rate": 8.0, "unit": "kg/h"},
+				{"kind": "tar", "rate": 0.55, "unit": "kg/h", "label": "Burner fuel"},
+			],
+			"outputs": [
+				{"kind": "biochar", "rate": 2.24, "unit": "kg/h"},
+				{"kind": "thermal", "rate": 1.6, "unit": "kW", "optional": true, "label": "Cooling water heat"},
+				{"kind": "woodgas", "rate": 0.5, "unit": "m³/h"},
+				{"kind": "wood_vinegar", "rate": 2.5, "unit": "L/h"},
+				{"kind": "tar", "rate": 2.5, "unit": "kg/h"},
+			],
+			"model_id": "tclab_biochar_reactor",
+		},
+	},
+	{
+		# Wood vinegar is ~78 % water. Frozen slowly in a chest freezer, it
+		# grows ice that leaves the acetic acid, the methanol and the dissolved
+		# tars in the liquid (freeze concentration, as done for fruit juice and
+		# table vinegar). Drain the concentrate, let the first melt run back
+		# into the next batch, and the rest of the ice melts to water clean
+		# enough for the beds: per litre of vinegar 0.62 L of water and 0.38 L
+		# of wood acid (~18 % acetic acid). Distilling would not do it: the
+		# acid boils off with the water (UnitOps "distillation").
+		# Power: 0.62 kg of ice a litre at ~0.08 kWh/kg (a freezer's COP ~1.5
+		# in desert heat, est) = 50 Wh/L; a 50 L freezer working through 2 L
+		# an hour draws ~110 W.
+		"type": "processor", "label": "Wood Vinegar Freeze Concentrator", "icon": "🧊",
+		"width": 150.0, "height": 120.0,
+		"specs": {
+			"name": "Wood Vinegar Freeze Concentrator", "watts": 110.0, "cost": 450.0,
+			"energy_source": "ac",
+			"efficiency": 1.0,
+			"unit_ops": ["freeze_concentration"],
+			"daily_note": "Wood vinegar 2 L/h + 110 W → 1.24 L/h clean melt water for the beds + 0.76 L/h wood acid (~18 % acetic).",
+			"inputs": [{"kind": "wood_vinegar", "rate": 2.0, "unit": "L/h"}],
+			"outputs": [
+				{"kind": "irrigation_water", "rate": 1.24, "unit": "L/h", "label": "Ice melt"},
+				{"kind": "wood_acid", "rate": 0.762, "unit": "L/h"},
+			],
+		},
+	},
+	{
+		# What the acid is good for: methane. Acetic acid is what methanogens
+		# eat (CH3COOH → CH4 + CO2), and the methanol and sugar tars go the same
+		# way (Buswell). Wood vinegar's phenols poison a plain digester; a bed of
+		# biochar takes them up and lets it run (Torri & Fabbri 2014,
+		# Bioresource Technology 172: biochar enables anaerobic digestion of the
+		# aqueous phase of pyrolysis). An insulated 1 m³ tank fed 0.15 L/h of
+		# concentrate (~1.7 kg COD per m³ a day): 80 % of the Buswell methane
+		# (est), 0.027 m³/h of biogas ≈ 160 W of heat, the spent char back to
+		# the char store (the phenols it holds, a few grams an hour, are left
+		# to the air side: the char's own make-up does not carry them), the
+		# treated water to the beds.
+		# No temperature model: keep it in the sun or with the compost.
+		"type": "processor", "label": "Wood Acid Digester (1 m³, biochar bed)", "icon": "♻",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Wood Acid Digester", "watts": 0.0, "cost": 900.0,
+			"energy_source": "",
+			"efficiency": 1.0,
+			"unit_ops": ["anaerobic_digestion"],
+			"air": "anaerobic",
+			"daily_note": "Wood acid 0.15 L/h + biochar 0.02 kg/h → 0.027 m³/h biogas + 0.1 L/h treated water + 0.02 kg/h spent char.",
+			"inputs": [
+				{"kind": "wood_acid", "rate": 0.15, "unit": "L/h"},
+				{"kind": "biochar", "rate": 0.02, "unit": "kg/h", "label": "Char bed top-up"},
+			],
+			"outputs": [
+				{"kind": "biogas", "rate": 0.027, "unit": "m³/h"},
+				{"kind": "irrigation_water", "rate": 0.10, "unit": "L/h", "label": "Treated water"},
+				{"kind": "biochar", "rate": 0.02, "unit": "kg/h", "label": "Spent char"},
+			],
+		},
+	},
+	{
 		# The tri-clamp reactor run as a plastic retort (TcPresets.plastic_retort):
 		# shredded polyolefin melts, cracks, and the condensers drop oil and wax;
 		# the light gas leaves the last column. The rates below are a fixed guess
@@ -570,6 +666,10 @@ const PROCESSORS: Array = [
 			"energy_source": "ac",
 			"efficiency": 0.85, "energy_wh_per_unit": 0.8,
 			"unit_ops": ["filtration"],
+			# io_absolute, as the RO Purifier: each port moves its own rate.
+			# Proportional, the 3 L/h backwash min-squashed the whole filter
+			# to 3 L/h the moment it was wired to a tank.
+			"io_absolute": true,
 			# 15 % of the feed backwashes the media and carries what it caught;
 			# optional: unwired, it drains on site.
 			"inputs": [{"kind": "greywater", "rate": 20.0, "unit": "L/h"}],
@@ -1393,6 +1493,17 @@ const RESOURCES: Array = [
 			"name": "Salt Pan", "resource_kind": "brine",
 			"capacity": "500 L", "capacity_qty": 500.0, "capacity_unit": "L",
 			"level": 0.0, "cost": 60.0,
+		},
+	},
+	{
+		# A lidded HDPE drum for the Freeze Concentrator's wood acid (~18 %
+		# acetic acid: HDPE holds it; keep it out of steel).
+		"type": "resource", "label": "Wood Acid Drum (200 L)", "icon": "🛢",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Wood Acid Drum", "resource_kind": "wood_acid",
+			"capacity": "200 L", "capacity_qty": 200.0, "capacity_unit": "L",
+			"level": 0.0, "cost": 90.0,
 		},
 	},
 	{

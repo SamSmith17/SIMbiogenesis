@@ -32,6 +32,7 @@ func _initialize() -> void:
 	_test_resource_migration()
 	_test_habitat_24h_depletion()
 	_test_habitat_waste_mass_balance()
+	_test_habitat_full_waste_tank_overflows()
 	_test_habitat_starvation()
 	_test_habitat_occupants_scale()
 	_test_habitat_scrub_rewind()
@@ -55,6 +56,7 @@ func _initialize() -> void:
 	_test_ac_power_wire_bidirectional()
 	_test_ac_power_through_compound()
 	_test_unconnected_output_flagged()
+	_test_optional_output_drains()
 	_test_node_state_reasons()
 	_test_habitat_node_state()
 	_test_render_step_determinism()
@@ -131,7 +133,7 @@ func _test_isru_catalog_kinds() -> void:
 	# port rates where their ports differ (the min+proportion path would
 	# squash them — see _process_processor's io_absolute comment).
 	for label2: String in ["RO Purifier", "Water Distiller", "Greenhouse Grow Bed",
-			"PP Injection Molder", "Soil Blender"]:
+			"PP Injection Molder", "Soil Blender", "Greywater Filter"]:
 		var s := _preset_specs(label2)
 		_check("preset '%s' exists" % label2, not s.is_empty())
 		_check("preset '%s' io_absolute" % label2, bool(s.get("io_absolute", false)))
@@ -188,6 +190,76 @@ func _test_ro_purifier_mass_balance() -> void:
 	var moved_out := perm * 1000.0 + conc * 1000.0
 	_check("RO 1h: mass conserved", absf(moved_in - moved_out) < 0.5,
 		"in=%.2f out=%.2f" % [moved_in, moved_out])
+
+
+## An OPTIONAL output (the Greywater Filter's backwash) left unwired drains on
+## site: it must not borrow the node's other output tank. With that fallback
+## the filter's 3 L/h backwash capped the whole filter at 3 L/h (min-squash)
+## and its litres landed in the reclaimed-water tank. The filter is
+## io_absolute (each port its own rate), so one filter for one hour treats
+## 20 × 0.85 = 17 L of greywater and makes 17 × 0.85 = 14.45 L of water; the
+## backwash (2.55 L) drains unwired, and with a tank on its port it lands
+## there without squashing the filter.
+func _test_optional_output_drains() -> void:
+	var specs := _preset_specs("Greywater Filter")
+	if specs.is_empty():
+		_check("Greywater Filter preset exists", false)
+		return
+	specs["current_state"] = "on"
+	var model = GraphModelScript.new()
+	model.add_item({"id": "grey", "type": "resource", "specs": {
+		"name": "Greywater", "resource_kind": "greywater",
+		"capacity_qty": 1000.0, "capacity_unit": "L", "level": 1.0}})
+	model.add_item({"id": "gf", "type": "processor", "specs": specs})
+	model.add_item({"id": "clean", "type": "resource", "specs": {
+		"name": "Reclaimed", "resource_kind": "water",
+		"capacity_qty": 1000.0, "capacity_unit": "L", "level": 0.0}})
+	model.add_item({"id": "ctrl", "type": "controller", "specs": {"name": "Controller"}})
+	model.add_connection({"id": "c0", "polarity": "resource", "resource_type": "greywater",
+		"source_item_id": "grey", "source_handle_id": "output",
+		"target_item_id": "gf", "target_handle_id": "res_in_0"})
+	model.add_connection({"id": "c1", "polarity": "resource", "resource_type": "water",
+		"source_item_id": "gf", "source_handle_id": "res_out_0",
+		"target_item_id": "clean", "target_handle_id": "input"})
+	model.add_connection({"id": "c_pwr", "polarity": "ac",
+		"source_item_id": "ctrl", "source_handle_id": "acOutput",
+		"target_item_id": "gf", "target_handle_id": "power_in"})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	engine.power_available_override = 1
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(1.0, 1.0)
+	var grey_l := (1.0 - _tank_level(model, "grey")) * 1000.0
+	var clean_l := _tank_level(model, "clean") * 1000.0
+	_check("greywater filter 1h: treats 17 L, not the 3 L/h backwash",
+		absf(grey_l - 17.0) < 0.5, "treated=%.2f L" % grey_l)
+	_check("greywater filter 1h: 14.45 L of water out", absf(clean_l - 14.45) < 0.5,
+		"out=%.2f L" % clean_l)
+	_check("greywater filter 1h: backwash did not land in the water tank",
+		clean_l < grey_l - 1.0, "in=%.2f out=%.2f" % [grey_l, clean_l])
+	# The backwash wired to its own tank: the filter still treats 17 L/h.
+	model.add_item({"id": "bw", "type": "resource", "specs": {
+		"name": "Backwash", "resource_kind": "greywater",
+		"capacity_qty": 1000.0, "capacity_unit": "L", "level": 0.0}})
+	model.add_connection({"id": "c2", "polarity": "resource", "resource_type": "greywater",
+		"source_item_id": "gf", "source_handle_id": "res_out_1",
+		"target_item_id": "bw", "target_handle_id": "input"})
+	var engine2 = ResourceFlowEngineScript.new()
+	engine2.setup(model, null)
+	engine2.power_available_override = 1
+	engine2.simulate_step_for_test(1.0, 1.0)
+	var grey0 := _tank_level(model, "grey") * 1000.0
+	var clean0 := _tank_level(model, "clean") * 1000.0
+	engine2.simulate_step_for_test(2.0, 2.0)
+	var grey2 := (_tank_level(model, "grey") * 1000.0)
+	var bw_l := _tank_level(model, "bw") * 1000.0
+	_check("greywater filter, backwash wired: still treats 17 L/h",
+		absf((grey0 - grey2) - 17.0) < 0.5, "treated=%.2f L" % (grey0 - grey2))
+	_check("greywater filter, backwash wired: 2.55 L/h to the backwash tank",
+		absf(bw_l - 2.55) < 0.3, "backwash=%.2f L" % bw_l)
+	_check("greywater filter, backwash wired: water out unchanged",
+		absf((_tank_level(model, "clean") * 1000.0 - clean0) - 14.45) < 0.5,
+		"out=%.2f L" % (_tank_level(model, "clean") * 1000.0 - clean0))
 
 
 ## Soil Blender (passive, io_absolute): runs with no power wire at all, and
@@ -453,7 +525,7 @@ func _test_resource_migration() -> void:
 
 ## Build a minimal habitat graph: water + food in, grey/black/biomass out.
 func _build_habitat_graph(occupants: int = 1, water_level: float = 1.0,
-		food_level: float = 0.8) -> Dictionary:
+		food_level: float = 0.8, black_level: float = 0.0) -> Dictionary:
 	var model = GraphModelScript.new()
 	model.add_item({
 		"id": "hab", "type": "processor", "x": 0.0, "y": 0.0,
@@ -501,7 +573,7 @@ func _build_habitat_graph(occupants: int = 1, water_level: float = 1.0,
 		"width": 90.0, "height": 100.0,
 		"specs": {
 			"name": "Black", "resource_kind": "blackwater",
-			"capacity_qty": 100.0, "capacity_unit": "L", "level": 0.0,
+			"capacity_qty": 100.0, "capacity_unit": "L", "level": black_level,
 		},
 	})
 	model.add_item({
@@ -583,6 +655,23 @@ func _test_habitat_waste_mass_balance() -> void:
 	var bio_kg := _tank_level(model, "bio") * 50.0
 	_check("biomass scraps ≤ food consumed", bio_kg <= 1.5 + 0.05, "bio=%.3f" % bio_kg)
 	_check("biomass ≈ 20% of food", absf(bio_kg - 0.3) < 0.05, "bio=%.3f" % bio_kg)
+
+
+## A full waste tank overflows: the people keep flushing and the tank's
+## timeline books what spilled. It used to vanish unrecorded, so "no waste
+## overflowed" passed on a site whose toilet tank sat full for weeks.
+func _test_habitat_full_waste_tank_overflows() -> void:
+	var g := _build_habitat_graph(1, 1.0, 0.8, 1.0)
+	var model = g["model"]
+	var engine = g["engine"]
+	engine.simulate_step_for_test(0.0, 0.0)
+	engine.simulate_step_for_test(24.0, 24.0)
+	var sp: Dictionary = model.get_item("black").get("specs", {}) as Dictionary
+	var spilled := float(sp.get("overflow_qty", 0.0))
+	_check("full blackwater tank stays full", _tank_level(model, "black") > 0.99,
+		"level=%.3f" % _tank_level(model, "black"))
+	_check("full blackwater tank books the overflow (~10 L in 24 h)",
+		absf(spilled - 10.0) < 1.0, "overflow=%.2f" % spilled)
 
 
 func _test_habitat_starvation() -> void:

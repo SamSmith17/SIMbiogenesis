@@ -107,6 +107,11 @@ const CURATED_MODELS := {
 	# flatbed; the curated envelope is the default four in a row.
 	"toilet_bank": {"w_m": 4.9, "d_m": 1.22, "h_m": 2.3, "mass_kg": 300.0,
 		"form": "crate", "this_side_up": true, "source": "estimated"},
+	# Shower house: a timber kit (deck, frames, partitions, a tin roof), the
+	# fittings and a 500 L poly tank, ~420 kg for the default four stalls
+	# (est), shipped as a bundle.
+	"shower_house": {"w_m": 2.5, "d_m": 1.2, "h_m": 0.9, "mass_kg": 420.0,
+		"form": "bundle", "source": "estimated"},
 	# Camp kitchen: folding tables, a two-burner stove, basins, pots and a
 	# 5 x 3.4 m shade, packed into crates (~180 kg, an estimate).
 	"camp_kitchen": {"w_m": 2.0, "d_m": 1.0, "h_m": 1.0, "mass_kg": 180.0,

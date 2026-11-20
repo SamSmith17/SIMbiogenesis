@@ -206,6 +206,17 @@ const BUILTIN: Dictionary = {
 		"flow_ref_rate": 1.0,
 		"aliases": ["pyroligneous_acid", "condensate"],
 	},
+	"wood_acid": {
+		# Wood vinegar with most of its water frozen out (the Wood Vinegar
+		# Freeze Concentrator): ~18 % acetic acid with the methanol and
+		# dissolved tars. Digests to biogas (the Wood Acid Digester).
+		"display": "Wood Acid (concentrate)",
+		"color": Color(0.620, 0.300, 0.120, 1.0),
+		"unit": "L",
+		"abbrev": "WA",
+		"flow_ref_rate": 0.5,
+		"aliases": ["acetic_concentrate", "concentrated_wood_vinegar"],
+	},
 	"tar": {
 		# Pyrolysis tar / bio-oil, the heavy condensate (TcProcSummary).
 		"display": "Tar / Bio-oil",
