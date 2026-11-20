@@ -995,6 +995,9 @@ func _rebuild_dynamic_sections() -> void:
 	if mid == WindLabBuilder.MODEL_ID or mid == "vawt" or mid == "small_hawt":
 		_button("Design wind turbine…", "The wind turbine designer, bound to this turbine: rotor, gearing, generator, power curve",
 			_model_btns, _on_windlab)
+	if mid == BankBuilder.MODEL_ID:
+		_button("Edit battery bank…", "The Battery Lab, bound to this bank: its packs, mount, cables and fuses",
+			_model_btns, _on_batterylab)
 	if EspBuilder.handles(mid):
 		_button("Edit board…", "The ESP board designer, bound to this board: parts, wiring, what it measures, ESPHome YAML",
 			_model_btns, _on_esplab)
@@ -1896,6 +1899,16 @@ func _on_windlab() -> void:
 		gv.call("open_wind_designer", gid)
 	elif main.has_method("open_windlab"):
 		main.call("open_windlab", {"prop_id": pid})
+
+
+func _on_batterylab() -> void:
+	var pid := _prop_id
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	if main == null or not main.has_method("open_batterylab"):
+		return
+	close()
+	main.call("open_batterylab", {"prop_id": pid})
 
 
 func _on_esplab() -> void:

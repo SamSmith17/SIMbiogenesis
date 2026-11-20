@@ -244,6 +244,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		FarmBotRuntime.attach(prop, rec)
 		GreenhouseRuntime.attach(prop, rec)
 		EspLabRuntime.attach(prop, rec)
+		BatteryBankRuntime.attach(prop, rec)
 		PalletRackBuildSite.attach(prop, rec)
 		_maybe_attach_stream_intake_flow(prop, rec)
 		_maybe_attach_firepit_fire(prop, rec)
@@ -305,6 +306,8 @@ static func _apply_generic_ghost(model: Node, alpha: float) -> void:
 ## Resolve a record's packed spec — same precedence as the edit drawer:
 ## live linkage design > container variant > model catalog entry.
 static func packed_spec_for_record(rec: Dictionary) -> Dictionary:
+	if rec.get("battery_bank_spec") is Dictionary:
+		return BankDesign.packed_spec(BankDesign.solve(rec.get("battery_bank_spec") as Dictionary))
 	if rec.get("linkage_spec") is Dictionary:
 		var p := LinkageParams.new()
 		p.from_config(rec.get("linkage_spec") as Dictionary)
@@ -947,6 +950,8 @@ static func model_extras(rec: Dictionary) -> Dictionary:
 		extras["tc_spec"] = rec.get("tc_spec", {})
 	if rec.has("esp_spec"):
 		extras["esp_spec"] = rec.get("esp_spec", {})
+	if rec.has("battery_bank_spec"):
+		extras["battery_bank_spec"] = rec.get("battery_bank_spec", {})
 	if rec.has("vehicle_spec"):
 		extras["vehicle_spec"] = rec.get("vehicle_spec", {})
 	if model_id == GrowBed.MODEL_ID:

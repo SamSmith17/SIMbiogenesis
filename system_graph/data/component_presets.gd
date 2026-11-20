@@ -149,26 +149,31 @@ const PANELS: Array = [
 # ---------------------------------------------------------------------------
 # Batteries  (type = "battery")
 # ---------------------------------------------------------------------------
+# Each battery below is a Battery Lab design (core/batterylab/batt_presets.gd,
+# `battery_preset`) built from its cells: its voltage, Ah, kWh and BMS limits
+# (max_charge_a / max_discharge_a / charge_temp_min_c, honoured by SolarUI) come
+# from the design. The cost is the market price. "Design this battery…" in the
+# inspector opens the design.
 const BATTERIES: Array = [
 	{
 		"type": "battery", "label": "12V 100Ah LiFePO4", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "12V 100Ah LiFePO4", "chemistry": "LFP",      "voltage": 12.8, "ah": 100.0, "kwh": 1.28, "soc": 0.80, "cost":  400.0 },
+		"specs": { "name": "12V 100Ah LiFePO4", "chemistry": "LFP", "voltage": 12.8, "ah": 105.0, "kwh": 1.344, "soc": 0.80, "cost": 400.0, "max_charge_a": 100.0, "max_discharge_a": 100.0, "charge_temp_min_c": 0.0, "cells_s": 4, "bms_id": "builtin_dropin_100", "round_trip_eff": 0.95, "chem_detail": "LFP", "battery_preset": "dropin_12v_105" },
 	},
 	{
 		"type": "battery", "label": "12V 200Ah LiFePO4", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "12V 200Ah LiFePO4", "chemistry": "LFP",      "voltage": 12.8, "ah": 200.0, "kwh": 2.56, "soc": 0.80, "cost":  700.0 },
+		"specs": { "name": "12V 200Ah LiFePO4", "chemistry": "LFP", "voltage": 12.8, "ah": 210.0, "kwh": 2.688, "soc": 0.80, "cost": 700.0, "max_charge_a": 100.0, "max_discharge_a": 100.0, "charge_temp_min_c": 0.0, "cells_s": 4, "bms_id": "jbd_4s_100a", "round_trip_eff": 0.95, "chem_detail": "LFP", "battery_preset": "dropin_12v_210" },
 	},
 	{
 		"type": "battery", "label": "12V 100Ah AGM", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "12V 100Ah AGM", "chemistry": "SLA",           "voltage": 12.0, "ah": 100.0, "kwh": 1.20, "soc": 0.50, "cost":  200.0 },
+		"specs": { "name": "12V 100Ah AGM", "chemistry": "SLA", "voltage": 12.0, "ah": 100.0, "kwh": 1.2, "soc": 0.50, "cost": 200.0, "max_charge_a": 30.0, "max_discharge_a": 100.0, "charge_temp_min_c": -20.0, "cells_s": 6, "bms_id": "", "round_trip_eff": 0.85, "chem_detail": "AGM", "battery_preset": "agm_12v_100" },
 	},
 	{
 		"type": "battery", "label": "48V 50Ah LiFePO4", "icon": "🔋",
 		"width": 100.0, "height": 136.0,
-		"specs": { "name": "48V 50Ah LiFePO4", "chemistry": "LFP",       "voltage": 51.2, "ah": 50.0, "kwh": 2.56, "soc": 0.80, "cost": 650.0 },
+		"specs": { "name": "48V 50Ah LiFePO4", "chemistry": "LFP", "voltage": 51.2, "ah": 50.0, "kwh": 2.56, "soc": 0.80, "cost": 650.0, "max_charge_a": 50.0, "max_discharge_a": 100.0, "charge_temp_min_c": 0.0, "cells_s": 16, "bms_id": "builtin_rack_100", "round_trip_eff": 0.95, "chem_detail": "LFP", "battery_preset": "rack_48v_50" },
 	},
 	{
 		"type": "battery", "label": "48V 100Ah LiFePO4", "icon": "🔋",
@@ -178,7 +183,7 @@ const BATTERIES: Array = [
 	{
 		"type": "battery", "label": "EG4 48V 200Ah", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "EG4 48V 200Ah LiFePO4", "chemistry": "LFP",  "voltage": 51.2, "ah": 200.0, "kwh":10.24, "soc": 0.80, "cost": 2600.0 },
+		"specs": { "name": "EG4 48V 200Ah LiFePO4", "chemistry": "LFP", "voltage": 51.2, "ah": 230.0, "kwh": 11.776, "soc": 0.80, "cost": 2600.0, "max_charge_a": 200.0, "max_discharge_a": 200.0, "charge_temp_min_c": 0.0, "cells_s": 16, "bms_id": "builtin_rack_200", "round_trip_eff": 0.95, "chem_detail": "LFP", "battery_preset": "rack_48v_230" },
 	},
 	# A 20.8 kWh 48 V LiFePO4 bank (the Mt Vernon site's EG4 bank): 51.2 V
 	# nominal (16S LFP) × 406.25 Ah. Model a different total by editing kwh/ah.
@@ -190,7 +195,7 @@ const BATTERIES: Array = [
 	{
 		"type": "battery", "label": "Server Rack 48V 100Ah", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "Server Rack 48V 100Ah", "chemistry": "LFP",  "voltage": 51.2, "ah": 100.0, "kwh": 5.12, "soc": 0.80, "cost": 1200.0 },
+		"specs": { "name": "Server Rack 48V 100Ah", "chemistry": "LFP", "voltage": 51.2, "ah": 105.0, "kwh": 5.376, "soc": 0.80, "cost": 1200.0, "max_charge_a": 100.0, "max_discharge_a": 100.0, "charge_temp_min_c": 0.0, "cells_s": 16, "bms_id": "builtin_rack_100", "round_trip_eff": 0.95, "chem_detail": "LFP", "battery_preset": "rack_48v_105" },
 	},
 ]
 

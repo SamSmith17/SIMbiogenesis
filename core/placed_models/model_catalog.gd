@@ -205,6 +205,8 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		return TcBuilder.build_node(tc_spec, "TriClampAssembly", {"pieces": bool(extras.get("pieces", false))})
 	if EspBuilder.handles(model_id):
 		return EspBuilder.build_node(extras.get("esp_spec", {}) as Dictionary, "EspBoard")
+	if model_id == BankBuilder.MODEL_ID:
+		return BankBuilder.build_node(extras.get("battery_bank_spec", {}) as Dictionary, "BatteryBank")
 	if model_id == FarmBotBuilder.MODEL_ID:
 		return FarmBotBuilder.build_node(extras.get("farmbot_spec", {}) as Dictionary, "FarmBot")
 	if model_id == CspLabBuilder.MODEL_ID:
@@ -804,6 +806,11 @@ static func _shipped_models() -> Array[Dictionary]:
 		# Procedural garden robot on its raised bed (FarmBotBuilder): the
 		# FarmBot designer's bed, crops and gantry (record key farmbot_spec).
 		# Its runtime (FarmBotRuntime) plays the robot's day on the clock.
+		# A battery bank from the Battery Lab (BankBuilder): its packs, mount,
+		# bus, cables and fuses (record key battery_bank_spec); one graph
+		# battery bound to it carries its BMS limits.
+		{"id": "batterylab_bank", "label": "Battery bank (designed)",
+			"procedural": true, "preserve_scale": true, "category": "tools"},
 		{"id": "farmbot", "label": "FarmBot bed (designed)",
 			"procedural": true, "preserve_scale": true, "category": "structures"},
 		# Procedural tri-clamp process assemblies (TcBuilder): the tri-clamp

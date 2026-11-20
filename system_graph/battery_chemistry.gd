@@ -69,6 +69,13 @@ static func infer(specs: Dictionary) -> String:
 	return from_nominal_voltage(float(specs.get("voltage", 0.0)))
 
 
+## The Battery Lab's finer chemistry (FLA / SLA / AGM / GEL / LFP / NMC, see
+## core/batterylab/batt_chem.gd) for a battery's specs. This file's three
+## classes stay what the graph reads; `BattChem.graph_class` maps back.
+static func detailed(specs: Dictionary) -> String:
+	return BattChem.infer(specs)
+
+
 static func normalize(raw: String) -> String:
 	var s := raw.strip_edges().to_lower()
 	match s:

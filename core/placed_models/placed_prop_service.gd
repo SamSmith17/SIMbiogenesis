@@ -107,6 +107,8 @@ static func place_model_at_xz(main: Node, model_id: String, x: float, z: float,
 		Callable(PlacedPropService, "seed_tclab").call_deferred(main, prop_id)
 	elif EspBuilder.handles(model_id):
 		Callable(PlacedPropService, "seed_esplab").call_deferred(main, prop_id)
+	elif model_id == BankBuilder.MODEL_ID:
+		Callable(PlacedPropService, "seed_battery_bank").call_deferred(main, prop_id)
 	elif VehicleBuilder.handles(model_id):
 		tag_vehicle_spaces(main, prop_id)
 	elif model_id == PvArrayBuilder.MODEL_ID:
@@ -781,6 +783,8 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 		Callable(PlacedPropService, "seed_tclab").call_deferred(main, prop_id)
 	elif EspBuilder.handles(model_id):
 		Callable(PlacedPropService, "seed_esplab").call_deferred(main, prop_id)
+	elif model_id == BankBuilder.MODEL_ID:
+		Callable(PlacedPropService, "seed_battery_bank").call_deferred(main, prop_id)
 	elif VehicleBuilder.handles(model_id):
 		tag_vehicle_spaces(main, prop_id)
 	elif model_id == PvArrayBuilder.MODEL_ID:
@@ -1330,6 +1334,42 @@ static func seed_esplab(main: Node, prop_id: String) -> String:
 	return node_id
 
 
+## A placed battery bank (Battery Lab) is one graph battery bound to the
+## prop: the bank's voltage, Ah, kWh and its BMS limits (max charge /
+## discharge current, coldest charging temperature), which SolarUI and the
+## bake honour. Re-applying keeps the battery's state of charge.
+static func seed_battery_bank(main: Node, prop_id: String) -> String:
+	if main == null or prop_id.is_empty():
+		return ""
+	var rec := get_prop_record(main, prop_id)
+	if rec.is_empty():
+		return ""
+	var bank: Dictionary = rec.get("battery_bank_spec", {}) as Dictionary if rec.get("battery_bank_spec") is Dictionary else {}
+	if bank.is_empty():
+		bank = BankSpec.of_pack(BattPresets.builtin("rack_48v_105"), 1, 2)
+		update_prop_record(main, prop_id, {"battery_bank_spec": bank}, false)
+	var g := BankDesign.graph_specs(BankDesign.solve(bank))
+	g["battery_bank_spec"] = BankSpec.resolve(bank)
+	g["model_id"] = BankBuilder.MODEL_ID
+	var gid := str(rec.get("graph_item_id", ""))
+	var sgv := _system_graph_view(main)
+	var gmodel: Variant = sgv.get("model") if sgv != null else null
+	if not gid.is_empty() and gmodel != null and not (gmodel.call("get_item", gid) as Dictionary).is_empty():
+		var it: Dictionary = gmodel.call("get_item", gid)
+		var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+		var soc := float(specs.get("soc", 0.8))
+		for k in g:
+			specs[k] = g[k]
+		specs["soc"] = soc
+		gmodel.call("update_item", gid, {"specs": specs})
+		return gid
+	var node_id := _create_bound_graph_node(main, prop_id, {
+		"node_type": "battery", "width": 120.0, "height": 92.0, "specs": g})
+	if not node_id.is_empty():
+		update_prop_record(main, prop_id, {"graph_item_id": node_id}, false)
+	return node_id
+
+
 static func seed_tclab(main: Node, prop_id: String) -> String:
 	if main == null or prop_id.is_empty():
 		return ""
@@ -1788,7 +1828,7 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 	# must build THAT design, not the builder's default (a concentrator's
 	# ghost was always the default dish).
 	var rec_extra_d: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
-	for dk in ["csplab_spec", "windlab_spec", "pelton_spec", "tc_spec", "esp_spec", "farmbot_spec", "earthship_spec", "building_spec", "greenhouse_spec", "light_rack_spec", "grow_bed_spec"]:
+	for dk in ["battery_bank_spec", "csplab_spec", "windlab_spec", "pelton_spec", "tc_spec", "esp_spec", "farmbot_spec", "earthship_spec", "building_spec", "greenhouse_spec", "light_rack_spec", "grow_bed_spec"]:
 		if rec_extra_d.has(dk) and not extras.has(dk):
 			extras[dk] = rec_extra_d[dk]
 	var model := ModelCatalog.instantiate(model_id, extras)

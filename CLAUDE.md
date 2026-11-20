@@ -1284,6 +1284,58 @@ Godot.exe.exe --headless --path . --script tools/diag/tc_chain_probe.gd -- --hou
 # off), a placed reactor's node taking the fitted batch by a real click on
 # "Use this run on the graph", UiAudit clean (run at 720 too):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/tc_process_check.gd -Label tc_process
+# Battery Lab data (offline — core/batterylab/, plans/BATTERY_LAB_PLAN.md
+# Phase 0): BattChem's six chemistries (FLA / SLA / AGM / GEL / LFP / NMC:
+# ordered charge voltages, monotone OCV + its inverse, temperature
+# compensation, cycle life vs DoD, Peukert, IEC 62485-2 ventilation and
+# Faraday's hydrogen by hand), BattCells (V × Ah, each cell inside its
+# chemistry's Wh/kg and Wh/L band), BattBms (ranges, consistent protection
+# windows, fitting, balance time) and BatteryChemistry unchanged for the
+# graph; Phase 1 packs (wire / busbar / ρL/A by hand, every built-in solving
+# clean with its numbers from its cells, cells inside the case and apart,
+# one link per series joint touching both groups, S+1 taps, rack U and BCI
+# sizes, laid-down rack cells, the builder's parts / cutaway / pick).
+# Phase 3: BattBmsLogic by hand (each protection's trip after its delay, a
+# break resetting it, release by hysteresis or a reversed current, current
+# trips retrying after 30 s, the charge and discharge switches apart, SOC
+# counting + recalibration, passive / active balancing) and BattSim (every
+# built-in × scenario keeps frames and closes its energy ledger, ~80 % of
+# the Ah into a 20 % pack, the rated Ah out to the UV trip, a weak cell
+# cutting the pack, the frozen-morning block, overload retry, a 0.3 ms
+# short trip, lead-acid stages and an unstopped short, active balancing
+# closing a spread, 10 h in < 1 s). Phase 4/5 banks: 1S4P by hand (51.2 V,
+# 420 Ah), shares summing to 1 and even with diagonal wiring, fault current
+# rising with strings, auto Class T rated for the voltage, ANL / no fuse /
+# rack packs in series / 42U / ventilation checks, mounts by form, a longer
+# main run never thinner, BOM total = its rows, the single-line SVG, graph
+# specs + packed count, EnergyTimeline.step_soc_lim == step_soc with INF
+# limits and clipping with finite ones, BankBuilder parts / pick /
+# highlight, a 100-pack bank solving and building fast.
+# EXPECTED_CHECKS; --import first:
+Godot.exe.exe --headless --path . --script core/batterylab/batterylab_selftest.gd
+# Every built-in pack's numbers (not a selftest; -- --preset=<id>):
+Godot.exe.exe --headless --path . --script tools/diag/batterylab_probe.gd
+# Look sheet (WINDOWED, APPDATA at a scratch folder): every built-in
+# assembled / exploded / cutaway; -- --only=, --cell=WxH, --views=, --out=:
+Godot.exe.exe --path . --windowed --resolution 1280x720 --script tools/diag/batterylab_look_diag.gd
+# The Battery Lab modal with REAL input (sandbox; Library → Designers →
+# Solar batteries, Main.open_batterylab; run at 1080 AND 720): every built-in
+# by a gallery click, UiAudit, S edited + Ctrl+Z, the explode slider dragged,
+# a cell clicked in the 3D view, Show me callouts, the 5-step tour, each
+# colour mode; the BMS & test tab by a click (Play / pause, a chart click
+# scrubbing, the cold / short / discharge scenarios, a log jump, the cell
+# under-voltage typed lower stopping the load sooner, lead-acid stages);
+# the Bank tab by a click (parallel typed to 4, Ctrl+Z, the mount, the
+# cable / BOM / checks views by clicks, a cable lit, Export files);
+# save / forget in user://batterylab_library.json (restored):
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/batterylab_designer_check.gd -Label batterylab
+# A placed bank (sandbox): drawn with its packs, its own graph battery with
+# the BMS limits, the runtime label, no limit while an undesigned battery is
+# on the site, SolarUI's summed limit once every battery is designed, the
+# energy timeline using it, the cold block (limit 0, the label says so),
+# re-seeding keeping the SOC, the designer opening on the bank, delete
+# removing the battery:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/batterylab_world_check.gd -Label batterylab_world
 # ESP board designer (offline — core/esplab/): every board's header GPIOs
 # against its chip's rules, HA's entity-id slug, the auto-wire solver (I2C
 # address clash -> other address -> second bus -> error, shared SPI with a CS
@@ -6931,6 +6983,72 @@ chemistry engine.
     - Not done: the ESP twin of that board reads the world's weather, not the
       process; the board is rebuilt from the ticks each time it is opened
       (hand wiring is kept only if saved in the ESP designer's own library).
+
+## Battery Lab (core/batterylab/, 2026-11-19)
+
+Plan: `plans/BATTERY_LAB_PLAN.md` (7 phases, all landed). Library →
+Designers → Solar batteries (`Main.open_batterylab({spec, bank, mode,
+prop_id, graph_item_id})`, layer `BatteryLabLayer`), a graph battery's
+"Design this battery…", a placed bank's "Edit battery bank…". The user's
+choices: designed batteries change the live sim at PACK level only; lead-acid
+draws its 2 V cells inside the block; the library's battery presets carry
+designed numbers under their old labels; brand names in presets are
+"transcribed, not verified".
+- **Data** (Phase 0): `BattChem` (FLA / SLA / AGM / GEL / LFP / NMC: voltages,
+  OCV, temperature compensation, cycle life, Peukert, ventilation),
+  `BattCells` (real cells and blocks), `BattBms` (real BMSs + protection
+  defaults). `BatteryChemistry` (the graph's 3-class view) is unchanged.
+- **Pack** (Phase 1–2): `BattSpec` → `BattDesign.solve` (layout of
+  P-groups, links, taps, balance harness, BMS, case; numbers from the
+  cells; checks) → `BattBuilder` (MultiMesh primitives, explode, cutaway,
+  pick, colour-by, callouts). Rack packs fit 4U only with prismatic cells
+  laid on their side. The modal is on `DesignerShell` with Pack / BMS & test /
+  Bank tabs; at 720 the gallery is in the left flyout.
+- **BMS bench** (Phase 3): `BattBmsLogic` (each protection a trip / release /
+  delay triple, separate charge and discharge switches, current trips retry
+  after 30 s, a short after 60 s, passive / active balancing, coulomb SOC
+  that recalibrates at full / empty) and `BattSim` (per cell: OCV with steep
+  knees at full and empty — without them a CV charger pumped 299 Ah into a
+  105 Ah pack — DC resistance = IR × 1.5 rising in the cold, a lumped
+  temperature, the P-group current split, a CC-CV / bulk-absorb-float
+  charger; the energy ledger closes). The whole scenario runs at once; the
+  tab scrubs its frames.
+- **Banks** (Phase 4): `BankSpec` (pack, series, parallel, mount, bus, wiring,
+  fuse, main run, disconnect, comms) → `BankDesign.solve` (LRU 24): pack
+  places per mount (cabinet in 19" rails, wall brackets, shelf, floor mat,
+  cart), every cable routed out of its terminal along a channel to its
+  landing and measured, sized at NEC 310.16 75 °C × 125 % then up a size
+  while the drop is over 1 %; string shares ∝ 1/R (diagonal take-off,
+  equal-length to a distributor, or same-end); fault current V / R of the
+  strings; one fuse per string picked by family (Class T 20 kA / 160 V,
+  MRBF 10 kA / 58 V, ANL 6 kA / 32 V — estimates); checks (packs with a FET
+  BMS in series, uneven shares, no fuse, fuse kA or V too low, main drop,
+  heavy wall packs, over 42U, ventilation, over 60 V, floor load).
+  `BattBom.bank`, `BankExport.write_all` (bom.csv, cables.csv,
+  single_line.svg, bank.json under `user://batterylab_designs/<slug>/`),
+  `BankBuilder` (model id `batterylab_bank`, record key
+  `battery_bank_spec`; packs, frame, cables as MultiMeshes, fuses; every
+  cable incl. the main run is a pickable part). Series cap 16, parallel 32.
+- **World + graph** (Phase 5): placing a bank (`place_bank` → the ghost with
+  `battery_bank_spec`, both placement chains) makes ONE graph `battery`
+  bound to the prop (`PlacedPropService.seed_battery_bank`; re-seeding keeps
+  its SOC) with `BankDesign.graph_specs`: kWh, voltage, `max_charge_a`,
+  `max_discharge_a`, `charge_temp_min_c`. `_collect_battery_aggregate` sums
+  each battery's limits at its voltage ONLY when every battery on the site
+  carries them (one without = no limit, the old behaviour); SolarUI holds
+  `battery_max_charge_kw` / `_discharge_kw` / `battery_charge_min_c` and
+  `battery_limits_now()` (charge 0 below the coldest charging temperature),
+  pushed into `EnergyTimeline.max_charge_kw / max_discharge_kw` before each
+  step (`step_soc_lim` / `clip_net`; INF = `step_soc` bit for bit, pinned).
+  `BatteryBankRuntime` (gameplay/) labels a placed bank: name, SOC, charging
+  / giving, "Too cold to charge", or a BMS limit holding it back. The
+  library's six battery presets carry designed numbers + `battery_preset`
+  (the designer opens on that design). PackedSpec ships a bank as its packs.
+- Tour stop `18p_battery_lab` (burningman); modal audit entry `batterylab`.
+- Not built: the bank's own BMS bench (the bench tests one pack), cell-level
+  effects in the live sim (pack level only, by the user's choice), DC
+  busbar ampacity checks on the bank bus, a 3D-routed main cable to the
+  placed inverter (the run is a length you type).
 
 ## ESP board designer (core/esplab/, 2026-11-07)
 

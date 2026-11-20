@@ -26,6 +26,11 @@ var capacity_kwh: float = 16.0
 var charge_eff: float = 0.95
 var discharge_eff: float = 0.95
 var min_soc_kwh: float = 1.6   # MIN_BATTERY_PERCENT (10%) of 16 kWh
+## What the bank's BMSs let through (kW; INF = no designed limit, the old
+## behaviour exactly). A designed battery (Battery Lab) sets them from its
+## continuous charge / discharge current × voltage; 0 charge = a cold block.
+var max_charge_kw: float = INF
+var max_discharge_kw: float = INF
 
 # ---- Buffer ----
 var step_hours: float = 1.0 / 60.0          # 1 sample per sim-minute
@@ -64,6 +69,24 @@ static func step_soc(soc: float, solar_kw: float, aux_kw: float, load_kw: float,
 		var avail := soc - min_kwh
 		discharge = minf(discharge, maxf(avail, 0.0))
 		return soc - discharge
+
+
+## step_soc with the bank's limits: net power into the battery is clipped to
+## `max_c` (surplus solar curtailed) and out of it to `max_d` (the rest of the
+## load goes unserved). Both INF = step_soc exactly.
+static func step_soc_lim(soc: float, solar_kw: float, aux_kw: float, load_kw: float,
+		dt_hours: float, cap: float, ceff: float, deff: float, min_kwh: float,
+		max_c: float, max_d: float) -> float:
+	if max_c == INF and max_d == INF:
+		return step_soc(soc, solar_kw, aux_kw, load_kw, dt_hours, cap, ceff, deff, min_kwh)
+	return step_soc(soc, clip_net(solar_kw + aux_kw - load_kw, max_c, max_d), 0.0, 0.0,
+		dt_hours, cap, ceff, deff, min_kwh)
+
+
+static func clip_net(net: float, max_c: float, max_d: float) -> float:
+	if net > 0.0:
+		return minf(net, maxf(max_c, 0.0))
+	return maxf(net, -maxf(max_d, 0.0))
 
 
 static func unstep_soc(soc: float, solar_kw: float, aux_kw: float, load_kw: float,
@@ -203,8 +226,8 @@ func record_step(abs_hours: float, solar_kw: float, aux_kw: float, load_kw: floa
 	# filling and then discarding samples nobody will ever read.
 	var skip_steps := maxi(0, steps - MAX_SAMPLES)
 	if skip_steps > 0:
-		soc = step_soc(soc, solar_kw, aux_kw, load_kw, float(skip_steps) * step_hours,
-			capacity_kwh, charge_eff, discharge_eff, min_soc_kwh)
+		soc = step_soc_lim(soc, solar_kw, aux_kw, load_kw, float(skip_steps) * step_hours,
+			capacity_kwh, charge_eff, discharge_eff, min_soc_kwh, max_charge_kw, max_discharge_kw)
 		steps -= skip_steps
 
 	_append_exact_run(soc, solar_kw, aux_kw, load_kw, steps, _raw_or(raw_kw, solar_kw))
@@ -230,6 +253,8 @@ func _append_exact_run(soc0: float, solar_kw: float, aux_kw: float, load_kw: flo
 	var raw := _raw_or(raw_kw, solar_kw)
 
 	var net := solar_kw + aux_kw - load_kw
+	if max_charge_kw != INF or max_discharge_kw != INF:
+		net = clip_net(net, max_charge_kw, max_discharge_kw)
 	if net > 0.0:
 		var per_step := net * step_hours * charge_eff
 		var clamp_step := steps
@@ -387,8 +412,8 @@ func _fill_forward_to(target_g: int) -> void:
 		var s := float(inp.get("solar_kw", last["solar_kw"]))
 		var a := float(inp.get("aux_kw", last["aux_kw"]))
 		var l := float(inp.get("load_kw", last["load_kw"]))
-		soc = step_soc(soc, s, a, l, step_hours,
-			capacity_kwh, charge_eff, discharge_eff, min_soc_kwh)
+		soc = step_soc_lim(soc, s, a, l, step_hours,
+			capacity_kwh, charge_eff, discharge_eff, min_soc_kwh, max_charge_kw, max_discharge_kw)
 		_soc.append(soc)
 		_solar.append(s)
 		_aux.append(a)
@@ -414,8 +439,8 @@ func fill_forward_chunk(target_g: int, max_steps: int) -> bool:
 		var s := float(inp.get("solar_kw", last["solar_kw"]))
 		var a := float(inp.get("aux_kw", last["aux_kw"]))
 		var l := float(inp.get("load_kw", last["load_kw"]))
-		soc = step_soc(soc, s, a, l, step_hours,
-			capacity_kwh, charge_eff, discharge_eff, min_soc_kwh)
+		soc = step_soc_lim(soc, s, a, l, step_hours,
+			capacity_kwh, charge_eff, discharge_eff, min_soc_kwh, max_charge_kw, max_discharge_kw)
 		_soc.append(soc)
 		_solar.append(s)
 		_aux.append(a)

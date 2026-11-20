@@ -447,6 +447,24 @@ func _rebuild_for_item(item: Dictionary) -> void:
 		# _build_siphon_hydro_section via the processor branch below.
 
 		"battery", "smartbattery":
+			var bl_btn := Button.new()
+			bl_btn.name = "design_battery"
+			bl_btn.text = "Design this battery…"
+			bl_btn.tooltip_text = ("Build it from its cells in the Battery Lab: chemistry, series and parallel, BMS, case, "
+					+ "and the bank (cabinet, wall, cables, fuses). Apply writes it back here with its BMS limits.")
+			var bl_id := str(item.get("id", ""))
+			bl_btn.pressed.connect(func() -> void:
+				var tree := get_tree()
+				var main := tree.current_scene if tree != null else null
+				if main != null and main.has_method("open_batterylab"):
+					main.call("open_batterylab", {"graph_item_id": bl_id}))
+			_form_vbox.add_child(bl_btn)
+			if specs.has("max_charge_a"):
+				_section("Designed (Battery Lab)")
+				_readonly_field("BMS limits", "%.0f A charge · %.0f A discharge" % [float(specs.get("max_charge_a", 0.0)), float(specs.get("max_discharge_a", 0.0))])
+				_readonly_field("Charges above", "%.0f °C" % float(specs.get("charge_temp_min_c", 0.0)))
+				if specs.has("bank_series"):
+					_readonly_field("Bank", "%d in series × %d in parallel" % [int(specs.get("bank_series", 1)), int(specs.get("bank_parallel", 1))])
 			_section("Specs")
 			_text_field("Name",              specs.get("name", ""),      "specs/name")
 			_num_field("Nominal Voltage (V)",specs.get("voltage", 12.0), "specs/voltage",  0, 1000, 0.1)

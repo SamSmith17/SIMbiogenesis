@@ -289,6 +289,8 @@ func _populate() -> void:
 			"Your real panels on racks or a tracker, wired in strings with live output.", PvLabBuilder.MODEL_ID, "sun"),
 		_designer("csplab", "Solar concentrators",
 			"Lenses and mirrors: ray trace, suns, heat through a year, tracking structure.", "csplab_concentrator", "sun"),
+		_designer("batterylab", "Solar batteries",
+			"Packs from their cells up: form, chemistry, series and parallel, busbars, BMS and case, exploded and explained.", "", "battery"),
 		_designer("farmbotlab", "Garden robots (FarmBot)",
 			"A gantry robot on a raised bed of any size: crop mix, packing, its day move by move, labour saved vs cost.", "farmbot", "sprout"),
 		_designer("windlab", "Wind turbines",
@@ -700,6 +702,13 @@ func _activate(e: Dictionary, force_place: bool) -> void:
 				main_esp.call("open_esplab", {})
 			else:
 				_status.text = "The ESP board designer needs a world."
+		"batterylab":
+			var main_bl := get_tree().current_scene if get_tree() != null else null
+			if main_bl != null and main_bl.has_method("open_batterylab"):
+				close()
+				main_bl.call("open_batterylab", {})
+			else:
+				_status.text = "The Battery Lab needs a world."
 		"farmbotlab":
 			# Hosted by Main, so it opens on every map.
 			var main_fb := get_tree().current_scene if get_tree() != null else null

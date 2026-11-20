@@ -3999,6 +3999,9 @@ func _update_battery(_delta: float) -> void:
 	# battery-full lerp), so the divergence test below would cut every render
 	# on its first tick. Readouts come from the cache too (same rule as the
 	# challenge playback), or the cards and the SOC tell different stories.
+	var lim_now := battery_limits_now()
+	energy_timeline.max_charge_kw = lim_now.x
+	energy_timeline.max_discharge_kw = lim_now.y
 	var rendered := _in_rendered_range(abs_h)
 	if abs_h > energy_timeline.end_abs_hours():
 		# Forward — integrate with exact live inputs (held across the step).
@@ -5091,6 +5094,22 @@ func _save_panel_settings() -> void:
 
 
 ## Apply aggregate panel/battery specs from a LinkageLab game bundle import.
+## The graph's designed battery limits (kW; INF = none) and the coldest
+## temperature the bank may be charged at (-INF = none).
+var battery_max_charge_kw := INF
+var battery_max_discharge_kw := INF
+var battery_charge_min_c := -INF
+
+
+## The limits the battery step uses now: a bank colder than its BMS allows
+## takes no charge (the BMS's charge under-temperature protection).
+func battery_limits_now() -> Vector2:
+	var c := battery_max_charge_kw
+	if battery_charge_min_c > -INF and _estimate_ambient_temp() < battery_charge_min_c:
+		c = 0.0
+	return Vector2(c, battery_max_discharge_kw)
+
+
 func apply_from_graph(data: Dictionary) -> void:
 	var pc := int(data.get("panel_count", 0))
 	var pw := float(data.get("panel_watts", PANEL_WATTAGE))
@@ -5104,6 +5123,10 @@ func apply_from_graph(data: Dictionary) -> void:
 	# every graph edit — clamping SOC to [0,0] forever (can't charge or discharge).
 	var bcount := int(data.get("battery_count", 0))
 	var bank_soc := float(data.get("battery_soc", -1.0))
+	# A designed bank's BMS limits (Battery Lab): INF = none.
+	battery_max_charge_kw = float(data.get("battery_max_charge_kw", INF))
+	battery_max_discharge_kw = float(data.get("battery_max_discharge_kw", INF))
+	battery_charge_min_c = float(data.get("battery_charge_min_c", -INF))
 	# The graph's real plane of array (placed arrays / deployed linkages) and
 	# the wired controller's limits replace the config-file values when known.
 	# Each designed array's own plane (or tracker); empty = one plane of array.

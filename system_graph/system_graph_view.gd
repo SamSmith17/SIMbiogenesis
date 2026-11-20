@@ -18195,6 +18195,14 @@ func _collect_root_array_aggregate_now() -> Dictionary:
 func _collect_battery_aggregate() -> Dictionary:
 	var bat_kwh: float = 0.0
 	var bat_count: int = 0
+	# A designed battery (Battery Lab) carries its BMS's continuous charge /
+	# discharge current and its coldest charging temperature; the bank's
+	# limits are their sums at each one's voltage. One battery without them
+	# = no designed limit for the bank (INF), the old behaviour.
+	var chg_kw := 0.0
+	var dis_kw := 0.0
+	var all_designed := true
+	var chg_min_c := -INF
 	if model == null:
 		return {"total_kwh": 0.0, "count": 0}
 	for item: Dictionary in GraphSystems.walk_site_power(model):
@@ -18206,11 +18214,23 @@ func _collect_battery_aggregate() -> Dictionary:
 			"battery", "smartbattery":
 				bat_kwh += float(specs.get("kwh", 0.0))
 				bat_count += 1
+				if specs.has("max_charge_a") and specs.has("max_discharge_a"):
+					var bv := float(specs.get("voltage", 0.0))
+					chg_kw += float(specs["max_charge_a"]) * bv * 0.001
+					dis_kw += float(specs["max_discharge_a"]) * bv * 0.001
+					chg_min_c = maxf(chg_min_c, float(specs.get("charge_temp_min_c", -INF)))
+				else:
+					all_designed = false
 			"compound":
 				if str(specs.get("compound_kind", "")) == "battery_bank":
 					bat_kwh += float(specs.get("bank_total_kwh", specs.get("kwh", 0.0)))
 					bat_count += int(specs.get("child_count", 1))
-	return {"total_kwh": bat_kwh, "count": bat_count}
+	var out := {"total_kwh": bat_kwh, "count": bat_count}
+	if bat_count > 0 and all_designed:
+		out["max_charge_kw"] = chg_kw
+		out["max_discharge_kw"] = dis_kw
+		out["charge_min_c"] = chg_min_c
+	return out
 
 
 func _average_graph_battery_soc() -> float:
@@ -18401,6 +18421,9 @@ func _sync_solar_ui_from_graph() -> void:
 			"battery_kwh": float(bat.get("total_kwh", 0.0)),
 			"battery_count": int(bat.get("count", 0)),
 			"battery_soc": bank_soc,
+			"battery_max_charge_kw": float(bat.get("max_charge_kw", INF)),
+			"battery_max_discharge_kw": float(bat.get("max_discharge_kw", INF)),
+			"battery_charge_min_c": float(bat.get("charge_min_c", -INF)),
 		}
 		var orient: Dictionary = agg.get("orientation", {}) as Dictionary
 		if not orient.is_empty():

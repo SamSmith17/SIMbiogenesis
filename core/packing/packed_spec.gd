@@ -151,6 +151,10 @@ const CURATED_MODELS := {
 ## owning builder, not this table (for_model returns its catalog fallback only
 ## when no live spec is available).
 const DYNAMIC_MODELS := {
+	# A Battery Lab bank: its packs as crates (BankDesign.packed_spec, from the
+	# record's battery_bank_spec); this is the fallback.
+	"batterylab_bank": {"w_m": 0.6, "d_m": 0.5, "h_m": 0.25, "mass_kg": 50.0, "count": 2,
+		"form": "crate", "this_side_up": true, "source": "estimated"},
 	# Computed from the record's rack_spec (PalletRackBuilder.packed_spec_for);
 	# this is the fallback for a rack with no spec on its record.
 	"pallet_rack": {"w_m": 2.70, "d_m": 1.00, "h_m": 0.75, "mass_kg": 350.0,

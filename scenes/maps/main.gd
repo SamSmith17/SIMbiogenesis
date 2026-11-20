@@ -942,6 +942,8 @@ var csplab_ui : Control = null
 const CSPLAB_MODAL_SCRIPT := preload( "res://scenes/ui/csplab_modal.gd" )
 var farmbotlab_ui : Control = null
 const FARMBOTLAB_MODAL_SCRIPT := preload( "res://scenes/ui/farmbotlab_modal.gd" )
+var batterylab_ui : Control = null
+const BATTERYLAB_MODAL_SCRIPT := preload( "res://scenes/ui/batterylab_modal.gd" )
 const NPC_ANIM_EDITOR_SCRIPT := preload( "res://scenes/ui/npc_anim_editor.gd" )
 const LINKAGE_HARDWARE_SCRIPT := preload( "res://scenes/ui/linkage_hardware_modal.gd" )
 var scad_store_ui : Control = null
@@ -5294,6 +5296,38 @@ func open_farmbotlab( opts: Dictionary = {} ) -> Control :
 		return null
 	farmbotlab_ui.call( "open", opts )
 	return farmbotlab_ui
+
+
+## The Battery Lab (scenes/ui/batterylab_modal.gd), on its own
+## CanvasLayer above the graph.
+func _setup_batterylab_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing_layer := ui_layer.get_node_or_null( "BatteryLabLayer" )
+	if existing_layer != null :
+		batterylab_ui = existing_layer.get_node_or_null( "BatteryLabModal" ) as Control
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "BatteryLabLayer"
+	layer.layer = UITheme.LAYER_MODAL + 1
+	ui_layer.add_child( layer )
+	var ui := Control.new()
+	ui.name = "BatteryLabModal"
+	ui.set_anchors_and_offsets_preset( Control.PRESET_FULL_RECT )
+	ui.set_script( BATTERYLAB_MODAL_SCRIPT )
+	layer.add_child( ui )
+	batterylab_ui = ui
+
+
+## Open the Battery Lab. opts: {spec, prop_id}.
+func open_batterylab( opts: Dictionary = {} ) -> Control :
+	if not is_instance_valid( batterylab_ui ) :
+		_setup_batterylab_ui()
+	if not is_instance_valid( batterylab_ui ) :
+		return null
+	batterylab_ui.call( "open", opts )
+	return batterylab_ui
 
 
 ## Open the solar concentrator designer. opts: {spec, prop_id}.
