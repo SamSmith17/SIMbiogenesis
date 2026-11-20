@@ -19,6 +19,26 @@ extends RefCounted
 ## as remembered, flagged as estimates. Costs and some masses are estimates.
 
 const DROP_MAX := 0.01
+## A distributor box's own bus rating (A): a Lynx-class distributor is sold
+## as a 1000 A bus (maker data, transcribed, not verified).
+const DIST_RATING_A := 1000.0
+## A main cable routed in 3D is drawn by the conduit system; the bank's own
+## model shows only this much of it, out of the bus.
+const ROUTED_STUB_MM := 350.0
+## Laid-together bars of one size carry less than n × one bar (they heat each
+## other): DIN 43671's factors for spaced flat bars, approximately (an
+## ESTIMATE for DC).
+const STACK_FACTOR := [0.0, 1.0, 1.7, 2.3, 2.8]
+## Adiabatic short-circuit withstand, S ≥ I·√t / k (IEC 60364-5-54, IEC
+## 60949): k = 143 A·√s/mm² for copper cable with XLPE / EPR insulation
+## (90 °C to 250 °C), 159 for a bare copper bar (to 200 °C).
+const K_CABLE := 143.0
+const K_BAR := 159.0
+## Fuse blow time t = k_blow / (x² − 1.21)² at x times its rating (x > 1.1):
+## ~5 ms at 10 × for Class T, ~10 ms for MRBF, ~50 ms for ANL, and seconds
+## near 2 ×, and never faster than the fuse's own clearing time (`t_min`:
+## the arc inside takes a millisecond or more to put out). A fit to the shape
+## of maker time-current curves, an ESTIMATE.
 const LUG_SLACK_MM := 100.0
 const STUB_MM := 45.0
 const PLINTH_MM := 100.0
@@ -31,11 +51,11 @@ const PER_ROW := 4
 const CABINET_W := 600.0
 ## Fuse families: interrupt kA, voltage rating V DC, sizes A, $ fuse, $ holder.
 const FUSE_TYPES := {
-	"class_t": {"label": "Class T", "ka": 20.0, "v": 160.0,
+	"class_t": {"label": "Class T", "ka": 20.0, "v": 160.0, "k_blow": 49.0, "t_min": 0.001,
 		"sizes": [70, 80, 100, 110, 125, 150, 175, 200, 225, 250, 300, 350, 400], "usd": 85.0, "holder_usd": 45.0},
-	"mrbf": {"label": "MRBF", "ka": 10.0, "v": 58.0,
+	"mrbf": {"label": "MRBF", "ka": 10.0, "v": 58.0, "k_blow": 98.0, "t_min": 0.003,
 		"sizes": [30, 40, 50, 60, 70, 80, 100, 125, 150, 175, 200, 225, 250, 300], "usd": 18.0, "holder_usd": 14.0},
-	"anl": {"label": "ANL", "ka": 6.0, "v": 32.0,
+	"anl": {"label": "ANL", "ka": 6.0, "v": 32.0, "k_blow": 490.0, "t_min": 0.01,
 		"sizes": [35, 40, 50, 60, 80, 100, 130, 150, 175, 200, 225, 250, 300, 325, 350, 400, 500], "usd": 12.0, "holder_usd": 18.0},
 }
 ## Copper cable: $ per metre per mm² (an estimate, welding / battery cable).
@@ -133,7 +153,7 @@ static func _solve(b: Dictionary) -> Dictionary:
 	var bus_neg_line := 0.0
 	var bar_lo := 0.0
 	var bar_hi := 0.0
-	var bus_size := BattElectrical.busbar_for(i_bank, "copper")
+	var bus_pick := bus_bar_for(b, i_bank)
 	if mount == "cabinet":
 		bus_pos_line = span_x * 0.5 + 70.0
 		bus_neg_line = span_x * 0.5 + 120.0
@@ -153,7 +173,8 @@ static func _solve(b: Dictionary) -> Dictionary:
 		bars = {"kind": "distributor", "box": AABB(Vector3(bx - 90.0, y0, front_z - 60.0), Vector3(180.0, 220.0, 120.0)),
 			"pos": Vector3(bx, y0 + 160.0, front_z + 10.0), "neg": Vector3(bx, y0 + 60.0, front_z + 10.0)}
 	else:
-		bars = {"kind": "busbar", "axis": bus_axis, "w": float(bus_size[0]), "t": float(bus_size[1]),
+		bars = {"kind": "busbar", "axis": bus_axis, "w": float(bus_pick["w"]), "t": float(bus_pick["t"]),
+			"n": int(bus_pick["n"]), "amps": float(bus_pick["amps"]), "auto": bool(bus_pick["auto"]),
 			"pos_line": bus_pos_line, "neg_line": bus_neg_line, "lo": bar_lo, "hi": bar_hi, "z": chan_z}
 	# The string ends: + at its first pack, − at its last (series joins between).
 	var cables: Array = []
@@ -206,7 +227,7 @@ static func _solve(b: Dictionary) -> Dictionary:
 		var land_n: Vector3 = st1["land_n"]
 		# The bar between the landing and the take-off.
 		if bus == "busbar":
-			var area := float(bars["w"]) * float(bars["t"])
+			var area := float(bars["w"]) * float(bars["t"]) * float(bars["n"])
 			var lp := absf(_along(bars, land_p) - take_pos)
 			var ln := absf(_along(bars, land_n) - take_neg)
 			r_str += BattElectrical.resistance("copper", lp, area) + BattElectrical.resistance("copper", ln, area)
@@ -225,15 +246,23 @@ static func _solve(b: Dictionary) -> Dictionary:
 		max_share = maxf(max_share, float(st["share"]))
 		min_share = minf(min_share, float(st["share"]))
 	# Main cables to the inverter (the run the player typed).
-	var run := float(b["main_run_m"]) * 1000.0
+	var routed := float(b.get("main_routed_m", -1.0)) > 0.0
+	var run := (float(b["main_routed_m"]) if routed else float(b["main_run_m"])) * 1000.0
 	var out_p := _take_point(bars, "pos", take_pos)
 	var out_n := _take_point(bars, "neg", take_neg)
 	var mp := _cable("main_pos", "main", out_p, out_p + Vector3(0, 0, run), false, chan_z, w_main, i_bank,
 		"red", "Main + to the inverter")
 	var mn := _cable("main_neg", "main", out_n, out_n + Vector3(0, 0, run), false, chan_z, w_main, i_bank,
 		"black", "Main − to the inverter")
-	# A straight run out; length as typed (the inverter is elsewhere).
+	# A straight run out: the length as typed, or as routed in 3D to the
+	# placed inverter (the run's real path is drawn by the conduit system).
 	for mc in [mp, mn]:
+		mc["routed"] = routed
+		if routed:
+			mc["label"] = str(mc["label"]) + " (routed in 3D)"
+			# The conduit system draws the run; the bank draws its first stretch.
+			var p0: Vector3 = (mc["pts"] as Array)[0]
+			mc["pts"] = [p0, p0 + Vector3(0, 0, minf(run, ROUTED_STUB_MM))]
 		mc["len_mm"] = run + LUG_SLACK_MM
 		mc["r_ohm"] = BattElectrical.resistance("copper", float(mc["len_mm"]), float(mc["mm2"]))
 		mc["drop_pct"] = float(mc["r_ohm"]) * i_bank / maxf(float(pe["v_nom"]) * float(N), 1.0) * 100.0
@@ -283,7 +312,9 @@ static func _solve(b: Dictionary) -> Dictionary:
 		"string_a": i_string, "r_ohm": r_bank, "i_sc": i_sc, "max_share": max_share, "min_share": min_share,
 		"packs": count,
 	}
+	var withstand := _withstand(cables, bars, fuse, i_sc, M, bus)
 	var d := {"spec": b, "pack": pd, "mount": mount, "bus": bus, "bars": bars, "packs": packs, "cables": cables,
+		"withstand": withstand, "main_routed": routed,
 		"strings": strings, "fuse": fuse, "fuses": fuses, "comms": comms, "frame": frame,
 		"bounds": outer, "electrical": e, "on_top": on_top, "series": N, "parallel": M,
 		"wire_string": w_str, "wire_main": w_main}
@@ -293,6 +324,86 @@ static func _solve(b: Dictionary) -> Dictionary:
 	d["mass_kg"] = float(bom["mass_kg"])
 	d["checks"] = _checks(d)
 	return d
+
+
+## The bus bar for a bank current: the player's size (or the smallest that
+## carries it), laid `bus_stack` together (or as many as it takes, ≤ 4).
+## {w, t, n, amps (what they carry together), auto}.
+static func bus_bar_for(b: Dictionary, i_bank: float) -> Dictionary:
+	var pick := str(b.get("bus_bar", "auto"))
+	# Battery circuits are sized at 125 % of the continuous current.
+	var i_size := i_bank * 1.25
+	var want_n := int(b.get("bus_stack", 0))
+	var size: Array = []
+	if pick != "auto":
+		size = [float(pick.get_slice("x", 0)), float(pick.get_slice("x", 1))]
+	var n := maxi(1, want_n)
+	if size.is_empty():
+		if want_n > 0:
+			# The smallest bar that, n together, carries it.
+			for bb in BattElectrical.BUSBARS:
+				size = bb
+				if BattElectrical.busbar_amps(float(bb[0]), float(bb[1])) * float(STACK_FACTOR[n]) >= i_size:
+					break
+		else:
+			n = 1
+			size = BattElectrical.busbar_for(i_size)
+			while BattElectrical.busbar_amps(float(size[0]), float(size[1])) * float(STACK_FACTOR[n]) < i_size \
+					and n < BankSpec.MAX_STACK:
+				n += 1
+	elif want_n == 0:
+		n = 1
+		while BattElectrical.busbar_amps(float(size[0]), float(size[1])) * float(STACK_FACTOR[n]) < i_size \
+				and n < BankSpec.MAX_STACK:
+			n += 1
+	var amps := BattElectrical.busbar_amps(float(size[0]), float(size[1])) * float(STACK_FACTOR[n])
+	return {"w": float(size[0]), "t": float(size[1]), "n": n, "amps": amps, "auto": pick == "auto"}
+
+
+## How long a fuse of `type` takes to blow at `x` times its rating (s); INF
+## at or below 1.1 ×.
+static func fuse_blow_s(type: String, x: float) -> float:
+	if x <= 1.1:
+		return INF
+	var k := float((FUSE_TYPES.get(type, FUSE_TYPES["class_t"]) as Dictionary)["k_blow"])
+	var ft: Dictionary = FUSE_TYPES.get(type, FUSE_TYPES["class_t"])
+	var d := x * x - 1.21
+	return maxf(k / (d * d), float(ft.get("t_min", 0.001)))
+
+
+## Short-circuit withstand: a short on the bus is fed by every string through
+## its own fuse; the bus carries the whole fault current until the fuses
+## blow, each string cable its share. S_min = I·√t / k (adiabatic).
+static func _withstand(cables: Array, bars: Dictionary, fuse: Dictionary, i_sc: float, m: int,
+		bus: String) -> Dictionary:
+	if fuse.is_empty():
+		return {"t_clear": INF, "ok": false, "worst": "", "need_mm2": 0.0, "have_mm2": 0.0}
+	var i_str := i_sc / float(maxi(m, 1))
+	var t := fuse_blow_s(str(fuse["type"]), i_str / float(fuse["amps"]))
+	var out := {"t_clear": t, "ok": true, "worst": "", "need_mm2": 0.0, "have_mm2": 0.0, "i_string": i_str}
+	var worst_ratio := 0.0
+	for cb in cables:
+		if str(cb["kind"]) not in ["pos", "neg"]:
+			continue
+		var need := i_str * sqrt(t) / K_CABLE
+		var ratio := need / maxf(float(cb["mm2"]), 1e-9)
+		if ratio > worst_ratio:
+			worst_ratio = ratio
+			out["worst"] = str(cb["id"])
+			out["need_mm2"] = need
+			out["have_mm2"] = float(cb["mm2"])
+	if bus == "busbar":
+		var need_b := i_sc * sqrt(t) / K_BAR
+		var have_b := float(bars["w"]) * float(bars["t"]) * float(bars["n"])
+		out["bar_need_mm2"] = need_b
+		out["bar_have_mm2"] = have_b
+		if need_b / have_b > worst_ratio:
+			worst_ratio = need_b / have_b
+			out["worst"] = "bar_pos"
+			out["need_mm2"] = need_b
+			out["have_mm2"] = have_b
+	out["ok"] = worst_ratio <= 1.0
+	return out
 
 
 static func _pname(p: Dictionary) -> String:
@@ -484,10 +595,40 @@ static func _checks(d: Dictionary) -> Array:
 		if float(fuse["v"]) < float(e["v_max"]):
 			out.append({"level": "error", "text": "The %s fuses are rated for %.0f V DC; the bank charges to %.1f V." % [fuse["label"], float(fuse["v"]), float(e["v_max"])],
 				"why": "A fuse used above its voltage rating may not put out the arc when it blows.", "ids": ["fuse_0"]})
+	# The bus: does it carry the bank's current?
+	var bars: Dictionary = d["bars"]
+	var i_need := maxf(float(e["cont_discharge_a"]), float(e["cont_charge_a"]))
+	if str(bars["kind"]) == "distributor":
+		if i_need > DIST_RATING_A:
+			out.append({"level": "error", "text": "The distributor's %.0f A bus can't carry this bank's %.0f A." % [DIST_RATING_A, i_need],
+				"why": "A distributor box is sold with a current rating for its own bars. Use a busbar pair sized for the bank, or split the bank.",
+				"ids": ["distributor"]})
+	else:
+		var ba := float(bars["amps"])
+		var bar_words := "%s%.0f × %.0f mm" % [("%d × " % int(bars["n"])) if int(bars["n"]) > 1 else "", float(bars["w"]), float(bars["t"])]
+		if ba < i_need:
+			out.append({"level": "error", "text": "The busbars (%s) carry about %.0f A; the bank can push %.0f A." % [bar_words, ba, i_need],
+				"why": "Near the take-off every string's current is on the bar at once. A bar run past its rating gets hot (DIN 43671 rates bars for a 30 K rise). Use a bigger bar, or more bars laid together.",
+				"ids": ["bar_pos"]})
+		elif ba < i_need * 1.25:
+			out.append({"level": "warn", "text": "The busbars (%s) have little margin: %.0f A for a %.0f A bank." % [bar_words, ba, i_need],
+				"why": "Battery circuits are sized at 125 % of the continuous current (NEC 690.8 practice). A size up gives the bus that margin.",
+				"ids": ["bar_pos"]})
+		if int(bars["n"]) >= BankSpec.MAX_STACK and ba < i_need:
+			out.append({"level": "info", "text": "Even four of the biggest bars are short of this bank's current.",
+				"why": "Split the bank into two banks, each with its own bus and main cables.", "ids": []})
+	var ws: Dictionary = d.get("withstand", {})
+	if not fuse.is_empty() and not ws.is_empty() and not bool(ws["ok"]):
+		var on_bar := str(ws["worst"]).begins_with("bar")
+		out.append({"level": "warn", "text": "A short on the bus would overheat the %s before the fuses blow." % ("busbars" if on_bar else "string cables"),
+			"why": "Each %s fuse sees %s A and takes about %s to blow; that needs %.0f mm² of copper and the %s has %.0f mm² (S = I√t / k, IEC 60364-5-54). Faster fuses (Class T) or a heavier %s." % [
+				fuse["label"], UiText.thousands(int(ws.get("i_string", 0.0))), BattSim.time_words(float(ws["t_clear"])),
+				float(ws["need_mm2"]), "bar" if on_bar else "cable", float(ws["have_mm2"]), "bar" if on_bar else "cable"],
+			"ids": [str(ws["worst"])]})
 	for cb in (d["cables"] as Array):
 		if float(cb["drop_pct"]) > DROP_MAX * 100.0 + 0.05 and str(cb["kind"]) == "main":
 			out.append({"level": "warn", "text": "The run to the inverter loses %.1f %% at full current." % float(cb["drop_pct"]),
-				"why": "Even the biggest cable in the table drops more than 1 %% over %.1f m: move the bank closer to the inverter." % float(b["main_run_m"]),
+				"why": "Even the biggest cable in the table drops more than 1 %% over %.1f m: move the bank closer to the inverter." % (float(cb["len_mm"]) * 0.001),
 				"ids": [str(cb["id"])]})
 			break
 	var mount := str(d["mount"])

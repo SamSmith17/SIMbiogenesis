@@ -99,9 +99,11 @@ static func bank(d: Dictionary) -> Dictionary:
 	else:
 		var bl := absf(float(bars["hi"]) - float(bars["lo"])) + 120.0
 		var area := float(bars["w"]) * float(bars["t"])
-		var kg := BattElectrical.mass_kg("copper", bl, area) * 2.0
-		rows.append(_row("Bus", "Copper busbar %.0f × %.0f mm" % [float(bars["w"]), float(bars["t"])], 2.0, "bars",
-			kg * 0.5 * COPPER_USD_KG * 2.0, kg, "%.0f mm long each, drilled at every landing" % bl))
+		var nb := int(bars.get("n", 1))
+		var kg := BattElectrical.mass_kg("copper", bl, area) * 2.0 * float(nb)
+		rows.append(_row("Bus", "Copper busbar %.0f × %.0f mm" % [float(bars["w"]), float(bars["t"])], 2.0 * float(nb), "bars",
+			kg / (2.0 * float(nb)) * COPPER_USD_KG * 2.0, kg,
+			"%.0f mm long each, drilled at every landing%s" % [bl, (", %d laid together a pole" % nb) if nb > 1 else ""]))
 	var fr: Dictionary = d["frame"]
 	match str(d["mount"]):
 		"cabinet":

@@ -16,7 +16,7 @@ extends SceneTree
 ## JSON, graph specs read back by BatteryChemistry, the builder's parts,
 ## cutaway and picking.
 
-const EXPECTED_CHECKS := 1964
+const EXPECTED_CHECKS := 2015
 
 var _pass := 0
 var _fail := 0
@@ -49,6 +49,8 @@ func _initialize() -> void:
 	_test_bms_logic()
 	_test_sim()
 	_test_bank()
+	_test_bank_bus_and_route()
+	_test_bank_sim()
 	var total := _pass + _fail
 	print("batterylab selftest: %d passed, %d failed (%d checks)" % [_pass, _fail, total])
 	if EXPECTED_CHECKS > 0 and total != EXPECTED_CHECKS:
@@ -928,3 +930,134 @@ func _test_bank() -> void:
 	_ok(hb.pack_count() == 100, "a 100-pack bank builds")
 	hb.free()
 	print("  100-pack bank: solve %.0f ms, build %.0f ms" % [ms, ms_b])
+
+
+func _trip_keys(res: Dictionary, what: String = "trip") -> Array:
+	var out: Array = []
+	for ev in (res["events"] as Array):
+		if str(ev["what"]) == what:
+			out.append(str(ev["key"]))
+	return out
+
+
+func _ledger_ok(res: Dictionary, what: String) -> void:
+	var led: Dictionary = res["ledger"]
+	var gap := float(led["in_wh"]) - float(led["out_wh"]) - float(led["short_wh"]) - float(led["stored_wh"]) - float(led["heat_wh"])
+	var scale := maxf(1.0, maxf(float(led["in_wh"]), float(led["out_wh"]) + float(led["short_wh"])))
+	_ok(absf(gap) < 0.01 * scale + 0.01, "%s: the bank's energy ledger closes (%.3f Wh)" % [what, gap])
+
+
+func _test_bank_bus_and_route() -> void:
+	# Bus bars: auto carries 125 % of the bank current, stacking when one is not enough.
+	var d := _bank("rack_48v_105", 1, 4)
+	var bars: Dictionary = d["bars"]
+	var i_bank := float(d["electrical"]["cont_discharge_a"])
+	_ok(float(bars["amps"]) >= 1.25 * i_bank - 1.0, "auto bus bar carries 125 % of the bank (%.0f A for %.0f A)" % [float(bars["amps"]), i_bank])
+	_ok(not _has_level(d, "warn", "busbars") and not _has_level(d, "error", "busbars"), "an auto bus raises no bus check")
+	var big := _bank("rack_48v_230", 1, 8)
+	_ok(int(big["bars"]["n"]) > 1, "a 1600 A bank stacks bars (%d)" % int(big["bars"]["n"]))
+	_near(float(big["bars"]["amps"]), BattElectrical.busbar_amps(float(big["bars"]["w"]), float(big["bars"]["t"])) * float(BankDesign.STACK_FACTOR[int(big["bars"]["n"])]), 0.01, "stacked bars carry n × one × the DIN factor")
+	var thin := _bank("rack_48v_105", 1, 4, {"bus_bar": "20x3", "bus_stack": 1})
+	_ok(_has_level(thin, "error", "busbars"), "a 20 × 3 bar on a 400 A bank is an error")
+	_ok(int(thin["bars"]["n"]) == 1 and is_equal_approx(float(thin["bars"]["w"]), 20.0), "the player's bar is used as given")
+	var stack3 := _bank("rack_48v_105", 1, 4, {"bus_bar": "20x3", "bus_stack": 3})
+	_ok(int(stack3["bars"]["n"]) == 3 and float(stack3["bars"]["amps"]) > float(thin["bars"]["amps"]) * 2.0, "three bars together carry more than twice one")
+	var dist := _bank("rack_48v_230", 1, 6, {"bus": "distributor"})
+	_ok(_has_level(dist, "error", "distributor"), "a 1171 A bank on a 1000 A distributor is an error")
+	_ok(not _has_level(_bank("rack_48v_105", 1, 2, {"bus": "distributor"}), "error", "distributor"), "a 200 A bank on a distributor is fine")
+	var bom := BattBom.bank(stack3)
+	var bar_rows := 0.0
+	for r in (bom["rows"] as Array):
+		if str(r["item"]).begins_with("Copper busbar"):
+			bar_rows = float(r["qty"])
+	_ok(is_equal_approx(bar_rows, 6.0), "the BOM counts three bars a pole")
+	# Fuse blow times: faster the harder it is driven, never under its clearing time.
+	_ok(BankDesign.fuse_blow_s("class_t", 1.05) == INF, "a fuse at 1.05 × never blows")
+	_ok(BankDesign.fuse_blow_s("class_t", 2.0) > BankDesign.fuse_blow_s("class_t", 10.0), "blows faster at 10 × than at 2 ×")
+	_ok(BankDesign.fuse_blow_s("anl", 10.0) > BankDesign.fuse_blow_s("class_t", 10.0), "an ANL is slower than a Class T")
+	_near(BankDesign.fuse_blow_s("class_t", 100.0), 0.001, 1e-9, "a Class T never clears faster than 1 ms")
+	# Withstand: S = I √t / k by hand.
+	var ws: Dictionary = d["withstand"]
+	var i_str := float(d["electrical"]["i_sc"]) / 4.0
+	var t := BankDesign.fuse_blow_s(str(d["fuse"]["type"]), i_str / float(d["fuse"]["amps"]))
+	_near(float(ws["t_clear"]), t, 1e-9, "withstand uses the fuse's blow time")
+	_ok(bool(ws["ok"]), "the rack bank's cables and bars survive a bus short")
+	_near(float(ws.get("bar_need_mm2", 0.0)), float(d["electrical"]["i_sc"]) * sqrt(t) / BankDesign.K_BAR, 1e-6, "bar need = I√t / 159")
+	# The main run routed in 3D.
+	var rt := _bank("rack_48v_105", 1, 4, {"main_routed_m": 7.5})
+	var main_c: Dictionary = {}
+	for cb in (rt["cables"] as Array):
+		if str(cb["id"]) == "main_pos":
+			main_c = cb
+	_ok(bool(rt["main_routed"]) and bool(main_c.get("routed", false)), "a routed run is marked routed")
+	_near(float(main_c["len_mm"]), 7500.0 + BankDesign.LUG_SLACK_MM, 0.01, "the routed length is the cable's length")
+	_ok(((main_c["pts"] as Array)[1] as Vector3).distance_to((main_c["pts"] as Array)[0]) <= BankDesign.ROUTED_STUB_MM + 0.01, "the bank draws only a stub of a routed run")
+	var typed := _bank("rack_48v_105", 1, 4, {"main_run_m": 2.0})
+	_ok(float(main_c["r_ohm"]) > float((typed["cables"] as Array).filter(func(c: Dictionary) -> bool: return str(c["id"]) == "main_pos")[0]["r_ohm"]), "a longer routed run has more resistance")
+	var r2 := BankSpec.resolve({"main_routed_m": 0.0, "bus_bar": "nonsense", "bus_stack": 9})
+	_ok(float(r2["main_routed_m"]) == -1.0 and str(r2["bus_bar"]) == "auto" and int(r2["bus_stack"]) == BankSpec.MAX_STACK, "spec keys clamp")
+
+
+func _test_bank_sim() -> void:
+	var d := _bank("rack_48v_105", 1, 4)
+	_ok(BankSim.scenarios_for(true).size() == 6 and BankSim.scenarios_for(false).size() == 5, "scenario lists (no cold for lead)")
+	# Share: every string near a quarter, bank down at the end.
+	var sh := BankSim.run(d, "share")
+	_ledger_ok(sh, "share")
+	_ok(float(sh["share_max"]) < 0.27, "diagonal wiring: no string over 27 %% of the load (%.1f %%)" % (float(sh["share_max"]) * 100.0))
+	_ok(float(sh["down_t"]) > 3600.0, "share: the bank runs over an hour at 0.5 C")
+	var fr: Array = sh["frames"]
+	_ok(fr.size() > 50 and fr.size() <= BankSim.MAX_FRAMES + 2, "share keeps frames")
+	_ok(float(fr[1]["v"]) > 48.0 and float(fr[1]["v"]) < 56.0, "the bus sits near the bank's voltage (%.1f V)" % float(fr[1]["v"]))
+	# Weak cell: its string trips on under-voltage, then the rest trip on over-current.
+	var wk := BankSim.run(d, "weak")
+	_ledger_ok(wk, "weak")
+	var first: Dictionary = {}
+	for ev in (wk["events"] as Array):
+		if str(ev["what"]) == "trip":
+			first = ev
+			break
+	_ok(str(first.get("key", "")) == "cell_uv" and str(first.get("where", "")) == "pack_0", "weak: the weak pack's BMS trips first, on its weak cell")
+	_ok(_trip_keys(wk).has("discharge_oc"), "weak: the others are pushed over their current and trip (a cascade)")
+	_ok(float(wk["down_t"]) > 0.0 and float(wk["down_t"]) < float(sh["down_t"]), "weak: the bank goes down sooner than a healthy one")
+	# Unequal strings: current flows from the full strings into the empty one, with no load.
+	var un := BankSim.run(d, "unequal")
+	_ledger_ok(un, "unequal")
+	var f1: Dictionary = (un["frames"] as Array)[1]
+	var ist: PackedFloat64Array = f1["i_str"]
+	_ok(ist[0] > 1.0 and ist[1] < 0.0, "unequal: the empty string charges from the full ones (%.0f A)" % ist[0])
+	_near(float(f1["i"]), 0.0, 1e-6, "with no load the strings' currents sum to zero")
+	# Cold string with the comms chain: blocked, and the rest charge without tripping.
+	var cd := BankSim.run(d, "cold")
+	_ledger_ok(cd, "cold")
+	_ok(_trip_keys(cd).has("charge_ut"), "cold: the cold string's BMS refuses the charge")
+	_ok(not _trip_keys(cd).has("charge_oc"), "cold with comms: the charger stays inside the other strings' rating")
+	_ok(float(cd["ledger"]["in_wh"]) > 5000.0, "cold with comms: the bank still charges")
+	var cdn := BankSim.run(_bank("rack_48v_105", 1, 4, {"comms": false}), "cold")
+	_ok(_trip_keys(cdn).has("charge_oc"), "cold without comms: the others are charged over their rating and trip")
+	# Charge: CC, then holding the voltage, then full.
+	var ch := BankSim.run(d, "charge")
+	_ledger_ok(ch, "charge")
+	_ok(float(ch["full_at"]) > 0.0, "charge: the bank fills")
+	# Short: lithium BMSs open within ~2 ms before any fuse; lead's fuses blow.
+	var st := BankSim.run(d, "short")
+	_ledger_ok(st, "short")
+	var sc_t := INF
+	for ev in (st["events"] as Array):
+		if str(ev["key"]) == "short_circuit":
+			sc_t = minf(sc_t, float(ev["t"]))
+	_ok(sc_t < 0.003, "short: the BMSs open within 2 ms of the short (%s)" % BattSim.time_words(sc_t))
+	_ok(float(st["i_peak"]) < -1000.0, "short: thousands of amps flow first")
+	var lead := _bank("agm_12v_100", 4, 2)
+	var ls := BankSim.run(lead, "short")
+	_ledger_ok(ls, "lead short")
+	_ok(_trip_keys(ls).count("fuse") == 2, "lead short: both strings' fuses blow")
+	var lsh := BankSim.run(lead, "share")
+	_ledger_ok(lsh, "lead share")
+	_ok(_trip_keys(lsh).has("lvd"), "lead: the inverter's low-voltage cutoff ends the run")
+	_ledger_ok(BankSim.run(lead, "charge"), "lead charge (float included)")
+	# A big bank runs in reasonable time.
+	var t0 := Time.get_ticks_msec()
+	var bigr := BankSim.run(_bank("agm_12v_100", 4, 25, {"mount": "floor"}), "share")
+	var ms := Time.get_ticks_msec() - t0
+	_ok(not (bigr["frames"] as Array).is_empty() and ms < 8000, "a 100-pack bank's run takes %d ms" % ms)

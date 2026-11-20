@@ -30,6 +30,9 @@ const BEND_RULES: Dictionary = {
 	"romex": {"mult_od": 5.0, "src": "NEC 334.24"},
 	# PV wire (UL 4703) single conductor: 5 × OD training radius (makers).
 	"dc_solar": {"mult_od": 5.0, "src": "PV wire makers, 5 × OD"},
+	# Fine-strand battery / welding cable: about 6 × OD (makers' training radius).
+	"battery_cable_pos": {"mult_od": 6.0, "src": "welding cable makers, 6 × OD"},
+	"battery_cable_neg": {"mult_od": 6.0, "src": "welding cable makers, 6 × OD"},
 	# ANSI/TIA-568: installed UTP 4 × the cable OD.
 	"ethernet": {"mult_od": 4.0, "src": "ANSI/TIA-568"},
 	# Garden hose kinks below about 6 × OD.
@@ -81,7 +84,7 @@ const SUPPORT_SPACING_M: Dictionary = {
 	"emt_conduit": 3.0, "romex": 1.4, "pvc_pipe": 1.2, "pvc_4in": 1.5,
 	"pvc_6in": 1.8, "abs_dwv": 1.2, "copper_type_l": 1.8, "pex_red": 0.8,
 	"pex_blue": 0.8, "pex_white": 0.8, "ethernet": 1.5, "ducting": 2.4,
-	"dc_solar": 1.0,
+	"dc_solar": 1.0, "battery_cable_pos": 1.0, "battery_cable_neg": 1.0,
 }
 
 ## How a kind is laid. The run solver and the mesh read this one word.
@@ -95,6 +98,7 @@ const ROUTING_STYLE: Dictionary = {
 	"led_fairy": "flex_drape", "led_patio": "hang", "led_strip": "flex_route",
 	"pex_red": "flex_route", "pex_blue": "flex_route", "pex_white": "flex_route",
 	"ethernet": "flex_route", "dc_solar": "flex_route",
+	"battery_cable_pos": "flex_route", "battery_cable_neg": "flex_route",
 	"romex": "rigid_ortho", "emt_conduit": "rigid_ortho",
 	"copper_type_l": "rigid_ortho", "pvc_pipe": "rigid_ortho",
 	"pvc_4in": "rigid_ortho", "pvc_6in": "rigid_ortho", "abs_dwv": "rigid_ortho",

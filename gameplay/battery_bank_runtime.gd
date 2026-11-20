@@ -17,6 +17,9 @@ var _poll := 0.0
 var _prop: Node3D = null
 var _prop_id := ""
 var _label: Label3D = null
+var _follow := 0.0
+## The main run as routed (m), -1 = typed.
+var routed_m := -1.0
 
 
 static func attach(prop: Node3D, rec: Dictionary) -> void:
@@ -50,6 +53,28 @@ func _bounds() -> AABB:
 	return AABB(Vector3.ZERO, Vector3(1, 1, 1))
 
 
+## The main cables as the conduit system measured them: written back into
+## the bank's design (cable sizes, drop) and its graph battery when the run
+## changes by more than 5 cm. Every 2 s.
+func _follow_route(main: Node) -> void:
+	_follow -= POLL_S
+	if _follow > 0.0:
+		return
+	_follow = 2.0
+	var m := PlacedPropService.bank_main_routed_m(main, _prop_id)
+	routed_m = m
+	var rec := PlacedPropService.get_prop_record(main, _prop_id)
+	if not (rec.get("battery_bank_spec") is Dictionary):
+		return
+	var bank: Dictionary = (rec["battery_bank_spec"] as Dictionary).duplicate(true)
+	var had := float(bank.get("main_routed_m", -1.0))
+	if (m < 0.0 and had < 0.0) or absf(m - had) < 0.05:
+		return
+	bank["main_routed_m"] = m
+	PlacedPropService.update_prop_record(main, _prop_id, {"battery_bank_spec": bank}, false)
+	PlacedPropService.seed_battery_bank(main, _prop_id)
+
+
 func _process(delta: float) -> void:
 	_poll -= delta
 	if _poll > 0.0:
@@ -62,6 +87,7 @@ func _refresh() -> void:
 	var main := get_tree().current_scene if get_tree() != null else null
 	if main == null:
 		return
+	_follow_route(main)
 	var rec := PlacedPropService.get_prop_record(main, _prop_id)
 	var gid := str(rec.get("graph_item_id", ""))
 	var gv := ServiceLocator.graph()
@@ -89,6 +115,8 @@ func _refresh() -> void:
 	var lines: Array = [str(specs.get("name", "Battery bank"))]
 	if soc >= 0.0:
 		lines.append("%.0f %% · %.1f kWh%s" % [soc * 100.0, float(specs.get("kwh", 0.0)), (" · " + flow) if not flow.is_empty() else ""])
+	if routed_m > 0.0:
+		lines.append("Main cables %.1f m to the inverter" % routed_m)
 	if blocked_cold:
 		lines.append("Too cold to charge: the BMS holds it off")
 	elif not at_limit.is_empty():

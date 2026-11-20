@@ -16,6 +16,10 @@ extends RefCounted
 ##           equal_len (every string's cables cut to the longest one, the
 ##           spare coiled: what a distributor needs) | same_end (both at one end: the nearest string does more work)
 ##   fuse    auto | class_t | mrbf | anl | none (one per string, at its +)
+##   bus_bar auto | "WxT" (a standard flat copper bar, mm) — with bus_stack
+##           bars laid together (0 = as many as the current needs, up to 4)
+##   main_routed_m  the run to the inverter as routed in 3D (m; -1 = none,
+##           then main_run_m as typed is used)
 
 const MOUNTS := ["auto", "cabinet", "wall", "floor", "shelf", "cart"]
 const MOUNT_WORDS := {"auto": "Chosen for the pack", "cabinet": "19\" cabinet", "wall": "On the wall",
@@ -27,6 +31,7 @@ const WIRING_WORDS := {"diagonal": "Diagonal take-off", "equal_len": "Every stri
 const FUSES := ["auto", "class_t", "mrbf", "anl", "none"]
 const FUSE_WORDS := {"auto": "Chosen for the fault current", "class_t": "Class T", "mrbf": "MRBF (on the terminal)",
 	"anl": "ANL", "none": "None"}
+const MAX_STACK := 4
 const MAX_SERIES := 16
 const MAX_PARALLEL := 32
 
@@ -36,6 +41,7 @@ static func empty(name: String = "Battery bank") -> Dictionary:
 		"v": 1, "name": name, "pack": BattSpec.empty("Pack"), "series": 1, "parallel": 2,
 		"mount": "auto", "bus": "auto", "wiring": "diagonal", "fuse": "auto",
 		"disconnect": true, "comms": true, "main_run_m": 2.0, "gap_mm": 0.0,
+		"bus_bar": "auto", "bus_stack": 0, "main_routed_m": -1.0,
 	}
 
 
@@ -63,7 +69,31 @@ static func resolve(b: Dictionary) -> Dictionary:
 	out["disconnect"] = bool(out["disconnect"])
 	out["comms"] = bool(out["comms"])
 	out["v"] = int(out.get("v", 1))
+	if not bar_sizes().has(str(out["bus_bar"])):
+		out["bus_bar"] = "auto"
+	out["bus_stack"] = clampi(int(out["bus_stack"]), 0, MAX_STACK)
+	out["main_routed_m"] = float(out["main_routed_m"]) if float(out["main_routed_m"]) > 0.0 else -1.0
 	return out
+
+
+## Bus bar choices: "auto" then every standard bar as "WxT" (mm).
+static func bar_sizes() -> Array:
+	var out: Array = ["auto"]
+	for b in BattElectrical.BUSBARS:
+		out.append("%dx%d" % [int(b[0]), int(b[1])])
+	return out
+
+
+static func bar_words() -> Dictionary:
+	var out := {"auto": "Sized for the current"}
+	for k in bar_sizes():
+		if k != "auto":
+			out[k] = "%s × %s mm" % [k.get_slice("x", 0), k.get_slice("x", 1)]
+	return out
+
+
+static func stack_words() -> Dictionary:
+	return {"0": "As many as needed", "1": "One bar", "2": "Two bars", "3": "Three bars", "4": "Four bars"}
 
 
 static func key_of(b: Dictionary) -> String:

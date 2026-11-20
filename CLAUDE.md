@@ -1310,7 +1310,12 @@ tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/tc_process_check
 # main run never thinner, BOM total = its rows, the single-line SVG, graph
 # specs + packed count, EnergyTimeline.step_soc_lim == step_soc with INF
 # limits and clipping with finite ones, BankBuilder parts / pick /
-# highlight, a 100-pack bank solving and building fast.
+# highlight, a 100-pack bank solving and building fast; the bus (auto bars
+# at 125 %, stacking, a too-small bar, the distributor's rating, the BOM's
+# bars), fuse blow times, the withstand by hand, the routed main run; the
+# bank bench (every scenario's ledger closing, even sharing, the weak-cell
+# cascade, current between strings, the cold string with and without comms,
+# the short: lithium BMSs vs lead's fuses).
 # EXPECTED_CHECKS; --import first:
 Godot.exe.exe --headless --path . --script core/batterylab/batterylab_selftest.gd
 # Every built-in pack's numbers (not a selftest; -- --preset=<id>):
@@ -1326,15 +1331,19 @@ Godot.exe.exe --path . --windowed --resolution 1280x720 --script tools/diag/batt
 # scrubbing, the cold / short / discharge scenarios, a log jump, the cell
 # under-voltage typed lower stopping the load sooner, lead-acid stages);
 # the Bank tab by a click (parallel typed to 4, Ctrl+Z, the mount, the
-# cable / BOM / checks views by clicks, a cable lit, Export files);
+# cable / BOM / checks views by clicks, a cable lit, a 20 × 3 bar an error,
+# the Bench view by a click: the weak-cell cascade, Play, a chart click, the
+# packs painted, a log jump, the paint off when leaving, Export files);
 # save / forget in user://batterylab_library.json (restored):
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/batterylab_designer_check.gd -Label batterylab
 # A placed bank (sandbox): drawn with its packs, its own graph battery with
 # the BMS limits, the runtime label, no limit while an undesigned battery is
 # on the site, SolarUI's summed limit once every battery is designed, the
 # energy timeline using it, the cold block (limit 0, the label says so),
-# re-seeding keeping the SOC, the designer opening on the bank, delete
-# removing the battery:
+# the main cables wired to the inverter (given a place first), routed and
+# measured, the length taken by the design and the label, re-seeding keeping
+# the SOC, the designer opening on the bank, delete removing the battery and
+# its cables:
 tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/batterylab_world_check.gd -Label batterylab_world
 # ESP board designer (offline — core/esplab/): every board's header GPIOs
 # against its chip's rules, HA's entity-id slug, the auto-wire solver (I2C
@@ -7044,11 +7053,46 @@ designed numbers under their old labels; brand names in presets are
   / giving, "Too cold to charge", or a BMS limit holding it back. The
   library's six battery presets carry designed numbers + `battery_preset`
   (the designer opens on that design). PackedSpec ships a bank as its packs.
-- Tour stop `18p_battery_lab` (burningman); modal audit entry `batterylab`.
-- Not built: the bank's own BMS bench (the bench tests one pack), cell-level
-  effects in the live sim (pack level only, by the user's choice), DC
-  busbar ampacity checks on the bank bus, a 3D-routed main cable to the
-  placed inverter (the run is a length you type).
+- **The bus carries its current** (2026-11-19): `bus_bar` ("auto" or a
+  standard "WxT") and `bus_stack` (0 = as many as needed, ≤ 4) on the spec;
+  `BankDesign.bus_bar_for` sizes auto bars for 125 % of the bank current,
+  stacked bars carry n × one × `STACK_FACTOR` (DIN 43671, estimate). Checks:
+  bars under the bank current (error) or under 125 % (warn), a distributor
+  over its `DIST_RATING_A` 1000 A, and short-circuit withstand
+  (`_withstand`: a bus short fed by every string through its fuse, S ≥ I√t / k,
+  k 143 cable / 159 bar, IEC 60364-5-54; fuse blow time
+  `fuse_blow_s` = k_blow / (x² − 1.21)², never under the type's `t_min`;
+  estimates). The bar fields grey out for a distributor.
+- **Bank bench** (`BankSim`, the Bank tab's "Bench" view,
+  `scenes/ui/batterylab_bank_bench.gd`): every pack with its BMS
+  (BattBmsLogic, pack-level cells), every string with its fuse (Miner's rule
+  on `fuse_blow_s`), the bus voltage solved over the strings that can pass
+  current that way (an open discharge switch still lets charge in). Scenarios:
+  share, one weak CELL (its pack trips on under-voltage, the rest are pushed
+  over their current and trip: a cascade — a weak PACK alone never shows it,
+  parallel strings balance themselves), strings at different charge (current
+  between strings with no load), one string in the cold, charge, a bus
+  short (lithium BMSs open in ~1.3 ms; lead's fuses blow). With the comms
+  chain the charger keeps to what the strings that can take charge are rated
+  for, so a cold string does not cascade; without it, it does. The energy
+  ledger closes (charge past full is booked as gassing / heat). The studio
+  paints each pack from the frame shown (`BankBuilder.show_bench_frame`).
+- **Main cables routed in 3D**: placing a bank wires its graph battery to the
+  site's controller (`PlacedPropService.wire_bank_to_inverter`: the nearest
+  one placed in the world first) with two conduits of the new kinds
+  `battery_cable_pos` / `battery_cable_neg` (2/0, one conductor a run),
+  `visible_3d`, `bank_main` = the prop id, force-remeshed so they are
+  measured with the world's 3D wires off. `BatteryBankRuntime` reads the
+  routed length (`bank_main_routed_m`) every 2 s and writes it into the
+  bank's `main_routed_m`, which the design uses for the main cable's length,
+  size and drop (the bank's own model then draws only a stub). A
+  controller with no place in the world can't be routed to: the run stays the
+  typed length (the graph's "Place it here" gives it one).
+- Tour stop `18p_battery_lab` (burningman, with the bench); modal audit entry
+  `batterylab`.
+- Not built: cell-level effects in the live sim (pack level only, by the
+  user's choice), cell spread inside a pack on the bank bench (pack-level
+  cells), an inverter model to place (it is a grey box).
 
 ## ESP board designer (core/esplab/, 2026-11-07)
 

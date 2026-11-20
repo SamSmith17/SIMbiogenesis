@@ -449,6 +449,92 @@ func _test_bank_tab(ui: Control, main: Node, tree: SceneTree, vp: Viewport, dir:
 	var audit := UiAudit.run(vp)
 	print("batterylab: ui audit (bank) — %s" % UiAudit.summary_line(audit))
 	_ok(int(audit.get("errors", 0)) == 0, "the bank tab has no UI audit errors")
+	# A bus bar too small for the bank, picked through its dropdown: the checks say so.
+	var bob := ui.find_child("bank_bus_bar", true, false) as OptionButton
+	_ok(bob != null, "the bus bar dropdown")
+	ui.call("edit_bank", "bus", "busbar")
+	await _settle(tree, 8)
+	_ok(not bob.disabled, "with a busbar bus the bar size can be picked")
+	if bob != null:
+		var bi := -1
+		for i in bob.item_count:
+			if str(bob.get_item_metadata(i)) == "20x3":
+				bi = i
+		bob.select(bi)
+		bob.item_selected.emit(bi)
+		ui.call("edit_bank", "bus_stack", "1")
+		await _settle(tree, 10)
+		var bad := false
+		for c in ((ui.call("bank_design") as Dictionary)["checks"] as Array):
+			if str(c["level"]) == "error" and str(c["text"]).find("busbars") >= 0:
+				bad = true
+		_ok(bad, "a 20 × 3 mm bar on the bank is an error in the checks")
+		for i in bob.item_count:
+			if str(bob.get_item_metadata(i)) == "auto":
+				bi = i
+		bob.select(bi)
+		bob.item_selected.emit(bi)
+		ui.call("edit_bank", "bus_stack", "0")
+		await _settle(tree, 10)
+	# The bank bench by a real click on its tab.
+	if btabs != null:
+		await HarnessInput.click(vp, btabs.get_global_transform() * btabs.get_tab_rect(3).get_center())
+		await _settle(tree, 12)
+		_ok(str(bp.call("view")) == "bench", "a click opens the bank bench")
+		var bench: Control = bp.call("bench")
+		_ok(bench != null and bench.visible and not (bench.get("result") as Dictionary).is_empty(), "the bench ran its first scenario")
+		var sco := ui.find_child("bank_bench_scenario", true, false) as OptionButton
+		if sco != null:
+			var wi := -1
+			for i in sco.item_count:
+				if str(sco.get_item_metadata(i)) == "weak":
+					wi = i
+			sco.select(wi)
+			sco.item_selected.emit(wi)
+			await _settle(tree, 6)
+		_ok(str(bench.call("scenario_id")) == "weak", "the weak-pack scenario is picked")
+		var res: Dictionary = bench.get("result")
+		var keys: Array = []
+		for ev in (res["events"] as Array):
+			if str(ev["what"]) == "trip":
+				keys.append(str(ev["key"]))
+		_ok(keys.has("cell_uv") and keys.has("discharge_oc"), "weak: one string trips, the others are overloaded and trip (%s)" % ", ".join(PackedStringArray(keys.slice(0, 5))))
+		var play := ui.find_child("bank_bench_play", true, false) as Button
+		await HarnessInput.click(vp, HarnessInput.center_of(play))
+		await _settle(tree, 30)
+		_ok(float(bench.call("time_s")) > 0.0, "Play moves the bench clock")
+		await HarnessInput.click(vp, HarnessInput.center_of(play))
+		await _settle(tree, 3)
+		# A click on the chart just after the cascade.
+		var t_oc := 0.0
+		for ev in (res["events"] as Array):
+			if str(ev["key"]) == "discharge_oc" and str(ev["what"]) == "trip":
+				t_oc = maxf(t_oc, float(ev["t"]))
+		var chart := ui.find_child("bank_bench_chart", true, false) as Control
+		var pr: Rect2 = chart.call("plot")
+		var u := clampf((t_oc + 5.0) / maxf(float(bench.call("duration")), 1.0), 0.0, 1.0)
+		await HarnessInput.click(vp, chart.get_global_transform() * (pr.position + Vector2(pr.size.x * u, pr.size.y * 0.5)))
+		await _settle(tree, 4)
+		var f: Dictionary = bench.call("frame")
+		var off := 0
+		for c in (f.get("state_str", PackedInt32Array()) as PackedInt32Array):
+			if c != 0:
+				off += 1
+		_ok(off >= 1, "just after the cascade strings are out (%d at %s)" % [off, BattSim.time_words(float(bench.call("time_s")))])
+		_ok(int((ui.call("bank_builder") as Node).call("tinted_count")) >= 1, "the studio paints the packs from the bench")
+		main.get_viewport().get_texture().get_image().save_png("%s/bank_bench.png" % dir)
+		var audit2 := UiAudit.run(vp)
+		print("batterylab: ui audit (bank bench) — %s" % UiAudit.summary_line(audit2))
+		_ok(int(audit2.get("errors", 0)) == 0, "the bank bench has no UI audit errors")
+		var lg := ui.find_child("bank_bench_log", true, false) as ItemList
+		if lg != null and lg.item_count > 1:
+			lg.select(1)
+			lg.item_selected.emit(1)
+			await _settle(tree, 4)
+			_near_ok(float(bench.call("time_s")), float(lg.get_item_metadata(1)), "a bench log entry jumps to its time")
+		await HarnessInput.click(vp, btabs.get_global_transform() * btabs.get_tab_rect(0).get_center())
+		await _settle(tree, 6)
+		_ok(int((ui.call("bank_builder") as Node).call("tinted_count")) == 0, "leaving the bench takes the paint off")
 	# Export by a real click.
 	var ex := ui.find_child("bank_export", true, false) as Button
 	if ex != null:

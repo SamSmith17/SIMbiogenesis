@@ -54,6 +54,18 @@ func run(ctx: TourContext) -> void:
 	await ctx.wait(1.5)
 	await ctx.hero()
 	await ctx.wait(1.5)
+	var bp: Variant = ui.call("bank_panel")
+	if bp != null:
+		bp.call("set_view", "bench")
+		var bench: Variant = bp.call("bench")
+		bench.call("run_scenario", "weak")
+		var t_oc := 0.0
+		for ev in (bench.get("result")["events"] as Array):
+			if str(ev["key"]) == "discharge_oc":
+				t_oc = maxf(t_oc, float(ev["t"]))
+		bench.call("seek", t_oc + 5.0)
+		ctx.caption("The bank bench: one weak cell trips its pack, and the other strings are overloaded in turn", 3.0)
+		await ctx.wait(3.0)
 
 
 func teardown(ctx: TourContext) -> void:

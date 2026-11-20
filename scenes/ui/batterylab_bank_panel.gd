@@ -9,6 +9,10 @@ extends VBoxContainer
 
 signal bank_changed(path: String, value: Variant)
 signal row_selected(id: String)
+signal view_changed(v: String)
+
+const BENCH := preload("res://scenes/ui/batterylab_bank_bench.gd")
+const VIEWS := ["cables", "bom", "checks", "bench"]
 
 var modal: Control = null
 var design: Dictionary = {}
@@ -20,12 +24,15 @@ var _place_btn: Button
 var _apply_btn: Button
 var _export_btn: Button
 var _view := "cables"
+var _bench: Control = null
 
 const FIELDS := [
 	["series", "In series", "spin", 1.0, 16.0, 1.0, "", "Packs joined end to end: their voltages add (only packs made for it)"],
 	["parallel", "In parallel", "spin", 1.0, 32.0, 1.0, "", "Strings side by side on the bus: their amp-hours add"],
 	["mount", "Mounted", "option", "mounts", "", 0.0, "", "Where the packs stand"],
 	["bus", "Bus", "option", "buses", "", 0.0, "", "What the strings land on: a busbar pair or a distributor box"],
+	["bus_bar", "Bus bar", "option", "bars", "", 0.0, "", "The copper bars' size: sized for the current, or your own"],
+	["bus_stack", "Bars a pole", "option", "stacks", "", 0.0, "", "Bars laid together on each pole: more carry more current"],
 	["wiring", "Wiring", "option", "wirings", "", 0.0, "", "How the strings reach the bus: equal lengths share the current evenly"],
 	["fuse", "Fuses", "option", "fuses", "", 0.0, "", "One per string, at its positive"],
 	["main_run_m", "To the inverter", "spin", 0.3, 30.0, 0.1, "m", "The run of main cable from the bus to the inverter"],
@@ -97,8 +104,15 @@ func _ready() -> void:
 	_tabs.add_tab("Cables")
 	_tabs.add_tab("Bill of materials")
 	_tabs.add_tab("Checks")
+	_tabs.add_tab("Bench")
+	_tabs.set_tab_tooltip(3, "The whole bank on a test bench: every pack's BMS and every string's fuse, the strings sharing the load")
 	_tabs.tab_changed.connect(func(i: int) -> void:
-		_view = ["cables", "bom", "checks"][i]
+		_view = VIEWS[i]
+		_tree.visible = _view != "bench"
+		_bench.visible = _view == "bench"
+		if _view == "bench" and (_bench.get("result") as Dictionary).is_empty() and not design.is_empty():
+			_bench.call("run_scenario", str(_bench.call("scenario_id")))
+		view_changed.emit(_view)
 		_fill())
 	_tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bar.add_child(_tabs)
@@ -135,6 +149,11 @@ func _ready() -> void:
 		if it != null and it.get_metadata(0) != null:
 			row_selected.emit(str(it.get_metadata(0))))
 	add_child(_tree)
+	_bench = BENCH.new()
+	_bench.name = "bank_bench"
+	_bench.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_bench.visible = false
+	add_child(_bench)
 
 
 static func _table(name: String) -> Dictionary:
@@ -147,6 +166,10 @@ static func _table(name: String) -> Dictionary:
 			return BankSpec.WIRING_WORDS
 		"fuses":
 			return BankSpec.FUSE_WORDS
+		"bars":
+			return BankSpec.bar_words()
+		"stacks":
+			return BankSpec.stack_words()
 	return {}
 
 
@@ -167,6 +190,24 @@ func set_design(d: Dictionary) -> void:
 			FormRow.select_meta(c as OptionButton, str(v))
 		elif c is CheckBox:
 			(c as CheckBox).set_pressed_no_signal(bool(v))
+	for bk in ["bus_bar", "bus_stack"]:
+		var bo := _rows.get(bk) as OptionButton
+		if bo != null:
+			bo.disabled = str(d["bus"]) == "distributor"
+			if bo.disabled:
+				bo.tooltip_text = "A distributor box has its own bars (rated %.0f A)" % BankDesign.DIST_RATING_A
+			elif bk == "bus_bar":
+				bo.tooltip_text = "The copper bars' size: sized for the current, or your own"
+			else:
+				bo.tooltip_text = "Bars laid together on each pole: more carry more current"
+	var run_sb := _rows.get("main_run_m") as SpinBox
+	if run_sb != null:
+		var routed := float(b.get("main_routed_m", -1.0)) > 0.0
+		run_sb.editable = not routed
+		run_sb.tooltip_text = ("Routed in 3D to the placed inverter: %.1f m. Move the bank or the inverter to change it." % float(b["main_routed_m"])) if routed \
+			else "The run of main cable from the bus to the inverter"
+		if routed:
+			run_sb.set_value_no_signal(float(b["main_routed_m"]))
 	var e: Dictionary = d["electrical"]
 	var pd: Dictionary = d["pack"]
 	var pe: Dictionary = pd["electrical"]
@@ -184,7 +225,12 @@ func set_design(d: Dictionary) -> void:
 		if str(c2["level"]) == "error":
 			errs += 1
 	_tabs.set_tab_title(2, "Checks (%d)" % (d["checks"] as Array).size() if errs == 0 else "Checks (%d to fix)" % errs)
+	_bench.call("set_design", d)
 	_fill()
+
+
+func bench() -> Control:
+	return _bench
 
 
 func view() -> String:
@@ -192,7 +238,7 @@ func view() -> String:
 
 
 func set_view(v: String) -> void:
-	_tabs.current_tab = ["cables", "bom", "checks"].find(v)
+	_tabs.current_tab = VIEWS.find(v)
 
 
 func tree() -> Tree:

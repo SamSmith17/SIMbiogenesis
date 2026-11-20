@@ -90,6 +90,33 @@ const BUILTIN: Dictionary = {
 		"ampacity_a": 30.0,  # NEC 310.16 10 AWG
 		"nominal_volts": 48.0,
 	},
+	# A battery bank's main cables (Battery Lab): one conductor a run, the +
+	# in red and the − in black, so the pair is the loop. 2/0 AWG welding
+	# cable: 0.256 mOhm/m (NEC Ch.9 T8), 175 A at 75 °C (NEC 310.16).
+	"battery_cable_pos": {
+		"label": "Battery cable (+)",
+		"radius_m": 0.0085,
+		"color": Color(0.72, 0.1, 0.08, 1.0),
+		"roughness": 0.55,
+		"metallic": 0.0,
+		"flexible": true,
+		"sag_amount": 0.05,
+		"resistance_ohm_per_m": 0.000256,
+		"ampacity_a": 175.0,
+		"nominal_volts": 48.0,
+	},
+	"battery_cable_neg": {
+		"label": "Battery cable (−)",
+		"radius_m": 0.0085,
+		"color": Color(0.06, 0.06, 0.07, 1.0),
+		"roughness": 0.55,
+		"metallic": 0.0,
+		"flexible": true,
+		"sag_amount": 0.05,
+		"resistance_ohm_per_m": 0.000256,
+		"ampacity_a": 175.0,
+		"nominal_volts": 48.0,
+	},
 	"garden_hose": {
 		"label": "Garden Hose",
 		"radius_m": 0.011,  # 5/8" hose ≈ 22 mm OD

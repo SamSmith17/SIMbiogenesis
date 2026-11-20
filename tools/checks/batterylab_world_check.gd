@@ -72,6 +72,16 @@ func run(main: Node, harness: Node) -> Dictionary:
 	var at := Vector3.ZERO
 	if pl != null:
 		at = pl.global_position - pl.global_transform.basis.z * 5.0
+	# The site's inverter given a place in the world beside the bank (the graph's
+	# "Place it here"), so the main cables can be routed in 3D.
+	for it: Dictionary in (model.get("items") as Array):
+		if str(it.get("type", "")) == "controller" and not bool(model.call("item_has_3d_anchor", it)):
+			var right := (pl.global_transform.basis.x if pl != null else Vector3.RIGHT)
+			gv.call("_on_world_place_requested", str(it["id"]), at + right * 6.0)
+			await _settle(tree, 10)
+			print("batterylab_world: placed the inverter %s in the world: anchored=%s" % [str(it["id"]),
+				str(model.call("item_has_3d_anchor", model.call("get_item", str(it["id"]))))])
+			break
 	var r: Dictionary = PlacedPropService.place_model_at_xz(main, BankBuilder.MODEL_ID, at.x, at.z, {"battery_bank_spec": bank})
 	_ok(bool(r.get("ok", false)), "the bank is placed (%s)" % str(r.get("error", "")))
 	var pid := str(r.get("prop_id", ""))
@@ -99,6 +109,46 @@ func run(main: Node, harness: Node) -> Dictionary:
 		_ok(str(sp.get("bound_prop_id", "")) == pid, "bound to the prop")
 	var rt := prop.get_node_or_null(BatteryBankRuntime.NODE_NAME)
 	_ok(rt != null, "the bank's runtime is attached")
+	# The main cables: wired to the site's controller, routed in 3D, the length
+	# written back into the bank.
+	var mains: Array = []
+	var ctl := ""
+	for c: Dictionary in (model.get("connections") as Array):
+		if str(c.get("bank_main", "")) == pid:
+			mains.append(c)
+			ctl = str(c.get("source_item_id", ""))
+	var has_ctl := false
+	for it: Dictionary in (model.get("items") as Array):
+		if str(it.get("type", "")) == "controller":
+			has_ctl = true
+	if has_ctl:
+		_ok(mains.size() == 2, "the bank's + and − main cables run to the controller")
+		_ok(str((model.call("get_item", ctl) as Dictionary).get("type", "")) == "controller", "they land on a controller")
+		var cit: Dictionary = model.call("get_item", ctl)
+		print("batterylab_world: controller %s (%s) anchored=%s routable=%s" % [ctl, str((cit.get("specs", {}) as Dictionary).get("name", "")),
+			str(model.call("item_has_3d_anchor", cit)), str(model.call("connection_is_3d_routable", mains[0]))])
+		var routed := -1.0
+		for _w in 40:
+			await _wait(tree, 0.25)
+			routed = PlacedPropService.bank_main_routed_m(main, pid)
+			var rspec: Dictionary = PlacedPropService.get_prop_record(main, pid).get("battery_bank_spec", {})
+			if routed > 0.0 and float(rspec.get("main_routed_m", -1.0)) > 0.0:
+				break
+		_ok(routed > 0.5, "the conduit system routed and measured them (%.1f m)" % routed)
+		await _wait(tree, 2.5)
+		var rs: Dictionary = PlacedPropService.get_prop_record(main, pid).get("battery_bank_spec", {})
+		_ok(absf(float(rs.get("main_routed_m", -1.0)) - routed) < 0.06, "the routed length is the bank's main run (%.2f m)" % float(rs.get("main_routed_m", -1.0)))
+		var dd := BankDesign.solve(rs)
+		var mlen := 0.0
+		for cb in (dd["cables"] as Array):
+			if str(cb["id"]) == "main_pos":
+				mlen = float(cb["len_mm"]) * 0.001
+		_ok(absf(mlen - routed - BankDesign.LUG_SLACK_MM * 0.001) < 0.06, "the design sizes the main cable for it")
+		if rt != null:
+			_ok(str(rt.get("text")).find("Main cables") >= 0, "the label gives the run")
+		_ok(PlacedPropService.wire_bank_to_inverter(main, pid) == "", "wiring again adds nothing")
+	else:
+		print("batterylab_world: no controller on the site, main cables skipped")
 	# Other batteries on the site with no design: no limit (the old behaviour).
 	var others: Array = []
 	for it: Dictionary in GraphSystems.walk_site_power(model):
@@ -169,5 +219,10 @@ func run(main: Node, harness: Node) -> Dictionary:
 		loader.call("delete_prop_by_id", pid)
 		await _settle(tree, 10)
 		_ok((model.call("get_item", gid) as Dictionary).is_empty(), "deleting the bank removes its graph battery")
+		var left := 0
+		for c: Dictionary in (model.get("connections") as Array):
+			if str(c.get("bank_main", "")) == pid:
+				left += 1
+		_ok(left == 0, "and its main cables")
 	print("batterylab_world: %d failures" % _fails.size())
 	return {"ok": _fails.is_empty(), "failures": _fails}

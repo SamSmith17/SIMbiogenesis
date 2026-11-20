@@ -1367,7 +1367,84 @@ static func seed_battery_bank(main: Node, prop_id: String) -> String:
 		"node_type": "battery", "width": 120.0, "height": 92.0, "specs": g})
 	if not node_id.is_empty():
 		update_prop_record(main, prop_id, {"graph_item_id": node_id}, false)
+		wire_bank_to_inverter(main, prop_id)
 	return node_id
+
+
+## A placed bank's main cables, routed in 3D: the + (red) and − (black)
+## from the bank's graph battery to the nearest inverter / charge controller
+## on the site (the controller's battery terminals). The conduit system routes
+## and measures them; BatteryBankRuntime writes the measured length back as
+## the bank's `main_routed_m`, so the cable sizing and drop use the real run.
+## Does nothing when the battery is already wired to a controller, or the
+## site has none. Returns the controller's id ("" when none was wired).
+static func wire_bank_to_inverter(main: Node, prop_id: String) -> String:
+	var rec := get_prop_record(main, prop_id)
+	var gid := str(rec.get("graph_item_id", ""))
+	var sgv := _system_graph_view(main)
+	var gmodel: Variant = sgv.get("model") if sgv != null else null
+	if gid.is_empty() or gmodel == null:
+		return ""
+	var conns: Array = gmodel.get("connections")
+	var items: Array = gmodel.get("items")
+	var ctl_ids := {}
+	for it: Dictionary in items:
+		if str(it.get("type", "")) == "controller" and not bool(it.get("is_virtual", false)):
+			ctl_ids[str(it["id"])] = it
+	if ctl_ids.is_empty():
+		return ""
+	for c: Dictionary in conns:
+		var a := str(c.get("source_item_id", ""))
+		var b := str(c.get("target_item_id", ""))
+		if (a == gid and ctl_ids.has(b)) or (b == gid and ctl_ids.has(a)):
+			return ""
+	# The nearest controller with a place in the world, else the first.
+	var here := Vector2(float(rec.get("x", 0.0)), float(rec.get("z", 0.0)))
+	var best := ""
+	var best_d := INF
+	for cid in ctl_ids:
+		var cit: Dictionary = ctl_ids[cid]
+		var pid := str((cit.get("specs", {}) as Dictionary).get("bound_prop_id", cit.get("bound_prop_id", "")))
+		var crec := get_prop_record(main, pid) if not pid.is_empty() else {}
+		var dist := INF
+		if not crec.is_empty():
+			dist = here.distance_to(Vector2(float(crec.get("x", 0.0)), float(crec.get("z", 0.0))))
+		elif bool(gmodel.call("item_has_3d_anchor", cit)):
+			dist = 1e6  # in the world, but not as a placed prop: after the props
+		else:
+			dist = 1e9  # graph-only: the cables can't be routed in 3D
+		if best.is_empty() or dist < best_d:
+			best = str(cid)
+			best_d = dist
+	var mgr: Node = sgv.call("_get_conduit_manager") if sgv.has_method("_get_conduit_manager") else null
+	for pole in [["positive", "batteryPositive", "battery_cable_pos"], ["negative", "batteryNegative", "battery_cable_neg"]]:
+		var conn := {
+			"scope_id": str(((gmodel.call("get_item", gid) as Dictionary)).get("scope_id", "root")),
+			"polarity": pole[0], "source_item_id": best, "source_handle_id": pole[1],
+			"target_item_id": gid, "target_handle_id": pole[0],
+			"waypoints": [], "line_style": "bezier", "curve_tension": 1.0, "corner_radius": 28.0,
+			"visible_3d": true, "conduit_type": pole[2], "bank_main": prop_id,
+		}
+		gmodel.call("add_connection", conn)
+		# Built now even with the world's 3D wires off: the build is what
+		# measures the run.
+		if mgr != null and mgr.has_method("force_remesh"):
+			mgr.call_deferred("force_remesh", str(conn.get("id", "")))
+	return best
+
+
+## The routed length (m) of a placed bank's main cables, -1 when they are not
+## routed (the longer of the + and −).
+static func bank_main_routed_m(main: Node, prop_id: String) -> float:
+	var sgv := _system_graph_view(main)
+	var gmodel: Variant = sgv.get("model") if sgv != null else null
+	if gmodel == null:
+		return -1.0
+	var best := -1.0
+	for c: Dictionary in (gmodel.get("connections") as Array):
+		if str(c.get("bank_main", "")) == prop_id:
+			best = maxf(best, float(c.get("route_length_m", 0.0)))
+	return best if best > 0.0 else -1.0
 
 
 static func seed_tclab(main: Node, prop_id: String) -> String:

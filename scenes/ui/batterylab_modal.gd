@@ -381,6 +381,8 @@ func _build_centre() -> void:
 	_bank_panel.size_flags_stretch_ratio = 1.0
 	col.add_child(_bank_panel)
 	_bank_panel.bank_changed.connect(_on_bank_field)
+	_bank_panel.view_changed.connect(func(_v: String) -> void: _paint_bench())
+	(_bank_panel.call("bench") as Control).connect("frame_changed", func(_f: Dictionary) -> void: _paint_bench())
 	_bank_panel.row_selected.connect(func(id: String) -> void: select_bank_part(id))
 
 
@@ -1539,6 +1541,15 @@ func _rebuild_bank() -> void:
 	if key != _bank_framed and _mode == "bank":
 		_bank_framed = key
 		_frame.call_deferred(false)
+
+
+## Paint the bank bench's frame on the bank in the studio (only while the
+## Bench view is up).
+func _paint_bench() -> void:
+	if _bank_builder == null:
+		return
+	var on := _mode == "bank" and str(_bank_panel.call("view")) == "bench"
+	_bank_builder.show_bench_frame((_bank_panel.call("bench") as Control).call("frame") if on else {})
 
 
 func _on_bank_field(path: String, value: Variant) -> void:

@@ -14,6 +14,7 @@ const MM := 0.001
 var design: Dictionary = {}
 var _packs: Array = []
 var _hl_node: Node3D = null
+var _tint_node: Node3D = null
 
 
 static func build_node(bank: Dictionary, node_name: String = "BatteryBank") -> Node3D:
@@ -122,7 +123,8 @@ func _build() -> void:
 				a = Vector3(float(bars["lo"]) - 40.0, line, float(bars["z"]))
 				c2 = Vector3(float(bars["hi"]) + 40.0, line, float(bars["z"]))
 			var mid := (a + c2) * 0.5
-			var size := (c2 - a).abs() + Vector3(float(bars["t"]), float(bars["t"]), float(bars["w"]))
+			var tn := float(bars["t"]) * float(bars.get("n", 1))
+			var size := (c2 - a).abs() + Vector3(tn, tn, float(bars["w"]))
 			var mi4 := MeshInstance3D.new()
 			mi4.name = "Bar_%s" % pole
 			mi4.mesh = box
@@ -130,7 +132,9 @@ func _build() -> void:
 			mi4.transform = BattBuilder.box_xf(mid, size)
 			add_child(mi4)
 			parts.append({"id": "bar_%s" % pole, "kind": "bus",
-				"label": "%s busbar %.0f × %.0f mm" % ["Positive" if pole == "pos" else "Negative", float(bars["w"]), float(bars["t"])],
+				"label": "%s busbar %s%.0f × %.0f mm, carries %.0f A" % ["Positive" if pole == "pos" else "Negative",
+					("%d × " % int(bars.get("n", 1))) if int(bars.get("n", 1)) > 1 else "", float(bars["w"]), float(bars["t"]),
+					float(bars.get("amps", 0.0))],
 				"aabb": AABB((mid - size * 0.5) * MM, size * MM)})
 	# Cables, red and black, each a chain of cylinders.
 	var rows := {"red": [], "black": []}
@@ -268,6 +272,57 @@ func highlight(ids: Array, color: Color = Color(1.0, 0.72, 0.15)) -> void:
 		mi.transform = Transform3D(Basis.from_scale(b.size), b.get_center())
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_hl_node.add_child(mi)
+
+
+## Paint a bank-bench frame (BankSim) over the bank: each pack by its
+## charge (green full, amber low) or red with its BMS tripped, a blown
+## fuse grey. An empty frame takes the paint off.
+func show_bench_frame(f: Dictionary) -> void:
+	if _tint_node == null:
+		_tint_node = Node3D.new()
+		_tint_node.name = "BenchTint"
+		add_child(_tint_node)
+	for c in _tint_node.get_children():
+		_tint_node.remove_child(c)
+		c.queue_free()
+	if f.is_empty():
+		return
+	var box := BattBuilder._box_mesh()
+	var ps: PackedInt32Array = f.get("pack_state", PackedInt32Array())
+	var soc: PackedFloat64Array = f.get("pack_soc", PackedFloat64Array())
+	var sc: PackedInt32Array = f.get("state_str", PackedInt32Array())
+	for p in (get_meta("parts", []) as Array):
+		var id := str(p["id"])
+		var col := Color(0, 0, 0, 0)
+		if str(p["kind"]) == "pack" and id.begins_with("pack_"):
+			var k := int(id.get_slice("_", 1))
+			if k < ps.size():
+				if ps[k] != 0:
+					col = Color(0.95, 0.25, 0.2, 0.5)
+				else:
+					var s := clampf(soc[k], 0.0, 1.0) if k < soc.size() else 0.5
+					col = Color(1.0, 0.7, 0.2, 0.32).lerp(Color(0.3, 0.9, 0.4, 0.32), s)
+		elif str(p["kind"]) == "fuse" and id.begins_with("fuse_"):
+			var j := int(id.get_slice("_", 1))
+			if j < sc.size() and sc[j] == 4:
+				col = Color(0.15, 0.15, 0.18, 0.85)
+		if col.a <= 0.0:
+			continue
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.albedo_color = col
+		var b: AABB = (p["aabb"] as AABB).grow(0.006)
+		var mi := MeshInstance3D.new()
+		mi.mesh = box
+		mi.material_override = m
+		mi.transform = Transform3D(Basis.from_scale(b.size), b.get_center())
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_tint_node.add_child(mi)
+
+
+func tinted_count() -> int:
+	return 0 if _tint_node == null else _tint_node.get_child_count()
 
 
 func highlighted_count() -> int:
