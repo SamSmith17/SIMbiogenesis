@@ -128,7 +128,7 @@ static func bank(d: Dictionary) -> Dictionary:
 			rows.append(_row("Mounting", "Rubber floor mat", 1.0, "pcs", MOUNT_USD["mat"], MOUNT_KG["mat"]))
 	var comms: Array = d["comms"]
 	if not comms.is_empty():
-		rows.append(_row("Comms", "Pack-to-pack comms cable (RJ45)", float(comms.size() + 1), "pcs", COMMS_USD, 0.05 * float(comms.size() + 1),
+		rows.append(_row("Comms", "Pack-to-pack comms cable (RJ45)", float(comms.size()), "pcs", COMMS_USD, 0.05 * float(comms.size()),
 			"addresses 1–%d by the DIP switches, terminator on the last" % int(e["packs"])))
 		rows.append(_row("Comms", "Terminator", 1.0, "pcs", 4.0, 0.01))
 	var total := 0.0

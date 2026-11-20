@@ -29,6 +29,9 @@ const ROD_D := 8.0            # M8 threaded rod
 const STUD_H := 4.0
 const HARNESS_UP := 22.0      # harness plane above the busbars
 const LEAD_UP := 12.0
+## Leads whose ends are closer than this (in plan) hop across at their own
+## height.
+const LEAD_HOP_MM := 160.0
 const BMS_LIFT := 8.0
 const WALL_T := {"steel": 1.5, "aluminium": 2.0, "abs": 3.0}
 const MARGIN := {"side": 12.0, "back": 12.0, "bottom": 6.0, "top": 15.0}
@@ -710,7 +713,9 @@ static func _finish(L: Dictionary, spec: Dictionary, cell: Dictionary, bms: Dict
 		var tp := float((cell.get("terminals", {}) as Dictionary).get("pitch_mm", cb.size.x * 0.7))
 		term = {"pos": Vector3(cb.get_center().x + tp * 0.5, cb.end.y, cb.get_center().z),
 			"neg": Vector3(cb.get_center().x - tp * 0.5, cb.end.y, cb.get_center().z),
-			"axis": "y"}
+			"axis": "y", "n_out": Vector3.UP, "out_kind": "stud", "stud": 8.0}
+		term["pos_out"] = term["pos"]
+		term["neg_out"] = term["neg"]
 	# Main leads.
 	var leads: Array = L["leads"]
 	var lw := BattElectrical.wire_for(amps)
@@ -763,6 +768,10 @@ static func _finish(L: Dictionary, spec: Dictionary, cell: Dictionary, bms: Dict
 
 
 static func _lead(id: String, a: Vector3, b: Vector3, via_y: float, w: Dictionary, color: String) -> Dictionary:
+	# Two ends close together (a breaker beside its terminal): a short hop at
+	# their own height, not up over the cells and back.
+	if Vector2(a.x - b.x, a.z - b.z).length() < LEAD_HOP_MM:
+		via_y = maxf(a.y, b.y) + 30.0
 	var pts: Array = [a, Vector3(a.x, via_y, a.z), Vector3(b.x, via_y, a.z), Vector3(b.x, via_y, b.z), b]
 	var clean: Array = [pts[0]]
 	for i in range(1, pts.size()):
@@ -809,9 +818,14 @@ static func _fittings(out: Array, form: String, o: AABB, en: Dictionary, bms: Di
 			out.append({"id": "post_%s" % e[0], "kind": "post_%s" % e[0],
 				"c": Vector3(x, py + 10.0, pz), "s": Vector3(18.0, 20.0, 18.0), "explode": Vector3(0, 1.1, 0)})
 			term[str(e[0])] = Vector3(x, py - 15.0, pz)
+			# Outside: a clamp round the post's middle.
+			term[str(e[0]) + "_out"] = Vector3(x, py + 9.0, pz)
 		out.append({"id": "handle", "kind": "handle", "c": Vector3(cx, py + 6.0, o.get_center().z),
 			"s": Vector3(w * 0.45, 8.0, 22.0), "explode": Vector3(0, 1.2, 0)})
 		term["axis"] = "y"
+		term["n_out"] = Vector3.UP
+		term["out_kind"] = "post"
+		term["stud"] = 8.0
 		return term
 	var ty := o.position.y + minf(h * 0.5, 55.0)
 	for e in [["pos", 1.0], ["neg", -1.0]]:
@@ -819,7 +833,12 @@ static func _fittings(out: Array, form: String, o: AABB, en: Dictionary, bms: Di
 		out.append({"id": "term_%s" % e[0], "kind": "term_%s" % e[0],
 			"c": Vector3(x, ty, fz + 12.0), "s": Vector3(22.0, 22.0, 24.0), "explode": ex})
 		term[str(e[0])] = Vector3(x, ty, fz - 15.0)
+		# Outside: where a lug sits on the M8 stud (on the brass, under the nut).
+		term[str(e[0]) + "_out"] = Vector3(x, ty, fz + 13.5)
 	term["axis"] = "z"
+	term["n_out"] = Vector3(0, 0, 1)
+	term["out_kind"] = "stud"
+	term["stud"] = 8.0
 	if protected:
 		var ba := float(en.get("breaker_a", 0.0))
 		if ba <= 0.0:
@@ -900,6 +919,6 @@ static func _shift(L: Dictionary, d: Vector3) -> void:
 		L["enclosure"]["outer"] = o
 		for pn in (L["enclosure"]["panels"] as Array):
 			pn["c"] = (pn["c"] as Vector3) + d
-	for f in ["pos", "neg", "breaker_in", "breaker_out"]:
+	for f in ["pos", "neg", "pos_out", "neg_out", "breaker_in", "breaker_out"]:
 		if (L["terminals"] as Dictionary).has(f):
 			L["terminals"][f] = (L["terminals"][f] as Vector3) + d

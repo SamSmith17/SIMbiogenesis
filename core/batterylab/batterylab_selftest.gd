@@ -16,7 +16,7 @@ extends SceneTree
 ## JSON, graph specs read back by BatteryChemistry, the builder's parts,
 ## cutaway and picking.
 
-const EXPECTED_CHECKS := 2015
+const EXPECTED_CHECKS := 2057
 
 var _pass := 0
 var _fail := 0
@@ -50,6 +50,7 @@ func _initialize() -> void:
 	_test_sim()
 	_test_bank()
 	_test_bank_bus_and_route()
+	_test_bank_wiring()
 	_test_bank_sim()
 	var total := _pass + _fail
 	print("batterylab selftest: %d passed, %d failed (%d checks)" % [_pass, _fail, total])
@@ -1061,3 +1062,105 @@ func _test_bank_sim() -> void:
 	var bigr := BankSim.run(_bank("agm_12v_100", 4, 25, {"mount": "floor"}), "share")
 	var ms := Time.get_ticks_msec() - t0
 	_ok(not (bigr["frames"] as Array).is_empty() and ms < 8000, "a 100-pack bank's run takes %d ms" % ms)
+
+
+func _test_bank_wiring() -> void:
+	# Every bank cable bends no tighter than its own minimum radius, in every
+	# mount and bus.
+	var cases := [["rack_48v_105", 1, 4, {}], ["rack_48v_105", 1, 3, {"bus": "distributor", "mount": "floor"}],
+		["wall_48v_314", 1, 2, {}], ["agm_12v_100", 4, 2, {"mount": "shelf"}], ["fla_6v_225", 8, 1, {"fuse": "anl"}],
+		["rack_48v_105", 1, 6, {"mount": "floor", "bus": "busbar"}]]
+	for c in cases:
+		var d := _bank(str(c[0]), int(c[1]), int(c[2]), c[3])
+		var tight := 0
+		var ends_ok := true
+		var lugs_ok := true
+		for cb in (d["cables"] as Array):
+			if bool(cb["tight"]):
+				tight += 1
+			var pts: Array = cb["pts"]
+			var ea: Dictionary = cb["ends"][0]
+			if (pts[0] as Vector3).distance_to(ea["s"]) > 0.5:
+				ends_ok = false
+			if str(cb["kind"]) != "main":
+				var eb: Dictionary = cb["ends"][1]
+				if (pts[-1] as Vector3).distance_to(eb["s"]) > 0.5:
+					ends_ok = false
+			for e in (cb["ends"] as Array):
+				if str(e.get("kind", "")) == "stud" and (e["lug"] as Dictionary).is_empty():
+					lugs_ok = false
+		var tag := "%s %dS%dP %s" % [c[0], c[1], c[2], d["mount"]]
+		_ok(tight == 0, "%s: no cable bent tighter than 5 × its diameter (%d tight)" % [tag, tight])
+		_ok(ends_ok, "%s: every cable starts and ends at its lug barrels" % tag)
+		_ok(lugs_ok, "%s: every stud end carries a ring lug" % tag)
+		_ok((d["fuses"] as Array).size() == int(c[2]) or (d["fuse"] as Dictionary).is_empty(), "%s: a fuse per string" % tag)
+	# Bend radius: a bigger cable bends wider, and battery cable at 5 × OD.
+	var od1 := BattWire.od_mm("1/0 AWG")
+	_near(BattWire.bend_r_mm(od1, "battery"), od1 * 5.0, 1e-9, "battery cable bends at 5 × its diameter")
+	_ok(BattWire.od_mm("4/0 AWG") > BattWire.od_mm("1 AWG"), "4/0 is thicker than 1 AWG")
+	# Fuse mounts by family and bus.
+	var cab := _bank("rack_48v_105", 1, 4)
+	_ok(str((cab["fuses"] as Array)[0]["mount"]) == "bar", "Class T holders bolt to the + bar")
+	var bars: Dictionary = cab["bars"]
+	_ok(float(bars["z_pos"]) > float(bars["z_neg"]), "the + bar stands in front of the − bar")
+	var f0: Dictionary = (cab["fuses"] as Array)[0]
+	_ok(((f0["in"] as Vector3) - (f0["a"] as Vector3)).x > 0.0, "the holder reaches away from the packs")
+	var dist := _bank("rack_48v_105", 1, 3, {"bus": "distributor", "mount": "floor"})
+	_ok(str((dist["fuses"] as Array)[0]["mount"]) == "distributor", "a distributor's fuses are inside it")
+	_ok((dist["bars"]["pos_studs"] as Array).size() == 4, "a distributor has a stud per string and one for the mains")
+	# The disconnect: the main + starts at its output stud.
+	var mp: Dictionary = (cab["cables"] as Array).filter(func(x: Dictionary) -> bool: return str(x["id"]) == "main_pos")[0]
+	_ok((mp["ends"][0]["p"] as Vector3).distance_to(cab["disconnect"]["b"]) < 0.5, "the main + leaves from the disconnect switch")
+	var nod := _bank("rack_48v_105", 1, 4, {"disconnect": false})
+	_ok((nod["disconnect"] as Dictionary).is_empty(), "no switch when the spec has none")
+	# Same-length wiring: string cables cut to one length really are that long.
+	var eq := _bank("rack_48v_105", 1, 4, {"wiring": "equal_len", "bus": "distributor", "mount": "floor"})
+	var lens: Array = []
+	var drawn_ok := true
+	for cb in (eq["cables"] as Array):
+		if str(cb["kind"]) in ["pos", "neg"]:
+			lens.append(float(cb["len_mm"]))
+			var drawn := BattWire.length(PackedVector3Array(cb["pts"])) + float(cb["ends"][0]["reach"]) + float(cb["ends"][1]["reach"])
+			if not bool(cb.get("coiled", false)) and absf(drawn - float(cb["len_mm"])) > 8.0:
+				drawn_ok = false
+	_ok(lens.max() - lens.min() < 0.5, "same-length string cables are one length")
+	_ok(drawn_ok, "and are drawn that long (a wider loop)")
+	# Comms: a patch cable per pack join plus one to the inverter.
+	_ok((cab["comms"] as Array).size() == 4, "comms: three joins and the run to the inverter")
+	# Top posts: series jumpers rise off the lid.
+	var agm := _bank("agm_12v_100", 4, 1, {"mount": "shelf"})
+	var j0: Dictionary = (agm["cables"] as Array)[0]
+	var top := -INF
+	for p in (j0["pts"] as Array):
+		top = maxf(top, (p as Vector3).y)
+	_ok(top > (j0["ends"][0]["p"] as Vector3).y + 20.0, "a jumper between top posts arches up off the lid")
+	# The builder: every triangle of the bank's own meshes wound to its normal.
+	var bb := BankBuilder.build_from_design(cab)
+	var bad := 0
+	var tris := 0
+	for nm in ["Bus", "Cables", "Comms"]:
+		var mi := bb.get_node_or_null(nm) as MeshInstance3D
+		_ok(mi != null, "the bank draws its %s" % nm.to_lower())
+		if mi == null:
+			continue
+		var am: ArrayMesh = mi.mesh
+		for si in am.get_surface_count():
+			var arr := am.surface_get_arrays(si)
+			var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+			var n: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+			for t in range(0, v.size(), 3):
+				var fn := n[t] + n[t + 1] + n[t + 2]
+				if fn.length_squared() < 1e-12:
+					continue
+				tris += 1
+				# (Smoothed normals on a tight tube bend can lean a sliver a
+				# little past its face: only a face turned clearly away counts.)
+				var cr := (v[t + 1] - v[t]).cross(v[t + 2] - v[t])
+				if cr.dot(fn) > 0.05 * cr.length() * fn.length():
+					bad += 1
+	_ok(tris > 1000 and bad == 0, "bank hardware: %d triangles, %d wound backwards" % [tris, bad])
+	var kinds := {}
+	for pt in (bb.get_meta("parts", []) as Array):
+		kinds[str(pt["kind"])] = true
+	_ok(kinds.has("fuse") and kinds.has("switch") and kinds.has("comms") and kinds.has("bus"), "fuses, the switch, comms and the bus are pickable")
+	bb.free()

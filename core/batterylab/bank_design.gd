@@ -58,6 +58,36 @@ const FUSE_TYPES := {
 	"anl": {"label": "ANL", "ka": 6.0, "v": 32.0, "k_blow": 490.0, "t_min": 0.01,
 		"sizes": [35, 40, 50, 60, 80, 100, 130, 150, 175, 200, 225, 250, 300, 325, 350, 400, 500], "usd": 12.0, "holder_usd": 18.0},
 }
+## Bus hardware, mm (proportions of maker drawings: estimates). Studs on
+## the distributor are this far apart; the − bar stands this much further
+## out than the + so − cables pass in front of the + bar; standoff
+## insulators hold the bars off their board; bars run this far past the
+## outermost landing; the take-off sits this far past the last landing.
+const STUD_PITCH_MM := 50.0
+## How far past the + bar a bus-mounted fuse holder reaches.
+const FUSE_REACH_MM := 170.0
+const NEG_STEP_MM := 40.0
+const STANDOFF_MM := 30.0
+const BAR_OVERHANG_MM := 60.0
+const TAKE_OUT_MM := 25.0
+const BAR_STUD_MM := 10.0
+const MRBF_STUD_MM := 10.0
+## SAE post (J537): a clamp's ring round its middle, radius ≈ 8.75 mm.
+const POST_R_MM := 8.75
+## A rotary battery disconnect switch: its body length along the bar and
+## how far its output stud stands off.
+const DISCONNECT_W_MM := 110.0
+const DISCONNECT_H_MM := 55.0
+## Points along each cable curve.
+const CURVE_SAMPLES := 24
+## Fuse bodies: stud pitch (input to output), height off the face, stud Ø,
+## width (Class T holder, ANL holder, MRBF terminal block, MEGA fuse).
+const FUSE_DIMS := {
+	"class_t": {"pitch": 125.0, "h": 45.0, "stud": 10.0, "w": 55.0},
+	"anl": {"pitch": 95.0, "h": 35.0, "stud": 8.0, "w": 42.0},
+	"mrbf": {"pitch": 32.0, "h": 23.0, "stud": 10.0, "w": 30.0},
+	"mega": {"pitch": 60.0, "h": 18.0, "stud": 8.0, "w": 20.0},
+}
 ## Copper cable: $ per metre per mm² (an estimate, welding / battery cable).
 const CABLE_USD_PER_M_MM2 := 0.22
 
@@ -96,8 +126,8 @@ static func _solve(b: Dictionary) -> Dictionary:
 	var ph := pb.size.y
 	var pdp := pb.size.z
 	var term: Dictionary = pd["layout"]["terminals"]
-	var t_pos: Vector3 = term.get("pos", Vector3(pw * 0.3, ph, 0))
-	var t_neg: Vector3 = term.get("neg", Vector3(-pw * 0.3, ph, 0))
+	var t_pos: Vector3 = term.get("pos_out", term.get("pos", Vector3(pw * 0.3, ph, 0)))
+	var t_neg: Vector3 = term.get("neg_out", term.get("neg", Vector3(-pw * 0.3, ph, 0)))
 	var on_top := t_pos.y > ph * 0.85
 	var gap := float(b["gap_mm"])
 	# Packs: string j, place s in it; k = j * N + s is the order they stand in.
@@ -139,169 +169,233 @@ static func _solve(b: Dictionary) -> Dictionary:
 		var y := y0 + float(lv) * step_y
 		packs.append({"id": "pack_%d" % k, "k": k, "string": k / N, "place": k % N,
 			"pos": Vector3(x, y, 0.0), "term_pos": Vector3(x, y, 0.0) + t_pos,
-			"term_neg": Vector3(x, y, 0.0) + t_neg})
+			"term_neg": Vector3(x, y, 0.0) + t_neg, "out_pos": Vector3(x, y, 0.0) + t_pos,
+			"out_neg": Vector3(x, y, 0.0) + t_neg})
 	var span_x := float(cols - 1) * step_x + pw
 	var top_y := y0 + float(levels - 1) * step_y + ph
 	var front_z := pb.end.z
-	# Bus: two bars (or a distributor) the strings land on.
+	# Bus: two bars (or a distributor) the strings land on. Cables are sized
+	# first: how tightly they can bend sets how far out the bus stands.
 	var i_string := float(pe["cont_discharge_a"])
 	var i_bank := i_string * float(M)
+	var w_str := BattElectrical.wire_for(i_string * 1.25)
+	var w_main := BattElectrical.wire_for(i_bank * 1.25)
+	var r_str := BattWire.bend_r_mm(BattWire.od_mm(str(w_str["name"]), float(w_str["mm2"])), "battery")
 	var bars: Dictionary = {}
 	var bus_axis := "y" if mount == "cabinet" else "x"
-	var chan_z := front_z + 70.0
+	var chan_z := front_z + maxf(70.0, r_str * 1.5)
 	var bus_pos_line := 0.0
 	var bus_neg_line := 0.0
 	var bar_lo := 0.0
 	var bar_hi := 0.0
 	var bus_pick := bus_bar_for(b, i_bank)
+	var bw := float(bus_pick["w"])
+	var tn := float(bus_pick["t"]) * float(bus_pick["n"])
+	var sp := maxf(50.0, bw + 30.0)
+	# The − bar stands nearer the packs, the + bar outside it with its fuse
+	# holders reaching away from the packs.
 	if mount == "cabinet":
-		bus_pos_line = span_x * 0.5 + 70.0
-		bus_neg_line = span_x * 0.5 + 120.0
+		bus_neg_line = span_x * 0.5 + 45.0 + bw * 0.5
+		bus_pos_line = bus_neg_line + sp
 		bar_lo = y0
 		bar_hi = top_y
 	else:
-		bus_pos_line = (y0 - 90.0) if not on_top else (top_y + 120.0)
-		bus_neg_line = bus_pos_line - 50.0 if not on_top else bus_pos_line + 50.0
-		if mount == "floor" or mount == "cart":
-			bus_pos_line = top_y + 120.0
-			bus_neg_line = top_y + 170.0
+		var below := y0 - 60.0 - bw * 0.5
+		if on_top or mount == "floor" or mount == "cart" or below - sp - bw * 0.5 - FUSE_REACH_MM < 40.0:
+			bus_neg_line = top_y + 90.0 + bw * 0.5
+			bus_pos_line = bus_neg_line + sp
+		else:
+			bus_neg_line = below
+			bus_pos_line = below - sp
 		bar_lo = -span_x * 0.5
 		bar_hi = span_x * 0.5
+	var bus_right := span_x * 0.5
 	if bus == "distributor":
-		# A box at the right-hand end: everything lands on its short bars.
-		var bx := span_x * 0.5 + 180.0
-		bars = {"kind": "distributor", "box": AABB(Vector3(bx - 90.0, y0, front_z - 60.0), Vector3(180.0, 220.0, 120.0)),
-			"pos": Vector3(bx, y0 + 160.0, front_z + 10.0), "neg": Vector3(bx, y0 + 60.0, front_z + 10.0)}
+		# A box at the right-hand end: a stud pair per string and one for the
+		# main cables, string fuses between the rows, room for the switch.
+		var slots := M + 1
+		var wd := float(slots) * STUD_PITCH_MM + 80.0 + (DISCONNECT_W_MM if bool(b["disconnect"]) else 0.0)
+		var bx := span_x * 0.5 + 80.0 + wd * 0.5
+		var box := AABB(Vector3(bx - wd * 0.5, y0, front_z - 60.0), Vector3(wd, 220.0, 120.0))
+		var ps: Array = []
+		var ns: Array = []
+		for k in slots:
+			var sx := box.position.x + 40.0 + STUD_PITCH_MM * (float(k) + 0.5)
+			ps.append(Vector3(sx, y0 + 175.0, box.end.z))
+			ns.append(Vector3(sx, y0 + 45.0, box.end.z))
+		bars = {"kind": "distributor", "box": box, "pos_studs": ps, "neg_studs": ns, "n_face": Vector3(0, 0, 1),
+			"pos": ps[M], "neg": ns[M]}
+		bus_right = box.end.x
 	else:
-		bars = {"kind": "busbar", "axis": bus_axis, "w": float(bus_pick["w"]), "t": float(bus_pick["t"]),
+		bars = {"kind": "busbar", "axis": bus_axis, "w": bw, "t": float(bus_pick["t"]),
 			"n": int(bus_pick["n"]), "amps": float(bus_pick["amps"]), "auto": bool(bus_pick["auto"]),
-			"pos_line": bus_pos_line, "neg_line": bus_neg_line, "lo": bar_lo, "hi": bar_hi, "z": chan_z}
+			"pos_line": bus_pos_line, "neg_line": bus_neg_line, "lo": bar_lo, "hi": bar_hi, "z": chan_z,
+			"z_neg": chan_z, "z_pos": chan_z + tn + NEG_STEP_MM, "tn": tn}
+		bars["face_pos"] = chan_z + tn * 0.5
+		bars["face_neg"] = float(bars["z_neg"]) + tn * 0.5
+		# The board stands flush with the packs' fronts, so every cable runs in
+		# front of it; the standoffs make up the depth.
+		bars["board_z"] = minf(front_z, chan_z - tn * 0.5 - STANDOFF_MM)
+		if mount == "cabinet":
+			bus_right = bus_pos_line + bw * 0.5 + (FUSE_REACH_MM if not fuse_guess_none(b) else 0.0)
 	# The string ends: + at its first pack, − at its last (series joins between).
 	var cables: Array = []
 	var strings: Array = []
-	var w_str := BattElectrical.wire_for(i_string * 1.25)
-	var w_main := BattElectrical.wire_for(i_bank * 1.25)
 	var r_pack := float(pe["r_ohm"])
 	var v_bank := float(pe["v_nom"]) * float(N)
+	var term_kind := str(term.get("out_kind", "stud"))
+	var term_n: Vector3 = term.get("n_out", Vector3(0, 0, 1))
+	var term_stud := float(term.get("stud", 8.0))
+	var fuse := _pick_fuse(str(b["fuse"]), float(pe["v_max"]) * float(N), 0.0, 1.0, i_string, bool(pd["lithium"]))
 	# Take-offs to the inverter: diagonal = + at the bar's high end, − at the low.
-	var take_pos := bar_hi
-	var take_neg := bar_lo if str(b["wiring"]) == "diagonal" else bar_hi
+	var take_pos := bar_hi + TAKE_OUT_MM
+	var take_neg := (bar_lo - TAKE_OUT_MM) if str(b["wiring"]) == "diagonal" else (bar_hi + TAKE_OUT_MM)
+	var fuses: Array = []
 	for j in M:
 		var first: Dictionary = packs[j * N]
 		var last: Dictionary = packs[j * N + N - 1]
-		var r_str := r_pack * float(N)
+		var rs := r_pack * float(N)
 		# Series jumpers inside the string.
 		for s in range(N - 1):
 			var a: Dictionary = packs[j * N + s]
 			var c2: Dictionary = packs[j * N + s + 1]
-			var cb := _cable("series_%d_%d" % [j, s], "series", a["term_neg"], c2["term_pos"], on_top, chan_z,
+			var cb := _cable("series_%d_%d" % [j, s], "series",
+				_end(term_kind, a["out_neg"], term_n, term_stud), _end(term_kind, c2["out_pos"], term_n, term_stud),
 				w_str, i_string, "black", "%s − to %s +" % [_pname(a), _pname(c2)])
 			_size_for_drop(cb, v_bank)
 			cables.append(cb)
-			r_str += float(cb["r_ohm"])
-		var land_p := _landing(bars, first["term_pos"], "pos")
-		var land_n := _landing(bars, last["term_neg"], "neg")
-		var cp := _cable("str_pos_%d" % j, "pos", first["term_pos"], land_p, on_top, chan_z, w_str, i_string,
+			rs += float(cb["r_ohm"])
+		var land_p := _landing(bars, first["out_pos"], "pos", j)
+		var land_n := _landing(bars, last["out_neg"], "neg", j)
+		var nf := _face_n(bars)
+		# The + end of the string cable: the pack's stud, or a terminal fuse on it.
+		var pa := _end(term_kind, first["out_pos"], term_n, term_stud)
+		var pb_end := _end("stud", land_p, nf, BAR_STUD_MM)
+		if not fuse.is_empty():
+			var fz := _place_fuse(j, fuse, bars, first["out_pos"], term_n, term_kind, land_p, nf)
+			fuses.append(fz)
+			if str(fz["mount"]) == "terminal":
+				pa = _end("stud", fz["in"], term_n, MRBF_STUD_MM)
+			elif str(fz["mount"]) == "bar":
+				pb_end = _end("stud", fz["in"], nf, float(fz["stud"]))
+		var cp := _cable("str_pos_%d" % j, "pos", pa, pb_end, w_str, i_string,
 			"red", "String %d + to the %s" % [j + 1, "distributor" if bus == "distributor" else "positive bar"])
-		var cn := _cable("str_neg_%d" % j, "neg", last["term_neg"], land_n, on_top, chan_z, w_str, i_string,
+		var cn := _cable("str_neg_%d" % j, "neg", _end(term_kind, last["out_neg"], term_n, term_stud),
+			_end("stud", land_n, nf, BAR_STUD_MM), w_str, i_string,
 			"black", "String %d − to the %s" % [j + 1, "distributor" if bus == "distributor" else "negative bar"])
 		_size_for_drop(cp, v_bank)
 		_size_for_drop(cn, v_bank)
 		cables.append(cp)
 		cables.append(cn)
-		strings.append({"j": j, "r_ohm": r_str, "fuse": "fuse_%d" % j, "cp": cp, "cn": cn,
+		strings.append({"j": j, "r_base": rs, "fuse": "fuse_%d" % j, "cp": cp, "cn": cn,
 			"land_p": land_p, "land_n": land_n})
 	if str(b["wiring"]) == "equal_len":
-		var longest := 0.0
-		for st0 in strings:
-			longest = maxf(longest, maxf(float(st0["cp"]["len_mm"]), float(st0["cn"]["len_mm"])))
-		for st0 in strings:
-			for cbx in [st0["cp"], st0["cn"]]:
-				cbx["len_mm"] = longest
-				cbx["r_ohm"] = BattElectrical.resistance("copper", longest, float(cbx["mm2"]))
-				cbx["coiled"] = true
-	for st1 in strings:
-		var j := int(st1["j"])
-		var r_str := float(st1["r_ohm"]) + float(st1["cp"]["r_ohm"]) + float(st1["cn"]["r_ohm"])
-		var land_p: Vector3 = st1["land_p"]
-		var land_n: Vector3 = st1["land_n"]
-		# The bar between the landing and the take-off.
-		if bus == "busbar":
-			var area := float(bars["w"]) * float(bars["t"]) * float(bars["n"])
-			var lp := absf(_along(bars, land_p) - take_pos)
-			var ln := absf(_along(bars, land_n) - take_neg)
-			r_str += BattElectrical.resistance("copper", lp, area) + BattElectrical.resistance("copper", ln, area)
-		st1["r_ohm"] = r_str
-		st1.erase("cp")
-		st1.erase("cn")
-		st1.erase("land_p")
-		st1.erase("land_n")
-	var g_sum := 0.0
-	for st in strings:
-		g_sum += 1.0 / float(st["r_ohm"])
+		_equal_lengths(strings)
+	var g_sum := _string_shares(strings, bars, bus, take_pos, take_neg)
+	# The fault current: the bank shorted at its bus.
+	var r_par := 1.0 / g_sum
+	var i_sc := v_bank / maxf(r_par, 1e-6)
+	var fuse2 := _pick_fuse(str(b["fuse"]), float(pe["v_max"]) * float(N), i_sc / float(M), i_sc, i_string,
+		bool(pd["lithium"]))
+	if str(fuse2.get("type", "")) != str(fuse.get("type", "")):
+		# The fault current changed the fuse family: redo the + ends with it.
+		fuse = fuse2
+		fuses = []
+		for j in M:
+			var first2: Dictionary = packs[j * N]
+			var lp2 := _landing(bars, first2["out_pos"], "pos", j)
+			var nf2 := _face_n(bars)
+			var ea := _end(term_kind, first2["out_pos"], term_n, term_stud)
+			var eb := _end("stud", lp2, nf2, BAR_STUD_MM)
+			if not fuse.is_empty():
+				var fz2 := _place_fuse(j, fuse, bars, first2["out_pos"], term_n, term_kind, lp2, nf2)
+				fuses.append(fz2)
+				if str(fz2["mount"]) == "terminal":
+					ea = _end("stud", fz2["in"], term_n, MRBF_STUD_MM)
+				elif str(fz2["mount"]) == "bar":
+					eb = _end("stud", fz2["in"], nf2, float(fz2["stud"]))
+			var cp2: Dictionary = (strings[j] as Dictionary)["cp"]
+			cp2["ends"] = [ea, eb]
+			_route_cable(cp2)
+			_size_for_drop(cp2, v_bank)
+		if str(b["wiring"]) == "equal_len":
+			_equal_lengths(strings)
+		g_sum = _string_shares(strings, bars, bus, take_pos, take_neg)
+		r_par = 1.0 / g_sum
+		i_sc = v_bank / maxf(r_par, 1e-6)
+	else:
+		fuse = fuse2
 	var max_share := 0.0
 	var min_share := 1.0
 	for st in strings:
-		st["share"] = (1.0 / float(st["r_ohm"])) / g_sum
 		max_share = maxf(max_share, float(st["share"]))
 		min_share = minf(min_share, float(st["share"]))
-	# Main cables to the inverter (the run the player typed).
+		st.erase("cp")
+		st.erase("cn")
+		st.erase("land_p")
+		st.erase("land_n")
+		st.erase("r_base")
+	# Main cables to the inverter (the run the player typed, or as routed in 3D).
 	var routed := float(b.get("main_routed_m", -1.0)) > 0.0
 	var run := (float(b["main_routed_m"]) if routed else float(b["main_run_m"])) * 1000.0
 	var out_p := _take_point(bars, "pos", take_pos)
 	var out_n := _take_point(bars, "neg", take_neg)
-	var mp := _cable("main_pos", "main", out_p, out_p + Vector3(0, 0, run), false, chan_z, w_main, i_bank,
-		"red", "Main + to the inverter")
-	var mn := _cable("main_neg", "main", out_n, out_n + Vector3(0, 0, run), false, chan_z, w_main, i_bank,
+	var nfm := _face_n(bars)
+	var away := _bar_dir(bars)
+	var away_n := -away if str(b["wiring"]) == "diagonal" and bus == "busbar" else away
+	var disc: Dictionary = {}
+	var main_a := _end("stud", out_p, nfm, BAR_STUD_MM, away)
+	if bool(b["disconnect"]):
+		disc = {"id": "disconnect", "a": out_p, "n": nfm, "axis": away,
+			"b": out_p + away * DISCONNECT_W_MM + nfm * DISCONNECT_H_MM,
+			"c": out_p + away * DISCONNECT_W_MM * 0.5 + nfm * DISCONNECT_H_MM * 0.5,
+			"amps": maxf(i_bank, 1.0)}
+		main_a = _end("stud", disc["b"], nfm, BAR_STUD_MM, away)
+		bus_right = maxf(bus_right, (disc["c"] as Vector3).x + DISCONNECT_W_MM)
+	var mp := _main_cable("main_pos", main_a, run, routed, w_main, i_bank, "red", "Main + to the inverter")
+	var mn := _main_cable("main_neg", _end("stud", out_n, nfm, BAR_STUD_MM, away_n), run, routed, w_main, i_bank,
 		"black", "Main − to the inverter")
-	# A straight run out: the length as typed, or as routed in 3D to the
-	# placed inverter (the run's real path is drawn by the conduit system).
-	for mc in [mp, mn]:
-		mc["routed"] = routed
-		if routed:
-			mc["label"] = str(mc["label"]) + " (routed in 3D)"
-			# The conduit system draws the run; the bank draws its first stretch.
-			var p0: Vector3 = (mc["pts"] as Array)[0]
-			mc["pts"] = [p0, p0 + Vector3(0, 0, minf(run, ROUTED_STUB_MM))]
-		mc["len_mm"] = run + LUG_SLACK_MM
-		mc["r_ohm"] = BattElectrical.resistance("copper", float(mc["len_mm"]), float(mc["mm2"]))
-		mc["drop_pct"] = float(mc["r_ohm"]) * i_bank / maxf(float(pe["v_nom"]) * float(N), 1.0) * 100.0
-	cables.append(mp)
-	cables.append(mn)
-	# Voltage-drop pass on the main run (the strings were sized as they were made).
 	_size_for_drop(mp, v_bank)
 	_size_for_drop(mn, v_bank)
-	# The fault current: the bank shorted at its terminals.
-	var r_par := 1.0 / g_sum
+	cables.append(mp)
+	cables.append(mn)
 	var r_bank := r_par + float(mp["r_ohm"]) + float(mn["r_ohm"])
-	var i_sc := v_bank / maxf(r_par, 1e-6)
-	var fuse := _pick_fuse(str(b["fuse"]), float(pe["v_max"]) * float(N), i_sc / float(M), i_sc, i_string,
-		bool(pd["lithium"]))
-	var fuses: Array = []
-	if not fuse.is_empty():
-		for j in M:
-			var fp: Vector3 = (packs[j * N] as Dictionary)["term_pos"]
-			fuses.append({"id": "fuse_%d" % j, "pos": fp + (Vector3(0, 60, 40) if on_top else Vector3(60, 0, 50)),
-				"amps": float(fuse["amps"]), "type": str(fuse["type"])})
-	# Comms: a patch cable pack to pack, then to the inverter, terminator at the end.
+	# Comms: a patch cable pack to pack (out of one port, into the next pack's
+	# first), the first pack's other port to the inverter, a terminator on the last.
 	var comms: Array = []
 	var talks: Array = (pd["bms"] as Dictionary).get("comms", [])
 	var has_comms := bool(b["comms"]) and count > 1 and (talks.has("CAN") or talks.has("RS485"))
+	var ports: Array = []
+	for f in (pd["layout"]["fittings"] as Array):
+		if str(f["kind"]) == "port":
+			ports.append((f["c"] as Vector3) + Vector3(0, 0, (f["s"] as Vector3).z * 0.5))
+	if ports.is_empty():
+		ports = [Vector3(-pw * 0.3, ph * 0.5, pb.end.z)]
+	var p_in: Vector3 = ports[0]
+	var p_out: Vector3 = ports[1] if ports.size() > 1 else ports[0] + Vector3(24, 0, 0)
 	if has_comms:
 		for k in range(count - 1):
-			var a2: Dictionary = packs[k]
-			var c3: Dictionary = packs[k + 1]
-			var pa: Vector3 = (a2["pos"] as Vector3) + Vector3(-pw * 0.3, ph * 0.5, pb.end.z)
-			var pc: Vector3 = (c3["pos"] as Vector3) + Vector3(-pw * 0.3, ph * 0.5, pb.end.z)
-			comms.append({"id": "comms_%d" % k, "a": pa, "b": pc,
-				"len_mm": maxf(500.0, pa.distance_to(pc) + 200.0), "addr": k + 1})
+			var pa2: Vector3 = (packs[k]["pos"] as Vector3) + p_out
+			var pc: Vector3 = (packs[k + 1]["pos"] as Vector3) + p_in
+			var path := _patch_path(pa2, pc)
+			comms.append({"id": "comms_%d" % k, "a": pa2, "b": pc, "pts": path,
+				"len_mm": maxf(500.0, BattWire.length(path) + 60.0), "addr": k + 1})
+		var p0: Vector3 = (packs[0]["pos"] as Vector3) + p_in
+		var tail := _patch_path(p0, p0 + Vector3(0, -120.0, 260.0))
+		comms.append({"id": "comms_inverter", "a": p0, "b": p0 + Vector3(0, -120.0, 260.0), "pts": tail,
+			"len_mm": 2000.0, "addr": 0, "to_inverter": true})
 	# Frame parts for the builder and the BOM.
-	var frame := _frame(mount, span_x, top_y, pb, y0, count, ph)
+	var frame := _frame(mount, span_x, top_y, pb, y0, count, ph, bus_right)
 	var outer := AABB(Vector3(-span_x * 0.5, 0.0, pb.position.z), Vector3(span_x, top_y, pdp))
 	for f in (frame["boxes"] as Array):
 		outer = outer.merge(f["box"] as AABB)
 	if bus == "distributor":
 		outer = outer.merge(bars["box"] as AABB)
+	else:
+		outer = outer.merge(_bars_box(bars))
+	for cb3 in cables:
+		if str(cb3["kind"]) != "main":
+			outer = outer.merge(_pts_box(cb3["pts"]))
 	var cont_bank := i_string / maxf(max_share, 1e-9)
 	var e := {
 		"v_nom": v_bank, "v_max": float(pe["v_max"]) * float(N), "v_min": float(pe["v_min"]) * float(N),
@@ -314,10 +408,10 @@ static func _solve(b: Dictionary) -> Dictionary:
 	}
 	var withstand := _withstand(cables, bars, fuse, i_sc, M, bus)
 	var d := {"spec": b, "pack": pd, "mount": mount, "bus": bus, "bars": bars, "packs": packs, "cables": cables,
-		"withstand": withstand, "main_routed": routed,
+		"withstand": withstand, "main_routed": routed, "disconnect": disc,
 		"strings": strings, "fuse": fuse, "fuses": fuses, "comms": comms, "frame": frame,
 		"bounds": outer, "electrical": e, "on_top": on_top, "series": N, "parallel": M,
-		"wire_string": w_str, "wire_main": w_main}
+		"wire_string": w_str, "wire_main": w_main, "term_kind": term_kind}
 	var bom := BattBom.bank(d)
 	d["bom"] = bom
 	d["cost_usd"] = float(bom["total_usd"])
@@ -410,33 +504,255 @@ static func _pname(p: Dictionary) -> String:
 	return "pack %d" % (int(p["k"]) + 1)
 
 
-## A Manhattan route out of a terminal (up if on top, else forward), along
-## the channel, to the landing; its length with lug allowances.
-static func _cable(id: String, kind: String, a: Vector3, b: Vector3, on_top: bool, chan_z: float,
-		wire: Dictionary, amps: float, color: String, label: String) -> Dictionary:
-	var pts: Array = [a]
-	var out := a + (Vector3(0, STUB_MM, 0) if on_top else Vector3(0, 0, STUB_MM))
-	pts.append(out)
-	if on_top:
-		pts.append(Vector3(b.x, out.y, out.z))
-		pts.append(Vector3(b.x, out.y, b.z))
+## One end of a cable: a ring lug on a stud ("stud"), a clamp round an SAE
+## post ("post") or a loose end ("free"), at `p` on a face with normal `n`;
+## `t` = which way the cable leaves it (in the face plane), else toward the
+## other end.
+static func _end(kind: String, p: Vector3, n: Vector3, stud: float, t: Vector3 = Vector3.ZERO) -> Dictionary:
+	return {"kind": kind, "p": p, "n": n.normalized(), "stud": stud, "t_hint": t}
+
+
+## A cable from end a to end b: sized, routed, measured.
+static func _cable(id: String, kind: String, a: Dictionary, b: Dictionary, wire: Dictionary, amps: float,
+		color: String, label: String) -> Dictionary:
+	var cb := {"id": id, "kind": kind, "ends": [a, b], "gauge": str(wire["name"]), "mm2": float(wire["mm2"]),
+		"amps": amps, "color": color, "label": label, "drop_pct": 0.0}
+	_route_cable(cb)
+	return cb
+
+
+## Where a cable leaves an end: the lug's barrel (or the clamp's ear), and
+## the direction it heads off in. Fills e["t"], e["s"], e["lug"], e["reach"].
+static func _exit(e: Dictionary, mm2: float, toward: Vector3) -> void:
+	var p: Vector3 = e["p"]
+	var n: Vector3 = e["n"]
+	var hint: Vector3 = e.get("t_hint", Vector3.ZERO)
+	var t := hint - n * hint.dot(n)
+	if t.length() < 1e-3:
+		var v := toward - p
+		t = v - n * v.dot(n)
+		# Side by side on one face: leave upward, an arch over what is between.
+		if t.length() > 1e-3 and absf(n.y) < 0.5 and absf(t.normalized().y) < 0.3:
+			t = Vector3.UP
+	if t.length() < 1e-3:
+		t = BattParts.frame(n)[0]
+	t = t.normalized()
+	e["t"] = t
+	match str(e["kind"]):
+		"stud":
+			var lg := BattWire.lug(mm2, float(e["stud"]))
+			e["lug"] = lg
+			var lift := float(lg["tongue_t"]) * 0.5 + float(lg["barrel_od"]) * 0.5
+			e["s"] = p + n * lift + t * float(lg["reach"])
+			e["reach"] = float(lg["reach"])
+		"post":
+			e["lug"] = {}
+			e["reach"] = POST_R_MM + 16.0
+			e["s"] = p + t * float(e["reach"])
+		_:
+			e["lug"] = {}
+			e["reach"] = 0.0
+			e["s"] = p
+
+
+## Route a cable between its two ends: out of each barrel along its
+## direction, one smooth curve between (a cubic whose handles are as long as
+## it takes to keep every bend at or above the cable's minimum radius).
+## Sets pts, od, r_bend, min_r, tight, len_mm, r_ohm.
+static func _route_cable(cb: Dictionary) -> void:
+	var mm2 := float(cb["mm2"])
+	var od := BattWire.od_mm(str(cb["gauge"]), mm2)
+	var r := BattWire.bend_r_mm(od, "battery")
+	var ea: Dictionary = cb["ends"][0]
+	var eb: Dictionary = cb["ends"][1]
+	_exit(ea, mm2, eb["p"])
+	_exit(eb, mm2, ea["p"])
+	var res := _route_try(ea, eb, r, float(cb.get("stretch_k", 0.0)))
+	if float(res["min_r"]) < r * 0.97 and float(cb.get("stretch_k", 0.0)) <= 0.0:
+		# Too tight the obvious way: try the lugs turned the other ways on
+		# their faces and keep the gentlest.
+		var opts_a := _lug_turns(ea)
+		var opts_b := _lug_turns(eb)
+		var best_ta: Vector3 = ea["t"]
+		var best_tb: Vector3 = eb["t"]
+		for ta in opts_a:
+			for tb in opts_b:
+				_set_lug_dir(ea, ta, mm2)
+				_set_lug_dir(eb, tb, mm2)
+				var rr := _route_try(ea, eb, r, 0.0)
+				if float(rr["min_r"]) > float(res["min_r"]) + 0.5:
+					res = rr
+					best_ta = ta
+					best_tb = tb
+				if float(res["min_r"]) >= r:
+					break
+			if float(res["min_r"]) >= r:
+				break
+		_set_lug_dir(ea, best_ta, mm2)
+		_set_lug_dir(eb, best_tb, mm2)
+	cb["pts"] = res["pts"]
+	cb["od"] = od
+	cb["r_bend"] = r
+	cb["min_r"] = res["min_r"]
+	cb["tight"] = float(res["min_r"]) < r * 0.97
+	cb["k"] = res["k"]
+	cb["len_mm"] = BattWire.length(PackedVector3Array(cb["pts"])) + float(ea["reach"]) + float(eb["reach"])
+	cb["r_ohm"] = BattElectrical.resistance("copper", float(cb["len_mm"]), mm2)
+
+
+static func _route_try(ea: Dictionary, eb: Dictionary, r: float, force_k: float) -> Dictionary:
+	# Off a top post the cable rises out of its lug rather than lying on the
+	# lid (the kink is under the heat-shrink).
+	var ta: Vector3 = ea["t"]
+	var tb: Vector3 = eb["t"]
+	if (ea["n"] as Vector3).y > 0.5:
+		ta = (ta + Vector3.UP * 0.7).normalized()
+	if (eb["n"] as Vector3).y > 0.5:
+		tb = (tb + Vector3.UP * 0.7).normalized()
+	return _curve(ea["s"], ta, eb["s"], tb, r, force_k)
+
+
+## The ways a lug can point on its face: its own way first, then the other
+## three right angles (a lug's hint, if any, is kept).
+static func _lug_turns(e: Dictionary) -> Array:
+	var t: Vector3 = e["t"]
+	if (e.get("t_hint", Vector3.ZERO) as Vector3).length() > 1e-3 or str(e["kind"]) == "free":
+		return [t]
+	var n: Vector3 = e["n"]
+	var s := n.cross(t).normalized()
+	return [t, s, -s, -t]
+
+
+static func _set_lug_dir(e: Dictionary, t: Vector3, mm2: float) -> void:
+	e["t_hint"] = t
+	_exit(e, mm2, e["p"])
+	e["t_hint"] = Vector3.ZERO
+
+
+## A cubic from s (heading ts) to e (arriving against te): the shortest
+## handle length that bends no tighter than r, else the gentlest one.
+## `force_k` > 0 uses that handle length as given.
+static func _curve(s: Vector3, ts: Vector3, e: Vector3, te: Vector3, r: float, force_k: float = 0.0) -> Dictionary:
+	var dist := maxf(s.distance_to(e), 1.0)
+	var ks: Array = []
+	if force_k > 0.0:
+		ks = [force_k]
 	else:
-		var cz := maxf(out.z, chan_z if kind != "series" else out.z)
-		pts.append(Vector3(out.x, out.y, cz))
-		pts.append(Vector3(b.x, out.y, cz))
-		pts.append(Vector3(b.x, b.y, cz))
-	pts.append(b)
-	var clean: Array = [pts[0]]
-	for p in pts.slice(1):
-		if (p as Vector3).distance_to(clean[-1]) > 0.5:
-			clean.append(p)
-	var L := 0.0
-	for i in range(1, clean.size()):
-		L += (clean[i] as Vector3).distance_to(clean[i - 1])
-	L += LUG_SLACK_MM
-	var r := BattElectrical.resistance("copper", L, float(wire["mm2"]))
-	return {"id": id, "kind": kind, "pts": clean, "len_mm": L, "gauge": str(wire["name"]), "mm2": float(wire["mm2"]),
-		"amps": amps, "r_ohm": r, "color": color, "label": label, "drop_pct": 0.0}
+		for f in [0.25, 0.35, 0.5, 0.65, 0.85, 1.1, 1.4]:
+			ks.append(maxf(dist * float(f), r * 0.9))
+		# Close ends: a wider loop is the way to a gentle bend.
+		for f in [1.2, 1.6, 2.2, 3.0]:
+			if r * float(f) > float(ks[-1]):
+				ks.append(r * float(f))
+	var best := {}
+	for k in ks:
+		var pts := _bez(s, s + ts * float(k), e + te * float(k), e, CURVE_SAMPLES)
+		var mr := BattWire.min_radius(PackedVector3Array(pts))
+		if best.is_empty() or mr > float(best["min_r"]):
+			best = {"pts": pts, "min_r": mr, "k": float(k)}
+		if mr >= r:
+			return {"pts": pts, "min_r": mr, "k": float(k)}
+	return best
+
+
+static func _bez(p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3, n: int) -> Array:
+	var out: Array = []
+	for i in n + 1:
+		var u := float(i) / float(n)
+		var v := 1.0 - u
+		out.append(p0 * (v * v * v) + p1 * (3.0 * v * v * u) + p2 * (3.0 * v * u * u) + p3 * (u * u * u))
+	return out
+
+
+## Lengthen a cable to `target` mm by giving it longer handles (a bigger,
+## gentler loop): how cables cut to one length lie in a real bank. Flags
+## it "coiled" when even long handles fall short.
+static func _stretch_to(cb: Dictionary, target: float) -> void:
+	if float(cb["len_mm"]) >= target - 1.0:
+		return
+	var lo := float(cb["k"])
+	var hi := lo * 6.0 + 400.0
+	for i in 22:
+		var mid := (lo + hi) * 0.5
+		cb["stretch_k"] = mid
+		_route_cable(cb)
+		if float(cb["len_mm"]) < target:
+			lo = mid
+		else:
+			hi = mid
+	cb["stretch_k"] = hi
+	_route_cable(cb)
+	cb["coiled"] = float(cb["len_mm"]) < target - 5.0
+
+
+static func _equal_lengths(strings: Array) -> void:
+	var longest := 0.0
+	for st in strings:
+		longest = maxf(longest, maxf(float(st["cp"]["len_mm"]), float(st["cn"]["len_mm"])))
+	for st in strings:
+		for cbx in [st["cp"], st["cn"]]:
+			_stretch_to(cbx, longest)
+			cbx["len_mm"] = longest
+			cbx["r_ohm"] = BattElectrical.resistance("copper", longest, float(cbx["mm2"]))
+
+
+## Each string's resistance (packs + jumpers + its two cables + the bar to
+## the take-off) and its share of the current. Returns the summed conductance.
+static func _string_shares(strings: Array, bars: Dictionary, bus: String, take_pos: float, take_neg: float) -> float:
+	for st in strings:
+		var r_s := float(st["r_base"]) + float(st["cp"]["r_ohm"]) + float(st["cn"]["r_ohm"])
+		if bus == "busbar":
+			var area := float(bars["w"]) * float(bars["t"]) * float(bars["n"])
+			var lp := absf(_along(bars, st["land_p"]) - take_pos)
+			var ln := absf(_along(bars, st["land_n"]) - take_neg)
+			r_s += BattElectrical.resistance("copper", lp, area) + BattElectrical.resistance("copper", ln, area)
+		st["r_ohm"] = r_s
+	var g_sum := 0.0
+	for st in strings:
+		g_sum += 1.0 / float(st["r_ohm"])
+	for st in strings:
+		st["share"] = (1.0 / float(st["r_ohm"])) / g_sum
+	return g_sum
+
+
+## A main cable: a lug on the bus (or the switch), a bend out toward the
+## inverter, then straight. The bank draws `run` of it, or only a stub when
+## the conduit system draws the routed run in 3D.
+static func _main_cable(id: String, a: Dictionary, run: float, routed: bool, wire: Dictionary, amps: float,
+		color: String, label: String) -> Dictionary:
+	var cb := {"id": id, "kind": "main", "ends": [a, {}], "gauge": str(wire["name"]), "mm2": float(wire["mm2"]),
+		"amps": amps, "color": color, "label": label + (" (routed in 3D)" if routed else ""), "drop_pct": 0.0,
+		"routed": routed, "run": run}
+	_route_main(cb)
+	return cb
+
+
+static func _route_main(cb: Dictionary) -> void:
+	var mm2 := float(cb["mm2"])
+	var od := BattWire.od_mm(str(cb["gauge"]), mm2)
+	var r := BattWire.bend_r_mm(od, "battery")
+	var ea: Dictionary = cb["ends"][0]
+	var n: Vector3 = ea["n"]
+	_exit(ea, mm2, (ea["p"] as Vector3) + n * 1000.0)
+	var s: Vector3 = ea["s"]
+	var ts: Vector3 = ea["t"]
+	# Out of the barrel, round toward +Z (to the inverter), then straight.
+	var q := s + ts * r * 1.8 + Vector3(0, 0, r * 3.2)
+	var res := _curve(s, ts, q, Vector3(0, 0, -1), r)
+	var pts: Array = res["pts"]
+	var run := float(cb["run"])
+	var draw := minf(run, ROUTED_STUB_MM) if bool(cb["routed"]) else run
+	var curve_len := BattWire.length(PackedVector3Array(pts))
+	pts.append(q + Vector3(0, 0, maxf(draw - curve_len, 20.0)))
+	cb["pts"] = pts
+	cb["ends"] = [ea, {"kind": "free", "p": pts[-1], "n": Vector3(0, 0, 1), "t": Vector3(0, 0, -1), "s": pts[-1],
+		"lug": {}, "reach": 0.0, "stud": 0.0}]
+	cb["od"] = od
+	cb["r_bend"] = r
+	cb["min_r"] = res["min_r"]
+	cb["tight"] = float(res["min_r"]) < r * 0.97
+	cb["len_mm"] = run + LUG_SLACK_MM
+	cb["r_ohm"] = BattElectrical.resistance("copper", float(cb["len_mm"]), mm2)
 
 
 static func _size_for_drop(cb: Dictionary, v: float) -> void:
@@ -450,8 +766,12 @@ static func _size_for_drop(cb: Dictionary, v: float) -> void:
 			return
 		cb["gauge"] = str(nxt[0])
 		cb["mm2"] = float(nxt[1])
-		cb["r_ohm"] = BattElectrical.resistance("copper", float(cb["len_mm"]), float(cb["mm2"]))
 		cb["upsized"] = true
+		# A thicker cable bends wider: route it again.
+		if str(cb["kind"]) == "main":
+			_route_main(cb)
+		else:
+			_route_cable(cb)
 
 
 static func _next_wire(mm2: float) -> Array:
@@ -461,13 +781,32 @@ static func _next_wire(mm2: float) -> Array:
 	return []
 
 
-static func _landing(bars: Dictionary, t: Vector3, pole: String) -> Vector3:
+## Where string j's + or − lands: on the bar's front face level with the
+## pack's terminal (clamped onto the bar), or on its stud of the distributor.
+static func _landing(bars: Dictionary, t: Vector3, pole: String, j: int = 0) -> Vector3:
 	if str(bars["kind"]) == "distributor":
-		return bars[pole]
+		var studs: Array = bars["%s_studs" % pole]
+		return studs[clampi(j, 0, studs.size() - 1)]
 	var line := float(bars["%s_line" % pole])
+	var fz := float(bars["face_%s" % pole])
 	if str(bars["axis"]) == "y":
-		return Vector3(line, t.y, float(bars["z"]))
-	return Vector3(clampf(t.x, float(bars["lo"]), float(bars["hi"])), line, float(bars["z"]))
+		return Vector3(line, clampf(t.y, float(bars["lo"]), float(bars["hi"])), fz)
+	return Vector3(clampf(t.x, float(bars["lo"]), float(bars["hi"])), line, fz)
+
+
+static func fuse_guess_none(b: Dictionary) -> bool:
+	return str(b.get("fuse", "auto")) == "none"
+
+
+static func _face_n(_bars: Dictionary) -> Vector3:
+	return Vector3(0, 0, 1)
+
+
+## Along the bar, away from the packs' middle (the high end).
+static func _bar_dir(bars: Dictionary) -> Vector3:
+	if str(bars["kind"]) == "distributor":
+		return Vector3(1, 0, 0)
+	return Vector3(0, 1, 0) if str(bars["axis"]) == "y" else Vector3(1, 0, 0)
 
 
 static func _along(bars: Dictionary, p: Vector3) -> float:
@@ -476,11 +815,91 @@ static func _along(bars: Dictionary, p: Vector3) -> float:
 
 static func _take_point(bars: Dictionary, pole: String, at: float) -> Vector3:
 	if str(bars["kind"]) == "distributor":
-		return (bars[pole] as Vector3) + Vector3(0, 0, 30)
+		return bars[pole]
 	var line := float(bars["%s_line" % pole])
+	var fz := float(bars["face_%s" % pole])
 	if str(bars["axis"]) == "y":
-		return Vector3(line, at, float(bars["z"]))
-	return Vector3(at, line, float(bars["z"]))
+		return Vector3(line, at, fz)
+	return Vector3(at, line, fz)
+
+
+## Where string j's fuse sits and what it joins:
+##  - MRBF: a terminal fuse block on the pack's + stud; the cable lands on
+##    its output stud (`in`, beside the pack stud, the block's height out).
+##  - Class T / ANL on a busbar: a holder bolted to the + bar at the landing,
+##    reaching back toward the packs; the cable lands on its far stud.
+##  - On a distributor: a MEGA-style fuse inside, under the string's stud.
+static func _place_fuse(j: int, fuse: Dictionary, bars: Dictionary, pack_pos: Vector3, term_n: Vector3,
+		term_kind: String, land: Vector3, nf: Vector3) -> Dictionary:
+	var type := str(fuse["type"])
+	var dims: Dictionary = FUSE_DIMS.get(type, FUSE_DIMS["class_t"])
+	var out := {"id": "fuse_%d" % j, "type": type, "amps": float(fuse["amps"]), "stud": float(dims["stud"])}
+	if str(bars["kind"]) == "distributor":
+		out["mount"] = "distributor"
+		out["a"] = land
+		out["in"] = land
+		out["n"] = nf
+		out["axis"] = Vector3(0, -1, 0)
+		out["pos"] = land + Vector3(0, -65.0, 0) + nf * 8.0
+		out["type"] = "mega"
+		return out
+	if type == "mrbf" and term_kind == "stud":
+		var up := Vector3.UP if absf(term_n.y) < 0.5 else Vector3.RIGHT
+		out["mount"] = "terminal"
+		out["a"] = pack_pos
+		out["n"] = term_n
+		out["axis"] = up
+		out["in"] = pack_pos + term_n * float(dims["h"]) + up * float(dims["pitch"])
+		out["pos"] = pack_pos + term_n * float(dims["h"]) * 0.5 + up * float(dims["pitch"]) * 0.5
+		return out
+	# Bus-mounted holder on the outer + bar, reaching away from the packs.
+	var perp := Vector3(1, 0, 0) if str(bars["axis"]) == "y" else Vector3(0, 1, 0)
+	if (pack_pos - land).dot(perp) > 0.0:
+		perp = -perp
+	out["mount"] = "bar"
+	out["a"] = land
+	out["n"] = nf
+	out["axis"] = perp
+	out["in"] = land + perp * float(dims["pitch"]) + nf * float(dims["h"])
+	out["pos"] = land + perp * float(dims["pitch"]) * 0.5 + nf * float(dims["h"]) * 0.5
+	return out
+
+
+## A patch cable from port a to port b: out of each plug, a loop that sags.
+static func _patch_path(a: Vector3, b: Vector3) -> Array:
+	var z := Vector3(0, 0, 1)
+	var pts := _bez(a + z * 30.0, a + z * 90.0, b + z * 90.0, b + z * 30.0, 16)
+	var sag := clampf(a.distance_to(b) * 0.12, 15.0, 80.0)
+	for i in pts.size():
+		var u := float(i) / float(pts.size() - 1)
+		pts[i] = (pts[i] as Vector3) + Vector3(0, -sag * sin(PI * u), 0)
+	pts.push_front(a)
+	pts.append(b)
+	return pts
+
+
+static func _bars_box(bars: Dictionary) -> AABB:
+	var w := float(bars["w"])
+	var b0: AABB
+	for pole in ["pos", "neg"]:
+		var line := float(bars["%s_line" % pole])
+		var z := float(bars["z_%s" % pole])
+		var lo := float(bars["lo"]) - BAR_OVERHANG_MM
+		var hi := float(bars["hi"]) + BAR_OVERHANG_MM
+		var bb: AABB
+		if str(bars["axis"]) == "y":
+			bb = AABB(Vector3(line - w * 0.5, lo, z - 40.0), Vector3(w, hi - lo, 80.0))
+		else:
+			bb = AABB(Vector3(lo, line - w * 0.5, z - 40.0), Vector3(hi - lo, w, 80.0))
+		b0 = bb if pole == "pos" else b0.merge(bb)
+	return b0
+
+
+static func _pts_box(pts: Array) -> AABB:
+	var b := AABB(pts[0], Vector3.ZERO)
+	for p in pts:
+		b = b.expand(p)
+	return b.grow(10.0)
 
 
 static func _pick_fuse(want: String, v_max: float, _i_sc_string: float, i_sc: float, i_string: float,
@@ -507,7 +926,7 @@ static func _pick_fuse(want: String, v_max: float, _i_sc_string: float, i_sc: fl
 
 ## The structure the packs stand in: boxes {id, kind, box, label}.
 static func _frame(mount: String, span_x: float, top_y: float, pb: AABB, y0: float, count: int,
-		ph: float) -> Dictionary:
+		ph: float, bus_right: float = 0.0) -> Dictionary:
 	var boxes: Array = []
 	var front := pb.end.z
 	var back := pb.position.z
@@ -516,7 +935,7 @@ static func _frame(mount: String, span_x: float, top_y: float, pb: AABB, y0: flo
 		"cabinet":
 			u = int(ceil((top_y - y0) / 44.45)) + 4
 			var h := y0 + float(u) * 44.45 + 60.0
-			var w := CABINET_W
+			var w := maxf(CABINET_W, 2.0 * (bus_right + 40.0))
 			var dp := maxf(800.0, (front - back) + 250.0)
 			var zc := (front + back) * 0.5 - 20.0
 			var t := 18.0
@@ -631,6 +1050,18 @@ static func _checks(d: Dictionary) -> Array:
 				"why": "Even the biggest cable in the table drops more than 1 %% over %.1f m: move the bank closer to the inverter." % (float(cb["len_mm"]) * 0.001),
 				"ids": [str(cb["id"])]})
 			break
+	var tight: Array = []
+	for cb in (d["cables"] as Array):
+		if bool(cb.get("tight", false)):
+			tight.append(str(cb["id"]))
+	if not tight.is_empty():
+		var c0: Dictionary = {}
+		for cb in (d["cables"] as Array):
+			if str(cb["id"]) == tight[0]:
+				c0 = cb
+		out.append({"level": "warn", "text": "%s bent tighter than %s cable should go." % [UiText.count(tight.size(), "cable"), str(c0.get("gauge", ""))],
+			"why": "Fine-strand battery cable wants a bend of about 5 × its diameter (%.0f mm for %s); bent tighter, the strands and the jacket are strained at the lug. Space the packs or the bus further apart, or use a smaller cable per string." % [float(c0.get("r_bend", 0.0)), str(c0.get("gauge", ""))],
+			"ids": tight})
 	var mount := str(d["mount"])
 	var pm := float(pd["mass_kg"])
 	if mount == "wall" and pm > 70.0:

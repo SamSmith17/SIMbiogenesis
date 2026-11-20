@@ -73,6 +73,9 @@ func _run() -> void:
 	if cell.contains("x"):
 		CW = int(cell.get_slice("x", 0))
 		CH = int(cell.get_slice("x", 1))
+	if _arg("banks", "") != "":
+		await _run_banks(root3d, cam)
+		return
 	var views: Array = Array(_arg("views", ",".join(PackedStringArray(VIEWS))).split(","))
 	var ids: Array = []
 	for b in BattPresets.builtins():
@@ -110,8 +113,11 @@ func _run() -> void:
 					var at := _close_target(b, view)
 					if at != Vector3.INF:
 						target = at
-						var near := 0.16 if view != "cells" else 0.12
+						var near := 0.16 if view != "cells" else 0.22
 						from = target + Vector3(near * 0.7, near * 0.75, near * 1.0)
+						if view == "cells":
+							# Down through the open lid: from the side the case walls are in the way.
+							from = target + Vector3(near * 0.15, near * 1.5, near * 0.55)
 			cam.global_position = from
 			cam.look_at(target, Vector3.UP)
 			target = bm.get_center()
@@ -128,6 +134,83 @@ func _run() -> void:
 	grid.save_png(out)
 	print("BatteryLook: wrote %s  (columns: %s; rows: %s)" % [
 		ProjectSettings.globalize_path(out), " / ".join(PackedStringArray(views)), ", ".join(PackedStringArray(ids))])
+	quit(0)
+
+
+## Banks: -- --banks=1 [--only=<case ids>]: each case whole, then close on
+## its bus, a pack terminal and a fuse.
+const BANK_CASES := [
+	["cab_1s4p", "rack_48v_105", 1, 4, {}],
+	["cab_dist", "rack_48v_105", 1, 3, {"bus": "distributor", "mount": "floor"}],
+	["wall_1s2p", "wall_48v_314", 1, 2, {}],
+	["agm_4s2p", "agm_12v_100", 4, 2, {"mount": "shelf"}],
+	["dropin_2p", "dropin_12v_105", 1, 3, {}],
+	["fla_8s1p", "fla_6v_225", 8, 1, {"fuse": "anl"}],
+]
+
+
+func _run_banks(root3d: Node3D, cam: Camera3D) -> void:
+	var only := _arg("only", "")
+	var views := ["whole", "bus", "terminal", "fuse"]
+	var cases: Array = []
+	for c in BANK_CASES:
+		if only.is_empty() or only.split(",").has(str(c[0])):
+			cases.append(c)
+	var grid := Image.create(CW * views.size(), CH * maxi(cases.size(), 1), false, Image.FORMAT_RGBA8)
+	for k in cases.size():
+		var c: Array = cases[k]
+		var pre := BattPresets.builtin(str(c[1]))
+		if pre.is_empty():
+			print("BatteryLook: no preset %s" % c[1])
+			continue
+		var bs := BankSpec.of_pack(pre, int(c[2]), int(c[3]), str(c[0]))
+		for key in (c[4] as Dictionary):
+			bs[key] = c[4][key]
+		var d := BankDesign.solve(bs)
+		var b := BankBuilder.build_from_design(d)
+		root3d.add_child(b)
+		var bm: AABB = b.get_meta("bounds_m")
+		var tight := 0
+		var worst := INF
+		for cb in (d["cables"] as Array):
+			if bool(cb.get("tight", false)):
+				tight += 1
+			worst = minf(worst, float(cb["min_r"]) / maxf(float(cb["r_bend"]), 1.0))
+		for v in views.size():
+			var view := str(views[v])
+			var target := bm.get_center()
+			var reach := maxf(bm.size.x, maxf(bm.size.y, bm.size.z)) * 1.9 + 0.3
+			var from := target + Vector3(reach * 0.45, reach * 0.35, reach * 0.85)
+			var id := ""
+			match view:
+				"bus":
+					id = "bar_pos" if not b.part("bar_pos").is_empty() else "distributor"
+				"terminal":
+					id = "series_0_0" if not b.part("series_0_0").is_empty() else "str_pos_0"
+				"fuse":
+					id = "fuse_0" if not b.part("fuse_0").is_empty() else "disconnect"
+			if id != "":
+				var pp := b.part(id)
+				if not pp.is_empty():
+					var ab: AABB = pp["aabb"]
+					target = ab.get_center()
+					if view == "terminal":
+						target = (d["packs"][0]["out_pos"] as Vector3) * 0.001
+					var near := clampf(ab.size.length() * 0.9, 0.25, 0.9) if view == "bus" else 0.32
+					from = target + Vector3(near * 0.55, near * 0.45, near * 1.0)
+			cam.global_position = from
+			cam.look_at(target, Vector3.UP)
+			for i in 4:
+				await process_frame
+			grid.blit_rect(_grab(CW, CH), Rect2i(0, 0, CW, CH), Vector2i(v * CW, k * CH))
+		print("BatteryLook: bank %-10s %d packs, %d cables, %d tight (worst %.2f of the bend radius), %s, fuse %s, bus %s" % [
+			c[0], (d["packs"] as Array).size(), (d["cables"] as Array).size(), tight, worst, d["mount"],
+			str((d["fuse"] as Dictionary).get("type", "none")), d["bus"]])
+		b.queue_free()
+		await process_frame
+	var out := _arg("out", "user://batterylab_banks.png")
+	grid.save_png(out)
+	print("BatteryLook: wrote %s" % ProjectSettings.globalize_path(out))
 	quit(0)
 
 

@@ -61,9 +61,12 @@ static func build_node(spec: Dictionary, node_name: String = "BatteryPack") -> N
 	return b
 
 
-static func build_from_design(d: Dictionary) -> BattBuilder:
+## `bare_studs`: leave the front terminals' outside washer and nut off (a
+## bank puts its own lugs, washers and nuts on them).
+static func build_from_design(d: Dictionary, bare_studs: bool = false) -> BattBuilder:
 	var b := BattBuilder.new()
 	b.design = d
+	b.bare_studs = bare_studs
 	b._build()
 	return b
 
@@ -528,6 +531,7 @@ func _build_monoblock_inside(L: Dictionary, cell: Dictionary, _chem: String) -> 
 # Detail: merged meshes, unit hardware, cables, terminals, BMS, case
 # ---------------------------------------------------------------------------
 
+var bare_studs := false
 var _bar_bolts: Array = []      # {p, n, w (washer row), b (bolt row)} on bars
 
 
@@ -901,9 +905,10 @@ func _front_terminal(g: BattParts.Geo, f: Dictionary, pos: bool) -> void:
 	BattParts.lathe(g, cc, zn, [Vector2(0, 0), Vector2(r + 2.0, 0), Vector2(r + 2.0, 1.5), Vector2(r, 2.5),
 		Vector2(r, 9.5), Vector2(r - 1.5, 11.0), Vector2(0, 11.0)], col, "plastic", 28)
 	BattParts.disc(g, cc + zn * 11.0, zn, 8.5, 2.5, brass, "metal", 20)
-	BattParts.threaded_stud(g, cc + zn * 13.5, zn, 8.0, 12.0, brass.lightened(0.15))
-	var wt := BattParts.washer(g, cc + zn * 13.5, zn, 8.0)
-	BattParts.hex_nut(g, cc + zn * (13.5 + wt), zn, 8.0)
+	BattParts.threaded_stud(g, cc + zn * 13.5, zn, 8.0, 12.0 if not bare_studs else 22.0, brass.lightened(0.15))
+	if not bare_studs:
+		var wt := BattParts.washer(g, cc + zn * 13.5, zn, 8.0)
+		BattParts.hex_nut(g, cc + zn * (13.5 + wt), zn, 8.0)
 	var ip := Vector3(c.x, c.y, fz - 15.0)
 	BattParts.disc(g, ip, zn, 9.0, 15.0, brass, "metal", 18)
 	BattParts.threaded_stud(g, ip, -zn, 8.0, 11.0, brass.lightened(0.15))
