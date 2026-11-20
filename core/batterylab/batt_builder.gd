@@ -47,6 +47,9 @@ var _cells_mmi: MultiMeshInstance3D
 var _case_node: Node3D
 var _inner_node: Node3D
 var _mono_mats: Array = []
+var _terms: Array = []         # every cell terminal: {p, n, dir, stud}
+var _geos: Dictionary = {}     # merged detail meshes by node name + explode
+var _lead_routes: Dictionary = {}
 
 static var _mat_cache: Dictionary = {}
 
@@ -190,6 +193,14 @@ func _build() -> void:
 	var cell_rows: Array = []
 	var stud_rows: Array = []
 	var cap_rows: Array = []
+	var collar_rows: Array = []
+	var vent_rows: Array = []
+	var label_rows: Array = []
+	var mono_hw: Array = []
+	_terms = []
+	_bar_bolts = []
+	_geos = {}
+	_lead_routes = {}
 	for ce in (L["cells"] as Array):
 		var c: Vector3 = ce["c"]
 		var s: Vector3 = ce["s"]
@@ -204,56 +215,108 @@ func _build() -> void:
 			var td: Vector3 = ce["term_d"]
 			cap_rows.append({"xf": seg_xf(tp - td * 1.2, tp + td * 0.6, d * 0.42), "dir": dir, "color": C_NICKEL})
 			cap_rows.append({"xf": seg_xf(tn + td * 1.0, tn - td * 0.4, d * 0.92), "dir": dir, "color": C_STEEL})
-		else:
+			collar_rows.append({"xf": unit_xf(tp - td * 1.0, td, d * 0.86, 0.5, d * 0.86), "dir": dir,
+				"color": Color(0.85, 0.82, 0.62)})
+			_terms.append({"p": tp + td * 0.6, "n": td, "dir": dir, "stud": 0.0})
+			_terms.append({"p": tn - td * 0.4, "n": -td, "dir": dir, "stud": 0.0})
+		elif fmt == "monoblock":
 			var td: Vector3 = ce["term_d"]
-			var sd := 18.0 if fmt == "monoblock" else 12.0
-			var sh := 14.0 if fmt == "monoblock" else BattLayout.STUD_H
-			for pair in [[ce["term_p"], C_RED if fmt != "monoblock" else C_LEAD],
-					[ce["term_n"], C_BLACK if fmt != "monoblock" else C_LEAD]]:
+			for pair in [[ce["term_p"], C_LEAD], [ce["term_n"], C_LEAD]]:
 				var tpt: Vector3 = pair[0]
-				stud_rows.append({"xf": seg_xf(tpt - td * sh, tpt + td * (0.5 if fmt != "monoblock" else sh * 0.2), sd),
-					"dir": dir, "color": pair[1]})
+				stud_rows.append({"xf": seg_xf(tpt - td * 14.0, tpt + td * 2.8, 18.0), "dir": dir, "color": pair[1]})
+				_terms.append({"p": tpt, "n": td, "dir": dir, "stud": 8.0})
+				var top_p := tpt + td * 2.8
+				mono_hw.append({"p": top_p, "n": td, "dir": dir})
+		else:
+			# Prismatic: an aluminium positive and a copper negative pad, each in
+			# a coloured insulating collar, the safety vent between them, a
+			# QR label on the top.
+			var td: Vector3 = ce["term_d"]
+			var sh := BattLayout.STUD_H
+			var pad := minf(18.0, minf(s.x, s.z) * 0.32) if absf(td.y) > 0.5 else minf(18.0, minf(s.x, s.y) * 0.32)
+			for pair in [[ce["term_p"], C_ALU, C_RED], [ce["term_n"], C_COPPER, C_BLACK]]:
+				var tpt: Vector3 = pair[0]
+				stud_rows.append({"xf": seg_xf(tpt - td * sh, tpt, pad), "dir": dir, "color": pair[1]})
+				collar_rows.append({"xf": unit_xf(tpt - td * sh, td, pad * 1.35, 1.2, pad * 1.35), "dir": dir, "color": pair[2]})
+				_terms.append({"p": tpt, "n": td, "dir": dir, "stud": 6.0})
+			var tp: Vector3 = ce["term_p"]
+			var tn: Vector3 = ce["term_n"]
+			var top := (tp + tn) * 0.5 - td * sh
+			var along := (tp - tn)
+			along -= td * along.dot(td)
+			var gap := along.length()
+			if gap > pad * 2.4:
+				var al := along / gap
+				vent_rows.append({"xf": unit_xf(top, td, maxf(gap - pad * 2.6, 6.0) * 0.55, 0.8, pad * 0.5, al),
+					"dir": dir, "color": Color(0.68, 0.7, 0.72)})
+				var side := td.cross(al).normalized()
+				label_rows.append({"xf": unit_xf(top + side * pad * 1.1, td, gap * 0.42, 0.25, pad * 0.7, al),
+					"dir": dir, "color": Color(0.93, 0.93, 0.9)})
 	var cell_mesh: Mesh = cyl if fmt == "cylindrical" else box
 	_cells_mmi = _multi("Cells", cell_mesh, _mat(Color.WHITE, 0.0, 0.45, true), cell_rows)
 	if not stud_rows.is_empty():
-		_multi("Studs", cyl8, _mat(Color.WHITE, 0.6, 0.4, true), stud_rows)
+		_multi("Studs", _cyl_mesh(16), _mat(Color.WHITE, 0.75, 0.32, true), stud_rows)
+	if not collar_rows.is_empty():
+		_multi("Collars", _unit("ring"), _mat(Color.WHITE, 0.0, 0.5, true), collar_rows)
+	if not vent_rows.is_empty():
+		_multi("Vents", _unit("vent"), _mat(Color.WHITE, 0.7, 0.35, true), vent_rows)
+		_multi("CellLabels", _unit("box"), _mat(Color.WHITE, 0.0, 0.7, true), label_rows)
 	if not cap_rows.is_empty():
 		_multi("Caps", cyl, _mat(Color.WHITE, 0.7, 0.35, true), cap_rows)
 	if fmt == "monoblock":
 		_build_monoblock_inside(L, cell, chem)
 	# Links and end bars.
-	var bar_rows: Array = []
-	var cable_rows: Array = []
+	var bolt_rows: Array = []
+	var washer_rows: Array = []
+	var weld_rows: Array = []
+	for mh in mono_hw:
+		var mp: Vector3 = mh["p"]
+		var mn: Vector3 = mh["n"]
+		washer_rows.append({"xf": unit_xf(mp, mn, 8.0, 8.0, 8.0), "dir": mh["dir"], "color": Color(0.78, 0.79, 0.8)})
+		bolt_rows.append({"xf": unit_xf(mp + mn * 1.44, mn, 8.0, 8.0, 8.0), "dir": mh["dir"], "color": Color(0.7, 0.71, 0.73)})
+		_bar_bolts.append({"p": mp, "n": mn, "w": washer_rows.size() - 1, "b": bolt_rows.size() - 1})
 	for lk in (L["links"] as Array) + (L["ends"] as Array):
 		var k := str(lk.get("kind", ""))
 		if k == "busbar" or k == "nickel":
 			var col := C_NICKEL if k == "nickel" else (C_ALU if str(lk.get("material", "")) == "aluminium" else C_COPPER)
-			bar_rows.append({"xf": box_xf(lk["c"], lk["s"]), "dir": lk.get("explode", Vector3.ZERO), "color": col})
+			var ldir: Vector3 = lk.get("explode", Vector3.ZERO)
+			_draw_bar(_geo("Links", ldir), lk, col, k == "nickel")
+			_bar_hardware(lk, k == "nickel", ldir, bolt_rows, washer_rows, weld_rows)
 			parts.append({"id": lk["id"], "kind": k, "label": ("Nickel strip" if k == "nickel" else "Busbar") + _link_words(lk),
 				"aabb": AABB(((lk["c"] as Vector3) - (lk["s"] as Vector3) * 0.5) * MM, (lk["s"] as Vector3) * MM)})
 		elif k == "link":
-			_poly_rows(cable_rows, lk["pts"], _wire_d(float(lk["area_mm2"])), C_BLACK, Vector3(0, 0.3, 0))
+			var path := _link_cable(_geo("LinkCables", Vector3(0, 0.3, 0)), lk, washer_rows, bolt_rows)
 			parts.append({"id": lk["id"], "kind": "link", "label": "Link cable" + _link_words(lk),
-				"aabb": _poly_aabb(lk["pts"])})
-	if not bar_rows.is_empty():
-		_multi("Links", box, _mat(Color.WHITE, 0.55, 0.35, true), bar_rows)
+				"aabb": _path_aabb(path)})
 	# Leads.
 	for ld in (L["leads"] as Array):
 		var col := C_RED if str(ld.get("color", "red")) == "red" else C_BLACK
-		_poly_rows(cable_rows, ld["pts"], _wire_d(float(ld["mm2"])), col, ld.get("explode", Vector3(0, 0.5, 0)))
+		var lr := _lead_cable(_geo("Leads", ld.get("explode", Vector3(0, 0.5, 0))), ld, col, L, washer_rows, bolt_rows)
+		_lead_routes[str(ld["id"])] = lr
 		parts.append({"id": ld["id"], "kind": "lead", "label": "%s cable, %s, %.0f mm" % [
-			"Positive" if col == C_RED else "Negative", ld["wire"], float(ld["len_mm"])], "aabb": _poly_aabb(ld["pts"])})
-	if not cable_rows.is_empty():
-		_multi("Leads", cyl8, _mat(Color.WHITE, 0.0, 0.6, true), cable_rows)
-	# Harness.
-	var h_rows: Array = []
+			"Positive" if col == C_RED else "Negative", ld["wire"], float(ld["len_mm"])], "aabb": _path_aabb(lr["path"])})
+	# Harness: 22 AWG silicone, soldered to a tab on its joint, bent at
+	# three diameters, into the BMS connector.
 	for h in (L["harness"] as Array):
 		var col := C_BLACK if int(h["i"]) == 0 else Color(0.92, 0.92, 0.9)
-		_poly_rows(h_rows, h["pts"], 1.6, col, h.get("explode", Vector3(0, 0.5, 0)))
+		var hg := _geo("Harness", h.get("explode", Vector3(0, 0.5, 0)))
+		var hpts := PackedVector3Array(h["pts"])
+		var od := BattWire.od_mm("22 AWG")
+		var bent := BattWire.bend(hpts, BattWire.bend_r_mm(od, "balance"))
+		BattParts.tube(hg, bent["path"], od, col, "jacket", 6)
+		if hpts.size() > 1:
+			var n0 := _axis_snap(hpts[1] - hpts[0])
+			var tdir: Vector3 = BattParts.frame(n0)[0]
+			BattParts.plate(hg, hpts[0] - tdir * 3.0, hpts[0] + tdir * 4.0, n0, 6.0, 5.0, 0.4, C_NICKEL, "tin")
+			BattParts.disc(hg, hpts[0], n0, 1.8, 1.0, Color(0.7, 0.72, 0.74), "tin", 10)
 		parts.append({"id": h["id"], "kind": "tap", "label": "Balance lead B%d, %.0f mm" % [int(h["i"]), float(h["len_mm"])],
-			"aabb": _poly_aabb(h["pts"])})
-	if not h_rows.is_empty():
-		_multi("Harness", cyl8, _mat(Color.WHITE, 0.0, 0.7, true), h_rows, null, false)
+			"aabb": _path_aabb(bent["path"])})
+	if not washer_rows.is_empty():
+		_multi("Washers", _unit("washer"), _mat(Color.WHITE, 0.85, 0.3, true), washer_rows)
+	if not bolt_rows.is_empty():
+		_multi("Bolts", _unit("bolt"), _mat(Color.WHITE, 0.85, 0.3, true), bolt_rows)
+	if not weld_rows.is_empty():
+		_multi("Welds", _unit("disc"), _mat(Color.WHITE, 0.6, 0.45, true), weld_rows, null, false)
 	# BMS.
 	var bms: Dictionary = L["bms"]
 	if not bms.is_empty():
@@ -265,6 +328,9 @@ func _build() -> void:
 		_single("Connector", box, _mat(Color(0.95, 0.95, 0.92)), box_xf(conn, Vector3(36, 8, 10)), bms["explode"], bn)
 		for pad in ["b_neg", "p_neg"]:
 			_single(pad, box, _mat(C_COPPER, 0.8, 0.3), box_xf(bms[pad], Vector3(14, 6, 14)), bms["explode"], bn)
+		var bd := BattParts.Geo.new()
+		_bms_detail(bd, bms)
+		_single("Components", bd.commit(), null, Transform3D.IDENTITY, bms["explode"], bn)
 		parts.append({"id": "bms", "kind": "bms", "label": str((design["bms"] as Dictionary).get("label", "BMS")),
 			"aabb": AABB(((bms["c"] as Vector3) - (bms["s"] as Vector3) * 0.5) * MM, (bms["s"] as Vector3) * MM)})
 	var s_rows: Array = []
@@ -311,7 +377,11 @@ func _build() -> void:
 	add_child(fit)
 	for f in (L["fittings"] as Array):
 		_fitting(fit, f, box, cyl, parts)
+	if not en.is_empty():
+		_case_detail(en, L)
+	_commit_geos()
 	set_meta("parts", parts)
+	set_meta("lead_routes", _lead_routes)
 	set_meta("bounds_m", AABB(bounds.position * MM, bounds.size * MM))
 
 
@@ -363,21 +433,25 @@ func _fitting(parent: Node3D, f: Dictionary, box: Mesh, cyl: Mesh, parts: Array)
 	var label := k.capitalize()
 	match k:
 		"term_pos", "term_neg":
-			var col := C_RED if k == "term_pos" else C_BLACK
-			_single(str(f["id"]), cyl, _mat(col, 0.2, 0.4), seg_xf(c - Vector3(0, 0, s.z * 0.5), c + Vector3(0, 0, s.z * 0.5), s.x), dir, parent)
-			_single(str(f["id"]) + "_stud", cyl, _mat(C_COPPER, 0.8, 0.3), seg_xf(c, c + Vector3(0, 0, s.z * 0.5 + 8.0), 8.0), dir, parent)
-			label = "Positive terminal" if k == "term_pos" else "Negative terminal"
+			var g := BattParts.Geo.new()
+			_front_terminal(g, f, k == "term_pos")
+			_single(str(f["id"]), g.commit(), null, Transform3D.IDENTITY, dir, parent)
+			label = "Positive terminal (M8 stud)" if k == "term_pos" else "Negative terminal (M8 stud)"
 		"post_pos", "post_neg":
-			_single(str(f["id"]), cyl, _mat(C_LEAD, 0.5, 0.4), seg_xf(c - Vector3(0, s.y * 0.5, 0), c + Vector3(0, s.y * 0.5, 0), s.x), dir, parent)
-			_single(str(f["id"]) + "_ring", cyl, _mat(C_RED if k == "post_pos" else C_BLACK, 0.0, 0.5),
-				seg_xf(c - Vector3(0, s.y * 0.5, 0), c - Vector3(0, s.y * 0.3, 0), s.x * 1.5), dir, parent)
-			label = "Positive post" if k == "post_pos" else "Negative post"
+			var g := BattParts.Geo.new()
+			_sae_post(g, f, k == "post_pos")
+			_single(str(f["id"]), g.commit(), null, Transform3D.IDENTITY, dir, parent)
+			label = "Positive post (SAE)" if k == "post_pos" else "Negative post (SAE)"
 		"wheel":
 			_single(str(f["id"]), cyl, _mat(C_BLACK, 0.0, 0.8), seg_xf(c - Vector3(s.x * 0.5, 0, 0), c + Vector3(s.x * 0.5, 0, 0), s.y), dir, parent)
 			label = "Caster"
 		"breaker":
 			_single(str(f["id"]), box, _mat(C_BLACK, 0.0, 0.5), box_xf(c, s), dir, parent)
 			_single(str(f["id"]) + "_toggle", box, _mat(Color(0.95, 0.95, 0.92)), box_xf(c + Vector3(0, 0, s.z * 0.5 + 4.0), Vector3(12, 22, 8)), dir, parent)
+			var bg := BattParts.Geo.new()
+			_breaker_studs(bg)
+			if not bg.is_empty():
+				_single(str(f["id"]) + "_studs", bg.commit(), null, Transform3D.IDENTITY, dir, parent)
 			label = "Breaker %.0f A" % float(f.get("amps", 0.0))
 		"display":
 			_single(str(f["id"]), box, _mat(Color(0.15, 0.45, 0.85), 0.0, 0.2, false, 0.8), box_xf(c, s), dir, parent)
@@ -388,6 +462,12 @@ func _fitting(parent: Node3D, f: Dictionary, box: Mesh, cyl: Mesh, parts: Array)
 		"shunt":
 			_single(str(f["id"]), box, _mat(C_BLACK, 0.0, 0.5), box_xf(c, s), dir, parent)
 			_single(str(f["id"]) + "_bar", box, _mat(C_COPPER, 0.8, 0.3), box_xf(c + Vector3(0, s.y * 0.5 + 2.0, 0), Vector3(s.x, 4, 12)), dir, parent)
+			var sg := BattParts.Geo.new()
+			for sx in [-1.0, 1.0]:
+				var sp := c + Vector3(sx * (s.x * 0.5 - 9.0), s.y * 0.5 + 4.0, 0)
+				BattParts.threaded_stud(sg, sp, Vector3.UP, 8.0, 10.0, Color(0.8, 0.8, 0.78))
+				BattParts.hex_nut(sg, sp, Vector3.UP, 8.0)
+			_single(str(f["id"]) + "_studs", sg.commit(), null, Transform3D.IDENTITY, dir, parent)
 			label = "Shunt (battery monitor)"
 		_:
 			var col := C_STEEL
@@ -409,6 +489,7 @@ func _build_monoblock_inside(L: Dictionary, cell: Dictionary, _chem: String) -> 
 	var cell_rows: Array = []
 	var plate_rows: Array = []
 	var cap_rows: Array = []
+	var strap_rows: Array = []
 	for ce in (L["cells"] as Array):
 		var c: Vector3 = ce["c"]
 		var s: Vector3 = ce["s"]
@@ -421,6 +502,10 @@ func _build_monoblock_inside(L: Dictionary, cell: Dictionary, _chem: String) -> 
 			var cc := c + (Vector3(off, 0, 0) if along_x else Vector3(0, 0, off))
 			var cs := Vector3(seg * 0.92 if along_x else s.x * 0.88, s.y * 0.86, s.z * 0.88 if along_x else seg * 0.92)
 			cell_rows.append({"xf": box_xf(cc + Vector3(0, -s.y * 0.04, 0), cs), "color": Color(0.85, 0.85, 0.8, 1)})
+			if i > 0:
+				var sc := c + (Vector3(off - seg * 0.5, s.y * 0.38, 0) if along_x else Vector3(0, s.y * 0.38, off - seg * 0.5))
+				strap_rows.append({"xf": box_xf(sc, Vector3(seg * 0.5 if along_x else 14.0, 10.0, 14.0 if along_x else seg * 0.5)),
+					"color": C_LEAD})
 			for j in 7:
 				var po := -seg * 0.4 + seg * 0.8 * float(j) / 6.0
 				var pc := cc + (Vector3(po, -s.y * 0.06, 0) if along_x else Vector3(0, -s.y * 0.06, po))
@@ -431,10 +516,465 @@ func _build_monoblock_inside(L: Dictionary, cell: Dictionary, _chem: String) -> 
 					"color": C_BLACK})
 	_multi("InnerCells", box, _mat(Color.WHITE, 0.0, 0.8, true, 0.0, 0.35), cell_rows, _inner_node, false)
 	_multi("Plates", box, _mat(Color.WHITE, 0.3, 0.6, true), plate_rows, _inner_node)
+	if not strap_rows.is_empty():
+		_multi("Straps", box, _mat(Color.WHITE, 0.4, 0.5, true), strap_rows, _inner_node)
 	if not cap_rows.is_empty():
 		# Vent caps sit on the lid, outside: they are not hidden with the inside.
 		_multi("VentCaps", _cyl_mesh(12), _mat(Color.WHITE, 0.0, 0.6, true), cap_rows)
 	_inner_node.visible = false
+
+
+# ---------------------------------------------------------------------------
+# Detail: merged meshes, unit hardware, cables, terminals, BMS, case
+# ---------------------------------------------------------------------------
+
+var _bar_bolts: Array = []      # {p, n, w (washer row), b (bolt row)} on bars
+
+
+## The merged mesh for a node name and explode direction.
+func _geo(node_name: String, dir: Vector3) -> BattParts.Geo:
+	var key := "%s|%.3f,%.3f,%.3f" % [node_name, dir.x, dir.y, dir.z]
+	if not _geos.has(key):
+		_geos[key] = {"name": node_name, "geo": BattParts.Geo.new(), "dir": dir}
+	return _geos[key]["geo"]
+
+
+func _commit_geos() -> void:
+	var used := {}
+	for key in _geos:
+		var e: Dictionary = _geos[key]
+		var g: BattParts.Geo = e["geo"]
+		if g.is_empty():
+			continue
+		var base_nm := str(e["name"])
+		var nm := base_nm
+		var k := 2
+		while used.has(nm):
+			nm = "%s%d" % [base_nm, k]
+			k += 1
+		used[nm] = true
+		var mi := _single(nm, g.commit(), null, Transform3D.IDENTITY, e["dir"], self)
+		if base_nm == "Harness":
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+
+## A unit part (y up, base at 0) placed at p (mm) with its y along n,
+## scaled sx / sy / sz (mm), its x toward t.
+static func unit_xf(p_mm: Vector3, n: Vector3, sx: float, sy: float, sz: float, t: Vector3 = Vector3.ZERO) -> Transform3D:
+	var y := n.normalized()
+	var x := t - y * t.dot(y)
+	if x.length() < 1e-4:
+		x = BattParts.frame(y)[0]
+	x = x.normalized()
+	var z := x.cross(y).normalized()
+	return Transform3D(Basis(x * sx, y * sy, z * sz), p_mm * MM)
+
+
+static var _units: Dictionary = {}
+
+
+## Unit hardware meshes (sized for a 1 mm stud, or a 1 mm part), y up.
+static func _unit(kind: String) -> ArrayMesh:
+	if _units.has(kind):
+		return _units[kind]
+	var g := BattParts.Geo.new()
+	var w := Color.WHITE
+	match kind:
+		"nut":
+			BattParts.hex_nut(g, Vector3.ZERO, Vector3.UP, 1.0, w)
+		"bolt":
+			var rc := 0.8 / cos(PI / 6.0)
+			BattParts.lathe(g, Vector3.ZERO, Vector3.UP, [Vector2(0, 0), Vector2(rc * 0.95, 0), Vector2(rc, 0.08),
+				Vector2(rc, 0.52), Vector2(rc * 0.86, 0.64), Vector2(0, 0.64)], w, "metal", 6, true)
+		"washer":
+			BattParts.annulus(g, Vector3(0, 0.09, 0), Vector3.UP, 1.05, 0.55, 0.18, w, "metal", 18)
+		"disc":
+			BattParts.disc(g, Vector3.ZERO, Vector3.UP, 0.5, 1.0, w, "metal", 12)
+		"box":
+			BattParts.abox(g, Vector3(0, 0.5, 0), Vector3.ONE, w, "plastic")
+		"ring":
+			BattParts.annulus(g, Vector3(0, 0.5, 0), Vector3.UP, 0.5, 0.36, 1.0, w, "plastic", 20)
+		"vent":
+			BattParts.busbar(g, Vector3(-0.5, 0.5, 0), Vector3(0.5, 0.5, 0), Vector3.UP, 1.0, 1.0, w, "metal")
+	var m := g.commit()
+	_units[kind] = m
+	return m
+
+
+## The axis a vector mostly runs along, as a unit vector.
+static func _axis_snap(v: Vector3) -> Vector3:
+	var a := v.abs()
+	if a.y >= a.x and a.y >= a.z:
+		return Vector3(0, signf(v.y) if v.y != 0.0 else 1.0, 0)
+	if a.z >= a.x:
+		return Vector3(0, 0, signf(v.z))
+	return Vector3(signf(v.x), 0, 0)
+
+
+static func _path_aabb(path: PackedVector3Array) -> AABB:
+	if path.is_empty():
+		return AABB()
+	var b := AABB(path[0] * MM, Vector3.ZERO)
+	for p in path:
+		b = b.expand(p * MM)
+	return b.grow(0.004)
+
+
+## A busbar or nickel strip lying flat on its terminals: round-ended and
+## edge-broken for a punched bar, square for a strip; a bar standing across
+## an aisle is a block.
+func _draw_bar(g: BattParts.Geo, lk: Dictionary, col: Color, nickel: bool) -> void:
+	var c: Vector3 = lk["c"]
+	var sz: Vector3 = lk["s"]
+	var n := _axis_snap(lk.get("n", Vector3.UP))
+	var ax := 1 if absf(n.y) > 0.5 else (2 if absf(n.z) > 0.5 else 0)
+	var others: Array = []
+	for i in 3:
+		if i != ax:
+			others.append(i)
+	var i0 := int(others[0])
+	var i1 := int(others[1])
+	var i_long := i0 if sz[i0] >= sz[i1] else i1
+	var i_w := i1 if i_long == i0 else i0
+	var th := sz[ax]
+	var w := sz[i_w]
+	var ln := sz[i_long]
+	if th > w * 0.5:
+		BattParts.abox(g, c, sz, col, "metal")
+		return
+	var t := Vector3.ZERO
+	t[i_long] = 1.0
+	var half := maxf(ln * 0.5 - w * 0.5, 0.0)
+	BattParts.busbar(g, c - t * half, c + t * half, n, w, th, col, "tin" if nickel else "metal", not nickel)
+
+
+## The hardware where a bar sits on cell terminals: a washer and a bolt per
+## threaded terminal, four spot welds per cell under a nickel strip.
+func _bar_hardware(lk: Dictionary, nickel: bool, dir: Vector3, bolt_rows: Array, washer_rows: Array,
+		weld_rows: Array) -> void:
+	var c: Vector3 = lk["c"]
+	var sz: Vector3 = lk["s"]
+	var n := _axis_snap(lk.get("n", Vector3.UP))
+	var th := absf(sz.dot(n))
+	var box := AABB(c - sz * 0.5, sz).grow(2.5)
+	for tm in _terms:
+		var p: Vector3 = tm["p"]
+		if not box.has_point(p) or (tm["n"] as Vector3).dot(n) < 0.5:
+			continue
+		var top := p + n * th
+		if nickel:
+			var f := BattParts.frame(n)
+			for o in [Vector2(-2.2, -1.6), Vector2(2.2, -1.6), Vector2(-2.2, 1.6), Vector2(2.2, 1.6)]:
+				weld_rows.append({"xf": unit_xf(top + (f[0] as Vector3) * o.x + (f[1] as Vector3) * o.y, n, 1.3, 0.15, 1.3),
+					"dir": dir, "color": Color(0.52, 0.5, 0.47)})
+		elif float(tm["stud"]) > 0.0:
+			var d := float(tm["stud"])
+			washer_rows.append({"xf": unit_xf(top, n, d, d, d), "dir": dir, "color": Color(0.78, 0.79, 0.8)})
+			bolt_rows.append({"xf": unit_xf(top + n * d * 0.18, n, d, d, d), "dir": dir, "color": Color(0.7, 0.71, 0.73)})
+			_bar_bolts.append({"p": top, "n": n, "w": washer_rows.size() - 1, "b": bolt_rows.size() - 1})
+
+
+## Where a cable end lands: the face's normal, the stud there, how far the
+## lug sits off the point, and whether it gets a nut (a stud) or a bolt
+## (a threaded terminal).
+func _end_info(p: Vector3, L: Dictionary) -> Dictionary:
+	var term: Dictionary = L["terminals"]
+	var axis := str(term.get("axis", "z"))
+	for k in ["pos", "neg"]:
+		if term.has(k) and (term[k] as Vector3).distance_to(p) < 1.0:
+			return {"n": Vector3(0, -1, 0) if axis == "y" else Vector3(0, 0, -1), "stud": 8.0, "lift": 0.0,
+				"nut": axis != "y"}
+	for k in ["breaker_in", "breaker_out"]:
+		if term.has(k) and (term[k] as Vector3).distance_to(p) < 1.0:
+			return {"n": Vector3(0, 0, -1), "stud": 6.0, "lift": 0.0, "nut": true}
+	var bms: Dictionary = L["bms"]
+	if not bms.is_empty():
+		for k in ["b_neg", "p_neg"]:
+			if (bms[k] as Vector3).distance_to(p) < 1.0:
+				var c: Vector3 = bms["c"]
+				var s: Vector3 = bms["s"]
+				var q := (p - c)
+				var rel := Vector3(q.x / maxf(s.x, 1.0), q.y / maxf(s.y, 1.0), q.z / maxf(s.z, 1.0))
+				var n := _axis_snap(rel)
+				return {"n": n, "stud": 6.0, "lift": 3.0, "nut": true}
+	for f in (L["fittings"] as Array):
+		if str(f["kind"]) == "shunt" and ((f["c"] as Vector3) - Vector3(0, 10, 0)).distance_to(p) < 1.0:
+			return {"n": Vector3(0, -1, 0), "stud": 8.0, "lift": 0.0, "nut": true}
+	for e in (L["ends"] as Array) + (L["links"] as Array):
+		if (e as Dictionary).has("tap") and (e["tap"] as Vector3).distance_to(p) < 1.0:
+			return {"n": _axis_snap(e.get("n", Vector3.UP)), "stud": 6.0, "lift": 0.0, "nut": false}
+	return {"n": Vector3.UP, "stud": 6.0, "lift": 0.0, "nut": false}
+
+
+## A cable along `corners` (barrel end to barrel end), bent at r, with a
+## ring lug at each end given in `ends` [{p, n, t, lug, stud, nut}], each
+## lug held by a washer and a nut or bolt. Returns the bend result.
+func _cable_geo(g: BattParts.Geo, corners: PackedVector3Array, od: float, r: float, ends: Array, col: Color,
+		washer_rows: Array, bolt_rows: Array, dir: Vector3) -> Dictionary:
+	var bent := BattWire.bend(corners, r)
+	BattParts.tube(g, bent["path"], od, col, "jacket", 12)
+	for e in ends:
+		var lg: Dictionary = e["lug"]
+		if lg.is_empty():
+			continue
+		var p: Vector3 = e["p"]
+		var n: Vector3 = e["n"]
+		BattParts.ring_lug(g, p, n, e["t"], lg, col)
+		var d := float(e["stud"])
+		var tt := float(lg["tongue_t"])
+		# A lug on a bar's own bolt lifts that bolt by its tongue.
+		var raised := false
+		for bb in _bar_bolts:
+			if (bb["p"] as Vector3).distance_to(p) < 3.0 and (bb["n"] as Vector3).dot(n) > 0.5:
+				for key in ["w", "b"]:
+					var rows: Array = washer_rows if key == "w" else bolt_rows
+					var xf: Transform3D = rows[int(bb[key])]["xf"]
+					xf.origin += n * tt * MM
+					rows[int(bb[key])]["xf"] = xf
+				raised = true
+		if raised:
+			continue
+		washer_rows.append({"xf": unit_xf(p + n * tt, n, d, d, d), "dir": dir, "color": Color(0.78, 0.79, 0.8)})
+		if bool(e.get("nut", false)):
+			bolt_rows.append({"xf": unit_xf(p + n * (tt + d * 0.18), n, d, d * 1.15, d), "dir": dir, "color": Color(0.7, 0.71, 0.73)})
+		else:
+			bolt_rows.append({"xf": unit_xf(p + n * (tt + d * 0.18), n, d, d, d), "dir": dir, "color": Color(0.7, 0.71, 0.73)})
+	return bent
+
+
+## A cell-to-cell link cable: lugs on both terminals, out of each barrel,
+## up over the cells in an arch and back down. Close terminals take their
+## lugs side by side and loop out to the side.
+func _link_cable(g: BattParts.Geo, lk: Dictionary, washer_rows: Array, bolt_rows: Array) -> PackedVector3Array:
+	var pts: Array = lk["pts"]
+	var a: Vector3 = pts[0]
+	var b: Vector3 = pts[pts.size() - 1]
+	var na := _axis_snap((pts[1] as Vector3) - a)
+	var nb := _axis_snap((pts[pts.size() - 2] as Vector3) - b)
+	var mm2 := float(lk["area_mm2"])
+	var od := BattWire.od_mm(str(lk.get("wire", "")), mm2)
+	var r := BattWire.bend_r_mm(od, "silicone")
+	var lg := BattWire.lug(mm2, 6.0)
+	var reach := float(lg["reach"])
+	var flat_ab := (b - a) - na * (b - a).dot(na)
+	var xa: Dictionary
+	var xb: Dictionary
+	if flat_ab.length() > 2.0 * (reach + r):
+		xa = BattWire.lug_exit(a, na, [b], lg)
+		xb = BattWire.lug_exit(b, nb, [a], lg)
+	else:
+		var side := na.cross(flat_ab.normalized() if flat_ab.length() > 0.1 else BattParts.frame(na)[0]).normalized()
+		xa = BattWire.lug_exit(a, na, [a + side], lg)
+		xb = BattWire.lug_exit(b, nb, [b + side], lg)
+	var pa: Vector3 = (xa["s"] as Vector3) + (xa["t"] as Vector3) * r
+	var pb: Vector3 = (xb["s"] as Vector3) + (xb["t"] as Vector3) * r
+	var up := maxf(r, 20.0)
+	var corners := PackedVector3Array([xa["s"], pa, pa + na * up, pb + nb * up, pb, xb["s"]])
+	var ends := [{"p": a, "n": na, "t": xa["t"], "lug": lg, "stud": 6.0},
+		{"p": b, "n": nb, "t": xb["t"], "lug": lg, "stud": 6.0}]
+	var bent := _cable_geo(g, corners, od, r, ends, C_BLACK, washer_rows, bolt_rows, Vector3(0, 0.3, 0))
+	return bent["path"]
+
+
+## A main lead: a ring lug on each end (a terminal stud, a bar, a BMS pad,
+## the breaker, the shunt), its gauge's diameter and bend radius, along the
+## layout's route moved to leave each barrel straight. The layout's own
+## route and length (which set the resistance) are unchanged; this is how it
+## really lies. Returns {path, min_r, tight, r, od, length}.
+func _lead_cable(g: BattParts.Geo, ld: Dictionary, col: Color, L: Dictionary, washer_rows: Array,
+		bolt_rows: Array) -> Dictionary:
+	var pts: Array = ld["pts"]
+	var a: Vector3 = pts[0]
+	var b: Vector3 = pts[pts.size() - 1]
+	var ia := _end_info(a, L)
+	var ib := _end_info(b, L)
+	var mm2 := float(ld["mm2"])
+	var od := BattWire.od_mm(str(ld.get("wire", "")), mm2)
+	var r := BattWire.bend_r_mm(od, "silicone")
+	var interior: Array = pts.slice(1, pts.size() - 1)
+	var ta_list: Array = interior.duplicate()
+	ta_list.append(b)
+	var tb_list: Array = interior.duplicate()
+	tb_list.reverse()
+	tb_list.append(a)
+	var na: Vector3 = ia["n"]
+	var nb: Vector3 = ib["n"]
+	var pa_pt := a + na * float(ia["lift"])
+	var pb_pt := b + nb * float(ib["lift"])
+	var lga := BattWire.lug(mm2, float(ia["stud"]))
+	var lgb := BattWire.lug(mm2, float(ib["stud"]))
+	var xa := BattWire.lug_exit(pa_pt, na, ta_list, lga)
+	var xb := BattWire.lug_exit(pb_pt, nb, tb_list, lgb)
+	var p1: Vector3 = (xa["s"] as Vector3) + (xa["t"] as Vector3) * r
+	var p2: Vector3 = (xb["s"] as Vector3) + (xb["t"] as Vector3) * r
+	var corners := PackedVector3Array([xa["s"], p1])
+	for q in interior:
+		var v := q as Vector3
+		if absf(v.x - a.x) < 0.5:
+			v.x = p1.x
+		elif absf(v.x - b.x) < 0.5:
+			v.x = p2.x
+		if absf(v.z - a.z) < 0.5:
+			v.z = p1.z
+		elif absf(v.z - b.z) < 0.5:
+			v.z = p2.z
+		corners.append(v)
+	corners.append(p2)
+	corners.append(xb["s"])
+	var ends := [{"p": pa_pt, "n": na, "t": xa["t"], "lug": lga, "stud": ia["stud"], "nut": ia["nut"]},
+		{"p": pb_pt, "n": nb, "t": xb["t"], "lug": lgb, "stud": ib["stud"], "nut": ib["nut"]}]
+	var bent := _cable_geo(g, corners, od, r, ends, col, washer_rows, bolt_rows, ld.get("explode", Vector3(0, 0.5, 0)))
+	bent["od"] = od
+	bent["r"] = r
+	return bent
+
+
+## On the BMS board's outward face: a finned heat sink, a row of MOSFETs,
+## electrolytic capacitors, a controller chip and the current shunt.
+func _bms_detail(g: BattParts.Geo, bms: Dictionary) -> void:
+	var c: Vector3 = bms["c"]
+	var s: Vector3 = bms["s"]
+	var ax := 0
+	if s.y <= s.x and s.y <= s.z:
+		ax = 1
+	elif s.z <= s.x:
+		ax = 2
+	var cb: AABB = design["layout"].get("cells_box", AABB(c, Vector3.ZERO))
+	var sgn := 1.0 if (c - cb.get_center())[ax] >= 0.0 else -1.0
+	var n := Vector3.ZERO
+	n[ax] = sgn
+	var o: Array = []
+	for i in 3:
+		if i != ax:
+			o.append(i)
+	var iu := int(o[0]) if s[int(o[0])] >= s[int(o[1])] else int(o[1])
+	var iw := int(o[1]) if iu == int(o[0]) else int(o[0])
+	var u := Vector3.ZERO
+	u[iu] = 1.0
+	var w := Vector3.ZERO
+	w[iw] = 1.0
+	var su := s[iu]
+	var sw := s[iw]
+	if su < 40.0 or sw < 20.0:
+		return
+	var fc := c + n * s[ax] * 0.5
+	# Heat sink: a base plate and fins along one long edge.
+	var hl := su * 0.7
+	var hw := sw * 0.3
+	var hc := fc + w * (sw * 0.5 - hw * 0.5 - 2.0)
+	var fh := clampf(sw * 0.18, 5.0, 14.0)
+	BattParts.obox(g, hc + n * 0.8, u, n, w, Vector3(hl, 1.6, hw), C_ALU, "metal")
+	var nf := clampi(int(hl / 5.0), 4, 24)
+	for i in nf:
+		var fu := -hl * 0.5 + hl * float(i) / float(nf - 1)
+		BattParts.obox(g, hc + u * fu + n * (1.6 + fh * 0.5), u, n, w, Vector3(1.1, fh, hw), C_ALU, "metal")
+	# MOSFETs (TO-220: a black body on a metal tab) in a row beside it.
+	var nm := clampi(int(su / 14.0), 2, 12)
+	var mw := hc - w * (hw * 0.5 + 6.0)
+	for i in nm:
+		var mu := -su * 0.38 + su * 0.76 * float(i) / float(maxi(nm - 1, 1))
+		var mc := mw + u * mu
+		BattParts.obox(g, mc + n * 1.4, u, n, w, Vector3(6.0, 2.8, 8.0), Color(0.06, 0.06, 0.07), "plastic")
+		BattParts.obox(g, mc + n * 0.4 + w * 5.0, u, n, w, Vector3(6.0, 0.8, 4.0), Color(0.78, 0.79, 0.8), "metal")
+	# Capacitors, the controller, the shunt.
+	var row := fc - w * (sw * 0.5 - 7.0)
+	for i in 3:
+		var pc := row + u * (-su * 0.3 + float(i) * 9.0)
+		BattParts.disc(g, pc, n, 3.2, 8.0, Color(0.1, 0.2, 0.45), "plastic", 14)
+		BattParts.disc(g, pc + n * 8.0, n, 3.0, 0.4, Color(0.82, 0.83, 0.85), "metal", 14)
+	BattParts.obox(g, row + u * su * 0.18 + n * 0.8, u, n, w, Vector3(10.0, 1.6, 10.0), Color(0.05, 0.05, 0.06), "plastic")
+	BattParts.obox(g, row + u * su * 0.34 + n * 0.6, u, n, w, Vector3(su * 0.12, 1.2, 4.0), C_COPPER, "metal")
+
+
+## A front terminal: a shrouded insulating boss, the brass terminal, an M8
+## stud with washer and nut; inside, the brass block through the panel
+## where the lead lands on its own stud; a moulded + or − on the panel.
+func _front_terminal(g: BattParts.Geo, f: Dictionary, pos: bool) -> void:
+	var c: Vector3 = f["c"]
+	var s: Vector3 = f["s"]
+	var col := C_RED if pos else C_BLACK
+	var zn := Vector3(0, 0, 1)
+	var fz := c.z - s.z * 0.5
+	var cc := Vector3(c.x, c.y, fz)
+	var brass := Color(0.84, 0.66, 0.36)
+	var r := s.x * 0.5
+	BattParts.lathe(g, cc, zn, [Vector2(0, 0), Vector2(r + 2.0, 0), Vector2(r + 2.0, 1.5), Vector2(r, 2.5),
+		Vector2(r, 9.5), Vector2(r - 1.5, 11.0), Vector2(0, 11.0)], col, "plastic", 28)
+	BattParts.disc(g, cc + zn * 11.0, zn, 8.5, 2.5, brass, "metal", 20)
+	BattParts.threaded_stud(g, cc + zn * 13.5, zn, 8.0, 12.0, brass.lightened(0.15))
+	var wt := BattParts.washer(g, cc + zn * 13.5, zn, 8.0)
+	BattParts.hex_nut(g, cc + zn * (13.5 + wt), zn, 8.0)
+	var ip := Vector3(c.x, c.y, fz - 15.0)
+	BattParts.disc(g, ip, zn, 9.0, 15.0, brass, "metal", 18)
+	BattParts.threaded_stud(g, ip, -zn, 8.0, 11.0, brass.lightened(0.15))
+	var mk := cc + Vector3(0, r + 9.0, 0.3)
+	BattParts.abox(g, mk, Vector3(9.0, 2.0, 0.6), col, "plastic")
+	if pos:
+		BattParts.abox(g, mk, Vector3(2.0, 9.0, 0.6), col, "plastic")
+
+
+## An SAE tapered post on the lid, a moulded + or − beside it, the lead
+## strap under the lid where the lead lands.
+func _sae_post(g: BattParts.Geo, f: Dictionary, pos: bool) -> void:
+	var c: Vector3 = f["c"]
+	var s: Vector3 = f["s"]
+	var base := Vector3(c.x, c.y - s.y * 0.5, c.z)
+	BattParts.sae_post(g, base, Vector3.UP, pos, 18.0)
+	var col := C_RED if pos else C_BLACK
+	var toward := -signf(base.x) if absf(base.x) > 1.0 else 1.0
+	var mk := base + Vector3(toward * 22.0, 0.3, 0)
+	BattParts.abox(g, mk, Vector3(9.0, 0.6, 2.0), col, "plastic")
+	if pos:
+		BattParts.abox(g, mk, Vector3(2.0, 0.6, 9.0), col, "plastic")
+	BattParts.abox(g, Vector3(c.x, base.y - 8.0, c.z), Vector3(16.0, 16.0, 16.0), C_LEAD, "metal")
+
+
+## The breaker's two studs inside the front panel.
+func _breaker_studs(g: BattParts.Geo) -> void:
+	var term: Dictionary = design["layout"]["terminals"]
+	var brass := Color(0.84, 0.66, 0.36)
+	for k in ["breaker_in", "breaker_out"]:
+		if not term.has(k):
+			continue
+		var p: Vector3 = term[k]
+		BattParts.disc(g, p, Vector3(0, 0, 1), 5.0, 22.0, brass, "metal", 14)
+		BattParts.threaded_stud(g, p, Vector3(0, 0, -1), 6.0, 9.0, brass.lightened(0.15))
+
+
+## Lid screws, a product label on the front.
+func _case_detail(en: Dictionary, _L: Dictionary) -> void:
+	for pn in (en["panels"] as Array):
+		var kind := str(pn["kind"])
+		var c: Vector3 = pn["c"]
+		var s: Vector3 = pn["s"]
+		if kind == "lid" and s.x > 80.0 and s.z > 80.0:
+			var g := BattParts.Geo.new()
+			var top := c.y + s.y * 0.5
+			var spots: Array = []
+			for sx in [-1.0, 1.0]:
+				for sz in [-1.0, 1.0]:
+					spots.append(Vector3(c.x + sx * (s.x * 0.5 - 10.0), top, c.z + sz * (s.z * 0.5 - 10.0)))
+				if s.x > 300.0:
+					spots.append(Vector3(c.x, top, c.z + sx * (s.z * 0.5 - 10.0)))
+			for sp in spots:
+				BattParts.lathe(g, sp, Vector3.UP, [Vector2(0, 0), Vector2(3.6, 0), Vector2(3.4, 0.9), Vector2(2.2, 1.6),
+					Vector2(0, 1.8)], Color(0.6, 0.61, 0.63), "metal", 12)
+				BattParts.abox(g, sp + Vector3(0, 1.75, 0), Vector3(4.4, 0.5, 0.9), Color(0.2, 0.2, 0.22), "metal")
+			var node := _single("lid_screws", g.commit(), null, Transform3D.IDENTITY, pn["explode"], _case_node)
+			node.set_meta("panel_kind", "lid")
+		elif kind == "front" and s.x > 120.0 and s.y > 60.0:
+			var g := BattParts.Geo.new()
+			var fz := c.z + s.z * 0.5
+			var lw := minf(s.x * 0.32, 150.0)
+			var lh := minf(s.y * 0.22, 36.0)
+			var lc := Vector3(c.x - s.x * 0.28, c.y + s.y * 0.3, fz + 0.2)
+			BattParts.abox(g, lc, Vector3(lw, lh, 0.4), Color(0.93, 0.93, 0.9), "plastic")
+			BattParts.abox(g, lc + Vector3(-lw * 0.5 + 3.0, 0, 0.1), Vector3(5.0, lh, 0.5), Color(0.15, 0.45, 0.85), "plastic")
+			for i in 3:
+				BattParts.abox(g, lc + Vector3(4.0, lh * 0.25 - float(i) * lh * 0.22, 0.1),
+					Vector3(lw * (0.6 - float(i) * 0.12), 1.6, 0.5), Color(0.3, 0.3, 0.32), "plastic")
+			var node := _single("front_label", g.commit(), null, Transform3D.IDENTITY, pn["explode"], _case_node)
+			node.set_meta("panel_kind", "front")
 
 
 # ---------------------------------------------------------------------------

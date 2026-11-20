@@ -103,8 +103,18 @@ func _run() -> void:
 				"top":
 					b.set_cutaway(true)
 					from = target + Vector3(0.001, reach * 1.1, reach * 0.15)
+				"terminals", "inside", "cells":
+					# Close-ups: the terminals from outside, a main lead's lug
+					# and bends inside, the links on the cells.
+					b.set_cutaway(view != "terminals")
+					var at := _close_target(b, view)
+					if at != Vector3.INF:
+						target = at
+						var near := 0.16 if view != "cells" else 0.12
+						from = target + Vector3(near * 0.7, near * 0.75, near * 1.0)
 			cam.global_position = from
 			cam.look_at(target, Vector3.UP)
+			target = bm.get_center()
 			for i in 4:
 				await process_frame
 			grid.blit_rect(_grab(CW, CH), Rect2i(0, 0, CW, CH), Vector2i(v * CW, k * CH))
@@ -119,6 +129,27 @@ func _run() -> void:
 	print("BatteryLook: wrote %s  (columns: %s; rows: %s)" % [
 		ProjectSettings.globalize_path(out), " / ".join(PackedStringArray(views)), ", ".join(PackedStringArray(ids))])
 	quit(0)
+
+
+func _close_target(b: BattBuilder, view: String) -> Vector3:
+	var ids: Array = []
+	match view:
+		"terminals":
+			ids = ["term_pos", "post_pos"]
+		"inside":
+			var routes: Dictionary = b.get_meta("lead_routes", {})
+			for k in ["lead_pos", "lead_breaker_term", "lead_p_neg", "lead_neg"]:
+				if routes.has(k):
+					var path: PackedVector3Array = routes[k]["path"]
+					if not path.is_empty():
+						return path[0] * 0.001
+		"cells":
+			ids = ["link_0", "link_1"]
+	for id in ids:
+		var pp := b.part(str(id))
+		if not pp.is_empty():
+			return (pp["aabb"] as AABB).get_center()
+	return Vector3.INF
 
 
 func _grab(cw: int, ch: int) -> Image:

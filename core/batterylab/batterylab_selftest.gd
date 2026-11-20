@@ -706,7 +706,7 @@ func _test_sim() -> void:
 			_ok((r["frames"] as Array).size() > 10, "%s / %s keeps frames" % [b["id"], sc["id"]])
 			var led: Dictionary = r["ledger"]
 			var scale := maxf(1.0, float(led["in_wh"]) + float(led["out_wh"]))
-			_ok(absf(_gap(r)) < 1e-6 * scale + 1e-6, "%s / %s energy ledger closes (%.2e Wh)" % [b["id"], sc["id"], _gap(r)])
+			_ok(absf(_gap(r)) < 1e-6 * scale + 1e-6, "%s / %s energy ledger closes (%.6f Wh)" % [b["id"], sc["id"], _gap(r)])
 	var rack := BattDesign.solve(BattPresets.builtin("rack_48v_105"))
 	var ah := float(rack["electrical"]["ah"])
 	# Charge from 20 %: about 80 % of the capacity goes in, then the charger stops.
@@ -952,7 +952,7 @@ func _test_bank_bus_and_route() -> void:
 	var d := _bank("rack_48v_105", 1, 4)
 	var bars: Dictionary = d["bars"]
 	var i_bank := float(d["electrical"]["cont_discharge_a"])
-	_ok(float(bars["amps"]) >= 1.25 * i_bank - 1.0, "auto bus bar carries 125 % of the bank (%.0f A for %.0f A)" % [float(bars["amps"]), i_bank])
+	_ok(float(bars["amps"]) >= 1.25 * i_bank - 1.0, "auto bus bar carries 125 %% of the bank (%.0f A for %.0f A)" % [float(bars["amps"]), i_bank])
 	_ok(not _has_level(d, "warn", "busbars") and not _has_level(d, "error", "busbars"), "an auto bus raises no bus check")
 	var big := _bank("rack_48v_230", 1, 8)
 	_ok(int(big["bars"]["n"]) > 1, "a 1600 A bank stacks bars (%d)" % int(big["bars"]["n"]))
