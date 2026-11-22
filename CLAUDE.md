@@ -7377,6 +7377,58 @@ Phase 2 of `plans/CONTROLLER_LAB_PLAN.md`. Library → Designers →
     lab's own Checks list (they are on the bar's notes only), a battery
     found through a battery_bank group.
 
+## Wire sheets: the system wiring page (core/wiresheet/, 2026-11-22)
+
+`WireSheet.layout(model, item_id, opts)` draws one power chain (the Panels >
+Controller > Battery bar's **Wiring diagram**, `scenes/ui/wiresheet_modal.gd`
+over `wiresheet_view.gd`) as a front elevation in page millimetres, y UP.
+The 2026-11-22 pass rebuilt its placement, router and drawing to read like
+a maker's diagram (the Victron / Lynx reference pictures):
+- **A shelf and a trough.** Everything that makes or stores power stands on
+  one shelf (feet at y = 0): the modules in a row in SERIES ORDER
+  (`_ordered_arrays`: the free positive first, then each negative's
+  neighbour), the controller's face, the battery. Cables hang DOWN into a
+  trough of lanes under the shelf, run along a lane, and climb to where they
+  land. A fuse / switch / shunt / bus / breaker stands IN its lane. The
+  battery's studs are on its lid (− left, + right); a cable climbs the side
+  of the case and over to its stud. Monitors sit under the trough.
+- **Lanes are first-fit from the top** (`_lanes_and_routes`): one lane per
+  run GROUP (`conductor.group`: `pv|<string>|<pole>`, `bat|<pole>`,
+  `data|<id>`; panel-to-panel jumpers run on their own lane just under the
+  pigtails), groups whose x-spans overlap never share a lane; PV groups
+  first by their controller lead from the left, then battery groups from
+  the right, then data. In-line devices take their chain's lane y.
+- **Ports carry `via`** (points a cable passes before heading for its
+  lane); `_route(pa, pb, lane_y)` makes the orthogonal polyline, and
+  `WireSheet.fillet(pts, r)` rounds it for drawing (the page and the SVG);
+  `pts` stays square for the hit test. `label_anchor` puts a gauge chip on
+  the longest horizontal leg; a run under 48 mm gets none.
+- ⚠ **Godot's `Vector2.DOWN` is (0, 1)**: on this y-up page every "hanging"
+  port pointed INTO its device and the first routes entered the controller
+  face. `WireSheet.DOWN` / `UP` are the page's own.
+- **`CtrlFaceDraw`** (`scenes/ui/kit/ctrl_face_draw.gd`) draws a face
+  layout onto any CanvasItem — body colour, corner radius, plate / split,
+  bands, raised panels, printed texts (width-fitted), bay, connectors,
+  pins, leads — from `CtrlSheet.layout`'s new `look` block. The Controller
+  Lab's Terminals view and the wiring page both use it; `CtrlSheet._look_svg`
+  is its SVG twin. The look is in the face's own frame: a shifted face adds
+  `rect.get_center()`.
+- Look checks: `tools/diag/wiresheet_look_diag.gd` (WINDOWED, APPDATA at a
+  scratch folder; `--chain=victron|trainer`, `--nodata`; writes the PNG, the
+  SVG and a raster of the SVG — ThorVG draws no SVG text, so chips read
+  blank there) and `tools/diag/ctrllab_look_diag.gd`. Gates:
+  `wiresheet_selftest` (64), `ctrllab_selftest` (34), the designer check.
+- **Controller 3D polish, same pass:** `CtrlBuilder._text` / `_label3d`
+  fit a text to `max_w` (a text record key; with none, to the face edge:
+  a left-aligned text to the right edge, a centred one to the nearer), so
+  the long Victron names stay inside their panels; `_t()` takes `align`
+  and `max_w`; the generic MPPT's PV / BATTERY / LOAD labels are sized to
+  the terminal pitch (they overprinted); the Growatt logo is one word; the
+  MultiPlus LED panel is dark with its LED names; fins are `FIN_BLACK`
+  (0.13, so they shade — pure near-black drew as a silhouette); the flange
+  mount is a rounded plate BEHIND the body with corner slots (a plate at
+  the body's own back plane z-fought it into an X of seams).
+
 ## ESP board designer (core/esplab/, 2026-11-07)
 
 Library → Structures → "ESP board designer (ESPHome)…" (`Main.open_esplab({spec})`,

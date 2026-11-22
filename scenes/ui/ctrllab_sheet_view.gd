@@ -10,6 +10,7 @@ signal port_selected(id: String)
 signal port_moved(id: String, delta: Vector2)
 signal place_requested(face: String, u: float, v: float)
 
+const FACE_DRAW := preload("res://scenes/ui/kit/ctrl_face_draw.gd")
 const BG := Color(0.07, 0.08, 0.1)
 const PAPER := Color(0.16, 0.17, 0.2)
 const EDGE := Color(0.62, 0.65, 0.7)
@@ -151,63 +152,29 @@ func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), BG)
 	if lay.is_empty():
 		return
-	var font := UITheme.font("medium")
 	var fbold := UITheme.font("semibold")
-	var ts := float(lay["text_mm"]) * scale_px
 	var r: Rect2 = lay["rect"]
 	var pr := Rect2(to_px(Vector2(r.position.x, r.end.y)), r.size * scale_px)
-	draw_rect(pr, PAPER)
-	draw_rect(pr, EDGE, false, 1.5)
 	var head := "%s  ·  %s × %s mm" % [str(CtrlSheet.FACE_WORDS.get(lay["face"], lay["face"])),
 		_n(r.size.x), _n(r.size.y)]
-	draw_string(fbold, pr.position + Vector2(0, -6), head, HORIZONTAL_ALIGNMENT_LEFT, -1, UITheme.FONT_SM, EDGE)
+	draw_string(fbold, pr.position + Vector2(0, -8), head, HORIZONTAL_ALIGNMENT_LEFT, -1, UITheme.FONT_SM, EDGE)
+	# The unit as it looks, its connectors, pins and leads: the shared face
+	# drawer, so this view and the wiring page agree.
+	var drag_port := str(_press.get("port", "#"))
+	FACE_DRAW.draw(self, lay, Callable(self, "to_px"), scale_px, {
+		"selected": selected, "drag": drag_port if _drag_delta != Vector2.ZERO else "", "drag_mm": _drag_delta,
+		"leads": show_wires, "lead_labels": true, "dark": true,
+	})
 	if bool(lay["has_bay"]):
 		var br: Rect2 = lay["bay"]
 		var bpr := Rect2(to_px(Vector2(br.position.x, br.end.y)), br.size * scale_px)
-		draw_rect(bpr, Color(0.11, 0.12, 0.14))
 		_dashed_rect(bpr, Color(0.5, 0.53, 0.58))
-		draw_string(font, Vector2(bpr.position.x + 4, bpr.end.y - 6), "Wiring bay", HORIZONTAL_ALIGNMENT_LEFT, -1, UITheme.FONT_XS, Color(0.6, 0.63, 0.68))
-	var fs := clampi(int(ts * 0.75), 9, 16)
-	for p in (lay["ports"] as Array):
-		var off := _drag_delta if str(p["id"]) == str(_press.get("port", "#")) else Vector2.ZERO
-		var poly := PackedVector2Array()
-		for v in (p["corners"] as Array):
-			poly.append(to_px((v as Vector2) + off))
-		var col: Color = p["color"]
-		var sel := str(p["id"]) == selected
-		if poly.size() >= 3:
-			draw_colored_polygon(poly, Color(col.r, col.g, col.b, 0.28))
-			var loop := poly.duplicate()
-			loop.append(poly[0])
-			draw_polyline(loop, SEL if sel else col.lightened(0.15), 2.5 if sel else 1.2, true)
-		var labelled := (p["pins"] as Array).filter(func(q): return str(q["role"]) != "").is_empty() or (p["pins"] as Array).size() > 2
-		if labelled and scale_px > 0.8:
-			var top := INF
-			for v2 in poly:
-				top = minf(top, v2.y)
-			var cen := to_px((p["centre"] as Vector2) + off)
-			draw_string(font, Vector2(cen.x - 200, top - 4), str(p["label"]), HORIZONTAL_ALIGNMENT_CENTER, 400, fs - 1,
-				SEL if sel else Color(0.82, 0.84, 0.88))
-		for pin in (p["pins"] as Array):
-			var pp := to_px((pin["pos"] as Vector2) + off)
-			draw_circle(pp, maxf(ts * 0.18, 2.5), Color(0.82, 0.68, 0.32), true, -1.0, true)
-	if show_wires:
-		for ld in (lay["leads"] as Array):
-			if str(ld["port"]) == str(_press.get("port", "#")) and _drag_delta != Vector2.ZERO:
-				continue
-			var pts := PackedVector2Array()
-			for v3 in (ld["pts"] as Array):
-				pts.append(to_px(v3 as Vector2))
-			var w := maxf(ts * 0.26, 2.0)
-			draw_polyline(pts, Color(0.75, 0.77, 0.8), w + 2.0, true)
-			draw_polyline(pts, ld["color"], w, true)
-			var e: Vector2 = to_px(ld["end"] as Vector2)
-			draw_set_transform(e + Vector2(fs * 0.35, 4), -PI * 0.5, Vector2.ONE)
-			draw_string(fbold, Vector2(-400, 0), str(ld["text"]), HORIZONTAL_ALIGNMENT_RIGHT, 400, fs, Color(0.92, 0.93, 0.95))
-			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		draw_string(UITheme.font("medium"), Vector2(bpr.position.x + 4, bpr.end.y - 6), "Wiring bay", HORIZONTAL_ALIGNMENT_LEFT, -1,
+			UITheme.FONT_XS, Color(0.7, 0.73, 0.78))
 	if tool != "" and _hover != Vector2.INF:
 		draw_circle(_hover, 6.0, Color(0.35, 0.85, 1.0, 0.8), false, 2.0, true)
-		draw_string(font, _hover + Vector2(10, -8), ConnectorCatalog.label(tool), HORIZONTAL_ALIGNMENT_LEFT, -1, UITheme.FONT_XS, Color(0.35, 0.85, 1.0))
+		draw_string(UITheme.font("medium"), _hover + Vector2(10, -8), ConnectorCatalog.label(tool), HORIZONTAL_ALIGNMENT_LEFT, -1,
+			UITheme.FONT_XS, Color(0.35, 0.85, 1.0))
 
 
 func _dashed_rect(r: Rect2, c: Color) -> void:

@@ -45,14 +45,14 @@ const SIZE := {
 	"panels": Vector2(150, 210),
 	"controller": Vector2(180, 120),
 	"battery": Vector2(170, 130),
-	"breaker": Vector2(64, 48),
-	"fuse": Vector2(64, 48),
-	"switch": Vector2(64, 48),
-	"busbar": Vector2(120, 28),
-	"combiner": Vector2(88, 56),
-	"distributor": Vector2(140, 56),
-	"shunt": Vector2(72, 40),
-	"monitor": Vector2(120, 44),
+	"breaker": Vector2(58, 44),
+	"fuse": Vector2(70, 36),
+	"switch": Vector2(60, 44),
+	"busbar": Vector2(120, 24),
+	"combiner": Vector2(100, 44),
+	"distributor": Vector2(150, 44),
+	"shunt": Vector2(76, 36),
+	"monitor": Vector2(110, 70),
 }
 
 const INSERT_KINDS := ["fuse", "breaker", "switch", "busbar", "distributor", "shunt"]
@@ -77,6 +77,7 @@ static func layout(model: GraphModel, item_id: String, opts: Dictionary = {}) ->
 	for d in devices:
 		by_id[str(d["id"])] = d
 	var conductors := _conductors(model, chain, by_id, show_data)
+	var trough := _lanes_and_routes(devices, conductors, chain)
 	var checks: Array = PowerChain.checks(model, chain["power"])
 	var bat := str(chain["battery"])
 	if not bat.is_empty() and _has_pole(conductors, bat, "positive"):
@@ -86,7 +87,8 @@ static func layout(model: GraphModel, item_id: String, opts: Dictionary = {}) ->
 				"text": "Battery: no fuse on the positive.",
 				"why": "A short across the bank is limited only by the cable until a fuse opens. Put one on the positive, close to the battery.",
 			})
-	return {"devices": devices, "conductors": conductors, "checks": checks, "bounds": _bounds(devices)}
+	return {"devices": devices, "conductors": conductors, "checks": checks, "bounds": _bounds(devices),
+		"lanes": trough["lanes"], "trough_top": trough["trough_top"]}
 
 
 ## The wire for `amps` continuous at `volts` over `length_m` (one way).
@@ -417,66 +419,136 @@ static func _leave(it: Dictionary, entered: String) -> String:
 
 
 # ---------------------------------------------------------------------------
-# Placement
+# Placement: a shelf and a wiring trough
 # ---------------------------------------------------------------------------
+#
+# Everything that makes or stores power stands on one shelf (its feet at
+# y = 0): the modules in a row, the controller's face, the battery. Cables
+# hang DOWN from them into a trough of horizontal lanes below the shelf, run
+# along a lane, and climb to where they land — the way a wall of gear is
+# wired in practice, and the way the maker's diagrams draw it. A fuse, a
+# switch, a shunt or a bus stands IN its lane, so the lane runs straight
+# through it. The battery's studs are on its lid: a cable comes up beside
+# the case and over to its stud. Comms monitors sit under the trough.
+#
+# Lanes are handed out first-fit from the top: runs whose x-spans do not
+# overlap share a lane; PV runs come before battery runs, and inside a side
+# the run that would otherwise be crossed goes higher (see _lanes_and_routes).
+
+## The page is y UP (millimetres on paper), so these are the page's own
+## up and down — Godot's Vector2.DOWN is (0, 1) and would point into a device.
+const DOWN := Vector2(0, -1)
+const UP := Vector2(0, 1)
+const PIGTAIL_MM := 22.0        ## a module's leads hang this far under its frame
+const ARRAY_LANE_DY := 30.0     ## the series jumpers run this far under the pigtails (their chips clear the nameplates)
+const TROUGH_GAP := 36.0        ## between the lowest hanging lead and the first lane
+const LANE_PITCH := 52.0
+const INLINE_GAP := 22.0        ## between two in-line devices on one lane
+const RISE_MM := 26.0           ## a battery cable climbs this far off the case
+const STUD_IN_MM := 34.0        ## a stud from the battery's end
+const PANEL_GAP := 24.0
+const MONITOR_GAP := 26.0
+
 
 static func _place(model: GraphModel, chain: Dictionary, places: Dictionary) -> Array:
 	var power: Dictionary = chain["power"]
-	var arrays: Array = power["arrays"]
-	var n := maxi(arrays.size(), 1)
-	var ph: float = SIZE["panels"].y
-	var stack := float(n) * ph + float(maxi(n - 1, 0)) * GAP_Y
-	var cy := stack * 0.5
+	var arrays: Array = _ordered_arrays(model, power["arrays"])
 	var out: Array = []
 	var x := 0.0
+	for a in arrays:
+		var dev := _device(model, str(a["id"]), "panels", Vector2(x, 0.0), places)
+		out.append(dev)
+		x += SIZE["panels"].x + PANEL_GAP
 	if not arrays.is_empty():
-		for i in arrays.size():
-			var a: Dictionary = arrays[i]
-			var y := stack - float(i + 1) * ph - float(i) * GAP_Y
-			out.append(_device(model, str(a["id"]), "panels", Vector2(x, y), places))
-		x += SIZE["panels"].x + GAP_X
+		x += GAP_X - PANEL_GAP
 	var ctrl := str(chain["controller"])
 	if not ctrl.is_empty():
-		var csz := _box_size(model, ctrl, "controller")
-		out.append(_device(model, ctrl, "controller", Vector2(x, cy - csz.y * 0.5), places))
-		x += csz.x + GAP_X
-	var pos_j: Array = chain["pos_junctions"]
-	var neg_j: Array = chain["neg_junctions"]
-	var nj := maxi(pos_j.size(), neg_j.size())
-	if nj > 0:
-		var jw: float = SIZE["breaker"].x
-		for i in pos_j.size():
-			var id := str(pos_j[i])
+		var face := _controller_face(model, ctrl)
+		var origin := Vector2(x, 0.0)
+		if not face.is_empty():
+			var bb: Rect2 = face["bounds"]
+			var r: Rect2 = face["rect"]
+			origin.y = bb.position.y - r.position.y
+		var cdev := _device(model, ctrl, "controller", origin, places)
+		out.append(cdev)
+		x += (cdev["box"] as Rect2).size.x + GAP_X
+	# In-line devices stand in the trough between the controller and the
+	# battery; their lane (y) is set once the lanes are known.
+	var x_row := x
+	var far := x
+	for lst in [chain["pos_junctions"], chain["neg_junctions"]]:
+		var xr := x_row
+		var seen := {}
+		for d in out:
+			seen[str(d["id"])] = true
+		for jid in (lst as Array):
+			var id := str(jid)
+			if seen.has(id):
+				continue
 			var kind := _junction_kind(model, id)
 			var sz: Vector2 = SIZE.get(kind, SIZE["breaker"])
-			var origin := Vector2(x + float(i) * (jw + 16.0), cy + PORT_DY - sz.y * 0.5)
-			out.append(_device(model, id, kind, origin, places))
-		for i in neg_j.size():
-			var id2 := str(neg_j[i])
-			if pos_j.has(id2):
-				continue
-			var kind2 := _junction_kind(model, id2)
-			var sz2: Vector2 = SIZE.get(kind2, SIZE["breaker"])
-			var origin2 := Vector2(x + float(i) * (jw + 16.0), cy - PORT_DY - sz2.y * 0.5)
-			out.append(_device(model, id2, kind2, origin2, places))
-		x += float(nj) * jw + float(maxi(nj - 1, 0)) * 16.0 + GAP_X
+			var dev2 := _device(model, id, kind, Vector2(xr, -sz.y * 0.5), places)
+			dev2["inline"] = true
+			out.append(dev2)
+			xr += sz.x + INLINE_GAP
+			far = maxf(far, xr)
+	if far > x_row:
+		x = far - INLINE_GAP + GAP_X
 	var bat := str(chain["battery"])
 	if not bat.is_empty():
-		var bh: float = SIZE["battery"].y
-		out.append(_device(model, bat, "battery", Vector2(x, cy - bh * 0.5), places))
+		out.append(_device(model, bat, "battery", Vector2(x, 0.0), places))
 	return out
 
 
-## A comms peer that is not already on the power page, sat below the chain.
-## Both ends of a data run get a data port if they did not have one.
+## The arrays in series order: the one whose positive is free (or wired to
+## the controller) first, then each one's negative neighbour.
+static func _ordered_arrays(model: GraphModel, arrays: Array) -> Array:
+	if arrays.size() < 2:
+		return arrays
+	var ids: Array = []
+	var by := {}
+	for a in arrays:
+		ids.append(str(a["id"]))
+		by[str(a["id"])] = a
+	var next := {}
+	var has_prev := {}
+	for c in model.connections:
+		var cd: Dictionary = c
+		var sa := PowerChain.unit_of(model, str(cd.get("source_item_id", "")))
+		var sb := PowerChain.unit_of(model, str(cd.get("target_item_id", "")))
+		if not by.has(sa) or not by.has(sb) or sa == sb:
+			continue
+		var ha := str(cd.get("source_handle_id", ""))
+		var hb := str(cd.get("target_handle_id", ""))
+		# A series link runs from one module's negative to the next's positive.
+		if _is_negative(ha) and not _is_negative(hb):
+			next[sa] = sb
+			has_prev[sb] = true
+		elif _is_negative(hb) and not _is_negative(ha):
+			next[sb] = sa
+			has_prev[sa] = true
+	var out: Array = []
+	var placed := {}
+	for id in ids:
+		if has_prev.has(id):
+			continue
+		var cur := str(id)
+		while cur != "" and not placed.has(cur):
+			placed[cur] = true
+			out.append(by[cur])
+			cur = str(next.get(cur, ""))
+	for id2 in ids:
+		if not placed.has(id2):
+			out.append(by[id2])
+	return out
+
+
+## A comms peer that is not already on the power page, sat under the
+## trough. Both ends of a data run get a data port if they did not have one.
 static func _add_monitors(model: GraphModel, devices: Array, places: Dictionary) -> void:
 	var by := {}
 	for d in devices:
 		by[str(d["id"])] = d
-	var floor := INF
-	for d2 in devices:
-		floor = minf(floor, ((d2 as Dictionary)["box"] as Rect2).position.y)
-	var y := floor - GAP_Y - SIZE["monitor"].y
 	var x := 0.0
 	for c in model.connections:
 		var cd: Dictionary = c
@@ -504,27 +576,29 @@ static func _add_monitors(model: GraphModel, devices: Array, places: Dictionary)
 		var role := _data_role(by[known], "data")
 		if role.is_empty():
 			role = "rs485"
-		var dev := _device(model, other, "monitor", Vector2(x, y), places)
-		var box: Rect2 = dev["box"]
-		dev["ports"] = [{
-			"id": "data", "handle": "data", "side": "top", "role": role,
-			"pos": Vector2(box.get_center().x, box.end.y), "dir": Vector2.UP,
-		}]
+		var dev := _device(model, other, "monitor", Vector2(x, 0.0), places)
+		dev["monitor"] = true
 		(dev["symbol"] as Dictionary)["caption"] = CtrlSheet.short(role)
 		devices.append(dev)
 		by[other] = dev
 		x += SIZE["monitor"].x + 16.0
 
 
+## A data port on a device that had none: a lead hanging under it.
 static func _ensure_data_port(device: Dictionary) -> void:
 	for p in (device["ports"] as Array):
 		if str(p["handle"]) == "data":
 			return
 	var box: Rect2 = device["box"]
-	(device["ports"] as Array).append({
-		"id": "data", "handle": "data", "side": "bottom", "role": "rs485",
-		"pos": Vector2(box.get_center().x, box.position.y), "dir": Vector2.DOWN,
-	})
+	var kind := str(device["kind"])
+	var at := Vector2(box.get_center().x, box.position.y)
+	if kind == "battery":
+		at = Vector2(box.end.x - STUD_IN_MM * 2.0, box.end.y)
+		(device["ports"] as Array).append({"id": "data", "handle": "data", "side": "top", "role": "rs485",
+			"pos": at, "dir": UP, "via": [at + Vector2(0, RISE_MM * 0.6), Vector2(box.end.x + RISE_MM * 1.8, at.y + RISE_MM * 0.6)]})
+		return
+	(device["ports"] as Array).append({"id": "data", "handle": "data", "side": "bottom", "role": "rs485",
+		"pos": at, "dir": DOWN, "via": []})
 
 
 ## The face lead this graph handle belongs to (rs485, ve_direct, ve_bus, …).
@@ -559,14 +633,6 @@ static func _junction_kind(model: GraphModel, id: String) -> String:
 	return ty if SIZE.has(ty) else "breaker"
 
 
-static func _box_size(model: GraphModel, id: String, kind: String) -> Vector2:
-	if kind == "controller":
-		var face := _controller_face(model, id)
-		if not face.is_empty():
-			return (face["bounds"] as Rect2).size
-	return SIZE.get(kind, SIZE["breaker"])
-
-
 static func _device(model: GraphModel, id: String, kind: String, origin: Vector2, places: Dictionary) -> Dictionary:
 	if places.has(id) and places[id] is Vector2:
 		origin = places[id]
@@ -575,7 +641,7 @@ static func _device(model: GraphModel, id: String, kind: String, origin: Vector2
 	var nm := str(sp.get("name", it.get("label", "")))
 	if nm.is_empty():
 		nm = str(it.get("label", id))
-	var symbol := {"kind": kind, "caption": "", "state": ""}
+	var symbol := {"kind": kind, "caption": "", "state": "", "module": ""}
 	var sz: Vector2 = SIZE.get(kind, SIZE["breaker"])
 	var ports: Array = []
 	if kind == "controller":
@@ -588,6 +654,7 @@ static func _device(model: GraphModel, id: String, kind: String, origin: Vector2
 			ports = _face_ports(shifted)
 	elif kind == "panels":
 		symbol["caption"] = _panel_caption(model, id)
+		symbol["module"] = _module_caption(sp)
 	elif kind == "battery":
 		symbol["caption"] = _battery_caption(sp)
 	elif kind == "fuse" or kind == "breaker":
@@ -605,7 +672,25 @@ static func _device(model: GraphModel, id: String, kind: String, origin: Vector2
 	var box := Rect2(origin, sz)
 	if ports.is_empty():
 		ports = _ports(kind, box)
-	return {"id": id, "kind": kind, "name": nm, "box": box, "ports": ports, "symbol": symbol}
+	return {"id": id, "kind": kind, "name": nm, "box": box, "ports": ports, "symbol": symbol, "placed": places.has(id)}
+
+
+## Move a device's box and its ports together.
+static func _move_device(dev: Dictionary, origin: Vector2) -> void:
+	var box: Rect2 = dev["box"]
+	var d := origin - box.position
+	if d.length() < 0.001:
+		return
+	dev["box"] = Rect2(origin, box.size)
+	for p in (dev["ports"] as Array):
+		p["pos"] = (p["pos"] as Vector2) + d
+		var via: Array = []
+		for v in (p.get("via", []) as Array):
+			via.append((v as Vector2) + d)
+		p["via"] = via
+	var sym: Dictionary = dev["symbol"]
+	if str(sym.get("kind", "")) == "face":
+		sym["face"] = _offset_face(sym["face"], d)
 
 
 ## The solved front face, in the face's own frame, or {} when this controller
@@ -688,7 +773,7 @@ static func _face_ports(face: Dictionary) -> Array:
 		used[handle] = true
 		out.append({
 			"id": handle, "handle": handle, "side": "bottom", "role": str(ld["role"]),
-			"pos": ld["end"], "dir": Vector2.DOWN,
+			"pos": ld["end"], "dir": DOWN, "via": [],
 		})
 	return out
 
@@ -701,6 +786,18 @@ static func _panel_caption(model: GraphModel, id: String) -> String:
 	if w > 0.0:
 		cap += " · %d W" % int(round(w))
 	return cap
+
+
+## One module's own nameplate: "300 W · 40 Voc".
+static func _module_caption(sp: Dictionary) -> String:
+	var parts: PackedStringArray = []
+	var w := float(sp.get("wmp", sp.get("watts", 0.0)))
+	var voc := float(sp.get("voc", 0.0))
+	if w > 0.0:
+		parts.append("%d W" % int(round(w)))
+	if voc > 0.0:
+		parts.append("%s Voc" % _n(voc))
+	return " · ".join(parts)
 
 
 static func _battery_caption(sp: Dictionary) -> String:
@@ -727,37 +824,54 @@ static func _protection_state(sp: Dictionary, kind: String) -> String:
 	return "Blown" if bool(sp.get("fuse", false)) or kind == "fuse" else "Tripped"
 
 
+## Where a device's cables leave it, and the way they go. A port is
+## {id, handle, side, role, pos, dir, via}: `via` are the points a cable
+## passes after `pos` before it heads straight for its lane (a battery
+## cable climbs off the lid and over to the side of the case).
 static func _ports(kind: String, box: Rect2) -> Array:
 	var out: Array = []
+	var c := box.get_center()
 	match kind:
 		"panels":
-			out.append(_port("positive", "right", "+", box, "pv1+"))
-			out.append(_port("negative", "right", "-", box, "pv1-"))
+			var y := box.position.y - PIGTAIL_MM
+			out.append(_port("positive", "bottom", Vector2(c.x - 18.0, y), DOWN, "pv1+"))
+			out.append(_port("negative", "bottom", Vector2(c.x + 18.0, y), DOWN, "pv1-"))
 		"controller":
-			out.append(_port("pvPositive", "left", "+", box, "pv1+"))
-			out.append(_port("pvNegative", "left", "-", box, "pv1-"))
-			out.append(_port("batteryPositive", "right", "+", box, "bat+"))
-			out.append(_port("batteryNegative", "right", "-", box, "bat-"))
+			out.append(_port("pvPositive", "left", Vector2(box.position.x, c.y + PORT_DY), Vector2.LEFT, "pv1+", true))
+			out.append(_port("pvNegative", "left", Vector2(box.position.x, c.y - PORT_DY), Vector2.LEFT, "pv1-", true))
+			out.append(_port("batteryPositive", "right", Vector2(box.end.x, c.y + PORT_DY), Vector2.RIGHT, "bat+", true))
+			out.append(_port("batteryNegative", "right", Vector2(box.end.x, c.y - PORT_DY), Vector2.RIGHT, "bat-", true))
 		"battery":
-			out.append(_port("positive", "left", "+", box, "bat+"))
-			out.append(_port("negative", "left", "-", box, "bat-"))
+			# − on the left, + on the right: the negative climbs the left side, the
+			# positive the right, so neither crosses the other's lane run.
+			var top := box.end.y
+			var neg := Vector2(box.position.x + STUD_IN_MM, top)
+			var pos := Vector2(box.end.x - STUD_IN_MM, top)
+			var over := top + RISE_MM
+			out.append({"id": "positive", "handle": "positive", "side": "top", "role": "bat+", "pos": pos, "dir": UP,
+				"via": [Vector2(pos.x, over), Vector2(box.end.x + RISE_MM, over)]})
+			out.append({"id": "negative", "handle": "negative", "side": "top", "role": "bat-", "pos": neg, "dir": UP,
+				"via": [Vector2(neg.x, over), Vector2(box.position.x - RISE_MM, over)]})
+		"monitor":
+			out.append(_port("data", "top", Vector2(c.x, box.end.y), UP, "rs485"))
 		_:
-			out.append(_port("input", "left", "0", box, "bat+"))
-			out.append(_port("output", "right", "0", box, "bat+"))
+			out.append(_port("input", "left", Vector2(box.position.x, c.y), Vector2.LEFT, "bat+", true))
+			out.append(_port("output", "right", Vector2(box.end.x, c.y), Vector2.RIGHT, "bat+", true))
 			if kind == "combiner" or kind == "distributor":
-				out.append(_port("input1", "left", "+", box, "pv1+"))
-				out.append(_port("input2", "left", "0", box, "pv1+"))
-				out.append(_port("input3", "left", "-", box, "pv1-"))
+				var step := minf(14.0, box.size.y * 0.3)
+				out.append(_port("input1", "left", Vector2(box.position.x, c.y + step), Vector2.LEFT, "pv1+", true))
+				out.append(_port("input2", "left", Vector2(box.position.x, c.y), Vector2.LEFT, "pv1+", true))
+				out.append(_port("input3", "left", Vector2(box.position.x, c.y - step), Vector2.LEFT, "pv1-", true))
+			if kind == "shunt":
+				out.append(_port("data", "bottom", Vector2(c.x, box.position.y), DOWN, "rs485"))
 	return out
 
 
-static func _port(handle: String, side: String, pole: String, box: Rect2, role: String) -> Dictionary:
-	var c := box.get_center()
-	var dy := 0.0 if pole == "0" else (PORT_DY if pole == "+" else -PORT_DY)
-	var y := c.y + dy
-	var x := box.position.x if side == "left" else box.end.x
-	var dir := Vector2.LEFT if side == "left" else Vector2.RIGHT
-	return {"id": handle, "handle": handle, "side": side, "role": role, "pos": Vector2(x, y), "dir": dir}
+static func _port(handle: String, side: String, pos: Vector2, dir: Vector2, role: String, stub: bool = false) -> Dictionary:
+	var via: Array = []
+	if stub:
+		via.append(pos + dir * STUB_MM)
+	return {"id": handle, "handle": handle, "side": side, "role": role, "pos": pos, "dir": dir, "via": via}
 
 
 # ---------------------------------------------------------------------------
@@ -790,14 +904,14 @@ static func _conductors(model: GraphModel, chain: Dictionary, by_id: Dictionary,
 			if drole.is_empty():
 				drole = "rs485"
 			var dlen := _data_length_m(cd)
-			var dpts := _route(pa["pos"], pa["dir"], pb["pos"], pb["dir"])
 			out.append({
 				"id": str(cd.get("id", "")), "a": sa, "ha": ha, "b": sb, "hb": hb,
 				"polarity": "data", "role": drole, "pv": false,
 				"color": CtrlSheet.wire_color(drole),
 				"gauge": "", "mm2": 0.0, "amps": 0.0, "volts": 0.0,
 				"length_m": dlen, "drop_pct": 0.0, "upsized": false,
-				"label": CtrlSheet.short(drole), "pts": dpts,
+				"label": CtrlSheet.short(drole), "pts": PackedVector2Array(),
+				"group": "data|" + str(cd.get("id", "")), "lane": -1,
 			})
 			continue
 		if pol != "positive" and pol != "negative":
@@ -807,23 +921,194 @@ static func _conductors(model: GraphModel, chain: Dictionary, by_id: Dictionary,
 		var amps := 0.0
 		var volts := 12.0
 		var length := _length_m(cd, pv)
+		var group := ""
 		if pv:
 			var panel := _panel_item(model, str(cd.get("source_item_id", "")), str(cd.get("target_item_id", "")))
 			amps = _string_isc(model, panel)
 			volts = _string_vmp(model, panel)
+			if str(da["kind"]) == "panels" and str(db["kind"]) == "panels":
+				group = "array"
+			else:
+				group = "pv|%s|%s" % [_string_root(model, panel), pol]
 		else:
 			amps = _charge_amps(model, str(chain["controller"]))
 			volts = _bat_volts(model, str(chain["battery"]))
+			group = "bat|" + pol
 		var sized := size_run(amps, volts, length)
-		var pts := _route(pa["pos"], pa["dir"], pb["pos"], pb["dir"])
 		out.append({
 			"id": str(cd.get("id", "")), "a": sa, "ha": ha, "b": sb, "hb": hb,
 			"polarity": pol, "role": role, "pv": pv,
 			"color": CtrlSheet.wire_color(role),
 			"gauge": sized["gauge"], "mm2": sized["mm2"], "amps": amps, "volts": volts,
 			"length_m": length, "drop_pct": sized["drop_pct"], "upsized": sized["upsized"],
-			"label": str(sized["gauge"]), "pts": pts,
+			"label": str(sized["gauge"]), "pts": PackedVector2Array(),
+			"group": group, "lane": -1,
 		})
+	return out
+
+
+## The lowest member id of a string, so both poles of one string share a key.
+static func _string_root(model: GraphModel, panel_id: String) -> String:
+	var ids := _string_members(model, panel_id)
+	ids.sort()
+	return str(ids[0]) if not ids.is_empty() else panel_id
+
+
+## Lanes for every trough run, in-line devices moved onto their lane,
+## monitors under the trough, then every conductor's polyline.
+## Returns {lanes: [y…], trough_top}.
+static func _lanes_and_routes(devices: Array, conductors: Array, chain: Dictionary) -> Dictionary:
+	var by_id := {}
+	for d in devices:
+		by_id[str(d["id"])] = d
+	# The trough starts under the lowest hanging lead of a device on the shelf.
+	var low := 0.0
+	var any := false
+	for d in devices:
+		if bool(d.get("inline", false)) or bool(d.get("monitor", false)):
+			continue
+		for p in (d["ports"] as Array):
+			if (p["dir"] as Vector2).y < -0.5:
+				low = minf(low, (p["pos"] as Vector2).y) if any else (p["pos"] as Vector2).y
+				any = true
+	var trough_top := (low if any else 0.0) - TROUGH_GAP
+	var array_y := -(PIGTAIL_MM + ARRAY_LANE_DY)
+	# Group runs: a group is one lane's worth (both ends of a string's pole,
+	# every segment of the battery positive through its fuses).
+	var groups := {}
+	for c in conductors:
+		var g := str(c["group"])
+		if g == "array":
+			continue
+		if not groups.has(g):
+			groups[g] = {"key": g, "x0": INF, "x1": -INF, "lead_x": 0.0, "n": 0}
+		var gr: Dictionary = groups[g]
+		for end in [[c["a"], c["ha"]], [c["b"], c["hb"]]]:
+			var dev: Dictionary = by_id[str(end[0])]
+			var port := _find_port(dev, str(end[1]))
+			if port.is_empty():
+				continue
+			var xs := _port_lane_x(port)
+			gr["x0"] = minf(float(gr["x0"]), xs)
+			gr["x1"] = maxf(float(gr["x1"]), xs)
+			if str(dev["kind"]) == "controller":
+				gr["lead_x"] = xs
+	# Order: PV groups by their controller lead from the left (the run whose
+	# lead is further left must sit higher or the other's climb crosses it),
+	# then battery groups from the right, then data; first-fit from the top.
+	var order: Array = groups.values()
+	order.sort_custom(func(a, b) -> bool:
+		var ka := _group_rank(str(a["key"]))
+		var kb := _group_rank(str(b["key"]))
+		if ka != kb:
+			return ka < kb
+		if ka == 0:
+			return float(a["lead_x"]) < float(b["lead_x"])
+		if ka == 1:
+			return float(a["lead_x"]) > float(b["lead_x"])
+		return str(a["key"]) < str(b["key"]))
+	var lanes: Array = []   # each: [[x0, x1], …] occupied spans
+	var lane_of := {}
+	var first_data := -1
+	for gr in order:
+		var span := [float(gr["x0"]) - INLINE_GAP, float(gr["x1"]) + INLINE_GAP]
+		var k := 0
+		if _group_rank(str(gr["key"])) == 2:
+			if first_data < 0:
+				first_data = lanes.size()
+			k = first_data
+		while true:
+			if k >= lanes.size():
+				lanes.append([span])
+				break
+			var free := true
+			for s in (lanes[k] as Array):
+				if float(span[0]) < float(s[1]) and float(s[0]) < float(span[1]):
+					free = false
+					break
+			if free:
+				(lanes[k] as Array).append(span)
+				break
+			k += 1
+		lane_of[str(gr["key"])] = k
+	var ys: Array = []
+	for i in lanes.size():
+		ys.append(trough_top - (float(i) + 0.5) * LANE_PITCH)
+	# In-line devices onto their lane; monitors under the last lane.
+	var floor_y := trough_top - float(lanes.size()) * LANE_PITCH
+	var pos_j: Array = chain.get("pos_junctions", [])
+	for d in devices:
+		if bool(d.get("inline", false)) and not bool(d.get("placed", false)):
+			var pol := "positive" if pos_j.has(str(d["id"])) else "negative"
+			var k2 := int(lane_of.get("bat|" + pol, -1))
+			if k2 >= 0:
+				var box: Rect2 = d["box"]
+				_move_device(d, Vector2(box.position.x, float(ys[k2]) - box.size.y * 0.5))
+		elif bool(d.get("monitor", false)) and not bool(d.get("placed", false)):
+			var box2: Rect2 = d["box"]
+			_move_device(d, Vector2(box2.position.x, floor_y - MONITOR_GAP - box2.size.y))
+	for c in conductors:
+		var g := str(c["group"])
+		var da: Dictionary = by_id[str(c["a"])]
+		var db: Dictionary = by_id[str(c["b"])]
+		var pa := _find_port(da, str(c["ha"]))
+		var pb := _find_port(db, str(c["hb"]))
+		var lane_y := array_y
+		if g != "array":
+			var k3 := int(lane_of.get(g, 0))
+			c["lane"] = k3
+			lane_y = float(ys[k3]) if k3 < ys.size() else trough_top - LANE_PITCH * 0.5
+		c["pts"] = _route(pa, pb, lane_y)
+	return {"lanes": ys, "trough_top": trough_top}
+
+
+static func _group_rank(key: String) -> int:
+	if key.begins_with("pv|"):
+		return 0
+	if key.begins_with("bat|"):
+		return 1
+	return 2
+
+
+## Where a port's cable meets its lane (the last via point's x, else its own).
+static func _port_lane_x(port: Dictionary) -> float:
+	var via: Array = port.get("via", [])
+	if not via.is_empty():
+		return (via[via.size() - 1] as Vector2).x
+	return (port["pos"] as Vector2).x
+
+
+## One cable: out of port a along its via points, straight to the lane,
+## along the lane, straight to port b's last via point, back along b's via
+## points into b. Every leg is horizontal or vertical.
+static func _route(pa: Dictionary, pb: Dictionary, lane_y: float) -> PackedVector2Array:
+	var raw: Array = [pa["pos"]]
+	for v in (pa.get("via", []) as Array):
+		raw.append(v)
+	var la: Vector2 = raw[raw.size() - 1]
+	var bvia: Array = (pb.get("via", []) as Array).duplicate()
+	bvia.reverse()
+	var lb: Vector2 = bvia[0] if not bvia.is_empty() else pb["pos"]
+	raw.append(Vector2(la.x, lane_y))
+	raw.append(Vector2(lb.x, lane_y))
+	for v2 in bvia:
+		raw.append(v2)
+	raw.append(pb["pos"])
+	var out := PackedVector2Array()
+	for p in raw:
+		var q: Vector2 = p
+		if not out.is_empty():
+			var last := out[out.size() - 1]
+			if last.distance_to(q) < 0.05:
+				continue
+			# Drop a collinear middle point.
+			if out.size() >= 2:
+				var prev := out[out.size() - 2]
+				if (absf(prev.x - last.x) < 0.01 and absf(last.x - q.x) < 0.01) \
+						or (absf(prev.y - last.y) < 0.01 and absf(last.y - q.y) < 0.01):
+					out[out.size() - 1] = q
+					continue
+		out.append(q)
 	return out
 
 
@@ -953,25 +1238,6 @@ static func _length_m(conn: Dictionary, pv: bool) -> float:
 	return RUN_PV_M if pv else RUN_BAT_M
 
 
-static func _route(a: Vector2, a_dir: Vector2, b: Vector2, b_dir: Vector2) -> PackedVector2Array:
-	var a1 := a + a_dir * STUB_MM
-	var b1 := b + b_dir * STUB_MM
-	var raw := PackedVector2Array([a, a1])
-	if absf(a_dir.x) > 0.5 and absf(b_dir.x) > 0.5:
-		var cx := (a1.x + b1.x) * 0.5
-		raw.append(Vector2(cx, a1.y))
-		raw.append(Vector2(cx, b1.y))
-	else:
-		raw.append(Vector2(a1.x, b1.y))
-	raw.append(b1)
-	raw.append(b)
-	var out := PackedVector2Array()
-	for p in raw:
-		if out.is_empty() or out[out.size() - 1].distance_to(p) > 0.05:
-			out.append(p)
-	return out
-
-
 static func _has_pole(conductors: Array, device_id: String, handle: String) -> bool:
 	for c in conductors:
 		var cd: Dictionary = c
@@ -1000,6 +1266,63 @@ static func _next_wire(mm2: float) -> Array:
 		if float(w[1]) > mm2 + 1e-6:
 			return w
 	return []
+
+
+## The corners of an orthogonal polyline rounded by up to `r` mm (never more
+## than half the shorter leg), each arc as a few points. What the page and
+## the SVG both draw; `pts` stays the square polyline the hit test uses.
+static func fillet(pts: PackedVector2Array, r: float, steps: int = 6) -> PackedVector2Array:
+	if pts.size() < 3 or r <= 0.01:
+		return pts
+	var out := PackedVector2Array()
+	out.append(pts[0])
+	for i in range(1, pts.size() - 1):
+		var p := pts[i]
+		var a := pts[i - 1]
+		var b := pts[i + 1]
+		var da := (a - p)
+		var db := (b - p)
+		var la := da.length()
+		var lb := db.length()
+		if la < 0.01 or lb < 0.01:
+			continue
+		var rr := minf(r, minf(la, lb) * 0.5)
+		var ua := da / la
+		var ub := db / lb
+		var p0 := p + ua * rr
+		var p1 := p + ub * rr
+		out.append(p0)
+		for k in range(1, steps):
+			var t := float(k) / float(steps)
+			# A quadratic bezier through the corner is close enough to a quarter arc here.
+			var q := p0.lerp(p, t).lerp(p.lerp(p1, t), t)
+			out.append(q)
+		out.append(p1)
+	out.append(pts[pts.size() - 1])
+	return out
+
+
+## The longest horizontal leg of a run: where its gauge chip goes.
+static func label_anchor(pts: PackedVector2Array) -> Dictionary:
+	var best_len := -1.0
+	var best := Vector2.ZERO
+	var horizontal := true
+	var length := 0.0
+	for i in range(1, pts.size()):
+		var a := pts[i - 1]
+		var b := pts[i]
+		var l := a.distance_to(b)
+		var horiz := absf(a.y - b.y) < 0.01
+		var score := l * (1.0 if horiz else 0.6)
+		if score > best_len:
+			best_len = score
+			best = (a + b) * 0.5
+			horizontal = horiz
+			length = l
+	if pts.size() == 1:
+		best = pts[0]
+	return {"pos": best, "horizontal": horizontal, "length": length}
+
 
 
 # ---------------------------------------------------------------------------
@@ -1040,8 +1363,8 @@ static func ink_bounds(lay: Dictionary) -> Rect2:
 	return b.grow(20.0) if any else Rect2()
 
 
-## The layout as an SVG document (millimetres, y down). The same boxes,
-## colours and words the page draws.
+## The layout as an SVG document (millimetres, y down). The same shelf,
+## trough, rounded cables and part symbols the page draws.
 static func svg(lay: Dictionary) -> String:
 	var b := ink_bounds(lay)
 	var checks: Array = lay.get("checks", [])
@@ -1055,25 +1378,18 @@ static func svg(lay: Dictionary) -> String:
 	var o := PackedStringArray()
 	o.append('<?xml version="1.0" encoding="UTF-8"?>')
 	o.append('<svg xmlns="http://www.w3.org/2000/svg" width="%smm" height="%smm" viewBox="0 0 %s %s" font-family="Inter, Arial, sans-serif">' % [_n(w), _n(h), _n(w), _n(h)])
-	o.append('<rect width="%s" height="%s" fill="#ffffff"/>' % [_n(w), _n(h)])
+	o.append('<rect width="%s" height="%s" fill="#f5f6f8"/>' % [_n(w), _n(h)])
 	o.append('<text x="%s" y="14" font-size="6" font-weight="600" fill="#1a1a1a">Wiring diagram</text>' % _n(pad))
+	# Data leads under the power cables; cables under the gear.
+	var ordered: Array = []
 	for c in (lay.get("conductors", []) as Array):
-		var cd: Dictionary = c
-		var pts := PackedStringArray()
-		var mid := Vector2.ZERO
-		var wire: PackedVector2Array = cd["pts"]
-		for p in wire:
-			pts.append("%s,%s" % [_n(ox + p.x), _n(oy - p.y)])
-			mid += p
-		if wire.size() > 0:
-			mid /= float(wire.size())
-		var col: Color = cd["color"]
-		var sw := 2.6 if str(cd.get("gauge", "")).begins_with("6 ") or str(cd.get("gauge", "")).begins_with("4 ") else 1.8
-		o.append('<polyline points="%s" fill="none" stroke="#ffffff" stroke-width="%s" stroke-linejoin="round" stroke-linecap="round"/>' % [" ".join(pts), _n(sw + 2.4)])
-		o.append('<polyline points="%s" fill="none" stroke="%s" stroke-width="%s" stroke-linejoin="round" stroke-linecap="round"/>' % [" ".join(pts), _hex(col), _n(sw)])
-		var label := "%s · %.1f m" % [str(cd["label"]), float(cd["length_m"])]
-		o.append('<text x="%s" y="%s" font-size="3.4" fill="%s" stroke="#ffffff" stroke-width="1.1" paint-order="stroke">%s</text>' % [
-			_n(ox + mid.x + 4.0), _n(oy - (mid.y + 5.0)), _hex(col.darkened(0.35)), _esc(label)])
+		if str((c as Dictionary).get("polarity", "")) == "data":
+			ordered.append(c)
+	for c2 in (lay.get("conductors", []) as Array):
+		if str((c2 as Dictionary).get("polarity", "")) != "data":
+			ordered.append(c2)
+	for c3 in ordered:
+		o.append(_wire_svg(c3, ox, oy))
 	for d in (lay.get("devices", []) as Array):
 		o.append(_device_svg(d, ox, oy))
 	var cy := top + b.size.y + pad + 6.0
@@ -1086,6 +1402,49 @@ static func svg(lay: Dictionary) -> String:
 	return "\n".join(o)
 
 
+static func _wire_svg(c: Variant, ox: float, oy: float) -> String:
+	var cd: Dictionary = c
+	var wire: PackedVector2Array = cd["pts"]
+	if wire.size() < 2:
+		return ""
+	var data := str(cd.get("polarity", "")) == "data"
+	var pts := PackedStringArray()
+	for p in fillet(wire, 14.0):
+		pts.append("%s,%s" % [_n(ox + p.x), _n(oy - p.y)])
+	var col: Color = cd["color"]
+	var sw := 1.4 if data else clampf(2.2 + 1.1 * sqrt(maxf(float(cd.get("mm2", 0.0)), 0.5)), 2.2, 9.0)
+	var o := PackedStringArray()
+	var path := " ".join(pts)
+	if data:
+		o.append('<polyline points="%s" fill="none" stroke="#ffffff" stroke-width="%s" stroke-linejoin="round" stroke-linecap="round"/>' % [path, _n(sw + 1.6)])
+		o.append('<polyline points="%s" fill="none" stroke="%s" stroke-width="%s" stroke-dasharray="%s %s" stroke-linejoin="round"/>' % [
+			path, _hex(col), _n(sw), _n(sw * 3.0), _n(sw * 2.0)])
+	else:
+		o.append('<polyline points="%s" fill="none" stroke="%s" stroke-width="%s" stroke-linejoin="round" stroke-linecap="round"/>' % [path, _hex(col.darkened(0.55)), _n(sw + 1.8)])
+		o.append('<polyline points="%s" fill="none" stroke="%s" stroke-width="%s" stroke-linejoin="round" stroke-linecap="round"/>' % [path, _hex(col), _n(sw)])
+		o.append('<polyline points="%s" fill="none" stroke="#ffffff" stroke-opacity="%s" stroke-width="%s" stroke-linejoin="round" stroke-linecap="round" transform="translate(%s %s)"/>' % [
+			path, "0.18" if col.get_luminance() < 0.3 else "0.3", _n(maxf(sw * 0.28, 0.5)), _n(-sw * 0.18), _n(-sw * 0.18)])
+		for e in [wire[0], wire[wire.size() - 1]]:
+			o.append('<circle cx="%s" cy="%s" r="%s" fill="%s"/><circle cx="%s" cy="%s" r="%s" fill="#cfa85a"/>' % [
+				_n(ox + e.x), _n(oy - e.y), _n(sw * 0.75 + 0.6), _hex(col.darkened(0.55)), _n(ox + e.x), _n(oy - e.y), _n(sw * 0.55)])
+	var anchor := label_anchor(wire)
+	if float(anchor.get("length", 0.0)) >= 48.0:
+		var mid: Vector2 = anchor["pos"]
+		var label := "%s · %.1f m" % [str(cd["label"]), float(cd["length_m"])]
+		if not data and float(cd.get("amps", 0.0)) > 0.0:
+			label += " · %s A" % _n(float(cd["amps"]))
+		var tw := float(label.length()) * 2.0 + 6.0
+		var lx := ox + mid.x - tw * 0.5
+		var ly := oy - mid.y - sw * 0.5 - 8.5
+		if not bool(anchor["horizontal"]):
+			lx = ox + mid.x + sw * 0.5 + 3.0
+			ly = oy - mid.y - 3.5
+		o.append('<rect x="%s" y="%s" width="%s" height="7" rx="1.2" fill="#ffffff" stroke="#b8bec6" stroke-width="0.3"/>' % [_n(lx), _n(ly), _n(tw)])
+		o.append('<rect x="%s" y="%s" width="1.2" height="7" fill="%s"/>' % [_n(lx), _n(ly), _hex(col)])
+		o.append('<text x="%s" y="%s" font-size="3.4" font-weight="600" fill="#1c2430">%s</text>' % [_n(lx + 3.0), _n(ly + 5.0), _esc(label)])
+	return "\n".join(o)
+
+
 static func _device_svg(d: Dictionary, ox: float, oy: float) -> String:
 	var box: Rect2 = d["box"]
 	var kind := str(d["kind"])
@@ -1093,9 +1452,12 @@ static func _device_svg(d: Dictionary, ox: float, oy: float) -> String:
 	var o := PackedStringArray()
 	o.append('<g id="dev_%s">' % _esc(str(d["id"])))
 	if str(sym.get("kind", "")) == "face":
-		o.append(CtrlSheet.face_svg(sym["face"], ox, oy))
+		var face: Dictionary = (sym["face"] as Dictionary).duplicate()
+		face["title"] = false
+		o.append(CtrlSheet.face_svg(face, ox, oy))
+		var r: Rect2 = face["rect"]
 		o.append('<text x="%s" y="%s" font-size="4.2" font-weight="600" text-anchor="middle" fill="#1a1a1a">%s</text>' % [
-			_n(ox + box.get_center().x), _n(oy - box.end.y + 5.0), _esc(str(d["name"]))])
+			_n(ox + r.get_center().x), _n(oy - r.end.y - 4.0), _esc(str(d["name"]))])
 	else:
 		o.append(_symbol_svg(kind, box, sym, d, ox, oy))
 	o.append('</g>')
@@ -1111,58 +1473,130 @@ static func _symbol_svg(kind: String, box: Rect2, sym: Dictionary, d: Dictionary
 	var cap := _esc(str(sym.get("caption", "")))
 	var state := _esc(str(sym.get("state", "")))
 	var o := PackedStringArray()
+	o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="2" fill="#000" fill-opacity="0.12"/>' % [_n(x + 1.2), _n(y + 1.6), _n(w), _n(h)])
 	if kind == "panels":
-		o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#d5d8de" stroke="#8e95a0" stroke-width="0.6"/>' % [_n(x), _n(y), _n(w), _n(h)])
-		o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#163e78"/>' % [_n(x + 4.0), _n(y + 4.0), _n(w - 8.0), _n(h - 16.0)])
-		o.append(_module_grid_svg(box, ox, oy))
-		o.append('<text x="%s" y="%s" font-size="4.2" font-weight="600" text-anchor="middle" fill="#ffffff">%s</text>' % [_n(x + w * 0.5), _n(y + 12.0), cap])
-		o.append('<text x="%s" y="%s" font-size="3.4" text-anchor="middle" fill="#1c2430">%s</text>' % [_n(x + w * 0.5), _n(y + h - 3.0), name])
-	elif kind == "battery":
-		o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#0c4c9a" stroke="#08356e" stroke-width="0.7"/>' % [_n(x), _n(y), _n(w), _n(h)])
-		o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#e4570e"/>' % [_n(x), _n(y), _n(w), _n(maxf(h * 0.08, 3.0))])
-		o.append('<text x="%s" y="%s" font-size="4.2" font-weight="600" text-anchor="middle" fill="#ffffff">%s</text>' % [_n(x + w * 0.5), _n(y + 14.0), name])
-		o.append('<text x="%s" y="%s" font-size="3.6" text-anchor="middle" fill="#ffffff">%s</text>' % [_n(x + w * 0.5), _n(y + 20.0), cap])
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="2" fill="#c9ced4" stroke="#8e95a0" stroke-width="0.6"/>' % [_n(x), _n(y), _n(w), _n(h)])
+		var fw := maxf(w * 0.035, 2.5)
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#0f2d5e"/>' % [_n(x + fw), _n(y + fw), _n(w - 2.0 * fw), _n(h - 2.0 * fw)])
+		o.append(_module_grid_svg(Rect2(x + fw, y + fw, w - 2.0 * fw, h - 2.0 * fw)))
+		# junction box and the two pigtails to the MC4 ends
+		var jb := Rect2(x + w * 0.39, y + h - 1.0, w * 0.22, maxf(h * 0.045, 4.0))
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="1" fill="#2c3138"/>' % [_n(jb.position.x), _n(jb.position.y), _n(jb.size.x), _n(jb.size.y)])
 		for p in (d["ports"] as Array):
 			var pp: Vector2 = p["pos"]
-			o.append('<circle cx="%s" cy="%s" r="3.2" fill="#8a7340"/><circle cx="%s" cy="%s" r="2.1" fill="#c6a15a"/>' % [
-				_n(ox + pp.x), _n(oy - pp.y), _n(ox + pp.x), _n(oy - pp.y)])
-	elif kind == "fuse":
-		o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#8d9399"/>' % [_n(x), _n(y), _n(w * 0.16), _n(h)])
-		o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#8d9399"/>' % [_n(x + w * 0.84), _n(y), _n(w * 0.16), _n(h)])
-		o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#f4d03f" stroke="#b7950b" stroke-width="0.4"/>' % [
-			_n(x + w * 0.16), _n(y + h * 0.12), _n(w * 0.68), _n(h * 0.76)])
-		o.append('<text x="%s" y="%s" font-size="4" font-weight="600" text-anchor="middle" fill="#1c2430">%s</text>' % [_n(x + w * 0.5), _n(y + h * 0.55), cap if cap != "" else name])
-	elif kind == "busbar":
-		o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#b87333" stroke="#7a4e22" stroke-width="0.5"/>' % [_n(x), _n(y), _n(w), _n(h)])
-		o.append('<text x="%s" y="%s" font-size="3.4" text-anchor="middle" fill="#1c2430">%s</text>' % [_n(x + w * 0.5), _n(y - 1.5), name])
-	else:
-		var fill := "#3a414a" if kind == "distributor" or kind == "shunt" or kind == "breaker" else ("#0c4c9a" if kind == "monitor" else "#e6e8eb")
-		var ink := "#ffffff" if fill != "#e6e8eb" else "#1c2430"
-		o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="%s" stroke="#1c2430" stroke-width="0.5"/>' % [_n(x), _n(y), _n(w), _n(h), fill])
-		o.append('<text x="%s" y="%s" font-size="4" text-anchor="middle" fill="%s">%s</text>' % [_n(x + w * 0.5), _n(y + h * 0.48), ink, name])
+			var plus := str(p["role"]).ends_with("+")
+			var ex := ox + pp.x
+			var ey := oy - pp.y
+			var fx := jb.get_center().x + (-1.0 if plus else 1.0) * jb.size.x * 0.25
+			o.append('<path d="M%s %s C%s %s %s %s %s %s" fill="none" stroke="%s" stroke-width="2.2" stroke-linecap="round"/>' % [
+				_n(fx), _n(jb.end.y), _n(fx), _n(jb.end.y + 8.0), _n(ex), _n(ey - 10.0), _n(ex), _n(ey - 5.0), "#c0392b" if plus else "#2c3138"])
+			o.append('<rect x="%s" y="%s" width="3.4" height="7" rx="1.3" fill="#23272c"/>' % [_n(ex - 1.7), _n(ey - 7.0)])
+		var module := _esc(str(sym.get("module", "")))
+		o.append('<text x="%s" y="%s" font-size="3.2" text-anchor="middle" fill="#1c2430">%s</text>' % [_n(x + w * 0.5), _n(y + h - 1.6), module if module != "" else name])
+		o.append('<text x="%s" y="%s" font-size="3.4" font-weight="600" text-anchor="middle" fill="#1c2430">%s</text>' % [_n(x + w * 0.5), _n(y - 2.5), name])
 		if cap != "":
-			o.append('<text x="%s" y="%s" font-size="3.4" text-anchor="middle" fill="%s">%s</text>' % [_n(x + w * 0.5), _n(y + h * 0.72), ink, cap])
-	if state != "":
-		o.append('<text x="%s" y="%s" font-size="3.4" font-weight="600" text-anchor="middle" fill="#b91c1c">%s</text>' % [_n(x + w * 0.5), _n(y + h - 2.0), state])
+			o.append('<text x="%s" y="%s" font-size="3.0" fill="#5b6675">%s</text>' % [_n(x), _n(y - 7.0), cap])
+	elif kind == "battery":
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="3" fill="#20314a"/>' % [_n(x), _n(y), _n(w), _n(h)])
+		var lid := maxf(h * 0.16, 6.0)
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="3" fill="#2b4062"/>' % [_n(x), _n(y), _n(w), _n(lid)])
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="2" fill="#eef1f4"/>' % [_n(x + w * 0.12), _n(y + lid + h * 0.14), _n(w * 0.76), _n(h * 0.52)])
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#e4570e"/>' % [_n(x + w * 0.12), _n(y + lid + h * 0.14), _n(w * 0.76), _n(maxf(h * 0.08, 3.0))])
+		o.append('<text x="%s" y="%s" font-size="4.2" font-weight="600" text-anchor="middle" fill="#1c2430">%s</text>' % [_n(x + w * 0.5), _n(y + lid + h * 0.42), name])
+		o.append('<text x="%s" y="%s" font-size="3.6" text-anchor="middle" fill="#1c2430">%s</text>' % [_n(x + w * 0.5), _n(y + lid + h * 0.56), cap])
+		for p in (d["ports"] as Array):
+			if str(p["handle"]) == "data":
+				continue
+			var pp: Vector2 = p["pos"]
+			var plus := str(p["role"]).ends_with("+")
+			o.append('<circle cx="%s" cy="%s" r="5.6" fill="%s"/><circle cx="%s" cy="%s" r="4.2" fill="#8a6f34"/><circle cx="%s" cy="%s" r="2.8" fill="#cfa85a"/>' % [
+				_n(ox + pp.x), _n(oy - pp.y), "#c0392b" if plus else "#2c3138", _n(ox + pp.x), _n(oy - pp.y), _n(ox + pp.x), _n(oy - pp.y)])
+	elif kind == "fuse":
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="2.5" fill="#23272c"/>' % [_n(x), _n(y + h * 0.1), _n(w), _n(h * 0.8)])
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="%s"/>' % [_n(x + w * 0.17), _n(y + h * 0.4), _n(w * 0.66), _n(h * 0.2), "#8a6f34" if state != "" else "#cfa85a"])
+		for sx in [0.17, 0.83]:
+			o.append(_nut_svg(x + w * sx, y + h * 0.5, maxf(h * 0.17, 4.0)))
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="2" fill="#8c99a6" fill-opacity="0.4" stroke="#c0c8d0" stroke-width="0.4"/>' % [_n(x + w * 0.27), _n(y), _n(w * 0.46), _n(h)])
+		o.append('<text x="%s" y="%s" font-size="3.6" font-weight="600" text-anchor="middle" fill="#f7f9fb">%s</text>' % [_n(x + w * 0.5), _n(y + h * 0.5 + 1.3), cap if cap != "" else name])
+		o.append('<text x="%s" y="%s" font-size="3" text-anchor="middle" fill="%s">%s</text>' % [_n(x + w * 0.5), _n(y + h + 4.5), "#b91c1c" if state != "" else "#5b6675", state.to_upper() if state != "" else "FUSE"])
+	elif kind == "breaker":
+		var tripped := state != ""
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="2.5" fill="#2c3138"/>' % [_n(x), _n(y), _n(w), _n(h)])
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="1.5" fill="%s"/>' % [_n(x + w * 0.3), _n(y + h * (0.42 if tripped else 0.12)), _n(w * 0.4), _n(h * 0.42), "#c0392b" if tripped else "#1f6fd6"])
+		o.append('<text x="%s" y="%s" font-size="3.4" font-weight="600" text-anchor="middle" fill="#f7f9fb">%s</text>' % [_n(x + w * 0.5), _n(y + h - 3.0), cap if cap != "" else name])
+		o.append('<text x="%s" y="%s" font-size="3" text-anchor="middle" fill="%s">%s</text>' % [_n(x + w * 0.5), _n(y + h + 4.5), "#b91c1c" if tripped else "#5b6675", "TRIPPED" if tripped else "BREAKER"])
+	elif kind == "switch":
+		var open := state != ""
+		var cx := x + w * 0.5
+		var cyy := y + h * 0.5
+		var rad := minf(w, h) * 0.4
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="2.5" fill="#1e2328"/>' % [_n(x), _n(y), _n(w), _n(h)])
+		o.append('<circle cx="%s" cy="%s" r="%s" fill="#0f1215"/><circle cx="%s" cy="%s" r="%s" fill="#c0392b"/>' % [_n(cx), _n(cyy), _n(rad * 1.1), _n(cx), _n(cyy), _n(rad)])
+		var dx := 0.0 if open else rad * 0.75
+		var dy := rad * 0.75 if open else 0.0
+		o.append('<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="#7b1d14" stroke-width="%s" stroke-linecap="round"/>' % [_n(cx - dx), _n(cyy - dy), _n(cx + dx), _n(cyy + dy), _n(maxf(rad * 0.32, 2.0))])
+		o.append('<text x="%s" y="%s" font-size="3" text-anchor="middle" fill="%s">%s</text>' % [_n(cx), _n(y + h + 4.5), "#b91c1c" if open else "#5b6675", ("OFF" if open else "ON") + " · " + name])
+	elif kind == "busbar":
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="2" fill="#23272c"/>' % [_n(x - 3.0), _n(y - 3.0), _n(w + 6.0), _n(h + 6.0)])
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#b87333" stroke="#7a4a1f" stroke-width="0.5"/>' % [_n(x), _n(y), _n(w), _n(h)])
+		for i in 5:
+			o.append(_nut_svg(x + w * (float(i) + 0.5) / 5.0, y + h * 0.5, maxf(h * 0.3, 3.0)))
+		o.append('<text x="%s" y="%s" font-size="3.4" font-weight="600" text-anchor="middle" fill="#1c2430">%s</text>' % [_n(x + w * 0.5), _n(y - 4.5), name])
+	elif kind == "distributor":
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="3" fill="#1f5fa8"/>' % [_n(x), _n(y), _n(w), _n(h)])
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#e4570e"/>' % [_n(x + w * 0.06), _n(y + h * 0.1), _n(w * 0.88), _n(maxf(h * 0.08, 2.0))])
+		for i in 4:
+			var fx := x + w * (0.1 + float(i) * 0.21)
+			o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="1" fill="#0e1a2b"/>' % [_n(fx), _n(y + h * 0.3), _n(w * 0.13), _n(h * 0.42)])
+			o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#cfa85a"/>' % [_n(fx + w * 0.026), _n(y + h * 0.46), _n(w * 0.078), _n(h * 0.1)])
+		o.append('<text x="%s" y="%s" font-size="3.4" font-weight="600" text-anchor="middle" fill="#f7f9fb">%s</text>' % [_n(x + w * 0.5), _n(y + h - 2.0), name])
+	elif kind == "shunt":
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="2" fill="#3a4654"/>' % [_n(x), _n(y), _n(w), _n(h)])
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#8a949e"/>' % [_n(x + w * 0.1), _n(y + h * 0.25), _n(w * 0.8), _n(h * 0.5)])
+		for sx in [0.14, 0.86]:
+			o.append(_nut_svg(x + w * sx, y + h * 0.5, maxf(h * 0.22, 4.0)))
+		o.append('<text x="%s" y="%s" font-size="3.2" text-anchor="middle" fill="#1c2430">%s</text>' % [_n(x + w * 0.5), _n(y - 3.5), name])
+	elif kind == "monitor":
+		var cx2 := x + w * 0.5
+		var cy2 := y + h * 0.42
+		var rad2 := minf(w, h * 0.84) * 0.5
+		o.append('<circle cx="%s" cy="%s" r="%s" fill="#1a1f26"/><circle cx="%s" cy="%s" r="%s" fill="#2b3340"/>' % [_n(cx2), _n(cy2), _n(rad2), _n(cx2), _n(cy2), _n(rad2 * 0.88)])
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="1.5" fill="#102033"/>' % [_n(cx2 - rad2 * 0.55), _n(cy2 - rad2 * 0.36), _n(rad2 * 1.1), _n(rad2 * 0.72)])
+		o.append('<text x="%s" y="%s" font-size="3.4" font-weight="600" text-anchor="middle" fill="#9fd3ff">100 %%</text>' % [_n(cx2), _n(cy2 + 1.3)])
+		o.append('<text x="%s" y="%s" font-size="3.4" font-weight="600" text-anchor="middle" fill="#1c2430">%s</text>' % [_n(cx2), _n(y + h - 2.5), name])
+		if cap != "":
+			o.append('<text x="%s" y="%s" font-size="3" text-anchor="middle" fill="#5b6675">%s</text>' % [_n(cx2), _n(y + h + 2.5), cap])
+	else:
+		o.append('<rect x="%s" y="%s" width="%s" height="%s" rx="2" fill="#e6e8eb" stroke="#1c2430" stroke-width="0.5"/>' % [_n(x), _n(y), _n(w), _n(h)])
+		o.append('<text x="%s" y="%s" font-size="4" text-anchor="middle" fill="#1c2430">%s</text>' % [_n(x + w * 0.5), _n(y + h * 0.48), name])
+		if cap != "":
+			o.append('<text x="%s" y="%s" font-size="3.4" text-anchor="middle" fill="#1c2430">%s</text>' % [_n(x + w * 0.5), _n(y + h * 0.72), cap])
 	return "\n".join(o)
 
 
-static func _module_grid_svg(box: Rect2, ox: float, oy: float) -> String:
-	var inset := 8.0
-	if box.size.x < inset * 3.0 or box.size.y < inset * 3.0:
-		return ""
-	var r := Rect2(box.position + Vector2(inset, inset), box.size - Vector2(inset * 2.0, inset * 2.0))
+static func _nut_svg(cx: float, cy: float, r: float) -> String:
+	var pts := PackedStringArray()
+	for i in 6:
+		var a := PI / 6.0 + TAU * float(i) / 6.0
+		pts.append("%s,%s" % [_n(cx + cos(a) * r), _n(cy + sin(a) * r)])
+	return '<polygon points="%s" fill="#b9bec4" stroke="#6b7177" stroke-width="0.3"/><circle cx="%s" cy="%s" r="%s" fill="#80868d"/>' % [
+		" ".join(pts), _n(cx), _n(cy), _n(r * 0.42)]
+
+
+## The cells of a module inside `glass` (sheet mm, y down).
+static func _module_grid_svg(glass: Rect2) -> String:
 	var o := PackedStringArray()
 	var cols := 6
 	var rows := 10
-	for i in range(1, cols):
-		var x := r.position.x + r.size.x * float(i) / float(cols)
-		o.append('<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="#8fb4e0" stroke-width="0.3"/>' % [
-			_n(ox + x), _n(oy - r.end.y), _n(ox + x), _n(oy - r.position.y)])
-	for j in range(1, rows):
-		var y := r.position.y + r.size.y * float(j) / float(rows)
-		o.append('<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="#8fb4e0" stroke-width="0.3"/>' % [
-			_n(ox + r.position.x), _n(oy - y), _n(ox + r.end.x), _n(oy - y)])
+	var gap := 0.9
+	var cw := (glass.size.x - gap * float(cols + 1)) / float(cols)
+	var ch := (glass.size.y - gap * float(rows + 1)) / float(rows)
+	if cw < 2.0 or ch < 2.0:
+		return ""
+	for j in rows:
+		for i in cols:
+			o.append('<rect x="%s" y="%s" width="%s" height="%s" fill="#1c4284"/>' % [
+				_n(glass.position.x + gap + float(i) * (cw + gap)), _n(glass.position.y + gap + float(j) * (ch + gap)), _n(cw), _n(ch)])
 	return "\n".join(o)
 
 

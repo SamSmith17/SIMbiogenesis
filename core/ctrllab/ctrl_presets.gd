@@ -19,6 +19,7 @@ const V_ORANGE := [0.93, 0.42, 0.12]
 const WHITE := [0.93, 0.93, 0.93]
 const BLACK := [0.07, 0.07, 0.075]
 const NEAR_BLACK := [0.04, 0.04, 0.045]
+const FIN_BLACK := [0.13, 0.13, 0.14]
 const ALU := [0.74, 0.75, 0.77]
 const ALU_DARK := [0.2, 0.21, 0.22]
 const GROWATT_GREEN := [0.45, 0.72, 0.12]
@@ -168,8 +169,9 @@ static func _p(id: String, conn: String, face: String, u: float, v: float, group
 
 
 static func _t(face: String, u: float, v: float, text: String, size: float, color: Array = WHITE, bold: bool = false,
-		dz: float = 0.0, rot: float = 0.0) -> Dictionary:
-	return {"face": face, "u": u, "v": v, "text": text, "size": size, "color": color, "bold": bold, "dz": dz, "rot": rot}
+		dz: float = 0.0, rot: float = 0.0, align: String = "center", max_w: float = 0.0) -> Dictionary:
+	return {"face": face, "u": u, "v": v, "text": text, "size": size, "color": color, "bold": bold, "dz": dz, "rot": rot,
+		"align": align, "max_w": max_w}
 
 
 static func _elec(s: Dictionary, e: Dictionary) -> void:
@@ -198,19 +200,23 @@ static func _victron_mppt(id: String, name: String, model: String, w: float, h: 
 	s["body"]["corner_r"] = h * 0.08
 	s["body"]["edge_r"] = minf(d * 0.12, 7.0)
 	s["heatsink"] = {"where": "back", "fins": 14, "fin_d": fin_d, "fin_t": 1.6, "base_t": 3.0, "extra_w": ex,
-		"color": NEAR_BLACK, "slots": true}
+		"color": FIN_BLACK, "slots": true}
 	var pw := wb * 0.66
 	s["panels"] = [
 		{"x0": -pw * 0.5, "x1": pw * 0.5, "y0": -h * 0.44, "y1": h * 0.43, "raise": 3.0, "r": 6.0, "e": 2.0, "color": VICTRON_LIGHT},
 		{"x0": -pw * 0.42, "x1": pw * 0.42, "y0": -h * 0.1, "y1": -h * 0.05, "raise": 3.3, "r": 0.0, "e": 0.0, "color": V_ORANGE},
 	]
 	var top := 3.3
+	var px0 := -pw * 0.46
 	s["texts"] = [
-		_t("front", -pw * 0.12, h * 0.33, "victron energy", h * 0.045, WHITE, true, top),
-		_t("front", -pw * 0.02, h * 0.19, name.replace("Victron ", "").split(" ")[0] + " charge controller", h * 0.06, WHITE, false, top),
-		_t("front", -pw * 0.02, h * 0.06, model, h * 0.11, WHITE, true, top),
-		_t("front", pw * 0.12, -h * 0.18, "Battery  %d/%d V | %.0f A" % [int(e["system_v"]), int(e["system_v"]) * 2, float(e["max_charge_a"])], h * 0.035, WHITE, false, top),
-		_t("front", pw * 0.12, -h * 0.235, "PV  %.0f V max | %.0f A" % [float(e["max_voc"]), float(e["max_input_a"])], h * 0.035, WHITE, false, top),
+		_t("front", px0, h * 0.345, "victron energy", h * 0.04, WHITE, true, top, 0.0, "left", pw * 0.6),
+		_t("front", 0.0, h * 0.2, name.replace("Victron ", "").split(" ")[0] + " charge controller", h * 0.05, WHITE, false, top,
+			0.0, "center", pw * 0.9),
+		_t("front", 0.0, h * 0.06, model, h * 0.11, WHITE, true, top, 0.0, "center", pw * 0.9),
+		_t("front", px0, -h * 0.17, "Battery  %d/%d V | %.0f A" % [int(e["system_v"]), int(e["system_v"]) * 2, float(e["max_charge_a"])],
+			h * 0.03, WHITE, false, top, 0.0, "left", pw * 0.55),
+		_t("front", px0, -h * 0.225, "PV  %.0f V max | %.0f A" % [float(e["max_voc"]), float(e["max_input_a"])],
+			h * 0.03, WHITE, false, top, 0.0, "left", pw * 0.55),
 	]
 	var tw := pw * 0.42
 	if big_terminals:
@@ -266,11 +272,14 @@ static func _victron_box(id: String, name: String, model: String, w: float, h: f
 	s["bay"] = {"on": true, "y1": h * 0.36, "wall": 10.0, "depth": d * 0.5, "color": [0.12, 0.12, 0.13],
 		"cover": {"show": true, "color": VICTRON, "window": {"on": false}}}
 	s["panels"] = [{"x0": w * 0.04, "x1": w * 0.46, "y0": h * 0.0, "y1": h * 0.14, "raise": 0.6, "r": 2.0, "e": 0.3,
-		"color": [0.85, 0.87, 0.9]}]
+		"color": [0.14, 0.15, 0.17]}]
+	var tx0 := -w * 0.44
 	s["texts"] = [
-		_t("front", -w * 0.33, h * 0.19, "victron energy", h * 0.028, WHITE, true, 0.5),
-		_t("front", -w * 0.28, h * 0.08, model.split(" ")[0], h * 0.05, WHITE, true),
-		_t("front", -w * 0.28, h * 0.03, " ".join(Array(model.split(" ")).slice(1)), h * 0.03, WHITE),
+		_t("front", tx0, h * 0.19, "victron energy", h * 0.026, WHITE, true, 0.5, 0.0, "left", w * 0.4),
+		_t("front", tx0, h * 0.085, model.split(" ")[0], h * 0.045, WHITE, true, 0.0, 0.0, "left", w * 0.44),
+		_t("front", tx0, h * 0.035, " ".join(Array(model.split(" ")).slice(1)), h * 0.028, WHITE, false, 0.0, 0.0, "left", w * 0.44),
+		_t("front", w * 0.12, h * 0.14 - 3.0, "charger", h * 0.018, [0.85, 0.86, 0.88], false, 0.9),
+		_t("front", w * 0.34, h * 0.14 - 3.0, "inverter", h * 0.018, [0.85, 0.86, 0.88], false, 0.9),
 	]
 	var bw := w - 20.0
 	var bh := h * 0.36 - 10.0
@@ -293,6 +302,7 @@ static func _victron_box(id: String, name: String, model: String, w: float, h: f
 		var ly := h * (0.11 - 0.028 * row)
 		ports.append(_p("led_%d" % i, "led", "front", lx, ly, "ui", names[i],
 			{"color": (GREEN_LED if row == 0 or col == 0 else (RED_LED if row > 0 else AMBER_LED)), "d": 3.0}, [], 0.0, 0.6))
+		s["texts"].append(_t("front", lx + 3.0, ly, names[i], h * 0.014, [0.85, 0.86, 0.88], false, 0.9, 0.0, "left", w * 0.17))
 	ports.append(_p("switch", "button", "front", w * 0.23, h * 0.07, "ui", "On / off / charger only",
 		{"d": 12.0, "color": [0.15, 0.15, 0.16]}, [], 0.0, 0.6))
 	var gl := ["gland_m25", "gland_m25", "gland_m20"] if charger else ["gland_m25", "gland_m20"]
@@ -326,8 +336,8 @@ static func _wall_hybrid(id: String, name: String, model: String, maker: String,
 			s["body"]["plate"] = {"on": true, "t": 12.0, "inset": 7.0, "color": WHITE, "corner_r": w * 0.11}
 			s["bands"] = [{"y0": h * 0.155, "y1": h * 0.162, "color": GROWATT_GREEN, "t": 0.4}]
 			s["mount"] = {"style": "bracket", "where": "top", "n": 1, "w": 0.0, "h": 0.0, "color": [-1.0, 0, 0]}
-			texts.append(_t("front", -w * 0.33, h * 0.38, "G", h * 0.05, GROWATT_GREEN, true))
-			texts.append(_t("front", -w * 0.15, h * 0.38, "ROWATT", h * 0.042, [0.2, 0.2, 0.21], true))
+			texts.append(_t("front", -w * 0.36, h * 0.38, "G", h * 0.05, GROWATT_GREEN, true, 0.0, 0.0, "left"))
+			texts.append(_t("front", -w * 0.36 + h * 0.038, h * 0.378, "ROWATT", h * 0.042, [0.2, 0.2, 0.21], true, 0.0, 0.0, "left"))
 			ports.append(_p("lcd", "lcd", "front", 0.0, -h * 0.08, "ui", "Display",
 				{"w": w * 0.2, "h": w * 0.13, "round": true, "screen": LCD_BLUE}))
 			for i in 4:
@@ -483,10 +493,11 @@ static func _mppt_box(id: String, name: String, maker: String, model: String, w:
 	ports.append(_p("terms", "power_terminal", "front", 0.0, -h * 0.4, "", "PV / BATTERY / LOAD",
 		{"poles": 6, "pitch": pitch, "color": [0.1, 0.1, 0.11], "labels": ["+", "−", "+", "−", "+", "−"]},
 		["pv1+", "pv1-", "bat+", "bat-", "load+", "load-"]))
+	var gl := minf(h * 0.03, pitch * 0.42)
 	var texts: Array = [
-		_t("front", -pitch * 2.0, -h * 0.28, "PV", h * 0.03, WHITE, true),
-		_t("front", 0.0, -h * 0.28, "BATTERY", h * 0.03, WHITE, true),
-		_t("front", pitch * 2.0, -h * 0.28, "LOAD", h * 0.03, WHITE, true),
+		_t("front", -pitch * 2.0, -h * 0.28, "PV", gl, WHITE, true, 0.0, 0.0, "center", pitch * 1.8),
+		_t("front", 0.0, -h * 0.28, "BATTERY", gl, WHITE, true, 0.0, 0.0, "center", pitch * 1.8),
+		_t("front", pitch * 2.0, -h * 0.28, "LOAD", gl, WHITE, true, 0.0, 0.0, "center", pitch * 1.8),
 		_t("front", 0.0, h * 0.4, maker.to_upper(), h * 0.04, WHITE, true),
 		_t("front", 0.0, h * 0.33, model, h * 0.035, [0.8, 0.82, 0.85]),
 	]
@@ -523,11 +534,11 @@ static func _pwm_box(id: String, name: String, maker: String, model: String, w: 
 		_p("terms", "power_terminal", "front", 0.0, -h * 0.33, "", "PV / BATTERY / LOAD",
 			{"poles": 6, "pitch": pitch, "color": [0.08, 0.08, 0.09], "labels": ["+", "−", "+", "−", "+", "−"], "h": h * 0.2, "d": 10.0},
 			["pv1+", "pv1-", "bat+", "bat-", "load+", "load-"]),
-		_p("lcd", "lcd", "front", 0.0, h * 0.22, "ui", "Display", {"w": w * 0.45, "h": w * 0.16, "screen": LCD_GREY}),
+		_p("lcd", "lcd", "front", 0.0, h * 0.16, "ui", "Display", {"w": w * 0.45, "h": w * 0.16, "screen": LCD_GREY}),
 		_p("usb", "usb_a", "front", w * 0.3, -h * 0.12, "usb", "USB 5 V"),
 		_p("btn", "button", "front", -w * 0.3, -h * 0.12, "ui", "Mode", {"d": 7.0}),
 	]
-	s["texts"] = [_t("front", 0.0, h * 0.42, maker.to_upper() + "  " + model, h * 0.05, WHITE, true)]
+	s["texts"] = [_t("front", 0.0, h * 0.41, maker.to_upper() + "  " + model, h * 0.045, WHITE, true)]
 	_elec(s, e)
 	return s
 

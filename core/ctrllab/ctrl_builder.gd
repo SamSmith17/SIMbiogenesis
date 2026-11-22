@@ -473,11 +473,20 @@ func _mounts(g: BattParts.Geo, d: Dictionary, s: Dictionary) -> void:
 					BattParts.abox(g, Vector3(x, y0 - mh * 0.5 + 3.0, 1.25), Vector3(mw, mh + 6.0, 2.5), col, "tin")
 					BattParts.disc(g, Vector3(x, y0 - mh * 0.5, 2.55), Vector3.BACK, minf(mw, mh) * 0.18, 0.1, hole, "rubber", 12)
 		"flange":
-			BattParts.abox(g, Vector3(0, y0 + h * 0.5, 1.5), Vector3(w + 2.0 * mh, h + 2.0 * mh, 3.0), col, "tin")
+			# A sheet-metal mounting plate a rim wider than the body, with the
+			# body's own corner radius and a slot at each corner (the Phoenix /
+			# Orion back plate), never a bare rectangle.
+			var pr := float(s["body"]["corner_r"]) + mh
+			var pfn := func(_y: float) -> Color:
+				return col
+			# Behind the body (the body's own back cap sits at z0; a plate
+			# sharing that plane z-fought it into an X of seams).
+			_loft(g, _rings(w + 2.0 * mh, h + 2.0 * mh, pr, y0 + h * 0.5, z0 - 2.5, z0, 0.0), pfn, "tin", true, true)
 			for sx in [-1.0, 1.0]:
 				for sy in [-1.0, 1.0]:
-					BattParts.disc(g, Vector3(sx * (w * 0.5 + mh * 0.5), y0 + h * 0.5 + sy * (h * 0.5 + mh * 0.5), 3.05),
-						Vector3.BACK, mh * 0.2, 0.1, hole, "rubber", 12)
+					var hx: float = sx * (w * 0.5 + mh * 0.45)
+					var hy: float = y0 + h * 0.5 + sy * (h * 0.5 - mh * 0.6)
+					BattParts.abox(g, Vector3(hx, hy, z0 - 2.55), Vector3(minf(mh * 0.5, 5.0), minf(mh * 1.1, 11.0), 0.1), hole, "rubber")
 		"side_feet":
 			for sx in [-1.0, 1.0]:
 				BattParts.abox(g, Vector3(sx * (w * 0.5 + 1.5), y0 + mh * 0.5, (z0 + zf) * 0.5), Vector3(3.0, mh, zf - z0), col, "plastic")
@@ -609,15 +618,32 @@ func cover_visible() -> bool:
 # Text, picking
 # ---------------------------------------------------------------------------
 
+## A printed text. `max_w` (mm) caps its width; with none, the text may
+## not run past the face it is printed on (a left-aligned text to the right
+## edge, a centred one to the nearer edge), which is what kept the long
+## Victron names inside their panels.
 func _text(parent: Node3D, d: Dictionary, t: Dictionary) -> void:
 	var face := str(t.get("face", "front"))
 	if not d["faces"].has(face):
 		return
 	var f: Dictionary = d["faces"][face]
+	var u := float(t.get("u", 0.0))
+	var v := float(t.get("v", 0.0))
+	var align := str(t.get("align", "center"))
+	var max_w := float(t.get("max_w", 0.0))
+	if max_w <= 0.0 and absf(float(t.get("rot", 0.0))) < 0.01:
+		var half: float = (f["size"] as Vector2).x * 0.5 - 2.0
+		match align:
+			"left":
+				max_w = half - u
+			"right":
+				max_w = half + u
+			_:
+				max_w = 2.0 * (half - absf(u))
 	var xf: Transform3D = (f["xf"] as Transform3D) * Transform3D(Basis(Vector3.BACK, deg_to_rad(float(t.get("rot", 0.0)))),
-		Vector3(float(t.get("u", 0.0)), float(t.get("v", 0.0)), float(t.get("dz", 0.0)) + 0.3))
+		Vector3(u, v, float(t.get("dz", 0.0)) + 0.3))
 	_label3d(parent, str(t.get("text", "")), xf, float(t.get("size", 8.0)), CtrlSpec.color_of(t.get("color", [0.95, 0.95, 0.95])),
-		bool(t.get("bold", false)), str(t.get("align", "center")))
+		bool(t.get("bold", false)), align, max_w)
 
 
 func _label_from(parent: Node3D, lb: Dictionary) -> void:
@@ -628,18 +654,26 @@ func _label_from(parent: Node3D, lb: Dictionary) -> void:
 		lb["color"], false, "center")
 
 
-static func _label3d(parent: Node3D, text: String, xf_mm: Transform3D, size_mm: float, col: Color, bold: bool, align: String) -> void:
+static func _label3d(parent: Node3D, text: String, xf_mm: Transform3D, size_mm: float, col: Color, bold: bool, align: String,
+		max_w: float = 0.0) -> void:
 	if text.strip_edges() == "":
 		return
 	var l := Label3D.new()
 	l.text = text
 	l.font_size = 64
-	l.pixel_size = size_mm * MM / 64.0
+	var font := UITheme.font("semibold" if bold else "medium")
+	var size := size_mm
+	if max_w > 0.5 and font != null:
+		var w_px := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 64).x
+		var w_mm := w_px * size_mm / 64.0
+		if w_mm > max_w:
+			size = size_mm * max_w / w_mm
+	l.pixel_size = size * MM / 64.0
 	l.modulate = col
 	l.outline_size = 0
 	l.double_sided = false
 	l.alpha_cut = Label3D.ALPHA_CUT_OPAQUE_PREPASS
-	l.font = UITheme.font("semibold" if bold else "medium")
+	l.font = font
 	match align:
 		"left":
 			l.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
