@@ -158,22 +158,22 @@ const BATTERIES: Array = [
 	{
 		"type": "battery", "label": "12V 100Ah LiFePO4", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "12V 100Ah LiFePO4", "chemistry": "LFP", "voltage": 12.8, "ah": 105.0, "kwh": 1.344, "soc": 0.80, "cost": 400.0, "max_charge_a": 100.0, "max_discharge_a": 100.0, "charge_temp_min_c": 0.0, "cells_s": 4, "bms_id": "builtin_dropin_100", "round_trip_eff": 0.95, "chem_detail": "LFP", "battery_preset": "dropin_12v_105" },
+		"specs": { "name": "12V 100Ah LiFePO4", "chemistry": "LFP", "voltage": 12.8, "ah": 105.0, "kwh": 1.344, "soc": 0.80, "cost": 349.0, "max_charge_a": 100.0, "max_discharge_a": 100.0, "charge_temp_min_c": 0.0, "cells_s": 4, "bms_id": "builtin_dropin_100", "round_trip_eff": 0.95, "chem_detail": "LFP", "battery_preset": "dropin_12v_105" },
 	},
 	{
 		"type": "battery", "label": "12V 200Ah LiFePO4", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "12V 200Ah LiFePO4", "chemistry": "LFP", "voltage": 12.8, "ah": 210.0, "kwh": 2.688, "soc": 0.80, "cost": 700.0, "max_charge_a": 100.0, "max_discharge_a": 100.0, "charge_temp_min_c": 0.0, "cells_s": 4, "bms_id": "jbd_4s_100a", "round_trip_eff": 0.95, "chem_detail": "LFP", "battery_preset": "dropin_12v_210" },
+		"specs": { "name": "12V 200Ah LiFePO4", "chemistry": "LFP", "voltage": 12.8, "ah": 210.0, "kwh": 2.688, "soc": 0.80, "cost": 599.0, "max_charge_a": 100.0, "max_discharge_a": 100.0, "charge_temp_min_c": 0.0, "cells_s": 4, "bms_id": "jbd_4s_100a", "round_trip_eff": 0.95, "chem_detail": "LFP", "battery_preset": "dropin_12v_210" },
 	},
 	{
 		"type": "battery", "label": "12V 100Ah AGM", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "12V 100Ah AGM", "chemistry": "SLA", "voltage": 12.0, "ah": 100.0, "kwh": 1.2, "soc": 0.50, "cost": 200.0, "max_charge_a": 30.0, "max_discharge_a": 100.0, "charge_temp_min_c": -20.0, "cells_s": 6, "bms_id": "", "round_trip_eff": 0.85, "chem_detail": "AGM", "battery_preset": "agm_12v_100" },
+		"specs": { "name": "12V 100Ah AGM", "chemistry": "SLA", "voltage": 12.0, "ah": 100.0, "kwh": 1.2, "soc": 0.50, "cost": 249.0, "max_charge_a": 30.0, "max_discharge_a": 100.0, "charge_temp_min_c": -20.0, "cells_s": 6, "bms_id": "", "round_trip_eff": 0.85, "chem_detail": "AGM", "battery_preset": "agm_12v_100" },
 	},
 	{
 		"type": "battery", "label": "48V 50Ah LiFePO4", "icon": "🔋",
 		"width": 100.0, "height": 136.0,
-		"specs": { "name": "48V 50Ah LiFePO4", "chemistry": "LFP", "voltage": 51.2, "ah": 50.0, "kwh": 2.56, "soc": 0.80, "cost": 650.0, "max_charge_a": 50.0, "max_discharge_a": 100.0, "charge_temp_min_c": 0.0, "cells_s": 16, "bms_id": "builtin_rack_100", "round_trip_eff": 0.95, "chem_detail": "LFP", "battery_preset": "rack_48v_50" },
+		"specs": { "name": "48V 50Ah LiFePO4", "chemistry": "LFP", "voltage": 51.2, "ah": 50.0, "kwh": 2.56, "soc": 0.80, "cost": 549.0, "max_charge_a": 50.0, "max_discharge_a": 100.0, "charge_temp_min_c": 0.0, "cells_s": 16, "bms_id": "builtin_rack_100", "round_trip_eff": 0.95, "chem_detail": "LFP", "battery_preset": "rack_48v_50" },
 	},
 	{
 		"type": "battery", "label": "48V 100Ah LiFePO4", "icon": "🔋",
@@ -183,7 +183,7 @@ const BATTERIES: Array = [
 	{
 		"type": "battery", "label": "EG4 48V 200Ah", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "EG4 48V 200Ah LiFePO4", "chemistry": "LFP", "voltage": 51.2, "ah": 230.0, "kwh": 11.776, "soc": 0.80, "cost": 2600.0, "max_charge_a": 200.0, "max_discharge_a": 200.0, "charge_temp_min_c": 0.0, "cells_s": 16, "bms_id": "builtin_rack_200", "round_trip_eff": 0.95, "chem_detail": "LFP", "battery_preset": "rack_48v_230" },
+		"specs": { "name": "EG4 48V 200Ah LiFePO4", "chemistry": "LFP", "voltage": 51.2, "ah": 230.0, "kwh": 11.776, "soc": 0.80, "cost": 2199.0, "max_charge_a": 200.0, "max_discharge_a": 200.0, "charge_temp_min_c": 0.0, "cells_s": 16, "bms_id": "builtin_rack_200", "round_trip_eff": 0.95, "chem_detail": "LFP", "battery_preset": "rack_48v_230" },
 	},
 	# A 20.8 kWh 48 V LiFePO4 bank (the Mt Vernon site's EG4 bank): 51.2 V
 	# nominal (16S LFP) × 406.25 Ah. Model a different total by editing kwh/ah.
@@ -195,7 +195,7 @@ const BATTERIES: Array = [
 	{
 		"type": "battery", "label": "Server Rack 48V 100Ah", "icon": "🔋",
 		"width": 110.0, "height": 80.0,
-		"specs": { "name": "Server Rack 48V 100Ah", "chemistry": "LFP", "voltage": 51.2, "ah": 105.0, "kwh": 5.376, "soc": 0.80, "cost": 1200.0, "max_charge_a": 100.0, "max_discharge_a": 100.0, "charge_temp_min_c": 0.0, "cells_s": 16, "bms_id": "builtin_rack_100", "round_trip_eff": 0.95, "chem_detail": "LFP", "battery_preset": "rack_48v_105" },
+		"specs": { "name": "Server Rack 48V 100Ah", "chemistry": "LFP", "voltage": 51.2, "ah": 105.0, "kwh": 5.376, "soc": 0.80, "cost": 1099.0, "max_charge_a": 100.0, "max_discharge_a": 100.0, "charge_temp_min_c": 0.0, "cells_s": 16, "bms_id": "builtin_rack_100", "round_trip_eff": 0.95, "chem_detail": "LFP", "battery_preset": "rack_48v_105" },
 	},
 ]
 
@@ -206,7 +206,7 @@ const CONTROLLERS: Array = [
 	{
 		"type": "controller", "label": "EcoWorthy SL3500", "icon": "🎛",
 		"width": 140.0, "height": 120.0,
-		"specs": {
+		"specs": { "controller_preset": "ecoworthy_sl3500",
 			"name": "EcoWorthy SL3500 Hybrid", "max_voc": 450.0, "max_charge_amps": 80.0,
 			"max_pv_watts": 3500.0, "cost": 900.0, "overload_watts": 3500.0,
 			"overload_duration_s": 10.0, "overload_lockout_s": 30.0,
@@ -215,32 +215,32 @@ const CONTROLLERS: Array = [
 	{
 		"type": "controller", "label": "Generic MPPT 150/50", "icon": "🎛",
 		"width": 140.0, "height": 120.0,
-		"specs": { "name": "Generic MPPT 150/50",       "max_voc": 150.0, "max_charge_amps": 50.0, "max_pv_watts": 2400.0, "cost": 250.0 },
+		"specs": { "controller_preset": "generic_mppt_150_50", "name": "Generic MPPT 150/50",       "max_voc": 150.0, "max_charge_amps": 50.0, "max_pv_watts": 2400.0, "cost": 250.0 },
 	},
 	{
 		"type": "controller", "label": "Victron 150/35", "icon": "🎛",
 		"width": 140.0, "height": 120.0,
-		"specs": { "name": "Victron SmartSolar 150/35", "max_voc": 150.0, "max_charge_amps": 35.0, "max_pv_watts": 2000.0, "cost": 380.0 },
+		"specs": { "controller_preset": "victron_ss_150_35", "name": "Victron SmartSolar 150/35", "max_voc": 150.0, "max_charge_amps": 35.0, "max_pv_watts": 2000.0, "cost": 207.0 },
 	},
 	{
 		"type": "controller", "label": "Victron 100/20", "icon": "🎛",
 		"width": 140.0, "height": 120.0,
-		"specs": { "name": "Victron SmartSolar 100/20", "max_voc": 100.0, "max_charge_amps": 20.0, "max_pv_watts":  580.0, "cost": 150.0 },
+		"specs": { "controller_preset": "victron_ss_100_20", "name": "Victron SmartSolar 100/20", "max_voc": 100.0, "max_charge_amps": 20.0, "max_pv_watts":  580.0, "cost": 100.0 },
 	},
 	{
 		"type": "controller", "label": "Renogy Rover 40A", "icon": "🎛",
 		"width": 140.0, "height": 120.0,
-		"specs": { "name": "Renogy Rover 40A MPPT",     "max_voc": 100.0, "max_charge_amps": 40.0, "max_pv_watts": 1040.0, "cost": 160.0 },
+		"specs": { "controller_preset": "renogy_rover_40", "name": "Renogy Rover 40A MPPT",     "max_voc": 100.0, "max_charge_amps": 40.0, "max_pv_watts": 1040.0, "cost": 160.0 },
 	},
 	{
 		"type": "controller", "label": "PowMR 5000W Hybrid", "icon": "🎛",
 		"width": 140.0, "height": 120.0,
-		"specs": { "name": "PowMR 5000W Hybrid Inv.",   "max_voc": 500.0, "max_charge_amps": 80.0, "max_pv_watts": 5500.0, "cost": 650.0 },
+		"specs": { "controller_preset": "powmr_5000", "name": "PowMR 5000W Hybrid Inv.",   "max_voc": 500.0, "max_charge_amps": 80.0, "max_pv_watts": 5500.0, "cost": 650.0 },
 	},
 	{
 		"type": "controller", "label": "EcoFlow DELTA Pro", "icon": "🎛",
 		"width": 140.0, "height": 120.0,
-		"specs": { "name": "EcoFlow DELTA Pro",         "max_voc": 150.0, "max_charge_amps": 15.0, "max_pv_watts": 1600.0, "cost":3000.0 },
+		"specs": { "controller_preset": "ecoflow_delta_pro", "name": "EcoFlow DELTA Pro",         "max_voc": 150.0, "max_charge_amps": 15.0, "max_pv_watts": 1600.0, "cost":3000.0 },
 	},
 	# EG4 6000XP — EG4 Electronics data sheet v1.4.4 (2025): DC input 100–480 V,
 	# startup 100 V, MPPT operating window 120–385 V (nominal 320 V), 2 MPPTs ×
@@ -250,13 +250,13 @@ const CONTROLLERS: Array = [
 	{
 		"type": "controller", "label": "EG4 6000XP", "icon": "🎛",
 		"width": 140.0, "height": 120.0,
-		"specs": { "name": "EG4 6000XP Hybrid", "max_voc": 480.0, "max_charge_amps": 125.0,
+		"specs": { "controller_preset": "eg4_6000xp", "name": "EG4 6000XP Hybrid", "max_voc": 480.0, "max_charge_amps": 125.0,
 			"max_pv_watts": 8000.0, "max_pv_watts_per_mppt": 4000.0, "mppt_count": 2,
 			"mppt_min_v": 120.0, "mppt_max_v": 385.0, "startup_v": 100.0,
 			"max_input_amps": 17.0, "max_isc_amps": 25.0,
 			"overload_watts": 6000.0, "overload_duration_s": 10.0, "overload_lockout_s": 30.0,
 			"idle_w": 50.0, "mppt_efficiency": 0.99, "charge_efficiency": 0.93,
-			"cost": 1450.0 },
+			"cost": 1500.0 },
 	},
 	# Solar Bootcamp trainer controllers. The PWM's 50 V ceiling takes ONE 40 Voc
 	# trainer panel but faults on any series pair; 10 A × 12 V bus = the 120 W
@@ -265,12 +265,12 @@ const CONTROLLERS: Array = [
 	{
 		"type": "controller", "label": "Trainer PWM 10A", "icon": "🎓",
 		"width": 140.0, "height": 120.0,
-		"specs": { "name": "Trainer PWM 12V 10A",       "max_voc":  50.0, "max_charge_amps": 10.0, "max_pv_watts":  300.0, "cost":  30.0 },
+		"specs": { "controller_preset": "trainer_pwm_10", "name": "Trainer PWM 12V 10A",       "max_voc":  50.0, "max_charge_amps": 10.0, "max_pv_watts":  300.0, "cost":  30.0 },
 	},
 	{
 		"type": "controller", "label": "Trainer MPPT 150/30", "icon": "🎓",
 		"width": 140.0, "height": 120.0,
-		"specs": { "name": "Trainer MPPT 150V 30A",     "max_voc": 150.0, "max_charge_amps": 30.0, "max_pv_watts": 2000.0, "cost": 180.0 },
+		"specs": { "controller_preset": "trainer_mppt_150_30", "name": "Trainer MPPT 150V 30A",     "max_voc": 150.0, "max_charge_amps": 30.0, "max_pv_watts": 2000.0, "cost": 180.0 },
 	},
 ]
 
@@ -286,47 +286,56 @@ const APPLIANCES: Array = [
 	{
 		"type": "appliance", "label": "LED Light",       "icon": "💡",
 		"width": 160.0, "height": 104.0,
-		"specs": { "name": "LED Light",           "max_watts":  15.0, "avg_watts":   10.0 },
+		"specs": { "name": "LED Light",           "max_watts":  15.0, "avg_watts":   10.0,
+			"signature_family": "steady" },
 	},
 	{
 		"type": "appliance", "label": "Laptop",          "icon": "💻",
 		"width": 160.0, "height": 104.0,
-		"specs": { "name": "Laptop",              "max_watts":  65.0, "avg_watts":   45.0 },
+		"specs": { "name": "Laptop",              "max_watts":  65.0, "avg_watts":   45.0,
+			"signature_family": "battery", "capacity_wh": 70.0 },
 	},
 	{
 		"type": "appliance", "label": "Desktop PC",      "icon": "🖥",
 		"width": 160.0, "height": 104.0,
-		"specs": { "name": "Desktop PC",          "max_watts": 500.0, "avg_watts":  200.0 },
+		"specs": { "name": "Desktop PC",          "max_watts": 500.0, "avg_watts":  200.0,
+			"signature_family": "steady" },
 	},
 	{
 		"type": "appliance", "label": "TV (LED 55\")",   "icon": "📺",
 		"width": 160.0, "height": 104.0,
-		"specs": { "name": "TV (LED 55\")",       "max_watts": 120.0, "avg_watts":   80.0 },
+		"specs": { "name": "TV (LED 55\")",       "max_watts": 120.0, "avg_watts":   80.0,
+			"signature_family": "steady" },
 	},
 	{
 		"type": "appliance", "label": "Refrigerator",    "icon": "🧊",
 		"width": 160.0, "height": 104.0,
-		"specs": { "name": "Refrigerator",        "max_watts": 400.0, "avg_watts":  150.0 },
+		"specs": { "name": "Refrigerator",        "max_watts": 400.0, "avg_watts":  150.0,
+			"signature_family": "inductive_cyclic" },
 	},
 	{
 		"type": "appliance", "label": "Space Heater",    "icon": "🔥",
 		"width": 160.0, "height": 104.0,
-		"specs": { "name": "Space Heater",        "max_watts":1500.0, "avg_watts": 1500.0 },
+		"specs": { "name": "Space Heater",        "max_watts":1500.0, "avg_watts": 1500.0,
+			"signature_family": "resistive_cycle" },
 	},
 	{
 		"type": "appliance", "label": "Window AC",       "icon": "❄",
 		"width": 160.0, "height": 104.0,
-		"specs": { "name": "Window AC",           "max_watts":1400.0, "avg_watts": 1000.0 },
+		"specs": { "name": "Window AC",           "max_watts":1400.0, "avg_watts": 1000.0,
+			"signature_family": "inductive_cyclic" },
 	},
 	{
 		"type": "appliance", "label": "EUC/Ebike Charger","icon": "🛴",
 		"width": 160.0, "height": 104.0,
-		"specs": { "name": "EUC/Ebike Charger",   "max_watts": 300.0, "avg_watts":  250.0 },
+		"specs": { "name": "EUC/Ebike Charger",   "max_watts": 300.0, "avg_watts":  250.0,
+			"signature_family": "battery", "capacity_wh": 500.0 },
 	},
 	{
 		"type": "appliance", "label": "Phone Charger",   "icon": "📱",
 		"width": 160.0, "height": 104.0,
-		"specs": { "name": "Phone Charger",       "max_watts":  20.0, "avg_watts":   15.0 },
+		"specs": { "name": "Phone Charger",       "max_watts":  20.0, "avg_watts":   15.0,
+			"signature_family": "battery", "capacity_wh": 15.0 },
 	},
 	# Wave 8 lights-as-wires: the AC wire INTO these loads renders in 3D as the
 	# light string itself (ConduitKinds light kinds — bulbs along a catenary).
@@ -336,19 +345,19 @@ const APPLIANCES: Array = [
 		"type": "appliance", "label": "Patio String Lights", "icon": "🌃",
 		"width": 160.0, "height": 104.0,
 		"specs": { "name": "Patio String Lights", "max_watts": 50.0, "avg_watts": 33.0,
-			"watts_per_m": 3.3, "light_conduit": "led_patio" },
+			"watts_per_m": 3.3, "light_conduit": "led_patio", "signature_family": "steady" },
 	},
 	{
 		"type": "appliance", "label": "LED Strip (12 V)", "icon": "🟨",
 		"width": 160.0, "height": 104.0,
 		"specs": { "name": "LED Strip (12 V)",    "max_watts": 90.0, "avg_watts": 70.0,
-			"watts_per_m": 14.0, "light_conduit": "led_strip" },
+			"watts_per_m": 14.0, "light_conduit": "led_strip", "signature_family": "steady" },
 	},
 	{
 		"type": "appliance", "label": "Fairy Lights",     "icon": "✨",
 		"width": 160.0, "height": 104.0,
 		"specs": { "name": "Fairy Lights",        "max_watts": 12.0, "avg_watts": 6.0,
-			"watts_per_m": 0.6, "light_conduit": "led_fairy" },
+			"watts_per_m": 0.6, "light_conduit": "led_fairy", "signature_family": "steady" },
 	},
 ]
 
@@ -376,7 +385,7 @@ const PROCESSORS: Array = [
 		"type": "processor", "label": "Water Pump",    "icon": "💧",
 		"width": 130.0, "height": 120.0,
 		"specs": {
-			"name": "Water Pump", "watts": 500.0, "cost": 80.0,
+			"name": "Water Pump", "watts": 500.0, "cost": 80.0, "signature_family": "inductive_start",
 			"unit_ops": ["pumping"],
 			"energy_source": "ac",
 			"efficiency": 0.92, "energy_wh_per_unit": 10.0,
@@ -390,7 +399,7 @@ const PROCESSORS: Array = [
 		"type": "processor", "label": "PP Shredder", "icon": "✂",
 		"width": 140.0, "height": 130.0,
 		"specs": {
-			"name": "PP Shredder", "watts": 600.0, "cost": 450.0,
+			"name": "PP Shredder", "watts": 600.0, "cost": 450.0, "signature_family": "inductive_start",
 			"unit_ops": ["shredding"],
 			"energy_source": "ac",
 			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
@@ -612,7 +621,7 @@ const PROCESSORS: Array = [
 		"type": "processor", "label": "Well Pump",     "icon": "🏗",
 		"width": 130.0, "height": 120.0,
 		"specs": {
-			"name": "Well Pump", "watts": 1500.0, "cost": 350.0,
+			"name": "Well Pump", "watts": 1500.0, "cost": 350.0, "signature_family": "inductive_start",
 			"unit_ops": ["pumping"],
 			"energy_source": "ac",
 			"efficiency": 0.90, "energy_wh_per_unit": 10.0,
@@ -625,7 +634,8 @@ const PROCESSORS: Array = [
 		"type": "processor", "label": "Mini-Split AC", "icon": "❄",
 		"width": 130.0, "height": 120.0,
 		"specs": {
-			"name": "Mini-Split AC", "watts": 900.0, "cost": 700.0,
+			"name": "Mini-Split AC", "watts": 900.0, "max_watts": 1400.0, "cost": 700.0,
+			"signature_family": "inductive_cyclic",
 			"energy_source": "ac",
 			"efficiency": 1.0, "energy_wh_per_unit": 0.1,
 			"inputs": [],
@@ -651,6 +661,7 @@ const PROCESSORS: Array = [
 		"width": 130.0, "height": 120.0,
 		"specs": {
 			"name": "EV Charger (Level 2)", "watts": 7200.0, "cost": 500.0,
+			"signature_family": "battery", "capacity_wh": 60000.0,
 			"energy_source": "ac",
 			"efficiency": 0.95, "energy_wh_per_unit": 288.0,
 			"inputs": [],
@@ -1760,25 +1771,25 @@ const NETWORK: Array = [
 	{
 		"type": "appliance", "label": "Home Assistant Server", "icon": "🖥",
 		"width": 200.0, "height": 128.0,
-		"specs": {"name": "Home Assistant Server", "net_role": "server", "avg_watts": 15.0,
+		"specs": {"name": "Home Assistant Server", "net_role": "server", "signature_family": "steady", "avg_watts": 15.0,
 			"rated_watts": 15.0, "max_watts": 25.0, "requested_state": "on", "cost": 120.0},
 	},
 	{
 		"type": "appliance", "label": "Network Switch (5 port)", "icon": "🔀",
 		"width": 200.0, "height": 128.0,
-		"specs": {"name": "Network Switch", "net_role": "switch", "ports": 5, "avg_watts": 4.0,
+		"specs": {"name": "Network Switch", "net_role": "switch", "ports": 5, "signature_family": "steady", "avg_watts": 4.0,
 			"rated_watts": 4.0, "max_watts": 6.0, "requested_state": "on", "cost": 20.0},
 	},
 	{
 		"type": "appliance", "label": "Network Switch (8 port)", "icon": "🔀",
 		"width": 200.0, "height": 128.0,
-		"specs": {"name": "Network Switch 8", "net_role": "switch", "ports": 8, "avg_watts": 6.0,
+		"specs": {"name": "Network Switch 8", "net_role": "switch", "ports": 8, "signature_family": "steady", "avg_watts": 6.0,
 			"rated_watts": 6.0, "max_watts": 9.0, "requested_state": "on", "cost": 35.0},
 	},
 	{
 		"type": "appliance", "label": "Wi-Fi Access Point", "icon": "📶",
 		"width": 200.0, "height": 128.0,
-		"specs": {"name": "Wi-Fi Access Point", "net_role": "ap", "avg_watts": 8.0,
+		"specs": {"name": "Wi-Fi Access Point", "net_role": "ap", "signature_family": "steady", "avg_watts": 8.0,
 			"rated_watts": 8.0, "max_watts": 12.0, "requested_state": "on", "cost": 60.0},
 	},
 ]
@@ -2310,7 +2321,7 @@ const TOOLS: Array = [
 		"type": "processor", "label": "PP Shredder", "icon": "✂",
 		"width": 140.0, "height": 130.0,
 		"specs": {
-			"name": "PP Shredder", "watts": 600.0, "cost": 450.0,
+			"name": "PP Shredder", "watts": 600.0, "cost": 450.0, "signature_family": "inductive_start",
 			"unit_ops": ["shredding"],
 			"energy_source": "ac",
 			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
@@ -2994,6 +3005,7 @@ const FLOW_CONTROLS: Array = [
 		"width": 130.0, "height": 110.0,
 		"specs": {
 			"name": "Transfer Pump", "role": "flowctl", "ctl_kind": "pump", "ctl_resource": "water",
+			"signature_family": "inductive_start",
 			"max_rate": 900.0, "open": 1.0, "requested_state": "on", "efficiency": 1.0,
 			"unit_ops": [],
 			"watts": 120.0, "energy_source": "ac", "max_lift_m": 12.0, "throttle": false, "cost": 95.0,
@@ -3006,6 +3018,7 @@ const FLOW_CONTROLS: Array = [
 		"width": 130.0, "height": 110.0,
 		"specs": {
 			"name": "Dosing Pump", "role": "flowctl", "ctl_kind": "pump", "ctl_resource": "water",
+			"signature_family": "inductive_start",
 			"max_rate": 6.0, "open": 1.0, "requested_state": "on", "efficiency": 1.0,
 			"unit_ops": [],
 			"watts": 15.0, "energy_source": "ac", "max_lift_m": 5.0, "throttle": false, "cost": 60.0,
@@ -3018,6 +3031,7 @@ const FLOW_CONTROLS: Array = [
 		"width": 130.0, "height": 110.0,
 		"specs": {
 			"name": "Sump Pump (greywater)", "role": "flowctl", "ctl_kind": "pump", "ctl_resource": "greywater",
+			"signature_family": "inductive_start",
 			"max_rate": 4000.0, "open": 1.0, "requested_state": "on", "efficiency": 1.0,
 			"unit_ops": [],
 			"watts": 250.0, "energy_source": "ac", "max_lift_m": 6.0, "throttle": false, "cost": 130.0,

@@ -79,7 +79,7 @@ const _GROUPS := [
 	["Views", [
 		["toggle_timeline_size", "Timeline: full / compact / hidden (also the arrows at its right end)"],
 		["toggle_third_person", "First person / third-person follow camera (Settings > Player)"],
-		["toggle_window_wall", "Window wall - the world across your monitor row (Settings > Window Wall)"],
+		["toggle_window_wall", "Window wall - panoramic row mode (Settings > Multi-Monitor)"],
 		["key:U", "...toggle UI while the window wall is up"],
 		["key:Ctrl+S", "...save this map's window-wall viewpoint"],
 		["key:I", "...identify screens (window wall)"],

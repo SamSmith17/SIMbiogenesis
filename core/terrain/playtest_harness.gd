@@ -8298,7 +8298,9 @@ func _run_hub_settings_capture() -> void:
 		_maybe_quit()
 		return
 	await _shoot_ui(dir, "01_hub")
-	var gear := hub.find_child("HubSettingsButton", true, false) as Button
+	var gear := tree.root.find_child("GlobeSettingsButton", true, false) as BaseButton
+	if gear == null:
+		gear = hub.find_child("HubSettingsButton", true, false) as BaseButton
 	if gear == null:
 		push_error("hubsettings: FAIL — no gear button on the hub header")
 		_maybe_quit()
@@ -8308,7 +8310,7 @@ func _run_hub_settings_capture() -> void:
 	for _j in 12:
 		await tree.process_frame
 	var panel: Control = hub.call("hub_settings_panel")
-	var opened := panel != null and panel.visible and CursorController.has_blocking_modal()
+	var opened := panel != null and panel.visible and CursorController.top_modal() == "timeline_settings"
 	print("hubsettings: gear click opens the settings modal %s" % ("PASS" if opened else "FAIL"))
 	if not opened:
 		fails += 1
@@ -8471,7 +8473,7 @@ func _run_hub_settings_capture() -> void:
 	await HarnessInput.press_action("ui_cancel")
 	for _p in 8:
 		await tree.process_frame
-	var closed := not panel.visible and not CursorController.has_blocking_modal()
+	var closed := not panel.visible and CursorController.top_modal() != "timeline_settings"
 	var fo := vp.gui_get_focus_owner()
 	print("hubsettings: Esc closes the modal %s%s" % ["PASS" if closed else "FAIL",
 		"" if closed else " (visible %s, modal %s, focus %s)" % [str(panel.visible),

@@ -221,6 +221,13 @@ func _build_left_column() -> Control:
 	col.add_child(_cat_list)
 
 	col.add_child(_section_label("Parts"))
+	var legend := Label.new()
+	legend.text = "● Ready   ⚠ Review   ○ Untested"
+	legend.tooltip_text = "● Ready: verified OpenSCAD part · ⚠ Review: check dimensions after generating · ○ Untested"
+	legend.mouse_filter = Control.MOUSE_FILTER_PASS
+	legend.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	legend.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+	col.add_child(legend)
 	_part_list = ItemList.new()
 	_part_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_style_list(_part_list)
@@ -284,27 +291,30 @@ func _build_right_column() -> Control:
 	_param_box = VBoxContainer.new()
 	_param_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_param_box.add_theme_constant_override("separation", UITheme.SPACE_XS)
+	_param_box.add_child(EmptyState.row("sliders-horizontal", "Pick a part on the left to adjust its dimensions."))
 	scroll.add_child(_param_box)
 	col.add_child(scroll)
 
 	_generate_btn = Button.new()
-	_generate_btn.text = "⟳  Generate"
-	UITheme.style_button(_generate_btn)
-	_accent_button(_generate_btn)
+	_generate_btn.text = "Generate"
+	UiIcons.apply(_generate_btn, "refresh-cw", "Compile this OpenSCAD part with the parameters above", 15)
+	UITheme.style_primary_button(_generate_btn)
 	_generate_btn.pressed.connect(_on_generate)
 	_generate_btn.disabled = true
 	col.add_child(_generate_btn)
 
 	_export_btn = Button.new()
-	_export_btn.text = "⭳  Export STL…"
+	_export_btn.text = "Export STL…"
+	UiIcons.apply(_export_btn, "download", "Save the generated STL mesh to disk", 15)
 	UITheme.style_button(_export_btn)
 	_export_btn.pressed.connect(_on_export)
 	_export_btn.disabled = true
 	col.add_child(_export_btn)
 
 	_place_btn = Button.new()
-	_place_btn.text = "⊕  Place in world"
-	UITheme.style_button(_place_btn)
+	_place_btn.text = "Place in world"
+	UiIcons.apply(_place_btn, "plus", "Place the generated 3D part in the world", 15)
+	UITheme.style_primary_button(_place_btn)
 	_place_btn.pressed.connect(_on_place)
 	_place_btn.disabled = true
 	col.add_child(_place_btn)
@@ -510,10 +520,14 @@ func _build_param_panel() -> void:
 	for c in _param_box.get_children():
 		c.queue_free()
 	_param_controls.clear()
+	var added := 0
 	for p in _schema.get("params", []):
 		if bool(p.get("hidden", false)):
 			continue
 		_param_box.add_child(_build_param_row(p))
+		added += 1
+	if added == 0:
+		_param_box.add_child(EmptyState.row("sliders-horizontal", "This part has fixed dimensions — click Generate to build it."))
 
 
 func _build_param_row(p: Dictionary) -> Control:

@@ -90,7 +90,7 @@ func open(main: Node) -> void:
 		return
 	_main = main
 	if not WindowWallPrefs.enabled():
-		_toast("Window wall is off — enable it in Settings → Window Wall", ToastUI.Level.WARN)
+		_toast("Window wall is off — enable it in Settings → Multi-Monitor", ToastUI.Level.WARN)
 		return
 	_opening = true
 
@@ -320,12 +320,11 @@ func _spawn_window(slot: int) -> Window:
 	var screen := _screens[slot]
 	var rect_pos := DisplayServer.screen_get_position(screen)
 	var rect_size := DisplayServer.screen_get_size(screen)
-	# "borderless" keeps the window windowed at exactly the screen rect. It
-	# looks the same and is the escape hatch for a display that will not
-	# PRESENT a second fullscreen window (it renders, but shows flat grey) —
-	# typically a monitor driven by a different graphics adapter than the main
-	# game window's.
+	# "borderless" keeps the window windowed at the screen rect minus a 1-px
+	# vertical anti-DirectFlip guard so Windows 11 DWM never promotes secondary
+	# monitors (e.g. a 5th monitor on a second GPU) into broken fullscreen flip.
 	var want_fullscreen := WindowWallPrefs.extra_window_mode() == WindowWallPrefs.WIN_FULLSCREEN
+	var borderless_size := Vector2i(rect_size.x, maxi(rect_size.y - 1, 1))
 	var w := Window.new()
 	w.name = "WallWindow%d" % slot
 	w.title = "SIMbiogenesis — window %d" % (slot + 1)
@@ -337,7 +336,7 @@ func _spawn_window(slot: int) -> Window:
 	w.wrap_controls = false
 	w.current_screen = screen
 	w.position = rect_pos
-	w.size = rect_size
+	w.size = rect_size if want_fullscreen else borderless_size
 	_copy_viewport_settings(get_tree().root, w)
 	add_child(w)
 	if want_fullscreen:
@@ -363,7 +362,7 @@ func _spawn_window(slot: int) -> Window:
 	# has landed; a fullscreen one is never written to again.
 	if not want_fullscreen and w.mode != Window.MODE_FULLSCREEN:
 		w.position = rect_pos
-		w.size = rect_size
+		w.size = borderless_size
 	if is_instance_valid(cam):
 		cam.current = true
 		_apply_frustum(cam, slot)

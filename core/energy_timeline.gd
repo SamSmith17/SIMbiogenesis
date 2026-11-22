@@ -14,6 +14,9 @@ extends RefCounted
 ## the array's MAX capture (before battery-full curtailment and DC caps), which
 ## never touches the battery maths; it only feeds the "possible today" counter.
 ## A caller that does not know it passes -1 and the sample takes solar_kw.
+## load_peak_kw is the highest coincident draw inside the minute (a compressor
+## inrush). It is what the Load track's band draws. The battery still integrates
+## load_kw, the average. -1 means "no separate spike" and stores the average.
 ## Sample i covers global step (_base_step + i); its absolute time is
 ## (_base_step + i) * step_hours. This is the same epoch CelestialClock and
 ## TimeDirector use (absolute hours since year 1 Jan 1 00:00).
@@ -41,6 +44,7 @@ var _soc: PackedFloat32Array = PackedFloat32Array()
 var _solar: PackedFloat32Array = PackedFloat32Array()
 var _aux: PackedFloat32Array = PackedFloat32Array()
 var _load: PackedFloat32Array = PackedFloat32Array()
+var _load_peak: PackedFloat32Array = PackedFloat32Array()
 var _raw: PackedFloat32Array = PackedFloat32Array()
 
 ## Optional evaluator: Callable(abs_hours: float) -> Dictionary
@@ -122,6 +126,7 @@ func clear() -> void:
 	_solar = PackedFloat32Array()
 	_aux = PackedFloat32Array()
 	_load = PackedFloat32Array()
+	_load_peak = PackedFloat32Array()
 	_raw = PackedFloat32Array()
 	_base_step = 0
 
@@ -169,14 +174,24 @@ func end_abs_hours() -> float:
 
 ## Establish the known initial condition. Resets the buffer to a single sample.
 func init_anchor(abs_hours: float, soc_kwh: float, solar_kw: float = 0.0,
-		aux_kw: float = 0.0, load_kw: float = 0.0, raw_kw: float = -1.0) -> void:
+		aux_kw: float = 0.0, load_kw: float = 0.0, raw_kw: float = -1.0,
+		load_peak_kw: float = -1.0) -> void:
 	clear()
 	_base_step = _step_of(abs_hours)
 	_soc.append(clampf(soc_kwh, 0.0, capacity_kwh))
 	_solar.append(solar_kw)
 	_aux.append(aux_kw)
 	_load.append(load_kw)
+	_load_peak.append(_peak_of(load_peak_kw, load_kw))
 	_raw.append(_raw_or(raw_kw, solar_kw))
+
+
+## The spike to store beside an average. Below zero means the caller has no
+## separate peak, so the band collapses onto the average.
+static func _peak_of(peak_kw: float, load_kw: float) -> float:
+	if peak_kw < 0.0:
+		return load_kw
+	return maxf(peak_kw, load_kw)
 
 
 ## The max-capture value to store: the caller's, never below what was
@@ -206,10 +221,10 @@ static func _raw_or(raw_kw: float, solar_kw: float) -> float:
 ## curve, same integrated kWh, just without the redundant function-call/branch
 ## overhead per sample.
 func record_step(abs_hours: float, solar_kw: float, aux_kw: float, load_kw: float,
-		raw_kw: float = -1.0) -> void:
+		raw_kw: float = -1.0, load_peak_kw: float = -1.0) -> void:
 	if is_empty():
 		init_anchor(abs_hours, clampf(capacity_kwh * 0.5, 0.0, capacity_kwh), solar_kw, aux_kw,
-			load_kw, raw_kw)
+			load_kw, raw_kw, load_peak_kw)
 		return
 	var target_g := _step_of(abs_hours)
 	var cur_g := last_step()
@@ -230,7 +245,8 @@ func record_step(abs_hours: float, solar_kw: float, aux_kw: float, load_kw: floa
 			capacity_kwh, charge_eff, discharge_eff, min_soc_kwh, max_charge_kw, max_discharge_kw)
 		steps -= skip_steps
 
-	_append_exact_run(soc, solar_kw, aux_kw, load_kw, steps, _raw_or(raw_kw, solar_kw))
+	_append_exact_run(soc, solar_kw, aux_kw, load_kw, steps, _raw_or(raw_kw, solar_kw),
+		_peak_of(load_peak_kw, load_kw))
 	_trim_if_needed()
 
 
@@ -240,7 +256,7 @@ func record_step(abs_hours: float, solar_kw: float, aux_kw: float, load_kw: floa
 ## resize() + indexed writes instead of append() to avoid incremental
 ## PackedArray reallocation across a large fast-forward run.
 func _append_exact_run(soc0: float, solar_kw: float, aux_kw: float, load_kw: float,
-		steps: int, raw_kw: float = -1.0) -> void:
+		steps: int, raw_kw: float = -1.0, load_peak_kw: float = -1.0) -> void:
 	if steps <= 0:
 		return
 	var start := _soc.size()
@@ -249,8 +265,10 @@ func _append_exact_run(soc0: float, solar_kw: float, aux_kw: float, load_kw: flo
 	_solar.resize(n)
 	_aux.resize(n)
 	_load.resize(n)
+	_load_peak.resize(n)
 	_raw.resize(n)
 	var raw := _raw_or(raw_kw, solar_kw)
+	var peak := _peak_of(load_peak_kw, load_kw)
 
 	var net := solar_kw + aux_kw - load_kw
 	if max_charge_kw != INF or max_discharge_kw != INF:
@@ -287,6 +305,7 @@ func _append_exact_run(soc0: float, solar_kw: float, aux_kw: float, load_kw: flo
 		_solar[start + k] = solar_kw
 		_aux[start + k] = aux_kw
 		_load[start + k] = load_kw
+		_load_peak[start + k] = peak
 		_raw[start + k] = raw
 
 
@@ -327,6 +346,7 @@ func record_measured(abs_hours: float, soc_kwh: float, solar_kw: float,
 		_solar[n] = solar_kw
 		_aux[n] = aux_kw
 		_load[n] = load_kw
+		_load_peak[n] = _peak_of(-1.0, load_kw)
 		_raw[n] = raw
 		return
 	while cur_g < target_g:
@@ -335,6 +355,7 @@ func record_measured(abs_hours: float, soc_kwh: float, solar_kw: float,
 		_solar.append(solar_kw)
 		_aux.append(aux_kw)
 		_load.append(load_kw)
+		_load_peak.append(_peak_of(-1.0, load_kw))
 		_raw.append(raw)
 	_trim_if_needed()
 
@@ -376,6 +397,7 @@ func sample_at(abs_hours: float) -> Dictionary:
 		"solar_kw": lerp(float(_solar[i]), float(_solar[i + 1]), frac),
 		"aux_kw":   lerp(float(_aux[i]),   float(_aux[i + 1]),   frac),
 		"load_kw":  lerp(float(_load[i]),  float(_load[i + 1]),  frac),
+		"load_peak_kw": lerp(_peak_at(i), _peak_at(i + 1), frac),
 		"raw_kw":   lerp(float(_raw[i]),   float(_raw[i + 1]),   frac),
 	}
 
@@ -390,8 +412,15 @@ func _sample_index(i: int) -> Dictionary:
 		"solar_kw": float(_solar[i]),
 		"aux_kw":   float(_aux[i]),
 		"load_kw":  float(_load[i]),
+		"load_peak_kw": _peak_at(i),
 		"raw_kw":   float(_raw[i]),
 	}
+
+
+func _peak_at(i: int) -> float:
+	if i < 0 or i >= _load_peak.size():
+		return float(_load[i]) if i >= 0 and i < _load.size() else 0.0
+	return float(_load_peak[i])
 
 
 func _inputs_at(abs_hours: float, fallback: Dictionary) -> Dictionary:
@@ -412,12 +441,14 @@ func _fill_forward_to(target_g: int) -> void:
 		var s := float(inp.get("solar_kw", last["solar_kw"]))
 		var a := float(inp.get("aux_kw", last["aux_kw"]))
 		var l := float(inp.get("load_kw", last["load_kw"]))
+		var pk := _peak_of(float(inp.get("load_peak_kw", -1.0)), l)
 		soc = step_soc_lim(soc, s, a, l, step_hours,
 			capacity_kwh, charge_eff, discharge_eff, min_soc_kwh, max_charge_kw, max_discharge_kw)
 		_soc.append(soc)
 		_solar.append(s)
 		_aux.append(a)
 		_load.append(l)
+		_load_peak.append(pk)
 		_raw.append(_raw_or(float(inp.get("raw_kw", -1.0)), s))
 	_trim_if_needed()
 
@@ -439,12 +470,14 @@ func fill_forward_chunk(target_g: int, max_steps: int) -> bool:
 		var s := float(inp.get("solar_kw", last["solar_kw"]))
 		var a := float(inp.get("aux_kw", last["aux_kw"]))
 		var l := float(inp.get("load_kw", last["load_kw"]))
+		var pk := _peak_of(float(inp.get("load_peak_kw", -1.0)), l)
 		soc = step_soc_lim(soc, s, a, l, step_hours,
 			capacity_kwh, charge_eff, discharge_eff, min_soc_kwh, max_charge_kw, max_discharge_kw)
 		_soc.append(soc)
 		_solar.append(s)
 		_aux.append(a)
 		_load.append(l)
+		_load_peak.append(pk)
 		_raw.append(_raw_or(float(inp.get("raw_kw", -1.0)), s))
 		done += 1
 	_trim_if_needed()
@@ -460,6 +493,7 @@ func _fill_backward_to(target_g: int) -> void:
 	var pre_solar := PackedFloat32Array()
 	var pre_aux := PackedFloat32Array()
 	var pre_load := PackedFloat32Array()
+	var pre_peak := PackedFloat32Array()
 	var pre_raw := PackedFloat32Array()
 	while g > target_g and (pre_soc.size() + _soc.size()) < MAX_SAMPLES:
 		g -= 1
@@ -467,6 +501,7 @@ func _fill_backward_to(target_g: int) -> void:
 		var s := float(inp.get("solar_kw", first["solar_kw"]))
 		var a := float(inp.get("aux_kw", first["aux_kw"]))
 		var l := float(inp.get("load_kw", first["load_kw"]))
+		var pk := _peak_of(float(inp.get("load_peak_kw", -1.0)), l)
 		# Recover SOC at the earlier step (inverse of the step that led to `soc`).
 		soc = clampf(unstep_soc(soc, s, a, l, step_hours,
 			capacity_kwh, charge_eff, discharge_eff, min_soc_kwh), 0.0, capacity_kwh)
@@ -475,6 +510,7 @@ func _fill_backward_to(target_g: int) -> void:
 		pre_solar = PackedFloat32Array([s]) + pre_solar
 		pre_aux = PackedFloat32Array([a]) + pre_aux
 		pre_load = PackedFloat32Array([l]) + pre_load
+		pre_peak = PackedFloat32Array([pk]) + pre_peak
 		pre_raw = PackedFloat32Array([_raw_or(float(inp.get("raw_kw", -1.0)), s)]) + pre_raw
 	if pre_soc.is_empty():
 		return
@@ -483,6 +519,7 @@ func _fill_backward_to(target_g: int) -> void:
 	_solar = pre_solar + _solar
 	_aux = pre_aux + _aux
 	_load = pre_load + _load
+	_load_peak = pre_peak + _load_peak
 	_raw = pre_raw + _raw
 
 
@@ -502,7 +539,80 @@ func truncate_after(abs_hours: float) -> void:
 	_solar.resize(keep)
 	_aux.resize(keep)
 	_load.resize(keep)
+	_load_peak.resize(keep)
 	_raw.resize(keep)
+
+
+## Samples from `from_step` to the end: {base_step, soc, solar, aux, load, peak, raw}.
+## Empty arrays when the tape has nothing at or after that step. The track's
+## span store copies these out so a later trim of this ring does not forget them.
+func slice_from(from_step: int) -> Dictionary:
+	var blank := {
+		"base_step": 0,
+		"soc": PackedFloat32Array(),
+		"solar": PackedFloat32Array(),
+		"aux": PackedFloat32Array(),
+		"load": PackedFloat32Array(),
+		"peak": PackedFloat32Array(),
+		"raw": PackedFloat32Array(),
+	}
+	if is_empty():
+		return blank
+	var i0 := from_step - _base_step
+	if i0 < 0:
+		i0 = 0
+	if i0 >= _soc.size():
+		blank["base_step"] = last_step() + 1
+		return blank
+	return {
+		"base_step": _base_step + i0,
+		"soc": _soc.slice(i0),
+		"solar": _solar.slice(i0),
+		"aux": _aux.slice(i0),
+		"load": _load.slice(i0),
+		"peak": _load_peak.slice(i0),
+		"raw": _raw.slice(i0),
+	}
+
+
+## Append the caller's sample, already integrated. Used when the playhead walks
+## forward into minutes the span store has already evaluated, so the tape and
+## the track stay the same curve. Repeats the sample if `abs_hours` skips ahead.
+func append_known(abs_hours: float, soc_kwh: float, solar_kw: float, aux_kw: float,
+		load_kw: float, raw_kw: float = -1.0, load_peak_kw: float = -1.0) -> void:
+	if is_empty():
+		init_anchor(abs_hours, soc_kwh, solar_kw, aux_kw, load_kw, raw_kw, load_peak_kw)
+		return
+	var target := _step_of(abs_hours)
+	var cur := last_step()
+	if target <= cur:
+		return
+	var soc := clampf(soc_kwh, 0.0, capacity_kwh)
+	var raw := _raw_or(raw_kw, solar_kw)
+	var peak := _peak_of(load_peak_kw, load_kw)
+	while cur < target:
+		cur += 1
+		_soc.append(soc)
+		_solar.append(solar_kw)
+		_aux.append(aux_kw)
+		_load.append(load_kw)
+		_load_peak.append(peak)
+		_raw.append(raw)
+	_trim_if_needed()
+
+
+## Rewrite every stored SOC from a corrected value at the first sample, using
+## each later sample's own inputs. A scrub lands the tape on a placeholder SOC
+## until the span fill reaches that minute.
+func restamp_soc(soc0: float) -> void:
+	if is_empty():
+		return
+	var soc := clampf(soc0, 0.0, capacity_kwh)
+	_soc[0] = soc
+	for i in range(1, _soc.size()):
+		soc = step_soc_lim(soc, float(_solar[i]), float(_aux[i]), float(_load[i]), step_hours,
+			capacity_kwh, charge_eff, discharge_eff, min_soc_kwh, max_charge_kw, max_discharge_kw)
+		_soc[i] = soc
 
 
 func _trim_if_needed() -> void:
@@ -513,6 +623,7 @@ func _trim_if_needed() -> void:
 	_solar = _solar.slice(over)
 	_aux = _aux.slice(over)
 	_load = _load.slice(over)
+	_load_peak = _load_peak.slice(over)
 	_raw = _raw.slice(over)
 	_base_step += over
 
@@ -586,18 +697,28 @@ func channel_slice(channel: String, abs_start: float, abs_end: float) -> Diction
 	var a := g0 - _base_step
 	var n := g1 - g0 + 1
 	vals.resize(n)
+	var peaks := PackedFloat32Array()
+	var with_peak := channel == "load_kw" and _load_peak.size() == _load.size()
+	if with_peak:
+		peaks.resize(n)
 	var cap := maxf(capacity_kwh, 0.001)
 	for k in n:
 		var i := a + k
 		match channel:
 			"solar_kw": vals[k] = _solar[i]
-			"load_kw": vals[k] = _load[i]
+			"load_kw":
+				vals[k] = _load[i]
+				if with_peak:
+					peaks[k] = _load_peak[i]
 			"aux_kw": vals[k] = _aux[i]
 			"soc_kwh": vals[k] = _soc[i]
 			"soc_pct": vals[k] = 100.0 * _soc[i] / cap
 			"net_kw": vals[k] = _solar[i] + _aux[i] - _load[i]
 			_: vals[k] = 0.0
-	return {"base_t": time_of_step(g0), "step": step_hours, "values": vals}
+	var out := {"base_t": time_of_step(g0), "step": step_hours, "values": vals}
+	if with_peak:
+		out["peaks"] = peaks
+	return out
 
 
 static func channel_value(sample: Dictionary, channel: String, cap_kwh: float = 16.0) -> float:

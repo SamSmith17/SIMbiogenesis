@@ -10,6 +10,15 @@ extends RefCounted
 
 const LIBRARY_PATH := "user://pvlab_library.json"
 
+## Typical 2026 US street price for a module type that is a class, not one
+## SKU. The JA 380, the flexible 100 W and the CIGS 200 W match the graph
+## library's panel prices.
+const MODULE_USD := {
+	"ja_380": 160.0, "topcon_430_black": 190.0, "poly_275": 70.0, "ibc_375": 340.0,
+	"rigid_100_12v": 90.0, "flex_100": 80.0, "cigs_200": 280.0, "cdte_420": 170.0,
+	"fold_200": 199.0,
+}
+
 ## The EG4 6000XP's PV input (its data sheet, as ComponentPresets): 480 V
 ## max Voc, MPPT 120–385 V, 100 V start-up, 25 A short circuit per MPPT,
 ## 8 kW of PV.
@@ -18,7 +27,7 @@ const EG4_6000XP := {"name": "EG4 6000XP", "max_voc": 480.0, "mppt_min_v": 120.0
 
 
 static func modules() -> Array:
-	return [
+	var out: Array = [
 		# JA Solar JAM60S20-380/MR data sheet (the graph's preset): 1769 ×
 		# 1052 × 35 mm, 120 half-cut M6 mono PERC, 20.5 kg, 3 split boxes,
 		# 1200 mm leads, Voc 41.62 / Vmp 34.77 / Isc 11.47 / Imp 10.93,
@@ -97,6 +106,12 @@ static func modules() -> Array:
 			"jbox": {"layout": "corner", "leads_mm": 4000.0, "connector": "anderson"}, "bypass_diodes": 4,
 			"electrical": {"mode": "datasheet", "wmp": 200.0, "voc": 23.2, "vmp": 19.2, "isc": 11.1, "imp": 10.4}})},
 	]
+	for m in out:
+		var usd := float(MODULE_USD.get(str((m as Dictionary)["id"]), 0.0))
+		(m as Dictionary)["price_usd"] = usd
+		if usd > 0.0:
+			((m as Dictionary)["spec"] as Dictionary)["price_usd"] = usd
+	return out
 
 
 static func module(id: String) -> Dictionary:

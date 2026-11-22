@@ -26,6 +26,8 @@ var _tabs: TabBar = null
 var _views: Control = null
 var _list: DesignGallery = null
 var _col: DesignerColumn = null
+var _light_panel: ModelLightPanel = null
+var _shell_3d: Node3D = null
 var _ids: Array = []
 var _rows: Dictionary = {}
 var _checks_box: VBoxContainer = null
@@ -96,6 +98,8 @@ func open_modal(opts: Dictionary = {}) -> void:
 func close() -> void:
 	if not _open:
 		return
+	if _light_panel != null:
+		_light_panel.reset_studio_night()
 	_stop_year()
 	if _shell.is_open():
 		_shell.close()
@@ -117,7 +121,10 @@ func is_open() -> bool:
 
 
 func current_spec() -> Dictionary:
-	return GreenhouseSpec.resolve(_spec)
+	var s := GreenhouseSpec.resolve(_spec)
+	if _light_panel != null:
+		s[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
+	return s
 
 
 func design() -> Dictionary:
@@ -209,6 +216,8 @@ func _build_centre() -> void:
 	_studio.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_studio.set_home(0.65, 0.4)
 	_studio.dist_max = 260.0
+	_studio.input_hook = func(e: InputEvent) -> bool:
+		return _light_panel != null and _light_panel.handle_viewport_event(e, _studio.camera, _studio.container, _shell_3d)
 	if _studio.ground != null:
 		(_studio.ground.mesh as PlaneMesh).size = Vector2(300, 300)
 	_views.add_child(_studio)
@@ -305,6 +314,8 @@ const FIELDS := [
 	["Beds", "beds.gantry", "FarmBot gantries", "check", "", "", 0.0, "", "A FarmBot on every bed (12 m tracks at most)"],
 	["Beds", "beds.lights", "Grow lights", "check", "", "", 0.0, "", "An LED rack over every bed"],
 	["Beds", "beds.feed", "Fed beds", "check", "", "", 0.0, "", "A nutrient store inside the house feeds every bed; on the graph it has a Nutrients in port to fill it from (compost, urine recovery)"],
+	["Lights", "lights.spectrum", "Spectrum", "option", "spectrums", "", 0.0, "", "Hydroponic red/blue LED (660 nm + 450 nm) or full-spectrum white LED"],
+	["Lights", "lights.schedule", "On", "option", "light_schedules", "", 0.0, "", "Turn grow lights on at sunset and off at sunrise by default, keep them always on, or follow the DLI photoperiod controller"],
 	["Lights", "lights.ppfd", "Light level", "spin", 20.0, 1000.0, 10.0, " µmol/m²s", "Photons at the canopy when on (200 tops up winter light)"],
 	["Lights", "lights.photoperiod_h", "Day length", "spin", 4.0, 24.0, 0.5, " h", "The longest the controller keeps them on"],
 	["Lights", "lights.dli_target", "Daily light target", "spin", 2.0, 40.0, 0.5, " mol/m²/day", "Sun + lights the controller aims for (lettuce 12-17, tomatoes 20-30)"],
@@ -355,6 +366,14 @@ func _build_right() -> void:
 		if row != null:
 			box.add_child(row)
 			_rows[key] = row
+	box.add_child(SectionHeader.make("Lighting", ""))
+	_light_panel = ModelLightPanel.new()
+	_light_panel.bind_studio_night(_studio)
+	_light_panel.lights_changed.connect(func() -> void:
+		_spec[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
+		if _col != null:
+			_col.set_summary("Lighting", _light_panel.summary_text()))
+	box.add_child(_light_panel)
 	var auto := Button.new()
 	auto.text = "Lay the beds out again"
 	auto.name = "beds_auto"
@@ -379,7 +398,7 @@ func _build_right() -> void:
 	_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_status)
-	_col = DesignerColumn.setup(box, "greenhouse", {"open": ["Shape", "Selected bed"], "tile_cols": 2})
+	_col = DesignerColumn.setup(box, "greenhouse", {"open": ["Shape", "Selected bed"], "tile_cols": 3})
 
 
 static func _items(table: String) -> Array:
@@ -421,6 +440,12 @@ static func _items(table: String) -> Array:
 		"styles":
 			for st in GreenhouseSpec.BED_STYLES:
 				out.append([st, str(GreenhouseSpec.BED_STYLE_LABELS[st])])
+		"spectrums":
+			for sp in GreenhouseSpec.SPECTRUMS:
+				out.append([sp, str(GreenhouseSpec.SPECTRUM_LABELS[sp])])
+		"light_schedules":
+			for sc in GreenhouseSpec.LIGHT_SCHEDULES:
+				out.append([sc, str(GreenhouseSpec.LIGHT_SCHEDULE_LABELS[sc])])
 	return out
 
 
@@ -471,6 +496,9 @@ func _set_field(key: String, v: Variant) -> void:
 	elif key.begins_with("beds.") and key != "beds.feed":
 		# Bed settings lay the beds out again.
 		_spec["beds"]["layout"] = "auto"
+	if _light_panel != null and (key.begins_with("beds.") or key.begins_with("lights.") or key in ["width_m", "length_m", "eave_h_m", "ridge_h_m"]):
+		_light_panel.sync_with_spec(_spec, [], key.begins_with("lights."))
+		_spec[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
 	_queue_rebuild()
 
 
@@ -622,6 +650,8 @@ func _load_spec(spec: Dictionary, frame: bool = true) -> void:
 	_spec = GreenhouseSpec.resolve(spec)
 	_selected_bed = ""
 	_sync_rows()
+	if _light_panel != null:
+		_light_panel.load_from_context(_main() if frame else null, _prop_id if frame else "", GreenhouseBuilder.MODEL_ID, _spec)
 	_rebuild_preview()
 	if frame:
 		_frame()
@@ -636,10 +666,15 @@ func _preview_node(spec: Dictionary) -> Node3D:
 	root.name = "GreenhousePreview"
 	var d := GreenhouseDesign.solve(spec)
 	var shell := GreenhouseBuilder.build_from_design(d, "Greenhouse", {"cutaway": _roof_off})
+	_shell_3d = shell
 	root.add_child(shell)
 	GreenhouseBuilder.set_vents(shell, 0.4)
 	var sink := float(d["spec"]["ground"]["sink_m"])
 	shell.position.y = -sink
+	if _light_panel != null:
+		_light_panel.attach_preview(shell)
+		if _col != null:
+			_col.set_summary("Lighting", _light_panel.summary_text())
 	if _show_parts:
 		for p in GreenhouseParts.parts(d):
 			var pd: Dictionary = p
@@ -770,6 +805,9 @@ func _edit_beds(fn: Callable) -> void:
 		_clamp_bed(it as Dictionary)
 	_spec["beds"]["layout"] = "custom"
 	_spec["beds"]["items"] = items
+	if _light_panel != null:
+		_light_panel.sync_with_spec(_spec)
+		_spec[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
 	_rebuild_preview()
 
 
@@ -984,9 +1022,11 @@ func _on_save() -> void:
 
 func _on_place() -> void:
 	var main := _main()
+	var js := GreenhouseSpec.to_json_safe(current_spec())
 	var res: Dictionary = PlacedPropService.begin_placement(main, GreenhouseBuilder.MODEL_ID,
-		{"record_extra": {GreenhouseSpec.KEY: GreenhouseSpec.to_json_safe(_spec), "collision_enabled": true,
-			"walk_in": true}})
+		{"record_extra": {GreenhouseSpec.KEY: js,
+			PropModelLights.KEY_MODEL_LIGHTS: _light_panel.serialized_items() if _light_panel != null else [],
+			"collision_enabled": true, "walk_in": true}})
 	if bool(res.get("ok", false)):
 		close()
 	else:
@@ -997,8 +1037,11 @@ func _on_apply() -> void:
 	if _prop_id.is_empty():
 		return
 	var main := _main()
-	PlacedPropService.update_prop_record(main, _prop_id, {GreenhouseSpec.KEY: GreenhouseSpec.to_json_safe(_spec)}, true)
+	var js := GreenhouseSpec.to_json_safe(current_spec())
+	PlacedPropService.update_prop_record(main, _prop_id, {GreenhouseSpec.KEY: js}, true)
 	GreenhouseWorld.sync(main, _prop_id)
+	if _light_panel != null:
+		PropModelLights.sync_prop(main, _prop_id, _light_panel.items(), true)
 	_status.text = "Applied to the placed greenhouse."
 
 

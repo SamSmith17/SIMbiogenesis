@@ -17,9 +17,9 @@ extends RefCounted
 ## scene) read and wrote the SAME lights file.
 
 const VERSION := 3
-const MAX_LIGHTS := 500
+const MAX_LIGHTS := 2000
 const MAX_WAYPOINTS_PER_STRING := 64
-const MAX_WAYPOINTS_TOTAL := 4000
+const MAX_WAYPOINTS_TOTAL := 8000
 
 var lights: Array = []
 var styles: Dictionary = {}
@@ -145,6 +145,10 @@ static func _heal(r: Dictionary) -> Dictionary:
 	r["style_id"] = str(r.get("style_id", ""))
 	r["name"] = str(r.get("name", ""))
 	r["graph_item_id"] = str(r.get("graph_item_id", ""))
+	if r.has("model_slot"):
+		r["model_slot"] = str(r.get("model_slot", ""))
+	if r.has("model_owned"):
+		r["model_owned"] = bool(r.get("model_owned", false))
 	if kind == "string":
 		var wps: Array = []
 		if r.get("waypoints") is Array:

@@ -233,10 +233,15 @@ func effect_time() -> float:
 func _update_lit() -> void:
 	if _main == null or not is_instance_valid(_main):
 		_main = get_tree().current_scene if is_inside_tree() else null
-	var lit := PlacedLightPower.is_lit(_main, record, fields)
-	if lit != _lit:
+	var packed := PlacedLightPower.host_packed(_main, record)
+	var lit := not packed and PlacedLightPower.is_lit(_main, record, fields)
+	if _bulb != null and packed:
+		_bulb.visible = false
+	if lit != _lit or (not packed and _bulb != null and _bulb.visible != bool(fields.get("show_body", false))):
 		_lit = lit
 		_apply_fields()
+		if _bulb != null and packed:
+			_bulb.visible = false
 
 
 ## The shared effect clock (PlacedLightClock) — every J light reads the same

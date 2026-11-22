@@ -14,7 +14,7 @@ extends SceneTree
 ## Run: Godot.exe.exe --headless --path . --import   (once, new class_names)
 ##      Godot.exe.exe --headless --path . --script core/globe/globe_selftest.gd
 
-const EXPECTED_CHECKS := 216
+const EXPECTED_CHECKS := 221
 
 var _fails := 0
 var _checks := 0
@@ -826,9 +826,22 @@ func _test_globe_improvements() -> void:
 	_check("layers: no rain before 1998", GlobeWeather.layer_gap("rain", 8.0e8, now_u).contains("1998"))
 	_check("layers: no satellite before 2000", GlobeWeather.layer_gap("sat", 9.0e8, now_u).contains("2000"))
 	_check("layers: no clouds a day from now",
-		GlobeWeather.layer_gap("clouds", now_u + 86400.0, now_u).contains("no image"))
+		GlobeWeather.layer_gap("clouds", now_u + 86400.0, now_u).contains("last few hours"))
 	_check("layers: clouds are offered within the hour",
 		GlobeWeather.layer_gap("clouds", now_u + 1800.0, now_u).is_empty())
+	# Compact Energy Zone helpers + coordinate parser (Launch Hub UX parity).
+	_check("zone bar: every zone 1..6 has a difficulty and concise hint",
+		not GlobeZoneBar.difficulty_of(1).is_empty() and not GlobeZoneBar.difficulty_of(6).is_empty()
+		and not GlobeZoneBar.short_hint_of(1).is_empty() and not GlobeZoneBar.short_hint_of(6).is_empty())
+	_check("zone bar: out-of-range zones return empty strings",
+		GlobeZoneBar.difficulty_of(0).is_empty() and GlobeZoneBar.short_hint_of(7).is_empty())
+	_check("zone bar: compact population formatting",
+		GlobeZoneBar.compact_pop(2_450_000_000) == "2.45B" and GlobeZoneBar.compact_pop(125_000_000) == "125M")
+	var parsed_ll := GlobeMode._parse_coords("33.3560, -115.7266")
+	_check("coords: comma pair parses lat/lon",
+		parsed_ll.size() == 2 and absf(parsed_ll[0] - 33.3560) < 1e-6 and absf(parsed_ll[1] + 115.7266) < 1e-6)
+	_check("coords: out-of-range latitude is rejected",
+		GlobeMode._parse_coords("95.0, -115.0").is_empty())
 
 
 ## A point at magnetic latitude `ml` on the magnetic midnight meridian.

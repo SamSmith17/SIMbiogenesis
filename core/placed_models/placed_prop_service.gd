@@ -111,6 +111,8 @@ static func place_model_at_xz(main: Node, model_id: String, x: float, z: float,
 		Callable(PlacedPropService, "seed_esplab").call_deferred(main, prop_id)
 	elif model_id == BankBuilder.MODEL_ID:
 		Callable(PlacedPropService, "seed_battery_bank").call_deferred(main, prop_id)
+	elif model_id == CtrlBuilder.MODEL_ID:
+		Callable(PlacedPropService, "seed_controller").call_deferred(main, prop_id)
 	elif VehicleBuilder.handles(model_id):
 		tag_vehicle_spaces(main, prop_id)
 	elif model_id == PvArrayBuilder.MODEL_ID:
@@ -119,6 +121,7 @@ static func place_model_at_xz(main: Node, model_id: String, x: float, z: float,
 		if sgv_pv != null and sgv_pv.has_method("bind_pv_array_prop"):
 			Callable(sgv_pv, "bind_pv_array_prop").call_deferred(prop_id)
 	Callable(PlacedPropService, "apply_catalog_earthworks").call_deferred(main, prop_id)
+	PropModelLights.sync_prop(main, prop_id)
 	_notify_mp_props_edited()
 	return {"ok": true, "prop_id": prop_id, "x": x, "z": z, "ground_y": gy}
 
@@ -174,6 +177,7 @@ static func sync_earthship(main: Node, prop_id: String) -> void:
 	update_prop_record(main, prop_id, {StructureEarthworks.KEY: EarthshipDesign.earthworks(spec),
 		"walk_in": true}, true)
 	_auto_tag_space(main, prop_id, "sleep", int(d["stats"]["sleeps"]), str(d["spec"]["name"]))
+	PropModelLights.sync_prop(main, prop_id)
 	# The roof feeds the cisterns behind the berm (an Earthship's water).
 	var st: Dictionary = d["stats"]
 	_sync_roof_water(main, prop_id, str(d["spec"]["name"]), float(st["roof_m2"]), float(st["cistern_l"]))
@@ -789,6 +793,8 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 		Callable(PlacedPropService, "seed_esplab").call_deferred(main, prop_id)
 	elif model_id == BankBuilder.MODEL_ID:
 		Callable(PlacedPropService, "seed_battery_bank").call_deferred(main, prop_id)
+	elif model_id == CtrlBuilder.MODEL_ID:
+		Callable(PlacedPropService, "seed_controller").call_deferred(main, prop_id)
 	elif VehicleBuilder.handles(model_id):
 		tag_vehicle_spaces(main, prop_id)
 	elif model_id == PvArrayBuilder.MODEL_ID:
@@ -797,6 +803,7 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 		if sgv_pv != null and sgv_pv.has_method("bind_pv_array_prop"):
 			Callable(sgv_pv, "bind_pv_array_prop").call_deferred(prop_id)
 	Callable(PlacedPropService, "apply_catalog_earthworks").call_deferred(main, prop_id)
+	PropModelLights.sync_prop(main, prop_id)
 	# Keep any bound graph node's site/elevation coords in sync with the 3D twin.
 	_notify_graph_prop_moved(main, prop_id)
 	# Generic post-commit hook (crew assembly queues its project here) —
@@ -1385,6 +1392,68 @@ static func seed_battery_bank(main: Node, prop_id: String) -> String:
 	return node_id
 
 
+## A placed Controller Lab unit is one graph controller bound to the prop:
+## the design's numbers (Voc, MPPT window, charge current, AC output …), the
+## design itself (`controller_spec`) and its terminals as graph handles. A
+## record that names a graph controller (`graph_item_id`, set when the Lab
+## was opened on one) binds that controller instead of making a new one.
+## Then any placed bank whose cables wait for a controller gets them.
+static func seed_controller(main: Node, prop_id: String) -> String:
+	if main == null or prop_id.is_empty():
+		return ""
+	var rec := get_prop_record(main, prop_id)
+	if rec.is_empty():
+		return ""
+	var spec: Dictionary = rec.get("controller_spec", {}) as Dictionary if rec.get("controller_spec") is Dictionary else {}
+	if spec.is_empty():
+		spec = CtrlPresets.builtin("generic_mppt_150_50")
+		update_prop_record(main, prop_id, {"controller_spec": spec}, false)
+	var d := CtrlDesign.solve(spec)
+	var g := CtrlDesign.graph_specs(d)
+	g["controller_spec"] = CtrlSpec.resolve(spec)
+	g["model_id"] = CtrlBuilder.MODEL_ID
+	var handles := CtrlDesign.graph_handles(d)
+	var gid := str(rec.get("graph_item_id", ""))
+	var sgv := _system_graph_view(main)
+	var gmodel: Variant = sgv.get("model") if sgv != null else null
+	if gmodel == null:
+		return ""
+	var node_id := ""
+	if not gid.is_empty() and not (gmodel.call("get_item", gid) as Dictionary).is_empty():
+		var it: Dictionary = gmodel.call("get_item", gid)
+		if str((it.get("specs", {}) as Dictionary).get("bound_prop_id", "")) != prop_id:
+			_create_bound_graph_node(main, prop_id, {"node_type": "controller", "existing_item_id": gid,
+				"specs": {"model_id": CtrlBuilder.MODEL_ID}, "label": str(g["name"])})
+			it = gmodel.call("get_item", gid)
+		var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+		for k in g:
+			specs[k] = g[k]
+		gmodel.call("update_item", gid, {"specs": specs, "handles": handles})
+		node_id = gid
+	else:
+		node_id = _create_bound_graph_node(main, prop_id, {
+			"node_type": "controller", "width": 140.0, "height": 120.0, "specs": g})
+		if not node_id.is_empty():
+			gmodel.call("update_item", node_id, {"handles": handles})
+	if node_id.is_empty():
+		return ""
+	if str(rec.get("graph_item_id", "")) != node_id:
+		update_prop_record(main, prop_id, {"graph_item_id": node_id}, false)
+	_wire_waiting_banks(main)
+	return node_id
+
+
+## Every placed bank whose graph battery is wired to no controller gets its
+## main cables now (a bank placed before any controller stood waiting).
+static func _wire_waiting_banks(main: Node) -> void:
+	var layer := _layer_for_main(main)
+	if layer == null:
+		return
+	for r: Dictionary in layer.props:
+		if str(r.get("model_id", "")) == BankBuilder.MODEL_ID and not str(r.get("graph_item_id", "")).is_empty():
+			wire_bank_to_inverter(main, str(r.get("id", "")))
+
+
 ## A placed bank's main cables, routed in 3D: the + (red) and − (black)
 ## from the bank's graph battery to the nearest inverter / charge controller
 ## on the site (the controller's battery terminals). The conduit system routes
@@ -1919,7 +1988,7 @@ static func _build_ghost(main: Node, model_id: String) -> Node3D:
 	# must build THAT design, not the builder's default (a concentrator's
 	# ghost was always the default dish).
 	var rec_extra_d: Dictionary = _placement_prep.get("record_extra", {}) as Dictionary
-	for dk in ["battery_bank_spec", "csplab_spec", "windlab_spec", "pelton_spec", "tc_spec", "esp_spec", "farmbot_spec", "earthship_spec", "building_spec", "greenhouse_spec", "light_rack_spec", "grow_bed_spec"]:
+	for dk in ["battery_bank_spec", "controller_spec", "csplab_spec", "windlab_spec", "pelton_spec", "tc_spec", "esp_spec", "farmbot_spec", "earthship_spec", "building_spec", "greenhouse_spec", "light_rack_spec", "grow_bed_spec"]:
 		if rec_extra_d.has(dk) and not extras.has(dk):
 			extras[dk] = rec_extra_d[dk]
 	var model := ModelCatalog.instantiate(model_id, extras)

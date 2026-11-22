@@ -174,6 +174,59 @@ static func tube(g: Geo, path: PackedVector3Array, d: float, col: Color, finish:
 		_cap(g, path[n - 1], tans[n - 1], rings[n - 1], col, finish)
 
 
+## A flat strap along `path`: width across, thickness the easy way to bend.
+## The section is carried by parallel transport, starting with its thin axis
+## toward world up so a horizontal run lies flat.
+static func ribbon(g: Geo, path: PackedVector3Array, width: float, thick: float, col: Color,
+		finish: String = "jacket") -> void:
+	var n := path.size()
+	if n < 2 or width < 0.2 or thick < 0.2:
+		return
+	var tans: Array = []
+	for i in n:
+		var t := Vector3.ZERO
+		if i > 0:
+			t += (path[i] - path[i - 1]).normalized()
+		if i < n - 1:
+			t += (path[i + 1] - path[i]).normalized()
+		if t.length_squared() < 1e-9:
+			t = path[mini(i + 1, n - 1)] - path[maxi(i - 1, 0)]
+		tans.append(t.normalized())
+	var t0: Vector3 = tans[0]
+	var ref := Vector3.UP if absf(t0.dot(Vector3.UP)) < 0.9 else Vector3.FORWARD
+	var u := ref.cross(t0).normalized()
+	var hw := width * 0.5
+	var ht := thick * 0.5
+	var rings: Array = []
+	var norms: Array = []
+	for i in n:
+		var tv: Vector3 = tans[i]
+		if i > 0:
+			var tp: Vector3 = tans[i - 1]
+			var ax := tp.cross(tv)
+			if ax.length_squared() > 1e-12:
+				u = u.rotated(ax.normalized(), tp.angle_to(tv))
+			u = (u - tv * u.dot(tv)).normalized()
+		var w := tv.cross(u).normalized()
+		var ring := PackedVector3Array()
+		var nr := PackedVector3Array()
+		for off in [u * hw + w * ht, -u * hw + w * ht, -u * hw - w * ht, u * hw - w * ht]:
+			ring.append(path[i] + off)
+			nr.append((off as Vector3).normalized())
+		rings.append(ring)
+		norms.append(nr)
+	for i in range(1, n):
+		var r0: PackedVector3Array = rings[i - 1]
+		var r1: PackedVector3Array = rings[i]
+		var n0: PackedVector3Array = norms[i - 1]
+		var n1: PackedVector3Array = norms[i]
+		for k in 4:
+			var k1 := (k + 1) % 4
+			g.quad(finish, col, r0[k], r0[k1], r1[k1], r1[k], n0[k], n0[k1], n1[k1], n1[k])
+	_cap(g, path[0], -(tans[0] as Vector3), rings[0], col, finish)
+	_cap(g, path[n - 1], tans[n - 1], rings[n - 1], col, finish)
+
+
 static func _cap(g: Geo, c: Vector3, n: Vector3, ring: PackedVector3Array, col: Color, finish: String) -> void:
 	for k in ring.size():
 		g.tri(finish, col, c, ring[k], ring[(k + 1) % ring.size()], n, n, n, n)

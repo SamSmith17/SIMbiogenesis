@@ -160,6 +160,28 @@ static func _run_mode(h: Node, shots_dir: String) -> int:
 		if n.has_method("hub_settings_panel"):
 			hub = n
 			break
+	# 3D Globe is now the default launch hub view on boot.
+	var gm0: GlobeMode = null
+	for n in tree.root.find_children("*", "Control", true, false):
+		if n is GlobeMode:
+			gm0 = n
+	fails += _report("boot: 3D Globe is the default launch hub view", gm0 != null)
+	if gm0 != null:
+		var c0 := gm0.find_child("CloudsToggle", true, false) as CheckBox
+		var w0 := gm0.find_child("WindToggle", true, false) as CheckBox
+		var l0 := gm0.find_child("LabelsToggle", true, false) as CheckBox
+		var zm0 := gm0.find_child("ZonesMode", true, false) as OptionButton
+		fails += _report("boot: default layers — Clouds off, Wind off, Labels off, Solar energy bands on",
+			c0 != null and not c0.button_pressed and w0 != null and not w0.button_pressed
+			and l0 != null and not l0.button_pressed
+			and gm0._colour == GlobeMode.COLOUR_ZONES and zm0 != null and zm0.selected == 0)
+		var map2d_btn := gm0.find_child("CloseButton", true, false) as BaseButton
+		if map2d_btn != null:
+			await HarnessInput.click(vp, HarnessInput.center_of(map2d_btn))
+			for _f in 8:
+				await tree.process_frame
+		fails += _report("boot: 2D Map button switches to the 2D picker",
+			not is_instance_valid(gm0) or gm0.is_queued_for_deletion())
 	var btn := hub.find_child("HubGlobeButton", true, false) as Button if hub != null else null
 	fails += _report("mode: the hub has a Globe button", btn != null)
 	if btn == null:
@@ -249,6 +271,7 @@ static func _run_mode(h: Node, shots_dir: String) -> int:
 	fails += await _run_cards_aurora(h, gm, shots_dir)
 	fails += await _run_perf(h, gm)
 	fails += await _run_local(h, gm, shots_dir)
+	fails += await _run_hub_ux(h, gm, shots_dir)
 	var res := UiAudit.run(tree.root.get_viewport())
 	print("globe: mode audit — %s" % UiAudit.summary_line(res))
 	for f in (res.get("findings", []) as Array):
@@ -279,6 +302,9 @@ static func _run_weather(h: Node, gm: GlobeMode, shots_dir: String) -> int:
 	gm.globe.look_at_point(20.0, -60.0, 2.6)
 	await _click_toggle(vp, gm.find_child("RainToggle", true, false) as CheckBox)
 	await _click_toggle(vp, gm.find_child("SatelliteToggle", true, false) as CheckBox)
+	var clouds_cb := gm.find_child("CloudsToggle", true, false) as CheckBox
+	if clouds_cb != null and not clouds_cb.button_pressed:
+		await _click_toggle(vp, clouds_cb)
 	var waited := 0
 	while not gm.globe.has_rain() and waited < 1800:
 		await tree.process_frame
@@ -291,7 +317,10 @@ static func _run_weather(h: Node, gm: GlobeMode, shots_dir: String) -> int:
 	fails += _report("weather: live clouds are refused for an old date", not gm.globe.has_clouds()
 		and dt.contains("last few hours"), dt)
 	await _settle_and_shoot(h, gm.globe, shots_dir, "10_mode_satellite_rain")
-	# Wind (on by default): the GFS run for that instant, streamlines drawn.
+	# Wind: turn Wind on and verify GFS run + streamlines for that instant.
+	var wind_cb := gm.find_child("WindToggle", true, false) as CheckBox
+	if wind_cb != null and not wind_cb.button_pressed:
+		await _click_toggle(vp, wind_cb)
 	waited = 0
 	while gm.wind_line_segments() == 0 and waited < 2400:
 		await tree.process_frame
@@ -509,6 +538,9 @@ static func _run_cards_aurora(h: Node, gm: GlobeMode, shots_dir: String) -> int:
 	var vp := h.get_viewport()
 	var fails := 0
 	var tp: Callable = gm.globe.time_provider
+	var lt := gm.find_child("LabelsToggle", true, false) as CheckBox
+	if lt != null and not lt.button_pressed:
+		lt.button_pressed = true
 	gm.globe.look_at_point(MV_LAT, MV_LON, 0.4)
 	for _f in 30:
 		await tree.process_frame
@@ -518,7 +550,6 @@ static func _run_cards_aurora(h: Node, gm: GlobeMode, shots_dir: String) -> int:
 		longest = maxi(longest, n.length())
 	fails += _report("labels: world pin names are short", not names.is_empty() and longest <= GlobeMode.PIN_NAME_MAX,
 		"%d shown, longest %d: %s" % [names.size(), longest, ", ".join(names)])
-	var lt := gm.find_child("LabelsToggle", true, false) as CheckBox
 	await _click_toggle(vp, lt)
 	for _f in 3:
 		await tree.process_frame
@@ -595,4 +626,154 @@ static func _run_cards_aurora(h: Node, gm: GlobeMode, shots_dir: String) -> int:
 		not (gm._aur.get("ovation", {}) as Dictionary).is_empty(), str(gm._aur.get("source", "")))
 	gm.globe.look_at_point(70.0, 100.0, 2.4)
 	await _settle_and_shoot(h, gm.globe, shots_dir, "22_aurora_now")
+	return fails
+
+
+## Launch Hub UX parity on the 3D globe: Worlds drawer, explicit Lat/Lon entry,
+## compact Energy Zone spark-bar + Sister/Peer city fly-to, interactive Zone
+## legend chips, and Hub Settings stacking cleanly above GlobeMode.
+static func _run_hub_ux(h: Node, gm: GlobeMode, shots_dir: String) -> int:
+	var tree := h.get_tree()
+	var vp := h.get_viewport()
+	var fails := 0
+	# Reset to the exact default launch hub look: Solar zones + Bands, Clouds off, Wind off, Labels off.
+	var ob := gm.find_child("ColourBy", true, false) as OptionButton
+	_select(ob, GlobeMode.COLOUR_ZONES)
+	var zm := gm.find_child("ZonesMode", true, false) as OptionButton
+	if zm != null:
+		zm.select(0)
+		zm.item_selected.emit(0)
+	for tn in ["RainToggle", "CloudsToggle", "WindToggle", "LabelsToggle", "AuroraToggle"]:
+		var tcb := gm.find_child(tn, true, false) as CheckBox
+		if tcb != null and tcb.button_pressed:
+			tcb.button_pressed = false
+	if gm._search != null:
+		gm._search.text = ""
+	if gm._card != null:
+		gm._card.visible = false
+	gm.globe.cam_tilt = 0.0
+	gm.globe.look_at_point(34.0, -98.0, 2.35)
+	for _f in 10:
+		await tree.process_frame
+	await _settle_and_shoot(h, gm.globe, shots_dir, "00_default_hub_view")
+	# 1. Hub header parity controls present and non-overlapping.
+	var hub_bar := gm.find_child("HubBar", true, false) as Control
+	var worlds_btn := gm.find_child("GlobeWorldsButton", true, false) as Button
+	var tour_btn := gm.find_child("GlobeTourButton", true, false) as Button
+	var share_btn := gm.find_child("GlobeShareButton", true, false) as BaseButton
+	var gear_btn := gm.find_child("GlobeSettingsButton", true, false) as BaseButton
+	var quit_btn := gm.find_child("GlobeQuitButton", true, false) as BaseButton
+	fails += _report("hub-ux: HubBar actions present on launch hub globe",
+		hub_bar != null and hub_bar.visible and worlds_btn != null and tour_btn != null
+		and share_btn != null and gear_btn != null and quit_btn != null)
+	# 2. Real click on Worlds (N) opens WorldsDrawer cleanly.
+	if gm._card != null:
+		gm._card.visible = false
+	await HarnessInput.click(vp, HarnessInput.center_of(worlds_btn))
+	for _f in 6:
+		await tree.process_frame
+	var drawer := gm.find_child("WorldsDrawer", true, false) as Control
+	fails += _report("hub-ux: clicking Worlds opens WorldsDrawer", drawer != null and drawer.visible)
+	await _settle_and_shoot(h, gm.globe, shots_dir, "23_hub_ux_worlds_drawer")
+	var r_drawer := UiAudit.run(tree.root.get_viewport())
+	fails += _report("hub-ux: UI audit clean with WorldsDrawer open", int(r_drawer.get("errors", 0)) == 0,
+		UiAudit.summary_line(r_drawer))
+	# Close WorldsDrawer via toggle click.
+	await HarnessInput.click(vp, HarnessInput.center_of(worlds_btn))
+	for _f in 4:
+		await tree.process_frame
+	# 3. Explicit coordinate entry (LatInput + LonInput + GoCoordsButton) -> PointCard + compact Zone bar.
+	var lat_ed := gm.find_child("LatInput", true, false) as LineEdit
+	var lon_ed := gm.find_child("LonInput", true, false) as LineEdit
+	var go_ll := gm.find_child("GoCoordsButton", true, false) as BaseButton
+	fails += _report("hub-ux: Lat/Lon inputs present", lat_ed != null and lon_ed != null and go_ll != null)
+	if lat_ed != null and lon_ed != null and go_ll != null:
+		lat_ed.text = "33.3560"
+		lon_ed.text = "-115.7266"
+		await HarnessInput.click(vp, HarnessInput.center_of(go_ll))
+		var waited_f := 0
+		while gm.globe.is_flying() and waited_f < 600:
+			await tree.process_frame
+			waited_f += 1
+		for _f in 10:
+			await tree.process_frame
+		var zbar := gm.find_child("ZonePopBar", true, false) as GlobeZoneBar
+		var guided := gm.find_child("StartGuidedButton", true, false) as Button
+		var empty_b := gm.find_child("CreateWorldButton", true, false) as Button
+		fails += _report("hub-ux: GoCoords flies to point and shows compact Zone bar + Guided/Empty world buttons",
+			gm._sel.size() == 2 and absf(gm._sel[0] - 33.3560) < 1e-3
+			and zbar != null and zbar.visible and zbar.active_zone_id >= 5
+			and guided != null and guided.visible and empty_b != null and empty_b.visible,
+			gm._card_zone.text)
+		await _settle_and_shoot(h, gm.globe, shots_dir, "24_hub_ux_coords_pointcard")
+		var r_card := UiAudit.run(tree.root.get_viewport())
+		fails += _report("hub-ux: UI audit clean with PointCard open", int(r_card.get("errors", 0)) == 0,
+			UiAudit.summary_line(r_card))
+		# 4. Real click on a Sister/Peer city chip flies to that reference city.
+		var city_btn: Button = null
+		if gm._zone_cities_row != null:
+			for ch in gm._zone_cities_row.get_children():
+				if ch is Button and ch.visible:
+					city_btn = ch as Button
+					break
+		fails += _report("hub-ux: PointCard offers clickable Sister/Peer city chips", city_btn != null)
+		if city_btn != null:
+			var city_label := city_btn.text
+			var prev_lat := gm._sel[0]
+			await HarnessInput.click(vp, HarnessInput.center_of(city_btn))
+			var w2 := 0
+			while gm.globe.is_flying() and w2 < 600:
+				await tree.process_frame
+				w2 += 1
+			for _f in 6:
+				await tree.process_frame
+			var coord_synced := (SitePrivacy.redact and lat_ed.text.is_empty()) \
+				or absf(float(lat_ed.text) - gm._sel[0]) < 0.01
+			fails += _report("hub-ux: clicking Sister/Peer city chip flies to city and syncs Lat/Lon inputs",
+				gm._sel.size() == 2 and absf(gm._sel[0] - prev_lat) > 0.5 and coord_synced,
+				"%s -> %.4f, %.4f" % [city_label, gm._sel[0], gm._sel[1]])
+			await _settle_and_shoot(h, gm.globe, shots_dir, "25_hub_ux_sister_city")
+	# 5. Real click on a Zone legend chip opens the compact Zone overview card.
+	gm.globe.look_at_point(25.0, -30.0, 2.5)
+	for _f in 8:
+		await tree.process_frame
+	var z_chip: Button = null
+	var legend := gm.find_child("Legend", true, false) as Control
+	if legend != null:
+		for ch in legend.find_children("*", "Button", true, false):
+			var b := ch as Button
+			if b != null and b.visible and (b.text.begins_with("Z4") or b.text.begins_with("Zone 4")):
+				z_chip = b
+				break
+	fails += _report("hub-ux: Zone legend has interactive Zone buttons", z_chip != null)
+	if z_chip != null:
+		await HarnessInput.click(vp, HarnessInput.center_of(z_chip))
+		for _f in 6:
+			await tree.process_frame
+		fails += _report("hub-ux: clicking Zone 4 legend chip opens Zone 4 overview",
+			gm._card.visible and gm._card_title.text.contains("Zone 4"))
+		await _settle_and_shoot(h, gm.globe, shots_dir, "26_hub_ux_zone_legend")
+		var r_zone := UiAudit.run(tree.root.get_viewport())
+		fails += _report("hub-ux: UI audit clean on Zone overview card", int(r_zone.get("errors", 0)) == 0,
+			UiAudit.summary_line(r_zone))
+	# 6. Hub Settings opens cleanly ABOVE GlobeMode and Esc closes Settings without closing GlobeMode.
+	if gear_btn != null:
+		await HarnessInput.click(vp, HarnessInput.center_of(gear_btn))
+		for _f in 8:
+			await tree.process_frame
+		var hs := tree.root.find_child("HubSettingsPanel", true, false) as Control
+		fails += _report("hub-ux: Settings opens above GlobeMode", hs != null and hs.visible)
+		await RenderingServer.frame_post_draw
+		vp.get_texture().get_image().save_png("%s/27_hub_ux_settings_stack.png" % shots_dir)
+		var r_set := UiAudit.run(tree.root.get_viewport())
+		fails += _report("hub-ux: UI audit clean with Settings stacked over GlobeMode",
+			int(r_set.get("errors", 0)) == 0, UiAudit.summary_line(r_set))
+		await HarnessInput.mouse_move(vp, vp.get_visible_rect().size * 0.5)
+		for _q in 3:
+			await tree.process_frame
+		await HarnessInput.press_action("ui_cancel")
+		for _f in 6:
+			await tree.process_frame
+		fails += _report("hub-ux: Esc closes Settings while keeping GlobeMode open",
+			(hs == null or not hs.visible) and is_instance_valid(gm) and not gm.is_queued_for_deletion())
 	return fails

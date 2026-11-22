@@ -54,6 +54,7 @@ static func sync(main: Node, prop_id: String) -> void:
 	PlacedPropService.update_prop_record(main, prop_id, patch, true)
 	rec = PlacedPropService.get_prop_record(main, prop_id)
 	sync_parts(main, prop_id, d, rec)
+	PropModelLights.sync_prop(main, prop_id, null, true)
 	sync_graph(main, prop_id, d)
 
 

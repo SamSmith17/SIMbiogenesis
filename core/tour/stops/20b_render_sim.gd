@@ -7,9 +7,9 @@ func _init() -> void:
 	chapter = "Systems"
 	summary = "Pre-compute the next day of the whole site, then play it back from the cache."
 	how = PackedStringArray(["Ctrl-drag a range on the timeline (or leave it: the next 24 h)",
-		"Click 📈 Render on the timeline bar",
+		"Click Render on the timeline bar",
 		"The green strip above the clips is what plays back without computing"])
-	button = "📈"
+	button = "Render"
 	world = "mtvernon"
 	budget_s = 45.0
 	hour = 10.0
@@ -26,7 +26,7 @@ func run(ctx: TourContext) -> void:
 		return
 	ctx.caption("One click renders the next 24 hours of the site", 3.0)
 	await ctx.wait(1.0)
-	var clicked: bool = await ctx.click_button("📈")
+	var clicked: bool = await ctx.click_button("Render")
 	if not ctx.require(clicked, "the Render button was found"):
 		return
 	var sr: Node = sgv.call("sim_renderer")
@@ -36,12 +36,12 @@ func run(ctx: TourContext) -> void:
 	# click once more, then press it through its own handler, and say so.
 	if not (bool(sr.call("is_active")) or not sr.cache.is_empty()):
 		await ctx.wait(0.8)
-		await ctx.click_button("📈")
+		await ctx.click_button("Render")
 		await ctx.wait(0.6)
 	if not (bool(sr.call("is_active")) or not sr.cache.is_empty()):
 		var tl0: Node = ctx.main.find_child("TimelineUI", true, false)
 		if tl0 != null and tl0.has_method("_on_render_pressed"):
-			ctx.note("the 📈 click did not land twice; pressed through the button's handler")
+			ctx.note("the Render click did not land twice; pressed through the button's handler")
 			tl0.call("_on_render_pressed")
 			await ctx.wait(0.6)
 	if not (bool(sr.call("is_active")) or not sr.cache.is_empty()):
@@ -52,7 +52,7 @@ func run(ctx: TourContext) -> void:
 		var end_abs := NAN
 		if tl != null and tl.has_method("_render_target_end"):
 			end_abs = float(tl.call("_render_target_end"))
-		var btn := HarnessInput.find_button(ctx.tree().root, "📈")
+		var btn := HarnessInput.find_button(ctx.tree().root, "Render")
 		ctx.note("render did not start: refusal='%s' end=%.3f play=%.3f button_disabled=%s shift=%s clock_owner='%s' hold='%s'" % [
 			str(sr.call("refusal", end_abs)), end_abs, float(ctx.main.call("get_absolute_hours")),
 			str(btn.disabled if btn != null else "<no button>"), str(Input.is_key_pressed(KEY_SHIFT)),

@@ -6,7 +6,7 @@ func _init() -> void:
 	title = "Window Wall"
 	chapter = "Labs"
 	summary = "Several monitors become windows onto the world, with one physically correct view."
-	how = PackedStringArray(["Settings ⚙ → Window Wall to lay out the monitors",
+	how = PackedStringArray(["Settings ⚙ → Multi-Monitor → Window Wall to lay out the monitors",
 		"Press F11 to open it; Esc to close"])
 	action = "toggle_window_wall"
 	world = "burningman"

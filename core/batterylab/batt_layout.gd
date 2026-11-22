@@ -16,6 +16,11 @@ extends RefCounted
 ## While placing, x is the PRIMARY axis (the cells' thin axis, along which a
 ## group and a row run) and z the secondary; `face` "z" turns the result a
 ## quarter turn so rows run along x instead.
+##
+## `spec["nudge"]` = {part id: [x, y, z] mm} is a drag in the FINISHED pack
+## (after the face turn and the centering shift). Cells, the BMS, sensors
+## and fittings move by it; links, balance leads and main leads are drawn
+## again so they still land on them. The case stays on the automatic layout.
 
 const CELL_GAP_BOX := 1.0     # insulating sheet between prismatic cells
 const ROW_GAP_BOX := 12.0
@@ -165,6 +170,16 @@ static func choose(spec: Dictionary, cell: Dictionary, plates: bool) -> Dictiona
 						score += float(gp * int(gr) - p) * 2.0
 						if is_side(u) and form == "diy":
 							score += 300.0
+						# A prismatic DIY box is the YIXIANG V3: cells upright
+						# in two rows, the panel on the short end.
+						if form == "diy" and not cyl:
+							# One layer, two rows: the V3 box, not a stack of layers.
+							if int(layers) != 1:
+								score += 900.0
+							if int(rows) != 2:
+								score += 150.0
+							if str(face) != "z":
+								score += 60.0
 						if score < best_score:
 							best_score = score
 							best = {"cols": cols, "rows": rows, "layers": int(layers),
@@ -342,6 +357,7 @@ static func place(spec: Dictionary, cell: Dictionary, ar: Dictionary, ic: String
 	if str(ar["face"]) == "z":
 		_turn(out)
 	_finish(out, spec, cell, bms, amps)
+	_apply_nudges(out, spec, cell, bms, amps, bus)
 	return out
 
 
@@ -578,6 +594,7 @@ static func _turn(L: Dictionary) -> void:
 static func _finish(L: Dictionary, spec: Dictionary, cell: Dictionary, bms: Dictionary,
 		amps: float) -> void:
 	var form := str(spec["form"])
+	var yixiang := form == "diy" and not bool((L["unit"] as Dictionary)["cyl"])
 	var en: Dictionary = spec["enclosure"]
 	var cells_box := _aabb_of(L["cells"])
 	var content := cells_box
@@ -607,8 +624,9 @@ static func _finish(L: Dictionary, spec: Dictionary, cell: Dictionary, bms: Dict
 				"conn": Vector3(c2.x, c2.y + st.y * 0.5, c2.z - st.z * 0.25),
 				"b_neg": Vector3(c2.x, c2.y + st.y * 0.5, c2.z + st.z * 0.15),
 				"p_neg": Vector3(c2.x, c2.y + st.y * 0.5, c2.z + st.z * 0.35)}
-		elif form == "rack":
-			# Behind the front panel, on edge, facing the front.
+		elif form == "rack" or yixiang:
+			# Behind the front panel, on edge. The YIXIANG kit clamps its
+			# BMS in that bay too, rather than on a shelf over the cells.
 			var st := Vector3(minf(bs.x, cells_box.size.x), minf(bs.z, cells_box.size.y), bs.y)
 			var c3 := Vector3(cells_box.get_center().x, cells_box.position.y + st.y * 0.5,
 				content.end.z + 8.0 + st.z * 0.5)
@@ -697,16 +715,18 @@ static func _finish(L: Dictionary, spec: Dictionary, cell: Dictionary, bms: Dict
 		var rack_u := int(roundf((outer.size.y + 0.8) / BattSpec.RACK_U_MM)) if form == "rack" else 0
 		encl = {"outer": outer, "wall": wall, "material": material, "fits": fits,
 			"rack_u": rack_u, "panels": _panels(outer, wall)}
-	# Lift a rolling unit onto its wheels.
+	# Lift a rolling unit onto its wheels, a YIXIANG box onto its feet.
 	var lift := 0.0
 	if form == "rolling" and not encl.is_empty():
 		lift = WHEEL_H
+	elif yixiang and not encl.is_empty():
+		lift = 12.0
 	# Front fittings: terminals, breaker, display, ports, handles, ears.
 	var fittings: Array = []
 	var term := {}
 	if not encl.is_empty():
 		var o: AABB = encl["outer"]
-		term = _fittings(fittings, form, o, en, bms, protected, amps)
+		term = _fittings(fittings, form, o, en, bms, protected, amps, yixiang)
 	else:
 		# The block's own posts.
 		var cb: AABB = cells_box
@@ -732,7 +752,9 @@ static func _finish(L: Dictionary, spec: Dictionary, cell: Dictionary, bms: Dict
 		elif monitor:
 			var sh := Vector3(lerpf(neg_tap.x, tneg.x, 0.5), via_y, lerpf(neg_tap.z, tneg.z, 0.5))
 			fittings.append({"id": "shunt", "kind": "shunt", "c": sh + Vector3(0, 10, 0),
-				"s": Vector3(90.0, 25.0, 40.0), "explode": Vector3(0, 0.6, 0)})
+				"s": Vector3(90.0, 25.0, 40.0), "explode": Vector3(0, 0.6, 0),
+				"moves": ["shunt"]})
+			term["shunt"] = sh
 			leads.append(_lead("lead_neg_shunt", neg_tap, sh, via_y, lw, "black"))
 			leads.append(_lead("lead_shunt_term", sh, tneg, via_y, lw, "black"))
 		else:
@@ -755,16 +777,25 @@ static func _finish(L: Dictionary, spec: Dictionary, cell: Dictionary, bms: Dict
 	var base := (encl["outer"] as AABB) if not encl.is_empty() else content
 	var shift := Vector3(-base.get_center().x, -base.position.y + lift, -base.get_center().z)
 	_shift(L, shift)
-	if lift > 0.0:
+	if lift > 0.0 and form == "rolling":
 		var o: AABB = encl["outer"]
 		for sx in [-1.0, 1.0]:
 			for sz in [-1.0, 1.0]:
 				fittings.append({"id": "wheel_%d_%d" % [int(sx), int(sz)], "kind": "wheel",
 					"c": Vector3(sx * (o.size.x * 0.5 - 40.0), WHEEL_H * 0.5, sz * (o.size.z * 0.5 - 40.0)),
 					"s": Vector3(24.0, WHEEL_H, WHEEL_H), "explode": Vector3(0, -0.2, 0)})
+	elif lift > 0.0 and yixiang:
+		var o: AABB = encl["outer"]
+		for sx in [-1.0, 1.0]:
+			for sz in [-1.0, 1.0]:
+				fittings.append({"id": "foot_%d_%d" % [int(sx), int(sz)], "kind": "foot",
+					"c": Vector3(sx * (o.size.x * 0.5 - 36.0), 6.0, sz * (o.size.z * 0.5 - 46.0)),
+					"s": Vector3(28.0, 12.0, 42.0), "explode": Vector3(0, -0.15, 0)})
 	var b2 := (encl["outer"] as AABB) if not encl.is_empty() else AABB(content.position + shift, content.size)
 	L["bounds"] = b2 if lift <= 0.0 else AABB(Vector3(b2.position.x, 0.0, b2.position.z), b2.size + Vector3(0, lift, 0))
 	L["cells_box"] = _aabb_of(L["cells"])
+	# The harness and main-lead plane, in the finished frame (top + the shift).
+	L["wire_y"] = top + shift.y
 
 
 static func _lead(id: String, a: Vector3, b: Vector3, via_y: float, w: Dictionary, color: String) -> Dictionary:
@@ -800,10 +831,91 @@ static func _panels(o: AABB, w: float) -> Array:
 	]
 
 
+## The YIXIANG V3 face: a white breaker on the left, a pair of posts for
+## each pole (P+ red, P− black) with the lead on the inner stud, the screen
+## between them, recessed handles on the long sides and a latch.
+static func _yixiang_panel(out: Array, o: AABB, en: Dictionary, bms: Dictionary,
+		protected: bool, amps: float) -> Dictionary:
+	var fz := o.end.z
+	var cx := o.get_center().x
+	var w := o.size.x
+	var h := o.size.y
+	var ex := Vector3(0, 0, 0.8)
+	var term := {}
+	var py := o.position.y + h * 0.66
+	if protected:
+		var ba := float(en.get("breaker_a", 0.0))
+		if ba <= 0.0:
+			ba = BattElectrical.breaker_for(amps)
+		var bx := o.position.x + minf(52.0, w * 0.16)
+		var by := o.position.y + h * 0.46
+		out.append({"id": "breaker", "kind": "breaker", "look": "yixiang",
+			"c": Vector3(bx, by, fz + 9.0), "s": Vector3(28.0, minf(72.0, h * 0.5), 16.0),
+			"explode": ex, "amps": ba, "moves": ["breaker_in", "breaker_out"]})
+		term["breaker_in"] = Vector3(bx, by - 8.0, fz - 22.0)
+		term["breaker_out"] = Vector3(bx, by + 8.0, fz - 22.0)
+		term["breaker_a"] = ba
+	var gap := 28.0
+	var px := cx - w * 0.12
+	var nx := cx + w * 0.22
+	for pole in [["pos", px], ["neg", nx]]:
+		var which := str(pole[0])
+		var x0 := float(pole[1])
+		var kind := "term_%s" % which
+		var inner_i := 1 if which == "pos" else 0
+		for i in 2:
+			var x := x0 + (float(i) - 0.5) * gap
+			var moves: Array = [which, which + "_out"] if i == inner_i else [which + "_twin"]
+			out.append({"id": "%s_%d" % [kind, i], "kind": kind,
+				"c": Vector3(x, py, fz + 12.0), "s": Vector3(20.0, 20.0, 22.0), "explode": ex,
+				"moves": moves})
+			out.append({"id": "cover_%s_%d" % [which, i], "kind": "cover",
+				"c": Vector3(x, py, fz + 22.0), "s": Vector3(26.0, 26.0, 14.0), "explode": ex})
+		var inner := x0 + (0.5 if which == "pos" else -0.5) * gap
+		var outer := x0 + (-0.5 if which == "pos" else 0.5) * gap
+		term[which] = Vector3(inner, py, fz - 14.0)
+		term[which + "_out"] = Vector3(inner, py, fz + 13.5)
+		term[which + "_twin"] = Vector3(outer, py, fz - 14.0)
+	term["axis"] = "z"
+	term["n_out"] = Vector3(0, 0, 1)
+	term["out_kind"] = "stud"
+	term["stud"] = 8.0
+	if protected and bool(en.get("display", true)):
+		out.append({"id": "display", "kind": "display",
+			"c": Vector3(cx + w * 0.02, o.position.y + h * 0.40, fz + 2.0),
+			"s": Vector3(minf(78.0, w * 0.22), minf(50.0, h * 0.26), 3.0), "explode": ex})
+		out.append({"id": "power", "kind": "button",
+			"c": Vector3(cx - w * 0.30, o.position.y + h * 0.80, fz + 2.5),
+			"s": Vector3(14.0, 14.0, 6.0), "explode": ex})
+		var listed: Array = []
+		for cm in (bms.get("comms", []) as Array):
+			if str(cm) in ["CAN", "RS485"]:
+				listed.append(str(cm))
+		if listed.is_empty():
+			listed = ["RS485", "CAN"]
+		for i in listed.size():
+			out.append({"id": "port_%s" % listed[i], "kind": "port",
+				"c": Vector3(cx - 16.0 + float(i) * 20.0, o.position.y + maxf(28.0, h * 0.16), fz + 1.5),
+				"s": Vector3(12.0, 10.0, 4.0), "explode": ex, "label": str(listed[i])})
+	for sx in [-1.0, 1.0]:
+		var x := o.position.x if sx < 0.0 else o.end.x
+		x += sx
+		out.append({"id": "recess_%d" % int(sx), "kind": "recess",
+			"c": Vector3(x, o.get_center().y, o.get_center().z - o.size.z * 0.06),
+			"s": Vector3(6.0, 46.0, minf(120.0, o.size.z * 0.26)),
+			"explode": Vector3(sx * 0.8, 0, 0)})
+	out.append({"id": "latch", "kind": "latch",
+		"c": Vector3(o.position.x - 3.0, o.end.y - 34.0, fz - 64.0),
+		"s": Vector3(8.0, 16.0, 32.0), "explode": Vector3(-0.4, 0, 0)})
+	return term
+
+
 ## Front-panel and case fittings; returns the terminal points (and the
 ## breaker's, when there is one).
 static func _fittings(out: Array, form: String, o: AABB, en: Dictionary, bms: Dictionary,
-		protected: bool, amps: float) -> Dictionary:
+		protected: bool, amps: float, yixiang: bool = false) -> Dictionary:
+	if yixiang:
+		return _yixiang_panel(out, o, en, bms, protected, amps)
 	var fz := o.end.z
 	var cx := o.get_center().x
 	var w := o.size.x
@@ -816,7 +928,8 @@ static func _fittings(out: Array, form: String, o: AABB, en: Dictionary, bms: Di
 		for e in [["pos", 1.0], ["neg", -1.0]]:
 			var x := cx + float(e[1]) * (w * 0.5 - 45.0)
 			out.append({"id": "post_%s" % e[0], "kind": "post_%s" % e[0],
-				"c": Vector3(x, py + 10.0, pz), "s": Vector3(18.0, 20.0, 18.0), "explode": Vector3(0, 1.1, 0)})
+				"c": Vector3(x, py + 10.0, pz), "s": Vector3(18.0, 20.0, 18.0),
+				"explode": Vector3(0, 1.1, 0), "moves": [str(e[0]), str(e[0]) + "_out"]})
 			term[str(e[0])] = Vector3(x, py - 15.0, pz)
 			# Outside: a clamp round the post's middle.
 			term[str(e[0]) + "_out"] = Vector3(x, py + 9.0, pz)
@@ -831,7 +944,8 @@ static func _fittings(out: Array, form: String, o: AABB, en: Dictionary, bms: Di
 	for e in [["pos", 1.0], ["neg", -1.0]]:
 		var x := cx + float(e[1]) * (w * 0.5 - 45.0)
 		out.append({"id": "term_%s" % e[0], "kind": "term_%s" % e[0],
-			"c": Vector3(x, ty, fz + 12.0), "s": Vector3(22.0, 22.0, 24.0), "explode": ex})
+			"c": Vector3(x, ty, fz + 12.0), "s": Vector3(22.0, 22.0, 24.0), "explode": ex,
+			"moves": [str(e[0]), str(e[0]) + "_out"]})
 		term[str(e[0])] = Vector3(x, ty, fz - 15.0)
 		# Outside: where a lug sits on the M8 stud (on the brass, under the nut).
 		term[str(e[0]) + "_out"] = Vector3(x, ty, fz + 13.5)
@@ -846,7 +960,8 @@ static func _fittings(out: Array, form: String, o: AABB, en: Dictionary, bms: Di
 		var bx := cx + w * 0.5 - 110.0
 		var by := o.position.y + minf(h * 0.5, 60.0)
 		out.append({"id": "breaker", "kind": "breaker", "c": Vector3(bx, by, fz + 10.0),
-			"s": Vector3(36.0, minf(80.0, h * 0.7), 20.0), "explode": ex, "amps": ba})
+			"s": Vector3(36.0, minf(80.0, h * 0.7), 20.0), "explode": ex, "amps": ba,
+			"moves": ["breaker_in", "breaker_out"]})
 		term["breaker_in"] = Vector3(bx, by, fz - 25.0)
 		term["breaker_out"] = Vector3(bx + 10.0, by, fz - 25.0)
 		term["breaker_a"] = ba
@@ -878,8 +993,8 @@ static func _fittings(out: Array, form: String, o: AABB, en: Dictionary, bms: Di
 			"c": Vector3(cx, o.end.y - 60.0, o.position.z - 4.0), "s": Vector3(w * 0.8, 60.0, 6.0),
 			"explode": Vector3(0, 0, -0.9)})
 	elif form == "rolling":
-		out.append({"id": "handle", "kind": "handle", "c": Vector3(cx, o.end.y + 25.0, o.position.z + 30.0),
-			"s": Vector3(w * 0.6, 14.0, 14.0), "explode": Vector3(0, 1.2, 0)})
+		out.append({"id": "handle", "kind": "handle", "c": Vector3(cx, o.end.y + 28.0, o.position.z + 30.0),
+			"s": Vector3(w * 0.6, 56.0, 16.0), "explode": Vector3(0, 1.2, 0)})
 	elif form == "diy" and bool(en.get("handles", true)):
 		for sx in [-1.0, 1.0]:
 			out.append({"id": "handle_%d" % int(sx), "kind": "handle",
@@ -919,6 +1034,259 @@ static func _shift(L: Dictionary, d: Vector3) -> void:
 		L["enclosure"]["outer"] = o
 		for pn in (L["enclosure"]["panels"] as Array):
 			pn["c"] = (pn["c"] as Vector3) + d
-	for f in ["pos", "neg", "pos_out", "neg_out", "breaker_in", "breaker_out"]:
+	for f in ["pos", "neg", "pos_out", "neg_out", "breaker_in", "breaker_out", "shunt"]:
 		if (L["terminals"] as Dictionary).has(f):
 			L["terminals"][f] = (L["terminals"][f] as Vector3) + d
+
+
+# ---------------------------------------------------------------------------
+# Drag nudges (the designer's "pick a part and drag it")
+# ---------------------------------------------------------------------------
+
+const NUDGE_LIMIT := 2000.0
+## Parts a drag in the pack view can move. Case panels, busbars, leads and
+## holders are drawn from the cells and the case, so they are not grabbed.
+const DRAG_KINDS := ["cell", "bms", "sensor", "breaker", "display", "button", "port",
+	"handle", "shunt", "cover", "latch", "ear", "bracket", "recess", "wheel", "foot"]
+
+
+static func can_drag(kind: String) -> bool:
+	return kind in DRAG_KINDS or kind.begins_with("term_") or kind.begins_with("post_")
+
+
+## The stored nudge for `id`, in millimetres. Zero when it has none.
+static func nudge_of(spec: Dictionary, id: String) -> Vector3:
+	var all: Variant = spec.get("nudge", {})
+	if not (all is Dictionary) or not (all as Dictionary).has(id):
+		return Vector3.ZERO
+	return _as_vec((all as Dictionary)[id])
+
+
+## Where a drag lets go: the nudge at the press plus how far the pointer
+## moved on the part's plane. `step` 0 keeps the fraction; 5 snaps to 5 mm.
+static func drag_nudge(n0: Vector3, hit0: Vector3, hit: Vector3, step: float) -> Vector3:
+	var s := n0 + (hit - hit0)
+	if step > 0.0:
+		s = Vector3(snappedf(s.x, step), snappedf(s.y, step), snappedf(s.z, step))
+	return s.clamp(Vector3.ONE * -NUDGE_LIMIT, Vector3.ONE * NUDGE_LIMIT)
+
+
+## Write `v` onto `spec` (0.1 mm), dropping a nudge shorter than 0.5 mm and
+## the whole key when nothing is left. Mutates `spec`.
+static func write_nudge(spec: Dictionary, id: String, v: Vector3) -> void:
+	var s := Vector3(snappedf(v.x, 0.1), snappedf(v.y, 0.1), snappedf(v.z, 0.1))
+	s = s.clamp(Vector3.ONE * -NUDGE_LIMIT, Vector3.ONE * NUDGE_LIMIT)
+	var all: Dictionary = spec["nudge"] if spec.get("nudge") is Dictionary else {}
+	if s.length() < 0.5:
+		all.erase(id)
+	else:
+		all[id] = [s.x, s.y, s.z]
+	if all.is_empty():
+		spec.erase("nudge")
+	else:
+		spec["nudge"] = all
+
+
+static func _as_vec(v: Variant) -> Vector3:
+	if v is Vector3:
+		return v
+	if v is Array and (v as Array).size() >= 3:
+		return Vector3(float((v as Array)[0]), float((v as Array)[1]), float((v as Array)[2]))
+	return Vector3.ZERO
+
+
+static func _has_nudge(spec: Dictionary) -> bool:
+	var all: Variant = spec.get("nudge", {})
+	return all is Dictionary and not (all as Dictionary).is_empty()
+
+
+## Move the named parts by their nudges, then redraw whatever was reaching
+## them. No nudge: the layout is left exactly as `_finish` built it.
+static func _apply_nudges(L: Dictionary, spec: Dictionary, _cell: Dictionary, bms: Dictionary,
+		amps: float, bus: Dictionary) -> void:
+	if not _has_nudge(spec):
+		return
+	var moved_cell := false
+	for ce in (L["cells"] as Array):
+		var n := nudge_of(spec, str(ce["id"]))
+		if n == Vector3.ZERO:
+			continue
+		moved_cell = true
+		ce["c"] = (ce["c"] as Vector3) + n
+		ce["term_p"] = (ce["term_p"] as Vector3) + n
+		ce["term_n"] = (ce["term_n"] as Vector3) + n
+	if moved_cell:
+		_relink(L, spec, bus, amps)
+	var moved_bms := false
+	if not (L["bms"] as Dictionary).is_empty():
+		var nb := nudge_of(spec, "bms")
+		if nb != Vector3.ZERO:
+			moved_bms = true
+			for f in ["c", "conn", "b_neg", "p_neg"]:
+				L["bms"][f] = (L["bms"][f] as Vector3) + nb
+	if moved_cell or moved_bms:
+		_rebuild_harness(L)
+	for sn in (L["sensors"] as Array):
+		var ns := nudge_of(spec, str(sn["id"]))
+		if ns != Vector3.ZERO:
+			sn["c"] = (sn["c"] as Vector3) + ns
+	var moved_fit := _nudge_fittings(L, spec)
+	if moved_cell or moved_bms or moved_fit:
+		_rebuild_main_leads(L, bms, amps)
+	_grow_bounds(L, spec)
+
+
+## Links, end bars and balance taps from the cells as they sit now.
+static func _relink(L: Dictionary, spec: Dictionary, bus: Dictionary, amps: float) -> void:
+	var u: Dictionary = L["unit"]
+	var ic := str(L["interconnect"])
+	var p := int(spec["parallel"])
+	var cells: Array = L["cells"]
+	var by := {}
+	for ce in cells:
+		var k := int((ce as Dictionary)["group"])
+		if not by.has(k):
+			by[k] = []
+		(by[k] as Array).append(ce)
+	var s := by.size()
+	var groups: Array = []
+	for k in s:
+		var g: Array = by[k]
+		groups.append(_group_regions(k, g, u, int((g[0] as Dictionary)["layer"])))
+	var links: Array = []
+	var leads: Array = []
+	var cells_box := _aabb_of(cells)
+	for k in range(s - 1):
+		var gn: Dictionary = groups[k]
+		var gpos: Dictionary = groups[k + 1]
+		var a: AABB = gn["neg"]
+		var b: AABB = gpos["pos"]
+		if int(gn["layer"]) != int(gpos["layer"]):
+			leads.append(_cross_layer_cable(k, a, b, cells_box, amps))
+			var last: Dictionary = leads[leads.size() - 1]
+			links.append({"id": "link_%d" % k, "kind": "cable", "from": k, "to": k + 1,
+				"tap": a.get_center(), "len_mm": _poly_len(last["pts"]),
+				"area_mm2": float(last["mm2"]), "material": "copper"})
+			continue
+		links.append(_link(k, gn, gpos, ic, bus, u, amps, p))
+	var ends: Array = []
+	ends.append(_end_bar("neg", (groups[0] as Dictionary)["neg"], (groups[0] as Dictionary)["n_neg"], ic, bus, u))
+	ends.append(_end_bar("pos", (groups[s - 1] as Dictionary)["pos"], (groups[s - 1] as Dictionary)["n_pos"], ic, bus, u))
+	var taps: Array = []
+	if not (L["bms"] as Dictionary).is_empty():
+		taps.append({"i": 0, "pos": (ends[0] as Dictionary)["tap"]})
+		for k in range(1, s):
+			taps.append({"i": k, "pos": (links[k - 1] as Dictionary)["tap"]})
+		taps.append({"i": s, "pos": (ends[1] as Dictionary)["tap"]})
+	L["groups"] = groups
+	L["links"] = links
+	L["ends"] = ends
+	L["taps"] = taps
+	L["leads"] = leads
+	L["cells_box"] = cells_box
+
+
+static func _rebuild_harness(L: Dictionary) -> void:
+	if (L["bms"] as Dictionary).is_empty() or (L["taps"] as Array).is_empty():
+		return
+	var yh := float(L["wire_y"]) + HARNESS_UP * 0.6
+	var conn: Vector3 = (L["bms"] as Dictionary)["conn"]
+	var cells_box: AABB = L["cells_box"]
+	var harness: Array = []
+	for t in (L["taps"] as Array):
+		var a: Vector3 = t["pos"]
+		var pts: Array = [a]
+		if a.y < cells_box.position.y + 5.0:
+			var ex := cells_box.end.x + 6.0
+			pts.append(Vector3(ex, a.y, a.z))
+			a = Vector3(ex, a.y, a.z)
+		pts.append(Vector3(a.x, yh, a.z))
+		pts.append(Vector3(a.x, yh, conn.z))
+		pts.append(Vector3(conn.x + float(int(t["i"])) * 1.6, yh, conn.z))
+		pts.append(Vector3(conn.x + float(int(t["i"])) * 1.6, conn.y, conn.z))
+		harness.append({"id": "tap_B%d" % int(t["i"]), "i": int(t["i"]), "pts": pts,
+			"len_mm": _poly_len(pts), "mm2": BattElectrical.BALANCE_MM2,
+			"explode": Vector3(0, 0.5, 0)})
+	L["harness"] = harness
+
+
+## Drop the old main leads and draw them to the terminals as they sit now.
+static func _rebuild_main_leads(L: Dictionary, bms_row: Dictionary, amps: float) -> void:
+	if bool(L.get("single_block", false)):
+		return
+	var leads: Array = []
+	for ld in (L["leads"] as Array):
+		if str((ld as Dictionary).get("kind", "")) != "main":
+			leads.append(ld)
+	var term: Dictionary = L["terminals"]
+	var ends: Array = L["ends"]
+	if not term.has("pos") or not term.has("neg") or ends.size() < 2:
+		L["leads"] = leads
+		return
+	var lw := BattElectrical.wire_for(amps)
+	var neg_tap: Vector3 = (ends[0] as Dictionary)["tap"]
+	var pos_tap: Vector3 = (ends[1] as Dictionary)["tap"]
+	var via_y := float(L["wire_y"]) + LEAD_UP
+	var tneg: Vector3 = term["neg"]
+	var tpos: Vector3 = term["pos"]
+	var protected := not (L["bms"] as Dictionary).is_empty()
+	var monitor := not protected and not bms_row.is_empty()
+	if protected:
+		leads.append(_lead("lead_b_neg", neg_tap, (L["bms"] as Dictionary)["b_neg"], via_y, lw, "black"))
+		leads.append(_lead("lead_p_neg", (L["bms"] as Dictionary)["p_neg"], tneg, via_y, lw, "black"))
+	elif monitor:
+		var sh: Vector3 = term["shunt"] if term.get("shunt") is Vector3 else Vector3(
+			lerpf(neg_tap.x, tneg.x, 0.5), via_y, lerpf(neg_tap.z, tneg.z, 0.5))
+		leads.append(_lead("lead_neg_shunt", neg_tap, sh, via_y, lw, "black"))
+		leads.append(_lead("lead_shunt_term", sh, tneg, via_y, lw, "black"))
+	else:
+		leads.append(_lead("lead_neg", neg_tap, tneg, via_y, lw, "black"))
+	if term.has("breaker_in"):
+		leads.append(_lead("lead_pos_breaker", pos_tap, term["breaker_in"], via_y, lw, "red"))
+		leads.append(_lead("lead_breaker_term", term["breaker_out"], tpos, via_y, lw, "red"))
+	else:
+		leads.append(_lead("lead_pos", pos_tap, tpos, via_y, lw, "red"))
+	L["leads"] = leads
+	L["lead_wire"] = lw
+
+
+## Move each fitting, and the terminal point it owns, by its nudge.
+static func _nudge_fittings(L: Dictionary, spec: Dictionary) -> bool:
+	var moved := false
+	var term: Dictionary = L["terminals"]
+	for f in (L["fittings"] as Array):
+		var n := nudge_of(spec, str(f["id"]))
+		if n == Vector3.ZERO:
+			continue
+		moved = true
+		f["c"] = (f["c"] as Vector3) + n
+		for key in (f.get("moves", []) as Array):
+			if term.get(key) is Vector3:
+				term[key] = (term[key] as Vector3) + n
+	return moved
+
+
+static func _grow_bounds(L: Dictionary, spec: Dictionary) -> void:
+	var bounds: AABB = L["bounds"]
+	var grew := false
+	for ce in (L["cells"] as Array):
+		if nudge_of(spec, str(ce["id"])) == Vector3.ZERO:
+			continue
+		grew = true
+		var c: Vector3 = ce["c"]
+		var s: Vector3 = ce["s"]
+		bounds = bounds.merge(AABB(c - s * 0.5, s))
+	for f in (L["fittings"] as Array):
+		if nudge_of(spec, str(f["id"])) == Vector3.ZERO:
+			continue
+		grew = true
+		var c2: Vector3 = f["c"]
+		var s2: Vector3 = f["s"]
+		bounds = bounds.merge(AABB(c2 - s2 * 0.5, s2))
+	if not (L["bms"] as Dictionary).is_empty() and nudge_of(spec, "bms") != Vector3.ZERO:
+		grew = true
+		var bc: Vector3 = L["bms"]["c"]
+		var bs: Vector3 = L["bms"]["s"]
+		bounds = bounds.merge(AABB(bc - bs * 0.5, bs))
+	if grew:
+		L["bounds"] = bounds

@@ -94,6 +94,14 @@ static func _load_catalog_file(model_id: String) -> Array:
 static func default_ports_for_model(model_id: String, dims: Dictionary = {}) -> Array:
 	if model_id.is_empty():
 		return []
+	if model_id == WireAccessory.MODEL_ID:
+		var kind := str(dims.get("accessory_kind", "breaker"))
+		var ports: Array = []
+		for t in WireAccessory.terminals(kind):
+			var tip: Vector3 = (t["pos"] as Vector3) * 0.001
+			ports.append(make_port(str(t["handle"]), str(t["handle"]), tip, t["dir"],
+				str(t["handle"]), "", "", "", 0.12))
+		return _normalize_ports(ports)
 	var w := maxf(float(dims.get("w_m", 1.0)), 0.2)
 	var d := maxf(float(dims.get("d_m", w)), 0.2)
 	var h := maxf(float(dims.get("h_m", 1.2)), 0.3)
@@ -272,6 +280,9 @@ static func resolve_ports_for_prop(main: Node, prop_id: String, model_id: String
 			if tsp.is_empty():
 				tsp = TcBuilder.spec_for_model(mid)
 			return _normalize_ports(TcDesign.connection_ports(TcDesign.solve(tsp)))
+		# A Controller Lab unit's ports are its terminals, one per graph handle.
+		if rec.get("controller_spec") is Dictionary:
+			return _normalize_ports(CtrlDesign.connection_ports(CtrlDesign.solve(rec["controller_spec"] as Dictionary)))
 		if rec.has("pelton_spec"):
 			dims = {"pelton_spec": rec.get("pelton_spec", {})}
 		elif rec.has("windlab_spec"):

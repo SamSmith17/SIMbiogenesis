@@ -112,8 +112,8 @@ Each planet's position is solved from its orbital elements (JPL's Keplerian set)
 **How to open:** **Click the timeline**
 
 - Scrub the timeline across a month
-- 🎬 Video export → Analemma: moon, for a lunation like this one
-- Settings → Sky: moon size and phase offset
+- Video export -> Analemma: moon, for a lunation like this one
+- Settings -> Sky: moon size and phase offset
 
 The moon's position comes from Meeus's lunar theory with topocentric parallax, and its lit fraction from the real angle between the sun and the moon. Stepping one lunar day at a time keeps it on the meridian while it waxes and wanes, and the sky behind it turns from day at new moon to deep night at full, exactly as it does outside.
 
@@ -141,11 +141,11 @@ The ∞ preset steps the calendar one day per frame to the site's mean solar noo
 
 *Archived and forecast weather drive the sky; smoke, dust and heat can be simulated.*
 
-**How to open:** **Click ⚙ → Extreme Weather**
+**How to open:** **Click Settings -> Extreme Weather**
 
-- Weather follows Open-Meteo automatically (the 🌤 / 🌎 indicator)
-- Settings ⚙ → Extreme Weather → Preview a hazard
-- 🌫 on the timeline calibrates local fog and wind
+- Weather follows Open-Meteo automatically
+- Settings -> Extreme Weather -> Preview a hazard
+- Microclimate on the timeline calibrates local fog and wind
 
 Clouds, wind, temperature and rain come from the real hourly record for the site, so solar output and the look of the day match what happened. Wildfire smoke, dust storms, damaging wind and heatwaves are resolved from alert and air-quality data — and can be previewed on demand.
 
@@ -251,6 +251,22 @@ Camps are households on a world-anchored lattice — an RV with its awning and c
 
 OSM waterways and the player's own streams are one network: carved into the terrain, drawn level in their channels, sized by real hydraulics, and fed by rain on their catchments at the clock's time. A stream can feed a turbine's penstock or a pond on the systems graph.
 
+<a id="terraces"></a>
+
+### Terraced fields
+
+![Terraced fields](tour/terraces.jpg)
+
+*Cut a hillside into level steps: rice paddies, reed beds or dry terraces, with water cascading down.*
+
+**How to open:** **Press T** · **Click Terrace**
+
+- Open the edit toolbar (T), pick Terrace
+- Hill: click a slope — everything above the click is terraced; or draw an outline
+- Click a field to change its steps, water, crop and wiring
+
+The Terrace tool cuts a slope into level steps that follow its contours. Each step is a paddy behind a low bund: water pumped to the top fills it and spills to the next, down to the bottom. Rice, reeds or taro grow in flooded steps, potatoes or sorghum in dry ones, and each field is one node on the systems graph that takes water and gives a harvest.
+
 <a id="prop_editor"></a>
 
 ### Placed things and the prop editor
@@ -273,15 +289,15 @@ Turbines, shade structures, tanks, vehicles and imported models are placed in th
 
 ![Building builder](tour/building_builder.jpg)
 
-*Restyle any OSM building: roof shape and pitch, walls, doors, windows, facades.*
+*Restyle an OSM building or design a house: roof, walls, doors, windows and a porch.*
 
 **How to open:** **Press B**
 
-- Aim at a building and press B (or Interact)
-- Click the preview walls to place doors and windows
-- The Library tab swaps the building for a placed model
+- Aim at a building and press B, or open Building designer…
+- Place a door, a window and a porch on the wall
+- Place in world drops the house on the map
 
-OSM footprints become buildings with level eaves and real roof geometry (gable, hip, pyramid) from their tags, roofs textured from the aerial photo. Each building can be restyled in a studio preview and the change is saved per site.
+OSM footprints become buildings with level eaves and real roof geometry (gable, hip, pyramid) from their tags, roofs textured from the aerial photo. Doors and windows cut the wall, a porch runs along a face, and the same designer places a house of its own.
 
 <a id="light_studio"></a>
 
@@ -314,6 +330,22 @@ Lights are placed on surfaces, strung between pins or hung as moving fixtures wi
 - F5 for the chase camera
 
 Placed vehicles use the same riding code as the scene vehicles, with a real collision footprint, a chase camera in third person, and an electric battery that drains with distance and trickle-charges while parked.
+
+<a id="forklift"></a>
+
+### Forklift
+
+![Forklift](tour/forklift.jpg)
+
+*Drive a forklift, lift pallets and crates; crews use it to unload heavy deliveries.*
+
+**How to open:** **Press O** · **Click Library → Vehicles**
+
+- Library (U) → Vehicles tab → Forklift
+- Aim at it and Interact to get in; PgUp / PgDn raise and lower the forks
+- Crews unload anything over 60 kg (forklift class) with it
+
+A 2.5 t counterbalance forklift with a working mast. Drive the forks under a pallet and lift it, or let a crew run a delivery: heavy crates come off the container on the forks while the light ones are carried by hand.
 
 <a id="scad_store"></a>
 
@@ -519,6 +551,23 @@ A rotor turns a fraction Cp of the wind's ½ρAv³ into shaft power at its best 
 
 Eleven kinds of converted vehicle — camper and cargo vans, shuttle and school buses, step vans, ambulances, Class C and Class A RVs, box trucks, travel trailers and a semi with a container home — each from a real chassis (wheelbase, tyres, duals, tank, weight rating, steering lock) under a body you size yourself. Roof items snap to the crown of the roof or the sides, solar comes as real modules in rows and columns, and a model of your own vehicle can be laid over the parametric one. Fuel use comes from rolling resistance and drag, and lands inside each chassis' real-world mpg.
 
+<a id="walk_in_vehicle"></a>
+
+### Step inside
+
+![Step inside](tour/walk_in_vehicle.jpg)
+
+*Open a van's or a bus's door and walk through the rooms you designed.*
+
+**How to open:** **Press O**
+
+- Library → Vehicles → place a van, bus, RV or trailer
+- Aim at one of its doors and press Interact: it opens
+- Walk up and in; Interact on a door again shuts it
+- Interact anywhere else on the vehicle drives it (the doors shut themselves)
+
+Every living vehicle is a real room. Its doors are leaves that swing, fold or slide open, its windows are glass you can see through from both sides, and the bed, galley and benches from the designer stand where you put them. Open a door, walk in, and look out at the camp from where the people who live there do.
+
 <a id="tclab"></a>
 
 ### Tri-clamp designer
@@ -592,6 +641,60 @@ Eighteen ESPHome boards (ESP32, S2, S3, C3, C6, ESP8266, Pico W and screen board
 
 Earthships are built into the ground: walls of rammed tyres, the back and ends buried to the roof, a sloped wall of glass facing the sun. The designer draws one from a few numbers and works out the earth it needs. Placed, it asks the terrain for an opening over its rooms, berms against its walls and a cut with a ramp down to the door, and the ground follows it when it moves. You walk down the ramp and in; rain runs off the roof into its cisterns, and the rooms sit near the temperature of the soil at that depth. The same earthworks sink any placed model, and give houses their basements.
 
+<a id="greenhouse"></a>
+
+### Greenhouses
+
+![Greenhouses](tour/greenhouse.jpg)
+
+*Design a greenhouse (gable, lean-to, hoop, gothic arch or dome), lay out its beds and crops, add lamps, vents, fans, water barrels and gutters, see a year of the climate inside, and place it: the beds move with the house, and on the graph it is one node that runs its own temperature and humidity.*
+
+**How to open:** **Click Greenhouse designer…**
+
+- Library → Designers → Greenhouse designer…
+- Pick a form and its size, the glazing, vents, fans, heater, shade cloth, how deep it is dug in and how many water barrels it holds
+- Plan tab: click a bed to set its crops, a FarmBot gantry or grow lamps; drag it to move it, drag on the floor to draw one
+- Climate tab: a year at the site hour by hour — inside against outside, vent and heater hours, lamp energy, rain off the roof, the harvest
+- Place in world: the house and every bed, gantry and lamp rack in it move, pack and delete as one
+- On the graph it is one node (inside °C, RH, light); open it to see its beds, lamps, fans, barrels, roof and tank
+
+A greenhouse is a climate you build. The designer draws gable, lean-to, hoop, gothic and geodesic houses with their beds inside, and runs a year of weather through the design: sun through each pane, heat lost through the skin and to a clear night sky, the earth around a sunk house, water barrels storing the day's warmth, vents and fans under a controller, the crops' transpiration and the water condensing on the glass. Placed, the beds, FarmBot gantries and lamp racks are part of the house; the graph runs the same climate and grows each bed from it.
+
+<a id="battery_lab"></a>
+
+### Battery Lab
+
+![Battery Lab](tour/battery_lab.jpg)
+
+*Build a solar battery from its cells and a bank from its packs; watch the BMS protect it on a test bench, then place the bank and its limits drive the live sim.*
+
+**How to open:** **Click Solar batteries**
+
+- Library → Designers → Solar batteries, or Design this battery… on a graph battery
+- Pack: chemistry, cells in series and parallel, BMS, case; the cutaway shows cells, busbars and balance wires
+- BMS & test: charge, discharge, a frozen morning, an overload, a short; every trip in the log
+- Bank: packs in a cabinet, on a wall, shelf or cart; cables sized and measured, fuses picked, checks
+- Place bank in world: its graph battery carries the BMS limits the live sim honours
+
+Lead-acid (flooded, AGM, gel) and lithium (LFP, NMC) from real cells and blocks, in every form: car batteries, drop-ins, server-rack packs, wall units, rolling units and DIY boxes. The pack is drawn down to its cells, busbars, balance leads and BMS. The bench runs the BMS cell by cell: over- and under-voltage, charge and discharge current, short circuit, temperature, balancing, each with its delay and release. A bank sizes its cables for current and voltage drop, picks fuses that can break its fault current, and checks what a real installer would. Placed in the world, its charge and discharge limits, and its refusal to charge below freezing, are what the live simulation uses.
+
+<a id="controller_lab"></a>
+
+### Controller Lab
+
+![Controller Lab](tour/controller_lab.jpg)
+
+*Design charge controllers, inverters and hybrids down to their wiring bay and terminals, and inspect the solar chain's wiring sheet.*
+
+**How to open:** **Click Solar controllers**
+
+- Library -> Designers -> Solar controllers, or Design this controller... on a graph controller
+- Unit: enclosure, heatsinks, wiring bay cover, and connectors placed right on the faces
+- Terminals: 2D front and bay terminal drawing with fanned conductor labels, exportable as SVG
+- Panels > Controller > Battery bar: hop straight between the linked labs or open the chain's Sheet
+
+Every library MPPT and hybrid inverter has a real 3D enclosure, heatsink, mounting tabs and terminal bay in the Controller Lab. Open the bay cover to see the battery studs, PV MC4s or breaker blocks, place or slide connectors from the shared connector kit, switch to the Terminals tab for an installer-grade wiring drawing, or open the chain's Sheet to place fuses, breakers, shunts and busbars across Panels, Controller and Battery.
+
 <a id="systems"></a>
 
 ## Systems
@@ -638,13 +741,29 @@ Tidy is a force layout whose direction comes from the ports — inputs on top, o
 
 *Pre-compute the next day of the whole site, then play it back from the cache.*
 
-**How to open:** **Click 📈**
+**How to open:** **Click Render**
 
 - Ctrl-drag a range on the timeline (or leave it: the next 24 h)
-- Click 📈 Render on the timeline bar
+- Click Render on the timeline bar
 - The green strip above the clips is what plays back without computing
 
 The simulation is a deterministic function of sim time, so a stretch of it can be rendered ahead — battery, tanks, hydro, camp power and the people's supplies — and then scrubbed or played back from the cache while you explore in first person. A green strip above the clips marks what is rendered; editing the graph cuts it at the playhead, as Premiere drops a stale preview.
+
+<a id="festival_systems"></a>
+
+### A festival of systems
+
+![A festival of systems](tour/festival_systems.jpg)
+
+*Every camp and vehicle is its own power system: see them all at once, then scroll into one.*
+
+**How to open:** **Press G**
+
+- Press G: each camp is a tile with a status ring
+- Scroll into a camp to see its own tanks and power; Esc comes back out
+- View ▾ → Festival board lists what is going wrong, worst first
+
+A festival site holds dozens of power systems: the player's own, every camp's and every living vehicle's. Far out each one is a tile whose ring shows power, water, food and people; closer in a card shows its interior live, and one more scroll goes inside with no jump. The dashboard follows the system you are in, and the Festival board ranks every system by what needs attention.
 
 <a id="graph_ring_3d"></a>
 
@@ -662,6 +781,55 @@ The simulation is a deterministic function of sim time, so a stretch of it can b
 
 The ring arrangement seen in space. As nested spheres the graph reads as a cell: the machines spread evenly over an outer membrane, one band per system, the stores they share on an inner nucleus, each toward the machines it is wired to, the people at the centre and the wires running through the inside. As a torus the machines run round its outer circumference at their ring angles and the stores round its inner edge. Ctrl+drag orbits; nothing about the flat graph changes.
 
+<a id="element_lens"></a>
+
+### Where the nitrogen goes
+
+![Where the nitrogen goes](tour/element_lens.jpg)
+
+*Colour every wire by the element it carries and follow it through the site.*
+
+**How to open:** **Press G**
+
+- Press G, then Show ▾ → Colour by element → Nitrogen (or water, carbon …)
+- Show ▾ → Where it goes… follows it from source to sink
+- Timeline → Tracks ▾ → Add water & nutrients track
+
+Every kind of resource is made of something: urine of water, urea and salts; food of protein, fat and starch; down to carbon, nitrogen, phosphorus and potassium. Colour the graph by one of them and each wire shows how much of it it carries, with dotted stubs where people breathe it out or plants take it from the air. Where it goes follows it through the site as a Sankey, over the hours the clock has run, and the timeline can track what the stores hold and how much used water comes back clean.
+
+<a id="flow_lens"></a>
+
+### Flows: a Sankey that can loop
+
+![Flows: a Sankey that can loop](tour/flow_lens.jpg)
+
+*Wires as wide as what they carry, and a lens that lays the graph out as a loop Sankey.*
+
+**How to open:** **Press G**
+
+- Press G, then View options ▾ → Flow: Sankey (or Flow style… to tune it)
+- Click the Flows lens: sources on top, returns up the sides
+- Hover a return to light its loop; pick a resource or a time window at the top
+
+Every wire is drawn as a ribbon as wide as what it carries, measured against the biggest flow of the same resource on screen, so watts and litres each keep their own scale (the legend says what a width means). Streaks move faster where more flows and never strobe at speed. The Flows lens lays the scope out as a Sankey that can loop: the main stream runs down the page, and what cycles back, water reused, nutrients returned to the beds, runs up the sides like field lines, with how much of each resource cycles (Finn's cycling index) in the header.
+
+<a id="circle_pack"></a>
+
+### Circles inside circles
+
+![Circles inside circles](tour/circle_pack.jpg)
+
+*Everything nested on the site (groups, arrays and their strings, stores and what they hold) as zoomable circles.*
+
+**How to open:** **Press G**
+
+- Press G, then View options ▾ → Nesting as circles…
+- Click a circle to fly into it; right-click or Backspace to come back out
+- Size by one each, rated power or mass; tabs for what the stores hold and what the site is built from
+- A group's inspector has See inside as circles; a store's has its make-up
+
+Every group on the graph, the camps and vehicles with their own systems, a solar array's strings of panels, as circles inside circles. Click one to fly into it, right-click to come back out; size them one each, by rated power or by mass. The same view shows what the stores hold, each store split into what it is made of down to the elements, and what the site's structures are built from, down to their parts.
+
 <a id="flow_torus"></a>
 
 ### Flows as a torus
@@ -677,6 +845,22 @@ The ring arrangement seen in space. As nested spheres the graph reads as a cell:
 - Drag a node to move it along its shell; right-click puts it back
 
 A site is a heat engine: sunlight comes in, does work and leaves as heat. The torus shape of the Flows lens draws that. Everything that only handles electricity stands on a central axis, sources at the top, and what is used leaves the bottom as heat. Everything that handles water, food or nutrients sits on one of two lobes. Each closed loop gets its own shell, smaller loops inside bigger ones, and round every shell the flow runs down beside the axis and back up the far side. Wires from the axis out to a machine are the work that keeps its loop turning.
+
+<a id="process_control"></a>
+
+### Process control: valves, loops, alarms
+
+![Process control: valves, loops, alarms](tour/process_control.jpg)
+
+*The graph as a plant picture, with control loops, alarms, gauges and trends.*
+
+**How to open:** **Press G**
+
+- Press G, then the Process lens
+- Templates drops in a whole process; Lessons teaches it in five steps
+- Logic, Alarms, Widgets, Trends and Hardware are in the bar under the picture
+
+The Process lens draws the piped part of the graph as tanks, pipes, valves and pumps. Click anything for its faceplate. Control blocks (on / off bands, PID loops, interlocks, sequences) run on the site's clock; alarms flash until acknowledged; gauges, buttons and trends can be set down on the picture and on extra screens. Templates drop in a whole process and can be shared as a code. With Home Assistant connected, in Live mode and armed, the same tags can drive real devices.
 
 <a id="site_plan"></a>
 
@@ -761,9 +945,9 @@ The Lab draws the turbine's water path in section over the real ground — pond 
 
 *A month-by-month year of sun, wind, rain, temperature and your system's output.*
 
-**How to open:** **Press K** · **Click 📊**
+**How to open:** **Press K** · **Click Site Report**
 
-- Press K, or 📊 on the timeline
+- Press K, or click Site Report on the timeline
 
 The report runs a representative year of the site's real weather through the current graph: solar resource and PV yield, a windrose, rainfall, temperature bands, hydro potential, and what it would take to pack the site into a truck.
 
@@ -773,7 +957,7 @@ The report runs a representative year of the site's real weather through the cur
 
 ![Solar Bootcamp](tour/bootcamp.jpg)
 
-*Twelve short levels that teach DC electrics by letting you blow things up.*
+*Twelve short levels that teach DC electrics by letting you blow things up. Level 1: a short circuit.*
 
 **How to open:** **Click 🎓 Bootcamp**
 
@@ -781,6 +965,34 @@ The report runs a representative year of the site's real weather through the cur
 - Each level runs in a sandbox — your real graph is put back on exit
 
 The tutorial starts with a short circuit and works up through overcharging, PWM vs MPPT limits, series/parallel banks, string sizing and 24-hour runs. Goals are judged on the circuit itself, and run levels on a pre-baked day.
+
+<a id="bootcamp_overcharge"></a>
+
+### Bootcamp 2: Panels Push Too Hard
+
+![Bootcamp 2: Panels Push Too Hard](tour/bootcamp_overcharge.jpg)
+
+*Wire a solar panel straight to a battery and find out why nobody does.*
+
+**How to open:** **Click 🎓 Bootcamp**
+
+- In the graph (G), click 🎓 Bootcamp, then level 2
+
+A 300 W panel's open-circuit voltage is 40 V; a 12 V battery must never see more than about 14.6 V. Wired directly, the panel drives the cells past their ceiling and the battery is ruined, which unlocks the charge controller.
+
+<a id="bootcamp_controller"></a>
+
+### Bootcamp 3: You've Got Power… Some of It
+
+![Bootcamp 3: You've Got Power… Some of It](tour/bootcamp_controller.jpg)
+
+*Do it right through a charge controller, then see how much of the panel it can use.*
+
+**How to open:** **Click 🎓 Bootcamp**
+
+- In the graph (G), click 🎓 Bootcamp, then level 3
+
+Panel into the PWM controller's PV inputs, controller into the battery: it charges. But a controller delivers at the battery's voltage, capped at its rated current — 12 V × 10 A = 120 W of the 300 W panel. The next levels are about getting the rest.
 
 <a id="challenges"></a>
 
@@ -799,19 +1011,20 @@ Pre-baked challenges simulate the whole span — energy, water and people — be
 
 <a id="conduit_routing"></a>
 
-### 3D wire and pipe routing
+### 3D pipe and cable routing
 
-![3D wire and pipe routing](tour/conduit_routing.jpg)
+![3D pipe and cable routing](tour/conduit_routing.jpg)
 
-*Pull a cord or a pipe off a device's port and plug it in — measured as you go.*
+*Join machines with real runs: square, with proper bends, round what is in the way.*
 
-**How to open:** **Click a device's port (press and drag)**
+**How to open:** **Press Shift+R**
 
-- Aim at a device's port, press and drag to the other device, release
-- Shift+release keeps chaining from the device you plugged into
-- Click a run to restyle it live: kind, size, colour — Revert puts it back
+- Shift+R opens the Route tools: click a port, then a port on the other machine
+- Bend: click a run, click it again to add a bend point, drag it
+- Runs on the same line lie side by side in lanes; Lane drags one to another
+- Open in Process → As built: the system drawn where it really is
 
-Every wire, hose, penstock and culvert on the graph can be a real run in the world, drawn from port to port over the ground and bent round obstacles. The HUD measures the run as it is pulled with the same rule the committed run uses, run-length tags show metres and feet, and the style modal edits the live run with the I²R loss and a stock-length fit in its header.
+Every pipe and cable on the graph can be a real run in the world. The router lays it square, with bends at the real minimum radius of what it is (NEC, PPI, TIA), round machines and buildings and over low things, through any bend points you add. Runs on one line become a bundle of lanes with matched bends. The style window lists the run's size, rating, weight, supports and cost, and the Process lens can draw it all as built.
 
 <a id="wind_turbines"></a>
 
@@ -962,6 +1175,22 @@ Every structure a crew builds runs on the same site: the kit is laid out in a ya
 
 Fabrication clips are authored on the same stick figure the crews use, in the context of the real job — a saw on its bench, a drill at the hole — with the hands held to the tool's grips by IK. Saved clips are picked up by the build crews at once.
 
+<a id="community_schedule"></a>
+
+### Community schedule
+
+![Community schedule](tour/community_schedule.jpg)
+
+*Everyone's day, the week's events and the rota on one calendar, exported as .ics.*
+
+**How to open:** **Click Community schedule**
+
+- Click the people button on the timeline (or Schedule… in Routines)
+- Day: a row per person; click one to see their week and edit their profile
+- Week: drag a deploy, a burn or a set to move it; Export calendars for any calendar app
+
+Each person lives their own day: their body clock moves their night, the weekly rota names who does which recurring job and when, and nobody is planned to work in their sleep. The week shows every scheduled thing on the site in one place — deploys, arrivals, burns, stage sets, meals — and you can move them there. Export writes a calendar for the group and one per person.
+
 <a id="labs"></a>
 
 ## Labs
@@ -1033,4 +1262,4 @@ A listen server with no servers of ours: the host's world, clock and simulation 
 
 ---
 
-<sub>Generated by `tools/tour_docs.py` from tour run tour_20261115-002145 (2026-11-15T00:25:00, commit 27de16d; 1/1 stops passed). Regenerate with `tools\tour.ps1 -Mode stills` then `python tools/tour_docs.py`. Add a feature: copy `core/tour/stops/_template.gd`.</sub>
+<sub>Generated by `tools/tour_docs.py` from tour run tour_polish_fix3 (2026-11-21T13:44:13, commit af08948; 3/3 stops passed). Regenerate with `tools\tour.ps1 -Mode stills` then `python tools/tour_docs.py`. Add a feature: copy `core/tour/stops/_template.gd`.</sub>

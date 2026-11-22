@@ -43,7 +43,9 @@ var _backdrop: ColorRect = null
 var _panel: PanelContainer = null
 var _title: Label = null
 var _subtitle: Label = null
+var _footer_sep: HSeparator = null
 var _is_open := false
+var _claimed_main_modal := false
 
 
 static func create(title: String, subtitle: String = "", size: Vector2 = Vector2(900, 640),
@@ -69,7 +71,7 @@ func _build(title: String, subtitle: String) -> void:
 	add_child(_backdrop)
 
 	_panel = PanelContainer.new()
-	_panel.add_theme_stylebox_override("panel", UITheme.panel_style(0.98))
+	_panel.add_theme_stylebox_override("panel", UITheme.modal_panel_style(0.99))
 	_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_panel.set_meta("ui_modal", true)  # UiAudit.MODAL_META
 	add_child(_panel)
@@ -106,6 +108,7 @@ func _build(title: String, subtitle: String) -> void:
 	UiIcons.apply(x, "x", "Close (Esc)", 18)
 	x.pressed.connect(close)
 	head.add_child(x)
+	v.add_child(HSeparator.new())
 
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -116,6 +119,9 @@ func _build(title: String, subtitle: String) -> void:
 	body.add_theme_constant_override("separation", 8)
 	scroll.add_child(body)
 
+	_footer_sep = HSeparator.new()
+	_footer_sep.visible = false
+	v.add_child(_footer_sep)
 	footer = HBoxContainer.new()
 	footer.alignment = BoxContainer.ALIGNMENT_END
 	footer.add_theme_constant_override("separation", 8)
@@ -137,16 +143,19 @@ func add_button(text: String, kind: int, cb: Callable, tip: String = "") -> Butt
 	b.tooltip_text = tip
 	b.focus_mode = Control.FOCUS_NONE
 	b.custom_minimum_size = Vector2(96, 32)
-	UITheme.style_button(b)
 	match kind:
 		PRIMARY:
-			b.add_theme_color_override("font_color", UITheme.C_PRIMARY)
+			UITheme.style_primary_button(b)
 		DESTRUCTIVE:
-			b.add_theme_color_override("font_color", UITheme.C_ERROR)
+			UITheme.style_destructive_button(b)
+		_:
+			UITheme.style_button(b)
 	if cb.is_valid():
 		b.pressed.connect(cb)
 	footer.add_child(b)
 	footer.visible = true
+	if _footer_sep != null:
+		_footer_sep.visible = true
 	return b
 
 
@@ -154,12 +163,30 @@ func open() -> void:
 	if _is_open:
 		return
 	_is_open = true
+	var in_secondary := UiFit.is_secondary_window(self)
+	if is_inside_tree() and get_tree() != null:
+		var scope_root: Node = get_viewport() if in_secondary else get_tree().root
+		var top_l := UITheme.LAYER_MODAL - 1
+		for n in scope_root.find_children("*", "CanvasLayer", true, false):
+			var cl := n as CanvasLayer
+			if cl != self and cl.visible and cl.layer >= UITheme.LAYER_MODAL and cl.layer < UITheme.LAYER_TOAST:
+				top_l = maxi(top_l, cl.layer)
+		layer = top_l + 1
+	_backdrop.color = UITheme.C_BG if in_secondary else Color(0, 0, 0, 0.55)
 	visible = true
 	_fit()
+	if not in_secondary:
+		UITheme.animate_open(_panel, _backdrop)
 	if not get_viewport().size_changed.is_connected(_fit):
 		get_viewport().size_changed.connect(_fit)
-	CursorController.request_modal(modal_name, close)
-	HudLayout.claim_modal(modal_name)
+	_claimed_main_modal = not in_secondary
+	if _claimed_main_modal:
+		var cc := get_node_or_null("/root/CursorController")
+		if cc != null:
+			cc.request_modal(modal_name, close)
+		var hl := get_node_or_null("/root/HudLayout")
+		if hl != null:
+			hl.claim_modal(modal_name)
 
 
 func close() -> void:
@@ -167,8 +194,14 @@ func close() -> void:
 		return
 	_is_open = false
 	visible = false
-	CursorController.release_modal(modal_name)
-	HudLayout.release(modal_name)
+	if _claimed_main_modal:
+		_claimed_main_modal = false
+		var cc := get_node_or_null("/root/CursorController")
+		if cc != null:
+			cc.release_modal(modal_name)
+		var hl := get_node_or_null("/root/HudLayout")
+		if hl != null:
+			hl.release(modal_name)
 	closed.emit()
 
 
@@ -177,9 +210,14 @@ func is_open() -> bool:
 
 
 func _exit_tree() -> void:
-	if _is_open:
-		CursorController.release_modal(modal_name)
-		HudLayout.release(modal_name)
+	if _is_open and _claimed_main_modal:
+		_claimed_main_modal = false
+		var cc := get_node_or_null("/root/CursorController")
+		if cc != null:
+			cc.release_modal(modal_name)
+		var hl := get_node_or_null("/root/HudLayout")
+		if hl != null:
+			hl.release(modal_name)
 
 
 ## Centred, never bigger than the screen minus a margin, and above the timeline.
@@ -187,7 +225,7 @@ func _fit() -> void:
 	if _panel == null or not is_inside_tree():
 		return
 	_panel.set_meta("ui_fit_content_max_w", content_max_w)
-	if UiFit.fills_screen(_want_size, keep_timeline):
+	if UiFit.fills_screen(_want_size, keep_timeline, _panel):
 		UiFit.fill(_panel, _want_size)
 		return
 	_panel.scale = Vector2.ONE

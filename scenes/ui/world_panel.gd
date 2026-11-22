@@ -82,24 +82,37 @@ func _build() -> void:
 	_root.add_child(center)
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(560, 0)
-	panel.add_theme_stylebox_override("panel", UITheme.panel_style())
+	panel.add_theme_stylebox_override("panel", UITheme.modal_panel_style(0.99))
 	center.add_child(panel)
+	panel.set_meta("ui_fit_card", true)
 	UiFit.adopt(panel)  # above the timeline, inside the screen at any size
 	var m := MarginContainer.new()
 	for k in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
-		m.add_theme_constant_override(k, 16)
+		m.add_theme_constant_override(k, 8)
 	panel.add_child(m)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 10)
 	m.add_child(v)
 
+	var top_bar := HBoxContainer.new()
+	top_bar.add_theme_constant_override("separation", 8)
+	v.add_child(top_bar)
+	var w_ic := TextureRect.new()
+	w_ic.texture = UiIcons.icon("globe", 18)
+	w_ic.modulate = UITheme.C_PRIMARY
+	w_ic.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	top_bar.add_child(w_ic)
 	var hdr := Label.new()
-	hdr.text = "WORLD"
-	hdr.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	hdr.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	v.add_child(hdr)
+	hdr.text = "World"
+	hdr.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hdr.add_theme_font_override("font", UITheme.font("semibold"))
+	hdr.add_theme_font_size_override("font_size", UITheme.FONT_LG)
+	hdr.add_theme_color_override("font_color", UITheme.C_TEXT)
+	top_bar.add_child(hdr)
+	top_bar.add_child(IconButton.close(hide_panel))
+	v.add_child(HSeparator.new())
 	_name_edit = LineEdit.new()
-	_name_edit.add_theme_font_size_override("font_size", UITheme.FONT_LG)
+	_name_edit.add_theme_font_size_override("font_size", UITheme.FONT_MD)
 	_name_edit.tooltip_text = "Rename this world (empty = the location's name)."
 	_name_edit.text_submitted.connect(func(_t: String) -> void: _commit_rename())
 	_name_edit.focus_exited.connect(_commit_rename)
@@ -110,15 +123,11 @@ func _build() -> void:
 	_sub_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	v.add_child(_sub_lbl)
 
-	var holds_hdr := Label.new()
-	holds_hdr.text = "THIS WORLD HOLDS"
-	holds_hdr.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	holds_hdr.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	v.add_child(holds_hdr)
+	v.add_child(SectionHeader.make("This world holds", "layers"))
 	_holds = GridContainer.new()
 	_holds.columns = 2
 	_holds.add_theme_constant_override("h_separation", 18)
-	_holds.add_theme_constant_override("v_separation", 3)
+	_holds.add_theme_constant_override("v_separation", 4)
 	v.add_child(_holds)
 	var note := Label.new()
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -133,11 +142,16 @@ func _build() -> void:
 	_imagery.mode_chosen.connect(_on_imagery_mode_chosen)
 	v.add_child(_imagery)
 
-	var row1 := HBoxContainer.new()
-	row1.add_theme_constant_override("separation", 8)
+	v.add_child(HSeparator.new())
+	var row1 := HFlowContainer.new()
+	row1.add_theme_constant_override("h_separation", 8)
+	row1.add_theme_constant_override("v_separation", 6)
 	v.add_child(row1)
 	_world_btns.clear()
-	_world_btns.append(_btn(row1, "Save now", _on_save_now, "Write everything now."))
+	var save_now := _btn(row1, "Save now", _on_save_now, "Write everything now.")
+	UITheme.style_primary_button(save_now)
+	UiIcons.apply(save_now, "save", save_now.tooltip_text, 15)
+	_world_btns.append(save_now)
 	_world_btns.append(_btn(row1, "Save a copy as…", _on_copy_pressed,
 		"Freeze a checkpoint: an independent copy of this world. You keep playing this one."))
 	_world_btns.append(_btn(row1, "New world on this map…", _on_new_world_pressed,

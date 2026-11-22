@@ -507,8 +507,11 @@ func _add_slider(parent: Control, label: String, mn: float, mx: float, step: flo
 	val.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	row.add_child(val)
 	sl.value_changed.connect(func(v: float) -> void:
-		var t := ("%.3f" % v) if step < 0.01 else ("%.2f" % v)
-		val.text = t + ((" " + unit) if not unit.is_empty() else "")
+		if unit == "m" and step < 0.01:
+			val.text = "%.0f mm" % (v * 1000.0)
+		else:
+			var t := ("%.3f" % v) if step < 0.01 else ("%.2f" % v)
+			val.text = t + ((" " + unit) if not unit.is_empty() else "")
 		_on_draft_changed())
 	parent.add_child(row)
 	return sl

@@ -35,6 +35,8 @@ const MARGIN := 24.0
 ## screen. Kept as before: content-sized panels (a `want` axis of 0: small
 ## dialogs) and panels that keep the timeline in view.
 const FULLSCREEN := true
+const FULLSCREEN_MIN_W := 1140.0
+const FULLSCREEN_MIN_H := 740.0
 const ZOOM_MAX := 1.25
 
 
@@ -51,9 +53,23 @@ static func area(ci: CanvasItem, margin: float = MARGIN, keep_timeline: bool = f
 		Vector2(maxf(r.size.x - margin * 2.0, 0.0), maxf(bottom - margin * 2.0, 0.0)))
 
 
+## True when `n` lives inside a secondary OS `Window` rather than `tree.root`.
+## Views in secondary monitor windows do not cover the main 3D viewport's HUD
+## or timeline bar, so they never claim `HudLayout` or leave timeline clearance.
+static func is_secondary_window(n: Node) -> bool:
+	if n == null or not n.is_inside_tree():
+		return false
+	var tree := n.get_tree()
+	var vp := n.get_viewport()
+	return tree != null and vp != null and vp != tree.root
+
+
 ## How much of the screen bottom a modal must leave for the timeline: none
-## when it draws over the bar (the usual case), the bar's height otherwise.
+## when it draws over the bar (the usual case) or lives in a secondary window,
+## the bar's height otherwise.
 static func timeline_clearance(n: Node, keep_timeline: bool = false) -> float:
+	if is_secondary_window(n):
+		return 0.0
 	if keep_timeline or not draws_over_timeline(n):
 		return HudLayout.timeline_height()
 	return 0.0
@@ -87,7 +103,7 @@ static func fit(panel: Control, want: Vector2, margin: float = MARGIN,
 		return
 	panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	panel.custom_minimum_size = Vector2.ZERO
-	if fills_screen(want, keep_timeline):
+	if fills_screen(want, keep_timeline, panel):
 		fill(panel, want)
 		return
 	panel.scale = Vector2.ONE
@@ -103,9 +119,16 @@ static func fit(panel: Control, want: Vector2, margin: float = MARGIN,
 	panel.global_position = Vector2(maxf(pos.x, a.position.x), maxf(pos.y, a.position.y))
 
 
-## True when a modal of this `want` goes full screen (see FULLSCREEN).
-static func fills_screen(want: Vector2, keep_timeline: bool = false) -> bool:
-	return FULLSCREEN and not keep_timeline and want.x >= 1.0 and want.y >= 1.0
+## True when a modal of this `want` goes full screen (workspaces, designers,
+## galleries and wide charts fill the screen; compact dialogs stay elevated cards).
+static func fills_screen(want: Vector2, keep_timeline: bool = false, panel: CanvasItem = null) -> bool:
+	if not FULLSCREEN or keep_timeline:
+		return false
+	if panel != null and panel.has_meta("ui_fit_card") and bool(panel.get_meta("ui_fit_card")):
+		return false
+	if panel != null and panel.has_meta("ui_fit_fullscreen") and bool(panel.get_meta("ui_fit_fullscreen")):
+		return want.x >= 1.0 and want.y >= 1.0
+	return want.x >= FULLSCREEN_MIN_W or want.y >= FULLSCREEN_MIN_H
 
 
 ## The zoom a full-screen modal of `want` gets on a screen area of `avail`
@@ -275,11 +298,12 @@ static func _refit(panel_v: Variant) -> void:
 		return
 	var panel := panel_v as Control
 	var shown := panel.is_inside_tree() and panel.is_visible_in_tree()
+	var in_secondary := is_secondary_window(panel)
 	if bool(panel.get_meta("ui_fit_claim", true)):
 		var owner := _claim_owner(panel)
-		if shown and not HudLayout.has_claim(owner):
+		if shown and not in_secondary and not HudLayout.has_claim(owner):
 			HudLayout.claim_modal(owner)
-		elif not shown and HudLayout.has_claim(owner):
+		elif (not shown or in_secondary) and HudLayout.has_claim(owner):
 			HudLayout.release(owner)
 	if not shown:
 		return

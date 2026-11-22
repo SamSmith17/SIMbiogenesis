@@ -44,7 +44,14 @@ func set_tiles(tiles: Array) -> void:
 			(w["cap"] as Label).text = cap
 		if (w["val"] as Label).text != val:
 			(w["val"] as Label).text = val
-		(w["panel"] as Control).tooltip_text = str(t.get("tip", ""))
+			var fsz := UITheme.FONT_LG
+			if val.length() >= 18:
+				fsz = UITheme.FONT_SM
+			elif val.length() >= 12:
+				fsz = UITheme.FONT_MD
+			(w["val"] as Label).add_theme_font_size_override("font_size", fsz)
+		var tip := str(t.get("tip", ""))
+		(w["panel"] as Control).tooltip_text = tip if not tip.is_empty() else "%s: %s" % [cap, val]
 		(w["val"] as Label).add_theme_color_override("font_color", _color(t))
 
 
@@ -84,12 +91,14 @@ func _make_tile() -> Dictionary:
 	c.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	c.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 	c.clip_text = true
+	c.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(c)
 	var val := Label.new()
 	val.add_theme_font_override("font", UITheme.font("semibold", true))
 	val.add_theme_font_size_override("font_size", UITheme.FONT_LG)
 	val.clip_text = true
+	val.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	val.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(val)
 	add_child(p)

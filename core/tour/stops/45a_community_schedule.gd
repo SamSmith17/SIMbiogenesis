@@ -9,7 +9,7 @@ func _init() -> void:
 	how = PackedStringArray(["Click the people button on the timeline (or Schedule… in Routines)",
 		"Day: a row per person; click one to see their week and edit their profile",
 		"Week: drag a deploy, a burn or a set to move it; Export calendars for any calendar app"])
-	button = "👥"
+	button = "Community schedule"
 	world = "walton"
 	budget_s = 45.0
 	hour = 10.0

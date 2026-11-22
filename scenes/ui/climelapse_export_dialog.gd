@@ -402,9 +402,9 @@ func _set_speed_mode(ana: bool) -> void:
 		_speed_spin.suffix = " days/s"
 		_speed_spin.value = float(_opts.get("analemma_days_per_second", 30.4375))
 	else:
-		_speed_spin.min_value = 0.0001
+		_speed_spin.min_value = 0.01
 		_speed_spin.max_value = ClimelapseExportOptions.MAX_RATE
-		_speed_spin.step = 0.0001
+		_speed_spin.step = 0.01
 		_speed_spin.suffix = " h/s"
 		_speed_spin.value = float(_opts.get("hours_per_second", 2.0))
 	_max_btn.visible = not ana

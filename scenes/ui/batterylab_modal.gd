@@ -4,6 +4,9 @@ extends Control
 ## form factor, the chemistry and cell, how many in series and in parallel,
 ## how they are arranged and joined, the BMS and the case — and see every
 ## part, exploded or cut open, with the numbers worked out in plain words.
+## A press on a cell, the BMS, a sensor or a fitting selects it; dragging
+## slides it (the leads are drawn again so they still reach it). On the
+## Bank tab the same gesture moves a pack, and its cables follow.
 ## Opened from the library; Main hosts it (`open_batterylab`). The BMS
 ## simulation (Phase 3) and banks (Phase 4) come later
 ## (plans/BATTERY_LAB_PLAN.md).
@@ -17,6 +20,9 @@ const MODAL_NAME := "batterylab_designer"
 const WANT := Vector2(1640, 980)
 const UNDO_LIMIT := 60
 const REBUILD_DELAY := 0.2
+## A press that moves less than this stays a click (the studio uses the same).
+const DRAG_PX := 4.0
+const DRAG_REBUILD := 0.05
 const TEST_PANEL := preload("res://scenes/ui/batterylab_test_panel.gd")
 const BANK_PANEL := preload("res://scenes/ui/batterylab_bank_panel.gd")
 ## Protection rows: [key, label, unit kind "v" | "a" | "c"].
@@ -65,6 +71,8 @@ var _cutaway := false
 var _learn := false
 var _tour := -1
 var _selected := ""
+## Live part drag: {id, bank, press, moved, n0: Vector3, hit0: Vector3, plane: Vector3, label}.
+var _drag: Dictionary = {}
 var _framed_key := ""
 var _mode := "pack"
 var _tabs: TabBar
@@ -76,11 +84,13 @@ var _bank_panel: VBoxContainer
 var _bank_builder: BankBuilder
 var _bank_design: Dictionary = {}
 var _bound_graph_id := ""
+var _chain: PowerChainBar = null
 var _bank_framed := ""
 
 # UI
 var _shell: DesignerShell
 var _gallery: DesignGallery
+var _sort: OptionButton
 var _view_stack: Control
 var _studio: StudioViewport
 var _overlay: Callouts
@@ -147,6 +157,7 @@ func open(opts: Dictionary = {}) -> void:
 	_undo.clear()
 	_redo.clear()
 	_selected = ""
+	_drag = {}
 	_tour = -1
 	_framed_key = ""
 	_active = true
@@ -160,11 +171,14 @@ func open(opts: Dictionary = {}) -> void:
 	_bank_panel.call("set_bound", not _bound_prop_id.is_empty() or not _bound_graph_id.is_empty())
 	_rebuild_now()
 	set_mode(start_mode)
+	_refresh_chain()
 
 
 func close() -> void:
 	if not _active:
 		return
+	if not _drag.is_empty():
+		_finish_drag()
 	_active = false
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -198,7 +212,12 @@ func _process(delta: float) -> void:
 	if _rebuild_timer > 0.0:
 		_rebuild_timer -= delta
 		if _rebuild_timer <= 0.0:
-			_rebuild_now()
+			# A bank drag only moves packs; skip rebuilding the pack mesh.
+			if not _drag.is_empty() and bool(_drag.get("bank", false)):
+				_rebuild_timer = -1.0
+				_rebuild_bank()
+			else:
+				_rebuild_now()
 	if _learn and _overlay != null:
 		_overlay.queue_redraw()
 
@@ -242,15 +261,31 @@ func _build_ui() -> void:
 	_build_left()
 	_build_centre()
 	_build_right()
-	_shell.set_hint("Drag to orbit · wheel to zoom · Shift-drag pans · click a part to see what it is · F frames the pack · Ctrl+Z undoes")
+	_shell.set_hint("Drag empty space to orbit · wheel to zoom · Shift-drag empty space pans · drag a cell, the BMS, a fitting or a pack to move it (Shift 1 mm · Alt free) · F frames · Ctrl+Z undoes")
 	_shell.add_button("Save design", DesignerShell.SECONDARY, _on_save_design,
 		"Keep this design in your library (every world)")
 	_shell.add_button("Close", DesignerShell.SECONDARY, close)
+	_chain = PowerChainBar.create("battery")
+	_chain.follow(_shell)
+	_shell.add_header_widget(_chain)
+	_chain.hop_requested.connect(_on_chain_hop)
+	_chain.add_requested.connect(_on_chain_add)
 
 
 func _build_left() -> void:
 	var box := _shell.left
 	box.add_child(SectionHeader.make("Designs", "layout-grid"))
+	_sort = OptionButton.new()
+	_sort.add_item("As listed")
+	_sort.add_item("$/kWh, cheapest")
+	_sort.add_item("$/kWh, dearest")
+	_sort.add_item("Price, cheapest")
+	_sort.add_item("Price, dearest")
+	_sort.fit_to_longest_item = false
+	_sort.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_sort.tooltip_text = "Order the list by street price, or by dollars per kilowatt-hour"
+	_sort.item_selected.connect(_on_sort_picked)
+	box.add_child(_sort)
 	_gallery = DesignGallery.make("batterylab")
 	_gallery.set_thumbnailer(_thumb_for)
 	_gallery.item_selected.connect(_on_design_activated)
@@ -293,6 +328,7 @@ func _build_centre() -> void:
 	_studio.dist_max = 20.0
 	_studio.clicked.connect(_on_click)
 	_studio.hovered.connect(_on_hover)
+	_studio.input_hook = _studio_input
 	_view_stack.add_child(_studio)
 	_overlay = Callouts.new()
 	_overlay.modal = self
@@ -628,6 +664,7 @@ func _unsnap(v: Dictionary) -> void:
 func _undo_step() -> void:
 	if _undo.is_empty():
 		return
+	_drag = {}
 	_redo.append(_snap())
 	_unsnap(_undo.pop_back())
 	_shell.set_undo_state(not _undo.is_empty(), not _redo.is_empty())
@@ -637,6 +674,7 @@ func _undo_step() -> void:
 func _redo_step() -> void:
 	if _redo.is_empty():
 		return
+	_drag = {}
 	_undo.append(_snap())
 	_unsnap(_redo.pop_back())
 	_shell.set_undo_state(not _undo.is_empty(), not _redo.is_empty())
@@ -703,6 +741,9 @@ func _rebuild_now() -> void:
 	_spec = BattSpec.resolve(_spec)
 	_design = BattDesign.solve(_spec)
 	if _builder != null:
+		# Hidden now: queue_free waits until the frame ends, and a drag
+		# rebuilds often enough that the old pack would still be on screen.
+		_builder.visible = false
 		_builder.queue_free()
 	_builder = BattBuilder.build_from_design(_design)
 	_builder.name = "Pack"
@@ -1061,7 +1102,10 @@ func _part_words(p: Dictionary) -> String:
 			extra = "reads %d cells, %.0f A" % [int(e["cells_series"]), float((_design["bms"] as Dictionary).get("cont_a", 0.0))]
 		"tap":
 			extra = "22 AWG to the BMS"
-	return "%s%s" % [str(p["label"]), (" · " + extra) if not extra.is_empty() else ""]
+	var words := "%s%s" % [str(p["label"]), (" · " + extra) if not extra.is_empty() else ""]
+	if BattLayout.can_drag(k):
+		words += " · drag to move"
+	return words
 
 
 func _on_click(pos: Vector2, button: int) -> void:
@@ -1085,7 +1129,10 @@ func _on_hover(pos: Vector2) -> void:
 			var rb := _studio.pick_ray_local(_bank_builder, pos)
 			if not rb.is_empty():
 				var hb := _bank_builder.pick(rb["origin"], rb["dir"])
-				_info_lbl.text = str(hb.get("label", "Click a pack, a cable or a fuse to see what it is."))
+				var hover := str(hb.get("label", "Click a pack, a cable or a fuse to see what it is."))
+				if str(hb.get("kind", "")) == "pack":
+					hover += " · drag to move"
+				_info_lbl.text = hover
 		return
 	if _builder == null or not _selected.is_empty():
 		return
@@ -1094,6 +1141,145 @@ func _on_hover(pos: Vector2) -> void:
 		return
 	var hit := _builder.pick(r["origin"], r["dir"])
 	_info_lbl.text = _part_words(hit) if not hit.is_empty() else "Click a part to see what it is."
+
+
+# ---------------------------------------------------------------------------
+# Dragging a part (or a bank pack)
+# ---------------------------------------------------------------------------
+
+func _drag_node() -> Node3D:
+	return _bank_builder if _mode == "bank" else _builder
+
+
+func _can_move(part: Dictionary) -> bool:
+	if part.is_empty() or _mode == "test":
+		return false
+	if _mode == "bank":
+		return str(part.get("kind", "")) == "pack"
+	return BattLayout.can_drag(str(part.get("kind", "")))
+
+
+func _pick_part(pos: Vector2) -> Dictionary:
+	var node := _drag_node()
+	if node == null:
+		return {}
+	var r := _studio.pick_ray_local(node, pos)
+	if r.is_empty():
+		return {}
+	if _mode == "bank":
+		return _bank_builder.pick(r["origin"], r["dir"])
+	return _builder.pick(r["origin"], r["dir"])
+
+
+## 5 mm, 1 mm with Shift, free with Alt — the same steps as the gantry editor.
+func _drag_step(e: InputEvent) -> float:
+	if e is InputEventWithModifiers:
+		var em := e as InputEventWithModifiers
+		if em.alt_pressed:
+			return 0.0
+		if em.shift_pressed:
+			return 1.0
+	return 5.0
+
+
+## The pointer on the camera-facing plane through `origin_m` (builder metres).
+func _plane_hit(node: Node3D, pos: Vector2, origin_m: Vector3) -> Vector3:
+	if node == null or _studio.camera == null:
+		return Vector3.INF
+	var r := _studio.pick_ray_local(node, pos)
+	if r.is_empty():
+		return Vector3.INF
+	var cam := node.global_transform.affine_inverse() * _studio.camera.global_transform
+	var n := (-cam.basis.z).normalized()
+	var dir: Vector3 = r["dir"]
+	var den := dir.dot(n)
+	if absf(den) < 1e-6:
+		return Vector3.INF
+	var t := (origin_m - (r["origin"] as Vector3)).dot(n) / den
+	if t < 0.0:
+		return Vector3.INF
+	return (r["origin"] as Vector3) + dir * t
+
+
+func _moved_words(v: Vector3) -> String:
+	if v.length() < 0.5:
+		return "back in its place"
+	return "moved %.0f mm" % v.length()
+
+
+## The studio's own input first. True = the orbit does not take it.
+func _studio_input(e: InputEvent) -> bool:
+	if not _active or _mode == "test":
+		return false
+	if e is InputEventMouseMotion:
+		if _drag.is_empty():
+			return false
+		var mm := e as InputEventMouseMotion
+		if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+			_finish_drag()
+			return true
+		_drag_motion(mm)
+		return true
+	if not (e is InputEventMouseButton):
+		return false
+	var mb := e as InputEventMouseButton
+	if mb.button_index != MOUSE_BUTTON_LEFT:
+		return false
+	if not mb.pressed:
+		if _drag.is_empty():
+			return false
+		_finish_drag()
+		return true
+	var part := _pick_part(mb.position)
+	if not _can_move(part):
+		return false
+	var id := str(part["id"])
+	if _mode == "bank":
+		select_bank_part(id)
+	else:
+		select_part(id)
+	var center: Vector3 = (part["aabb"] as AABB).get_center()
+	var hit := _plane_hit(_drag_node(), mb.position, center)
+	if hit == Vector3.INF:
+		hit = center
+	var host: Dictionary = _bank if _mode == "bank" else _spec
+	_drag = {
+		"id": id, "bank": _mode == "bank", "press": mb.position, "moved": false,
+		"n0": BattLayout.nudge_of(host, id), "hit0": hit * 1000.0, "plane": center,
+		"label": str(part.get("label", "Part")),
+	}
+	return true
+
+
+func _drag_motion(mm: InputEventMouseMotion) -> void:
+	if not bool(_drag.get("moved", false)) and mm.position.distance_to(_drag["press"]) <= DRAG_PX:
+		return
+	var hit := _plane_hit(_drag_node(), mm.position, _drag["plane"])
+	if hit == Vector3.INF:
+		return
+	if not bool(_drag["moved"]):
+		_drag["moved"] = true
+		_push_undo("")
+	var n := BattLayout.drag_nudge(_drag["n0"], _drag["hit0"], hit * 1000.0, _drag_step(mm))
+	var host: Dictionary = _bank if bool(_drag["bank"]) else _spec
+	BattLayout.write_nudge(host, str(_drag["id"]), n)
+	_info_lbl.text = "%s · %s" % [str(_drag["label"]), _moved_words(n)]
+	if _rebuild_timer <= 0.0:
+		_rebuild_timer = DRAG_REBUILD
+
+
+func _finish_drag() -> void:
+	var moved := not _drag.is_empty() and bool(_drag.get("moved", false))
+	var bank := bool(_drag.get("bank", false))
+	_drag = {}
+	if not moved:
+		return
+	# The last motion already queued a rebuild; this one is the final pose.
+	_rebuild_timer = -1.0
+	if bank:
+		_rebuild_bank()
+	else:
+		_rebuild_now()
 
 
 ## Where a local point of the pack is on the overlay (or Vector2.INF).
@@ -1134,20 +1320,69 @@ func _thumb_for(i: int) -> Dictionary:
 		return BattBuilder.build_node(s, "Thumb")}
 
 
+func _on_sort_picked(_idx: int) -> void:
+	_refresh_design_list()
+
+
+func _shop_rows(raw: Array) -> Array:
+	var rows: Array = []
+	for i in raw.size():
+		var src: Dictionary = raw[i]
+		var facts := BattPresets.shop_facts(src["spec"], float(src.get("price_usd", 0.0)))
+		rows.append({"src": src, "facts": facts, "ord": i})
+	var mode := _sort.selected if _sort != null else 0
+	if mode == 0:
+		return rows
+	var by_kwh := mode <= 2
+	var cheap_first := mode == 1 or mode == 3
+	var key := "per_kwh" if by_kwh else "usd"
+	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var ka := float((a["facts"] as Dictionary)[key])
+		var kb := float((b["facts"] as Dictionary)[key])
+		if is_equal_approx(ka, kb):
+			return int(a["ord"]) < int(b["ord"])
+		return ka < kb if cheap_first else ka > kb)
+	return rows
+
+
+func _add_shop_row(label: String, facts: Dictionary, spec: Dictionary, builtin: bool, id: String, tip: String) -> void:
+	_gallery.add_item(label)
+	var i := _gallery.item_count - 1
+	_gallery.set_item_shop(i, str(facts["price"]), str(facts["per"]), str(facts["detail"]))
+	_gallery.set_item_tooltip(i, tip)
+	_entries.append({"spec": spec, "builtin": builtin, "id": id})
+
+
 func _refresh_design_list() -> void:
+	var keep := ""
+	var sel := _gallery.get_selected_items()
+	if not sel.is_empty() and int(sel[0]) < _entries.size():
+		keep = str((_entries[int(sel[0])] as Dictionary)["id"])
 	_gallery.clear()
 	_entries.clear()
-	for b in BattPresets.builtins():
-		var bd: Dictionary = b
-		_gallery.add_item(str(bd["label"]))
-		_gallery.set_item_subtitle(_gallery.item_count - 1, BattPresets.size_line(bd["spec"]))
-		_entries.append({"spec": bd["spec"], "builtin": true, "id": str(bd["id"])})
+	for row in _shop_rows(BattPresets.builtins()):
+		var bd: Dictionary = row["src"]
+		var facts: Dictionary = row["facts"]
+		_add_shop_row(str(bd["label"]), facts, bd["spec"], true, str(bd["id"]), str(bd.get("blurb", "")))
 	var lib := BattPresets.load_library()
+	var saved: Array = []
 	for id2 in lib.keys():
 		var s2: Dictionary = lib[id2]
-		_gallery.add_item("★ " + str(s2.get("name", id2)))
-		_gallery.set_item_subtitle(_gallery.item_count - 1, BattPresets.size_line(s2))
-		_entries.append({"spec": s2, "builtin": false, "id": str(id2)})
+		saved.append({"spec": s2, "id": str(id2), "name": str(s2.get("name", id2))})
+	for row2 in _shop_rows(saved):
+		var mine: Dictionary = row2["src"]
+		var facts2: Dictionary = row2["facts"]
+		var tip := str(mine["name"])
+		if bool(facts2["about"]):
+			tip += "\nParts estimate, not a street price"
+		_add_shop_row("★ " + str(mine["name"]), facts2, mine["spec"], false, str(mine["id"]), tip)
+	if keep.is_empty():
+		return
+	for i in _entries.size():
+		if str((_entries[i] as Dictionary)["id"]) == keep:
+			_gallery.select(i)
+			_gallery.ensure_current_is_visible()
+			return
 
 
 func gallery() -> DesignGallery:
@@ -1292,6 +1527,8 @@ class Callouts extends Control:
 
 ## "pack" or "test": the test bench under the pack.
 func set_mode(m: String) -> void:
+	if not _drag.is_empty():
+		_finish_drag()
 	_mode = m if m in ["pack", "test", "bank"] else "pack"
 	_tabs.set_current_tab(["pack", "test", "bank"].find(_mode))
 	_test.visible = _mode == "test"
@@ -1527,6 +1764,7 @@ func _rebuild_bank() -> void:
 	var b := bank_spec()
 	_bank_design = BankDesign.solve(b)
 	if _bank_builder != null:
+		_bank_builder.visible = false
 		_bank_builder.queue_free()
 	_bank_builder = BankBuilder.build_from_design(_bank_design)
 	_bank_builder.name = "Bank"
@@ -1572,7 +1810,10 @@ func select_bank_part(id: String) -> void:
 		return
 	var p := _bank_builder.part(id)
 	_bank_builder.highlight([] if p.is_empty() else [id])
-	_info_lbl.text = str(p.get("label", "Click a pack, a cable or a fuse to see what it is."))
+	var text := str(p.get("label", "Click a pack, a cable or a fuse to see what it is."))
+	if str(p.get("kind", "")) == "pack":
+		text += " · drag to move"
+	_info_lbl.text = text
 
 
 func _main() -> Node:
@@ -1617,6 +1858,52 @@ func apply_bank() -> void:
 		specs["battery_bank_spec"] = b
 		model.call("update_item", _bound_graph_id, {"specs": specs})
 		_status("Applied to the graph battery: %s." % BattPresets.size_line(b["pack"]))
+	_refresh_chain()
+
+
+# ---------------------------------------------------------------------------
+# The power chain (Panels › Controller › Battery)
+# ---------------------------------------------------------------------------
+
+func chain_bar() -> PowerChainBar:
+	return _chain
+
+
+## The graph battery this Lab is on ("" = none).
+func _chain_item() -> String:
+	if not _bound_graph_id.is_empty():
+		return _bound_graph_id
+	if not _bound_prop_id.is_empty() and _main() != null:
+		return str(PlacedPropService.get_prop_record(_main(), _bound_prop_id).get("graph_item_id", ""))
+	return ""
+
+
+func _refresh_chain() -> void:
+	if _chain != null:
+		_chain.refresh(_chain_item())
+
+
+## Leave for another lab: apply what was changed here first.
+func _on_chain_hop(kind: String, unit: Dictionary) -> void:
+	var ch := _chain.chain()
+	var main := _main()
+	if not _undo.is_empty() and not _chain_item().is_empty():
+		apply_bank()
+	close()
+	PowerChainBar.go(main, kind, unit, ch)
+
+
+func _on_chain_add(what: String) -> void:
+	if what == "panels":
+		_on_chain_hop("panels", {})
+		return
+	var gv := ServiceLocator.graph()
+	var model: GraphModel = gv.get("model") as GraphModel if gv != null else null
+	if model == null:
+		return
+	var nid := PowerChain.add_missing(model, _chain.chain(), what)
+	_status("Added a controller to the graph, wired to this battery." if nid != "" else "Could not add it.")
+	_refresh_chain()
 
 
 ## A graph battery's bank: its own design, else the built-in under its

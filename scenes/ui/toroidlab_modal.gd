@@ -49,6 +49,7 @@ var _library: Array = []
 var _hover_frame := 0
 
 # UI
+var _shell: DesignerShell = null
 var _panel: PanelContainer
 var _name_edit: LineEdit
 var _subtitle: Label
@@ -56,6 +57,8 @@ var _undo_btn: Button
 var _redo_btn: Button
 var _design_list: DesignGallery
 var _col: DesignerColumn
+var _light_panel: ModelLightPanel = null
+var _toroid_3d: Node3D = null
 var _design_entries: Array = []
 var _tabs: TabBar
 var _view_stack: Control
@@ -138,6 +141,10 @@ func is_open() -> bool:
 	return _active
 
 
+func shell() -> DesignerShell:
+	return _shell
+
+
 func _activate() -> void:
 	_undo.clear()
 	_redo.clear()
@@ -150,12 +157,13 @@ func _activate() -> void:
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_process(true)
-	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
-	UiFit.keep_fitted(_panel, WANT)
+	_shell.open()
 	_apply_btn.visible = not _bound_prop_id.is_empty()
 	_place_btn.text = "Place a copy" if not _bound_prop_id.is_empty() else "Place in world"
 	_refresh_design_list()
 	_built_key = ""
+	if _light_panel != null:
+		_light_panel.load_from_context(_main_node(), _bound_prop_id, ToroidLabBuilder.MODEL_ID, _spec)
 	_rebuild_now()
 	_frame_camera()
 
@@ -163,12 +171,15 @@ func _activate() -> void:
 func close() -> void:
 	if not _active:
 		return
+	if _light_panel != null:
+		_light_panel.reset_studio_night()
 	_active = false
 	_playing = false
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_process(false)
-	CursorController.release_modal(MODAL_NAME)
+	if _shell != null and _shell.is_open():
+		_shell.close()
 
 
 func _process(delta: float) -> void:
@@ -207,26 +218,25 @@ func _input(e: InputEvent) -> void:
 # ---------------------------------------------------------------------------
 
 func _build_ui() -> void:
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.55)
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	add_child(dim)
-	_panel = PanelContainer.new()
-	_panel.add_theme_stylebox_override("panel", UITheme.panel_style())
-	add_child(_panel)
-	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	_panel.add_child(root)
-	root.add_child(_build_header())
-	var body := HBoxContainer.new()
-	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body.add_theme_constant_override("separation", UITheme.SPACE_MD)
-	root.add_child(body)
-	body.add_child(_build_left())
-	body.add_child(_build_centre())
-	body.add_child(_build_right())
-	root.add_child(_build_footer())
+	_shell = DesignerShell.create("Toroid designer", "target", {
+		"name_id": MODAL_NAME, "want": WANT, "name_edit": true, "undo": true,
+		"left_label": "Designs", "left_w": 240.0, "right_w": 400.0})
+	add_child(_shell)
+	_panel = _shell.panel
+	_name_edit = _shell.name_edit
+	_name_edit.placeholder_text = "Design name"
+	_name_edit.text_submitted.connect(func(_t): _on_name_changed())
+	_name_edit.focus_exited.connect(_on_name_changed)
+	_subtitle = _shell.subtitle
+	_undo_btn = _shell.undo_btn
+	_redo_btn = _shell.redo_btn
+	_shell.undo_requested.connect(_undo_step)
+	_shell.redo_requested.connect(_redo_step)
+	_shell.closed.connect(close)
+	_shell.left.add_child(_build_left())
+	_shell.centre.add_child(_build_centre())
+	_shell.right.add_child(_build_right())
+	_build_footer()
 	_file_dialog = FileDialog.new()
 	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
 	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -236,54 +246,10 @@ func _build_ui() -> void:
 	add_child(_file_dialog)
 
 
-func _build_header() -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	var icon := TextureRect.new()
-	icon.texture = UiIcons.icon("target", 22)
-	icon.modulate = UITheme.C_AMBER
-	icon.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
-	row.add_child(icon)
-	var title := Label.new()
-	title.text = "Toroid designer"
-	title.add_theme_font_size_override("font_size", UITheme.FONT_XL)
-	title.add_theme_color_override("font_color", UITheme.C_TEXT)
-	row.add_child(title)
-	_name_edit = LineEdit.new()
-	_name_edit.custom_minimum_size = Vector2(260, 0)
-	_name_edit.placeholder_text = "Design name"
-	_name_edit.text_submitted.connect(func(_t): _on_name_changed())
-	_name_edit.focus_exited.connect(_on_name_changed)
-	row.add_child(_name_edit)
-	_subtitle = Label.new()
-	_subtitle.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	_subtitle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_subtitle.clip_text = true
-	_subtitle.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	row.add_child(_subtitle)
-	_undo_btn = IconButton.make("undo-2", "Undo (Ctrl+Z)", _undo_step)
-	row.add_child(_undo_btn)
-	_redo_btn = IconButton.make("redo-2", "Redo (Ctrl+Y)", _redo_step)
-	row.add_child(_redo_btn)
-	row.add_child(IconButton.close(close))
-	return row
-
-
-func _scroll_column(width: float) -> Array:
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(width, 0)
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+func _build_left() -> Control:
 	var box := VBoxContainer.new()
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	scroll.add_child(box)
-	return [scroll, box]
-
-
-func _build_left() -> Control:
-	var col := _scroll_column(240)
-	var box: VBoxContainer = col[1]
 	box.add_child(SectionHeader.make("Designs", "layout-grid"))
 	_design_list = DesignGallery.make("toroidlab")
 	_design_list.set_thumbnailer(_thumb_for)
@@ -303,6 +269,8 @@ func _build_left() -> Control:
 	forget.pressed.connect(_on_forget_design)
 	lib.add_child(forget)
 	box.add_child(lib)
+	var how_sec := Collapsible.make("How it works", false).persist("toroidlab", "how")
+	box.add_child(how_sec)
 	var how := Label.new()
 	how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	how.add_theme_font_size_override("font_size", UITheme.FONT_XS)
@@ -310,8 +278,8 @@ func _build_left() -> Control:
 	how.text = ("Every rib is one circle — the torus' minor circle — cut where it meets the ground and " +
 		"split into bent arcs. Angles on that circle run from its outer equator (0°) up over the crown " +
 		"(90°) to the throat (180°). Rings, the canopy's edges and the panels are placed by those angles.")
-	box.add_child(how)
-	return col[0]
+	how_sec.body.add_child(how)
+	return box
 
 
 func _build_centre() -> Control:
@@ -495,8 +463,9 @@ func _build_studio_world() -> void:
 
 
 func _build_right() -> Control:
-	var col := _scroll_column(400)
-	var box: VBoxContainer = col[1]
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	var sec := Collapsible.make("Torus", true)
 	box.add_child(sec)
 	_torus_box = sec.body
@@ -521,6 +490,15 @@ func _build_right() -> Control:
 	sec = Collapsible.make("Colours", false)
 	box.add_child(sec)
 	_color_box = sec.body
+	sec = Collapsible.make("Lighting", false)
+	box.add_child(sec)
+	_light_panel = ModelLightPanel.new()
+	_light_panel.bind_studio_night(_studio)
+	_light_panel.lights_changed.connect(func() -> void:
+		_spec[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
+		if _col != null:
+			_col.set_summary("Lighting", _light_panel.summary_text()))
+	sec.body.add_child(_light_panel)
 	box.add_child(SectionHeader.make("Checks", "circle-check"))
 	_warn_box = VBoxContainer.new()
 	box.add_child(_warn_box)
@@ -556,41 +534,16 @@ func _build_right() -> Control:
 	_export_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_export_status)
 	_col = DesignerColumn.setup(box, "toroidlab", {"open": ["Torus"], "fold": ["Bill of materials", "Fabrication files"]})
-	return col[0]
+	return box
 
 
-func _build_footer() -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	var hint := Label.new()
-	hint.text = "Drag to orbit · wheel to zoom · click a tube, fitting, canopy piece or panel to highlight its kind"
-	hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(hint)
-	_apply_btn = Button.new()
-	_apply_btn.text = "Apply to placed structure"
-	UITheme.style_button(_apply_btn)
-	_apply_btn.pressed.connect(_on_apply)
-	row.add_child(_apply_btn)
-	_place_btn = Button.new()
-	_place_btn.text = "Place in world"
-	UITheme.style_button(_place_btn)
-	_place_btn.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	_place_btn.pressed.connect(_on_place)
-	row.add_child(_place_btn)
-	var crew_b := Button.new()
-	crew_b.text = "👷 Build with a crew"
-	crew_b.tooltip_text = "Place a packed kit in front of you and hand it to the site's crew: they lay it out and put it up piece by piece"
-	UITheme.style_button(crew_b)
-	crew_b.pressed.connect(_on_crew_build)
-	row.add_child(crew_b)
-	var close_b := Button.new()
-	close_b.text = "Close"
-	UITheme.style_button(close_b)
-	close_b.pressed.connect(close)
-	row.add_child(close_b)
-	return row
+func _build_footer() -> void:
+	_shell.set_hint("Drag to orbit · wheel to zoom · click a tube, fitting, canopy piece or panel to highlight its kind")
+	_apply_btn = _shell.add_button("Apply to placed structure", DesignerShell.SECONDARY, _on_apply)
+	_place_btn = _shell.add_button("Place in world", DesignerShell.PRIMARY, _on_place)
+	_shell.add_button("Build with a crew", DesignerShell.SECONDARY, _on_crew_build,
+		"Place a packed kit in front of you and hand it to the site's crew: they lay it out and put it up piece by piece")
+	_shell.add_button("Close", DesignerShell.SECONDARY, close)
 
 
 # ---------------------------------------------------------------------------
@@ -673,6 +626,8 @@ func _rebuild_now() -> void:
 		_built_key = key
 		_build_settings_rows()
 	_sync_settings()
+	if _light_panel != null:
+		_light_panel.sync_with_spec(_spec)
 	_rebuild_studio()
 	_refresh_parts()
 	_refresh_bom()
@@ -805,14 +760,15 @@ func _build_settings_rows() -> void:
 		var s := SpinBox.new()
 		s.min_value = 0.1
 		s.max_value = 60.0
-		s.step = 0.005
+		s.step = 0.01
+		s.custom_arrow_step = 0.01
 		s.suffix = " m"
 		s.value_changed.connect(_on_measure_changed.bind(str(m[0])))
 		_row(_torus_box, str(m[1]), s, str(m[2]))
 		_bindings.append({"ctl": s, "group": "_measure", "key": str(m[0]), "scale": 1.0})
 	_bind_spin(_torus_box, "Ribs (segments)", "torus", "segments", ToroidLabSpec.MIN_SEGMENTS, ToroidLabSpec.MAX_SEGMENTS,
 		1.0, "", "How many ribs round the ring")
-	_bind_spin(_torus_box, "Ground rings' height", "torus", "base_y_m", 0.0, 1.0, 0.005, " m",
+	_bind_spin(_torus_box, "Ground rings' height", "torus", "base_y_m", 0.0, 1.0, 0.01, " m",
 		"The ground rings' centreline above the ground (feet, base plates)")
 	_bind_spin(_torus_box, "Rotation", "torus", "rotation_deg", -180.0, 180.0, 0.5, "°", "Rib 0's bearing")
 	_bind_spin(_torus_box, "Inner top ring at", "torus", "inner_top_deg", -1.0, 230.0, 0.5, "°",
@@ -1214,6 +1170,8 @@ func _on_design_activated(idx: int) -> void:
 	_spec = ToroidLabSpec.resolve((_design_entries[idx]["spec"] as Dictionary).duplicate(true))
 	_highlight = ""
 	_built_key = ""
+	if _light_panel != null:
+		_light_panel.load_from_context(null, "", ToroidLabBuilder.MODEL_ID, _spec)
 	_rebuild_now()
 	_frame_camera()
 
@@ -1270,7 +1228,12 @@ func _rebuild_studio() -> void:
 		c.queue_free()
 	var node := ToroidLabBuilder.build_from_design(_design, "Toroid", {"explode": _explode,
 		"assembly": _assembly, "highlight": _highlight, "record": true})
+	_toroid_3d = node
 	_holder.add_child(node)
+	if _light_panel != null:
+		_light_panel.attach_preview(node)
+		if _col != null:
+			_col.set_summary("Lighting", _light_panel.summary_text())
 	var person := _studio.get_node_or_null("ScalePerson") as Node3D
 	if person != null:
 		person.position = Vector3(float(_design["stats"]["radius_max_m"]) + 0.6, 0.875, 0.0)
@@ -1293,6 +1256,9 @@ func _update_camera() -> void:
 
 
 func _on_studio_input(e: InputEvent) -> void:
+	if _light_panel != null and _light_panel.active_tool() != "select" \
+			and _light_panel.handle_viewport_event(e, _camera, _vp_container, _toroid_3d):
+		return
 	if e is InputEventMouseButton:
 		var mb := e as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
@@ -1306,9 +1272,13 @@ func _on_studio_input(e: InputEvent) -> void:
 				_orbiting = true
 				_moved = false
 				_press_pos = mb.position
+				if mb.button_index == MOUSE_BUTTON_LEFT and _light_panel != null:
+					_light_panel.handle_viewport_event(e, _camera, _vp_container, _toroid_3d)
 			else:
 				_orbiting = false
 				if not _moved and mb.button_index == MOUSE_BUTTON_LEFT:
+					if _light_panel != null and _light_panel.handle_viewport_event(e, _camera, _vp_container, _toroid_3d):
+						return
 					var hit := _pick_at(mb.position)
 					_set_highlight(str(hit.get("id", "")))
 	elif e is InputEventMouseMotion:
@@ -1441,6 +1411,8 @@ func _prop_record(prop_id: String) -> Dictionary:
 
 
 func _on_place() -> void:
+	if _light_panel != null:
+		_spec[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
 	if _loader != null and _loader.has_method("begin_toroidlab_placement"):
 		if bool(_loader.call("begin_toroidlab_placement", ToroidLabSpec.to_json_safe(_spec))):
 			close()
@@ -1453,8 +1425,12 @@ func _on_apply() -> void:
 		return
 	var main := _main_node()
 	var pid := _bound_prop_id
+	if _light_panel != null:
+		_spec[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
 	if main != null:
 		PlacedPropService.update_prop_record(main, pid, {"toroid_spec": ToroidLabSpec.to_json_safe(_spec)}, true)
+		if _light_panel != null:
+			PropModelLights.sync_prop(main, pid, _light_panel.items())
 		# The panel ring may have changed: re-seed its graph array.
 		Callable(PlacedPropService, "seed_toroid_graph").call_deferred(main, pid)
 	close()

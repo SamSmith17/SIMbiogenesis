@@ -146,12 +146,16 @@ func _rebuild_actions() -> void:
 	var actions: Array = _current_card.get("actions", []) as Array
 	if actions.is_empty():
 		actions = [{"label": "Got it"}]
-	for a in actions:
+	for i in actions.size():
+		var a: Variant = actions[i]
 		if not (a is Dictionary):
 			continue
 		var btn := Button.new()
 		btn.text = str((a as Dictionary).get("label", "OK"))
-		UITheme.style_button(btn)
+		if i == actions.size() - 1:
+			UITheme.style_primary_button(btn)
+		else:
+			UITheme.style_button(btn)
 		var cb: Variant = (a as Dictionary).get("callback")
 		btn.pressed.connect(func() -> void:
 			close()
@@ -171,30 +175,39 @@ func _build_ui() -> void:
 
 	_panel = PanelContainer.new()
 	_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	_panel.add_theme_stylebox_override("panel", UITheme.panel_style(0.98))
+	_panel.add_theme_stylebox_override("panel", UITheme.modal_panel_style(0.99))
+	_panel.set_meta("ui_modal", true)
 	add_child(_panel)
 	UiScreenLayout.clamped_center(_panel, PANEL_SIZE)
 
 	var outer := MarginContainer.new()
-	outer.add_theme_constant_override("margin_left", UITheme.SPACE_LG)
-	outer.add_theme_constant_override("margin_right", UITheme.SPACE_LG)
-	outer.add_theme_constant_override("margin_top", UITheme.SPACE_MD)
-	outer.add_theme_constant_override("margin_bottom", UITheme.SPACE_MD)
+	outer.add_theme_constant_override("margin_left", UITheme.SPACE_MD)
+	outer.add_theme_constant_override("margin_right", UITheme.SPACE_MD)
+	outer.add_theme_constant_override("margin_top", UITheme.SPACE_XS)
+	outer.add_theme_constant_override("margin_bottom", UITheme.SPACE_XS)
 	_panel.add_child(outer)
 
 	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", UITheme.SPACE_MD)
+	root.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	outer.add_child(root)
 
 	var title_row := HBoxContainer.new()
 	title_row.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	root.add_child(title_row)
 
+	var alert_ic := TextureRect.new()
+	alert_ic.texture = UiIcons.icon("triangle-alert", 18)
+	alert_ic.modulate = UITheme.C_ERROR
+	alert_ic.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	title_row.add_child(alert_ic)
+
 	_title_lbl = Label.new()
+	_title_lbl.add_theme_font_override("font", UITheme.font("semibold"))
 	_title_lbl.add_theme_font_size_override("font_size", UITheme.FONT_LG)
 	_title_lbl.add_theme_color_override("font_color", UITheme.C_ERROR)
 	_title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title_row.add_child(_title_lbl)
+	root.add_child(HSeparator.new())
 
 	_body_lbl = RichTextLabel.new()
 	_body_lbl.bbcode_enabled = true

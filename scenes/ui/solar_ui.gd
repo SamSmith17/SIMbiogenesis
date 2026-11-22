@@ -87,12 +87,20 @@ var battery_soc_shutdown_pct  : float = 10.0   # Trip inverter output off when S
 var battery_soc_resume_pct    : float = 20.0   # Re-enable output when SOC recovers to this
 var _soc_protect_active       : bool  = false  # True while in low-SOC lockout
 
-# Inverter overload protection (measured in real time, not simulation time)
-var inverter_overload_watts    : float = 3500.0  # AC load trip threshold (W)
-var inverter_overload_duration : float = 10.0    # Seconds above threshold before shutdown
-var inverter_lockout_duration  : float = 30.0    # Seconds to remain off after overload trip
+# Inverter overload protection. Holds are sim seconds (delta * time_scale * 3600),
+# so a 10 s overload still trips at 60x. surge 0 means surge = the continuous rating.
+var inverter_overload_watts    : float = 3500.0  # Continuous AC rating (W)
+var inverter_surge_watts       : float = 0.0     # Short-spike rating; 0 = same as continuous
+var inverter_overload_duration : float = 10.0    # Sim seconds above the continuous rating
+var inverter_lockout_duration  : float = 30.0    # Sim seconds to remain off after a trip
 var _inverter_overload_elapsed : float = 0.0
 var _inverter_lockout_remaining: float = 0.0
+var current_load_now_kw        : float = 0.0     # Signature sample at this hour
+var current_load_peak_kw       : float = 0.0     # Coincident peak of the last fault window
+var _timeline_load_peak_kw     : float = 0.0     # Peak of the unbilled gap, written with the minute
+var _load_fault_from_h         : float = -1.0
+var _load_peak_show_w          : float = 0.0
+var _load_peak_show_until_h    : float = -1.0
 
 # Solar constants
 const SOLAR_CONSTANT : float = 1361.0
@@ -248,6 +256,17 @@ var last_time : float = -1.0
 ## scrubbing backward reads SOC back from the cache (the battery "uncharges").
 ## See core/energy_timeline.gd.
 var energy_timeline := EnergyTimeline.new()
+## Minutes the tracks keep across a scrub, including the ones the 14-day ring
+## has already trimmed. See core/timeline/energy_span_store.gd.
+var energy_spans := EnergySpanStore.new()
+## Graph / weather fingerprint the spans were filled against. Empty until the
+## first simulated tick. A change clears the store; a scrub does not.
+var _span_key := ""
+## Next tape step to copy into the store. -1 = from the start of the tape.
+var _span_mirror_from := -1
+## Tape step planted by a scrub with a placeholder SOC. Not copied into the
+## store; replaced once the fill integrates that minute.
+var _span_skip_step := -1
 ## Clock position of the previous _update_battery (forward-vs-backward test).
 var _battery_last_abs_h: float = -INF
 ## How far live net power may drift from the cached sample before the cached
@@ -2053,14 +2072,6 @@ func _perf_tick(delta: float) -> void:
 		_update_graph()
 		_update_weather_data_display()
 
-	# Overload protection — real-time, only while sim clock is running
-	if main_node != null:
-		var _ts: Variant = main_node.get("time_scale")
-		if _ts != null and float(_ts) > 0.0:
-			PerfSpan.begin("sui_over")
-			_update_inverter_overload(delta)
-			PerfSpan.end("sui_over")
-
 	# Smooth lighting every frame near realtime; at high speed, UI-rate is enough
 	# (targets still update on the 10 Hz weather tick).
 	_lighting_accumulator += delta
@@ -3284,15 +3295,21 @@ func get_timeline_bins(source : String, channel : String, w : float, i0 : int, n
 		"sim":
 			if _sim_series != null and not _sim_series.is_empty():
 				var s : Dictionary = _sim_series.channel_slice(channel, t0, t1)
-				return TimelineBinning.from_regular(s["values"], float(s["base_t"]), float(s["step"]), w, i0, n)
+				var sim_peaks : PackedFloat32Array = s.get("peaks", PackedFloat32Array())
+				return TimelineBinning.from_regular(s["values"], float(s["base_t"]), float(s["step"]), w, i0, n, sim_peaks)
 		"observed":
 			if _observed_series != null and not _observed_series.is_empty():
 				var o : Dictionary = _observed_series.channel_slice(channel, t0, t1, BATTERY_CAPACITY_KWH)
-				return TimelineBinning.from_regular(o["values"], float(o["base_t"]), float(o["step"]), w, i0, n)
+				var obs_peaks : PackedFloat32Array = o.get("peaks", PackedFloat32Array())
+				return TimelineBinning.from_regular(o["values"], float(o["base_t"]), float(o["step"]), w, i0, n, obs_peaks)
 		_:
+			# Spans outlive the 14-day ring and the holes a scrub used to smear.
+			if energy_spans.has_any():
+				return energy_spans.bins(channel, w, i0, n, BATTERY_CAPACITY_KWH)
 			if energy_timeline != null and not energy_timeline.is_empty():
 				var e : Dictionary = energy_timeline.channel_slice(channel, t0, t1)
-				return TimelineBinning.from_regular(e["values"], float(e["base_t"]), float(e["step"]), w, i0, n)
+				var peaks : PackedFloat32Array = e.get("peaks", PackedFloat32Array())
+				return TimelineBinning.from_regular(e["values"], float(e["base_t"]), float(e["step"]), w, i0, n, peaks)
 			# No recorded timeline yet: the pure evaluator, a few instants per bin.
 			var f := func(t : float) -> float:
 				var sample : Dictionary = evaluate_inputs_at(t)
@@ -3472,12 +3489,20 @@ func make_sim_render_evaluator(model: Object) -> Callable:
 		var solar := pair.y
 		var aux := evaluate_aux_at(abs_hours) if is_nan(render_aux_kw) else maxf(render_aux_kw, 0.0)
 		var load := 0.0
+		var peak := 0.0
 		if render_ac_on:
 			if model != null and get_tree() != null:
-				load = float(_GRAPH_AC_LOAD_SCRIPT.compute_kw(model, get_tree()))
+				var restore := _ac_restore_h()
+				if restore >= 0.0 and abs_hours < restore:
+					restore = -1.0
+				var step: Dictionary = _GRAPH_AC_LOAD_SCRIPT.evaluate_step(model, get_tree(),
+					abs_hours - 1.0 / 60.0, abs_hours, restore)
+				load = float(step.get("mean_w", 0.0)) / 1000.0
+				peak = maxf(load, float(step.get("peak_w", 0.0)) / 1000.0)
 			else:
 				load = _modeled_load_at(abs_hours)
-		return {"solar_kw": solar, "aux_kw": aux, "load_kw": load, "raw_kw": pair.x}
+				peak = load
+		return {"solar_kw": solar, "aux_kw": aux, "load_kw": load, "load_peak_kw": peak, "raw_kw": pair.x}
 
 
 ## The SimRenderer's cache: while it covers the playhead, `_update_battery`
@@ -3501,6 +3526,8 @@ func prepare_live_timeline_for_render(abs_h: float, model: Object) -> EnergyTime
 	if energy_timeline.is_empty():
 		energy_timeline.init_anchor(abs_h, battery_kwh_stored, current_solar_kw, aux_total, current_load_kw)
 	energy_timeline.truncate_after(abs_h)
+	energy_spans.truncate_after_hours(abs_h)
+	_span_mirror_from = energy_timeline.step_of(abs_h)
 	render_aux_kw = maxf(aux_total, 0.0)
 	render_ac_on = not _soc_protect_active
 	energy_timeline.set_evaluator(make_sim_render_evaluator(model))
@@ -3854,30 +3881,148 @@ func _get_shadow_factor(sun_direction: Vector3) -> float:
 
 
 func _calculate_load_power() -> void:
+	var abs_h := _load_abs_hours()
+	var sim_s := 0.0
+	if _load_fault_from_h < 0.0 or abs_h + 1e-9 < _load_fault_from_h:
+		_load_fault_from_h = abs_h
+		_inverter_overload_elapsed = 0.0
+	else:
+		sim_s = maxf(abs_h - _load_fault_from_h, 0.0) * 3600.0
+	if sim_s > 0.0 and _inverter_lockout_remaining > 0.0:
+		_inverter_lockout_remaining = maxf(_inverter_lockout_remaining - sim_s, 0.0)
+		if _inverter_lockout_remaining <= 0.0:
+			_inverter_overload_elapsed = 0.0
+			if _ac_shutdown_reason == "overload":
+				_ac_shutdown_reason = ""
+				ac_shutdown_changed.emit(false, "")
+			_publish_ac_power_bus(true)
+			if not _power_available and not _soc_protect_active:
+				_sync_power_available(get_battery_percent())
 	# Inverter output is intentionally cut during low-SOC protection/lockout.
 	# Force displayed AC load to zero so UI and graph mirror real availability.
 	if not is_ac_output_enabled():
 		current_load_kw = 0.0
+		current_load_now_kw = 0.0
+		current_load_peak_kw = 0.0
+		_timeline_load_peak_kw = 0.0
+		_load_fault_from_h = abs_h
 		return
 
 	# Use HA override while in live mode or during CSV / HA historical playback.
+	# The meter is the signature: a sustained reading still has to be able to trip.
 	var sm := get_node_or_null("/root/SimMode")
 	var historical := sm != null and sm.has_method("is_historical") and bool(sm.call("is_historical"))
 	if _ha_load_override >= 0.0 and (is_in_live_mode() or historical):
 		current_load_kw = _ha_load_override
+		current_load_now_kw = _ha_load_override
+		current_load_peak_kw = _ha_load_override
+		_timeline_load_peak_kw = _ha_load_override
+		var ha_w := _ha_load_override * 1000.0
+		var over := sim_s if ha_w > inverter_overload_watts else 0.0
+		var surge_lim := inverter_surge_watts if inverter_surge_watts > 0.0 else inverter_overload_watts
+		var above_surge := sim_s if surge_lim > 0.0 and ha_w > surge_lim else 0.0
+		if sim_s > 0.0:
+			_apply_inverter_decision(ha_w, over, above_surge)
+		_load_fault_from_h = abs_h
 		return
 
 	# Authoritative load: wired + ON items on the system graph canvas only.
+	# The energy window is everything the timeline has not billed yet (a spike
+	# must not fill a whole minute). The fault window is only the new interval,
+	# so a half-second inrush is not held for the rest of that minute.
 	var tree := get_tree()
 	if tree != null:
 		var sgv := _graph_view()
 		if sgv != null and ("model" in sgv):
 			var m: Variant = sgv.get("model")
 			if m != null:
-				current_load_kw = _GRAPH_AC_LOAD_SCRIPT.compute_kw(m, tree)
+				var restore := _ac_restore_h()
+				if restore >= 0.0 and abs_h < restore:
+					restore = -1.0
+				var fault: Dictionary = _GRAPH_AC_LOAD_SCRIPT.evaluate_step(m, tree,
+					_load_fault_from_h, abs_h, restore, inverter_overload_watts, inverter_surge_watts)
+				var energy_from := _load_fault_from_h
+				if energy_timeline != null and not energy_timeline.is_empty():
+					energy_from = minf(energy_timeline.end_abs_hours(), abs_h)
+				var energy := fault
+				if absf(energy_from - _load_fault_from_h) > 1e-9:
+					energy = _GRAPH_AC_LOAD_SCRIPT.evaluate_step(m, tree, energy_from, abs_h, restore)
+				current_load_kw = float(energy.get("mean_w", 0.0)) / 1000.0
+				current_load_now_kw = float(energy.get("now_w", 0.0)) / 1000.0
+				current_load_peak_kw = float(fault.get("peak_w", 0.0)) / 1000.0
+				# The energy window is the whole unbilled minute, so its peak is
+				# the spike the Load track should keep when that minute is written.
+				_timeline_load_peak_kw = maxf(float(energy.get("peak_w", 0.0)),
+					float(fault.get("peak_w", 0.0))) / 1000.0
+				_remember_load_peak(float(fault.get("peak_w", 0.0)), abs_h)
+				_publish_load_by_item(energy.get("by_item", {}) as Dictionary, fault.get("by_item", {}) as Dictionary)
+				if sim_s > 0.0:
+					_apply_inverter_decision(float(fault.get("peak_w", 0.0)),
+						float(fault.get("above_continuous_s", 0.0)),
+						float(fault.get("above_surge_s", 0.0)))
+				_load_fault_from_h = abs_h
 				return
 
 	current_load_kw = 0.0
+	current_load_now_kw = 0.0
+	current_load_peak_kw = 0.0
+	_timeline_load_peak_kw = 0.0
+	_load_fault_from_h = abs_h
+
+
+func _load_abs_hours() -> float:
+	if main_node != null and main_node.has_method("get_absolute_hours"):
+		return float(main_node.call("get_absolute_hours"))
+	return 0.0
+
+
+func _ac_restore_h() -> float:
+	var apb := get_node_or_null("/root/AcPowerBus")
+	if apb != null and "ac_restore_h" in apb:
+		return float(apb.get("ac_restore_h"))
+	return -1.0
+
+
+func _remember_load_peak(peak_w: float, abs_h: float) -> void:
+	if abs_h > _load_peak_show_until_h:
+		_load_peak_show_w = 0.0
+	if peak_w > _load_peak_show_w:
+		_load_peak_show_w = peak_w
+		_load_peak_show_until_h = abs_h + 30.0 / 3600.0
+
+
+func _publish_load_by_item(energy_items: Dictionary, fault_items: Dictionary) -> void:
+	var apb := get_node_or_null("/root/AcPowerBus")
+	if apb == null or not ("load_by_item" in apb):
+		return
+	var out := {}
+	for k in energy_items.keys():
+		var raw_e: Variant = energy_items[k]
+		var raw_f: Variant = fault_items.get(k, {})
+		var e: Dictionary = raw_e if raw_e is Dictionary else {}
+		var f: Dictionary = raw_f if raw_f is Dictionary else {}
+		out[str(k)] = {
+			"now_w": float(e.get("now_w", 0.0)),
+			"mean_w": float(e.get("mean_w", 0.0)),
+			"peak_w": float(f.get("peak_w", e.get("peak_w", 0.0))),
+		}
+	apb.set("load_by_item", out)
+
+
+func _apply_inverter_decision(peak_w: float, above_cont_s: float, above_surge_s: float) -> void:
+	var decision: Dictionary = PowerSignature.inverter_decision(_inverter_overload_elapsed,
+		peak_w, above_cont_s, above_surge_s, inverter_overload_watts, inverter_surge_watts,
+		inverter_overload_duration)
+	_inverter_overload_elapsed = float(decision.get("elapsed_s", 0.0))
+	if not bool(decision.get("tripped", false)):
+		return
+	_inverter_overload_elapsed = 0.0
+	_inverter_lockout_remaining = inverter_lockout_duration
+	if _ac_shutdown_reason.is_empty():
+		_ac_shutdown_reason = "overload"
+		ac_shutdown_changed.emit(true, _ac_shutdown_reason)
+	_sync_power_available(get_battery_percent())
+	_publish_ac_power_bus(true)
 
 ## Hysteretic SOC protection helper — updates _soc_protect_active.
 ## Shuts off output at battery_soc_shutdown_pct, restores at battery_soc_resume_pct.
@@ -3921,6 +4066,8 @@ func _publish_ac_power_bus(force: bool = false) -> void:
 	var apb := get_node_or_null("/root/AcPowerBus")
 	if apb == null or not apb.has_method("publish"):
 		return
+	if apb.has_method("note_output") and main_node != null and main_node.has_method("get_absolute_hours"):
+		apb.call("note_output", is_ac_output_enabled(), float(main_node.call("get_absolute_hours")))
 	var shut := _soc_protect_active or _inverter_lockout_remaining > 0.0 \
 		or _graph_controller_destroyed
 	var reason: String = _ac_shutdown_reason
@@ -3938,6 +4085,212 @@ func _ac_shutdown_reason_label() -> String:
 	if _inverter_lockout_remaining > 0.0:
 		return "Inverter overload — AC off for %.0fs" % ceilf(_inverter_lockout_remaining)
 	return ""
+
+
+## The timeline tells the store which week is on screen. The fill walks that
+## window; a playhead jump of more than an hour starts again from there.
+func note_power_window(t0: float, t1: float, playhead: float, bin_w: float) -> void:
+	energy_spans.note_window(t0, t1, playhead, bin_w)
+
+
+func power_span_generation() -> int:
+	return energy_spans.generation
+
+
+## Background fill, shared with the timeline so a paused scrub still completes.
+## Returns how many new samples landed.
+func pump_power_spans(budget_us: int) -> int:
+	if main_node == null or _sim_render_active():
+		return 0
+	_refresh_span_key()
+	var anchor := battery_kwh_stored
+	if main_node.has_method("get_absolute_hours"):
+		var h := float(main_node.call("get_absolute_hours"))
+		var wrote := energy_spans.pump(budget_us, Callable(self, "_span_inputs"), h, anchor, _span_limits())
+		_apply_span_restamp()
+		return wrote
+	return 0
+
+
+func _sim_render_active() -> bool:
+	var gv := _graph_view()
+	if gv == null:
+		return false
+	var r: Variant = gv.get("_sim_renderer")
+	if r is Object and (r as Object).has_method("is_active"):
+		return bool((r as Object).call("is_active"))
+	return false
+
+
+func _span_limits() -> Dictionary:
+	var lim := battery_limits_now()
+	return {
+		"cap": BATTERY_CAPACITY_KWH,
+		"ceff": CHARGE_EFFICIENCY,
+		"deff": DISCHARGE_EFFICIENCY,
+		"min_kwh": min_battery_kwh(),
+		"max_c": lim.x,
+		"max_d": lim.y,
+	}
+
+
+## Solar at that instant, load from the same signature step the live tick uses,
+## aux held at the live value (a filled hour is not a hydro replay). At the
+## discharge floor the load sheds, so the reconstructed battery does not keep
+## drawing through an empty pack.
+func _span_inputs(abs_h: float, soc: float) -> Dictionary:
+	var pair := _evaluate_solar_pair(abs_h)
+	var aux := evaluate_aux_at(abs_h)
+	var load := 0.0
+	var peak := 0.0
+	var model: Object = null
+	var gv := _graph_view()
+	if gv != null:
+		var m: Variant = gv.get("model")
+		if m is Object:
+			model = m
+	if model != null and get_tree() != null:
+		var restore := _ac_restore_h()
+		if restore >= 0.0 and abs_h < restore:
+			restore = -1.0
+		var step: Dictionary = _GRAPH_AC_LOAD_SCRIPT.evaluate_step(model, get_tree(),
+			abs_h - 1.0 / 60.0, abs_h, restore)
+		load = float(step.get("mean_w", 0.0)) / 1000.0
+		peak = maxf(load, float(step.get("peak_w", 0.0)) / 1000.0)
+	else:
+		load = _modeled_load_at(abs_h)
+		peak = load
+	if soc <= min_battery_kwh() + 1e-3 and pair.y + aux <= load:
+		load = 0.0
+		peak = 0.0
+	return {"solar_kw": pair.y, "aux_kw": aux, "load_kw": load, "load_peak_kw": peak, "raw_kw": pair.x}
+
+
+func _refresh_span_key() -> void:
+	var urev := -1
+	var srev := -1
+	var gv := _graph_view()
+	if gv != null:
+		var m: Variant = gv.get("model")
+		if m is Object:
+			urev = int((m as Object).get("user_rev"))
+			srev = int((m as Object).get("struct_rev"))
+	var wx := "na"
+	var ws := get_node_or_null("/root/WeatherService")
+	if ws != null:
+		var has := false
+		if ws.has_method("has_data"):
+			has = bool(ws.call("has_data"))
+		var n := 0
+		var series: Variant = ws.get("_forecast_series")
+		if series is Array:
+			n = (series as Array).size()
+		wx = "%s|%d" % [str(has), n]
+	var key := "%d|%d|%.4f|%s|%s" % [urev, srev, BATTERY_CAPACITY_KWH, str(_clear_sky_override), wx]
+	if _span_key == "":
+		_span_key = key
+		return
+	if key == _span_key:
+		return
+	_span_key = key
+	energy_spans.clear()
+	_span_skip_step = -1
+	_span_mirror_from = energy_timeline.last_step() + 1 if not energy_timeline.is_empty() else -1
+
+
+func _mirror_tape_into_spans() -> void:
+	if energy_timeline.is_empty():
+		return
+	var from := energy_timeline.first_step()
+	if _span_mirror_from >= 0:
+		from = _span_mirror_from
+	var pack := energy_timeline.slice_from(from)
+	var soc: PackedFloat32Array = pack.get("soc", PackedFloat32Array())
+	if soc.is_empty():
+		return
+	var base := int(pack["base_step"])
+	var solar: PackedFloat32Array = pack["solar"]
+	var aux: PackedFloat32Array = pack["aux"]
+	var load: PackedFloat32Array = pack["load"]
+	var peak: PackedFloat32Array = pack["peak"]
+	var raw: PackedFloat32Array = pack["raw"]
+	if _span_skip_step == base:
+		if soc.size() <= 1:
+			_span_mirror_from = energy_timeline.last_step() + 1
+			return
+		soc = soc.slice(1)
+		solar = solar.slice(1)
+		aux = aux.slice(1)
+		load = load.slice(1)
+		peak = peak.slice(1)
+		raw = raw.slice(1)
+		base += 1
+	energy_spans.write_lived_run(base, soc, solar, aux, load, peak, raw)
+	_span_mirror_from = energy_timeline.last_step() + 1
+
+
+func _reanchor_after_scrub(abs_h: float, aux_total: float) -> void:
+	_mirror_tape_into_spans()
+	var g := energy_timeline.step_of(abs_h)
+	var known := energy_spans.sample_minute(g)
+	if not known.is_empty():
+		energy_timeline.init_anchor(abs_h, float(known["soc_kwh"]), float(known["solar_kw"]),
+			float(known["aux_kw"]), float(known["load_kw"]), float(known["raw_kw"]),
+			float(known["load_peak_kw"]))
+		_span_skip_step = -1
+	else:
+		energy_timeline.init_anchor(abs_h, battery_kwh_stored, current_solar_kw, aux_total,
+			current_load_kw, _raw_solar_kw, _timeline_load_peak_kw)
+		_span_skip_step = energy_timeline.first_step()
+	# The placeholder minute stays out of the store until the fill integrates it.
+	_span_mirror_from = energy_timeline.last_step() + 1
+	energy_spans.retarget_playhead(abs_h)
+
+
+## Play stepped into minutes the fill already has. Copy them onto the tape so
+## the battery follows that curve. The live solar reading carries cloud noise
+## the evaluator does not, so a per-tick mismatch must not throw the fill away;
+## a graph edit clears the store instead.
+func _adopt_span_forward(abs_h: float) -> bool:
+	if energy_timeline.is_empty():
+		return false
+	var g0 := energy_timeline.last_step() + 1
+	var g1 := energy_timeline.step_of(abs_h)
+	if g1 < g0:
+		return false
+	if not energy_spans.covers_minutes(g0, g1):
+		return false
+	var g := g0
+	while g <= g1:
+		var s := energy_spans.sample_minute(g)
+		energy_timeline.append_known(energy_timeline.time_of_step(g), float(s["soc_kwh"]),
+			float(s["solar_kw"]), float(s["aux_kw"]), float(s["load_kw"]),
+			float(s["raw_kw"]), float(s["load_peak_kw"]))
+		g += 1
+	return true
+
+
+func _apply_span_restamp() -> void:
+	if _span_skip_step < 0 or energy_timeline.is_empty():
+		return
+	if energy_timeline.first_step() != _span_skip_step:
+		_span_skip_step = -1
+		return
+	var soc := energy_spans.soc_at_hours(energy_timeline.time_of_step(_span_skip_step))
+	if is_nan(soc):
+		return
+	energy_timeline.restamp_soc(soc)
+	var resume := _span_skip_step + 1
+	_span_skip_step = -1
+	_span_mirror_from = resume
+	_mirror_tape_into_spans()
+
+
+func _tape_covers(abs_h: float) -> bool:
+	if energy_timeline.is_empty():
+		return false
+	return abs_h >= energy_timeline.start_abs_hours() - 1e-6 \
+		and abs_h <= energy_timeline.end_abs_hours() + energy_timeline.step_hours
 
 
 func _update_battery(_delta: float) -> void:
@@ -3963,6 +4316,7 @@ func _update_battery(_delta: float) -> void:
 			battery_kwh_stored = soc_live
 			energy_timeline.record_measured(abs_h_live, soc_live,
 				current_solar_kw, aux_total, current_load_kw, _raw_solar_kw)
+			_mirror_tape_into_spans()
 		# Update availability
 		var battery_percent_val : float = _ha_battery_soc_override
 		_apply_soc_hysteresis(battery_percent_val)
@@ -3992,7 +4346,7 @@ func _update_battery(_delta: float) -> void:
 	energy_timeline.configure(BATTERY_CAPACITY_KWH, CHARGE_EFFICIENCY, DISCHARGE_EFFICIENCY, min_kwh)
 	if energy_timeline.is_empty():
 		energy_timeline.init_anchor(abs_h, battery_kwh_stored,
-			current_solar_kw, aux_total, current_load_kw, _raw_solar_kw)
+			current_solar_kw, aux_total, current_load_kw, _raw_solar_kw, _timeline_load_peak_kw)
 	# Inside a RENDERED range the timeline is authoritative: the render
 	# integrated the same inputs as a pure function of time, and the live
 	# `current_solar_kw` comes from the scene-sun path (cloud noise, the
@@ -4003,12 +4357,26 @@ func _update_battery(_delta: float) -> void:
 	energy_timeline.max_charge_kw = lim_now.x
 	energy_timeline.max_discharge_kw = lim_now.y
 	var rendered := _in_rendered_range(abs_h)
+	_refresh_span_key()
+	var frame_h := 0.0
+	if "time_scale" in main_node:
+		frame_h = _delta * float(main_node.time_scale)
+	var have_last := _battery_last_abs_h > -1.0e8
+	var scrub := have_last and EnergySpanStore.jump_is_scrub(
+		abs_h - _battery_last_abs_h, frame_h, energy_timeline.step_hours)
 	if abs_h > energy_timeline.end_abs_hours():
-		# Forward — integrate with exact live inputs (held across the step).
-		energy_timeline.record_step(abs_h, current_solar_kw, aux_total, current_load_kw, _raw_solar_kw)
+		if scrub:
+			# A scrub must not stamp the landing power across every skipped
+			# minute. The span store already holds what was simulated; the
+			# fill walks from that edge to here.
+			_reanchor_after_scrub(abs_h, aux_total)
+		elif not _adopt_span_forward(abs_h):
+			# One played step — integrate with the live inputs (held across it).
+			energy_timeline.record_step(abs_h, current_solar_kw, aux_total, current_load_kw, _raw_solar_kw, _timeline_load_peak_kw)
 	elif abs_h < energy_timeline.start_abs_hours():
-		# Scrubbed before the cache start — extend backward (best-effort).
-		energy_timeline.seek(abs_h)
+		# Before the tape. Seeking would paint the edge sample backward across
+		# the jump. The span store fills that past from the tape's first minute.
+		pass
 	elif rendered:
 		pass  # pure read of the rendered curve, forward or back
 	elif abs_h > _battery_last_abs_h + 1e-6 \
@@ -4026,10 +4394,21 @@ func _update_battery(_delta: float) -> void:
 		if absf(cached_net - live_net) > BATTERY_CACHE_DIVERGE_KW:
 			var cut_at := _battery_last_abs_h if abs_h - _battery_last_abs_h <= 1.0 else abs_h
 			energy_timeline.truncate_after(cut_at)
-			energy_timeline.record_step(abs_h, current_solar_kw, aux_total, current_load_kw, _raw_solar_kw)
+			energy_spans.truncate_after_hours(cut_at)
+			_span_mirror_from = energy_timeline.step_of(cut_at)
+			energy_timeline.record_step(abs_h, current_solar_kw, aux_total, current_load_kw, _raw_solar_kw, _timeline_load_peak_kw)
 	# else: paused or moving back inside the cache — pure reversible read.
+	_mirror_tape_into_spans()
+	if not _sim_render_active():
+		energy_spans.pump(2500, Callable(self, "_span_inputs"), abs_h, battery_kwh_stored, _span_limits())
+	_apply_span_restamp()
 	_battery_last_abs_h = abs_h
-	battery_kwh_stored = clampf(energy_timeline.soc_at(abs_h), 0.0, BATTERY_CAPACITY_KWH)
+	if _tape_covers(abs_h):
+		battery_kwh_stored = clampf(energy_timeline.soc_at(abs_h), 0.0, BATTERY_CAPACITY_KWH)
+	else:
+		var span_soc := energy_spans.soc_at_hours(abs_h)
+		if not is_nan(span_soc):
+			battery_kwh_stored = clampf(span_soc, 0.0, BATTERY_CAPACITY_KWH)
 	if rendered:
 		_apply_playback_readouts(abs_h, energy_timeline.sample_at(abs_h))
 	# Scoreboard/24h-history are derived read-only views over the timeline —
@@ -4058,38 +4437,6 @@ func _apply_playback_readouts(abs_h: float, ps: Dictionary) -> void:
 		solar = maxf(load - aux, 0.0)
 	current_solar_kw = solar
 	current_load_kw = load
-
-
-## Inverter overload protection — call every frame with real-time delta.
-## Trips AC output off when load exceeds inverter_overload_watts for
-## inverter_overload_duration seconds.  Keeps output off for inverter_lockout_duration.
-func _update_inverter_overload(delta: float) -> void:
-	if _inverter_lockout_remaining > 0.0:
-		_inverter_lockout_remaining -= delta
-		if _inverter_lockout_remaining <= 0.0:
-			_inverter_lockout_remaining = 0.0
-			_inverter_overload_elapsed  = 0.0
-			if _ac_shutdown_reason == "overload":
-				_ac_shutdown_reason = ""
-				ac_shutdown_changed.emit(false, "")
-			_publish_ac_power_bus(true)
-			# Lockout expired — force a power-available re-check next battery tick
-			if not _power_available and not _soc_protect_active:
-				_sync_power_available(get_battery_percent())
-		return
-	var load_watts : float = current_load_kw * 1000.0
-	if load_watts > inverter_overload_watts:
-		_inverter_overload_elapsed += delta
-		if _inverter_overload_elapsed >= inverter_overload_duration:
-			_inverter_overload_elapsed  = 0.0
-			_inverter_lockout_remaining = inverter_lockout_duration
-			if _ac_shutdown_reason.is_empty():
-				_ac_shutdown_reason = "overload"
-				ac_shutdown_changed.emit(true, _ac_shutdown_reason)
-			_sync_power_available(get_battery_percent())
-			_publish_ac_power_bus(true)
-	else:
-		_inverter_overload_elapsed = 0.0
 
 
 ## Sum the instantaneous output of all auxiliary EnergySource nodes (wind,
@@ -4301,12 +4648,19 @@ func _update_display() -> void:
 		load_value.add_theme_color_override("font_color", Color(1.0, 0.28, 0.22, 1.0))
 		load_value.tooltip_text = _ac_shutdown_reason_label()
 	else:
-		load_value.text = "%s%s" % [_fmt_power(current_load_kw), load_linked]
-		if current_load_kw > 0.01:
+		var shown_kw := current_load_now_kw
+		load_value.text = "%s%s" % [_fmt_power(shown_kw), load_linked]
+		if _load_peak_show_w > shown_kw * 1000.0 + 50.0:
+			load_value.text = "%s  peak %s%s" % [_fmt_power(shown_kw), _fmt_power(_load_peak_show_w / 1000.0), load_linked]
+		if shown_kw > 0.01 or _load_peak_show_w > 50.0:
 			load_value.add_theme_color_override("font_color", Color(1.0, 0.5, 0.3, 1.0))
 		else:
 			load_value.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5, 1.0))
-		load_value.tooltip_text = _get_link_tooltip("load", ha_load_entity)
+		var tip := _get_link_tooltip("load", ha_load_entity)
+		if _load_peak_show_w > shown_kw * 1000.0 + 50.0:
+			tip = "%s\nPeak this step %s (the battery is billed the average, %s)." % [tip,
+				_fmt_power(_load_peak_show_w / 1000.0), _fmt_power(current_load_kw)]
+		load_value.tooltip_text = tip
 	
 	# Battery percent tooltip
 	battery_percent.tooltip_text = _get_link_tooltip("battery SOC", ha_battery_soc_entity)
@@ -5254,20 +5608,35 @@ func _setup_collapse() -> void:
 	_expanded_height = maxf(size.y, 520.0)
 	custom_minimum_size.x = maxf(custom_minimum_size.x, PANEL_MIN_WIDTH)
 
+	var panel_node := get_node_or_null("Panel") as PanelContainer
+	if panel_node != null:
+		panel_node.add_theme_stylebox_override("panel", UITheme.dock_panel_style(0.95))
+	for num_lbl in [solar_value, aux_value, potential_value, load_value, net_value, battery_percent]:
+		if num_lbl != null:
+			num_lbl.add_theme_font_override("font", UITheme.font("semibold", true))
 	var header := HBoxContainer.new()
 	header.name = "CollapseHeader"
+	header.add_theme_constant_override("separation", 6)
 	var title_idx := title_label.get_index()
 	vbox.add_child(header)
 	vbox.move_child(header, title_idx)
+
+	var zap_ic := TextureRect.new()
+	zap_ic.texture = UiIcons.icon("zap", 16)
+	zap_ic.modulate = UITheme.C_AMBER
+	zap_ic.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	zap_ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	header.add_child(zap_ic)
 
 	_collapse_btn = Button.new()
 	_collapse_btn.flat = true
 	_collapse_btn.focus_mode = Control.FOCUS_NONE
 	_collapse_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_collapse_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_collapse_btn.add_theme_font_size_override("font_size", 20)
-	_collapse_btn.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
-	_collapse_btn.add_theme_color_override("font_hover_color", Color(0.55, 0.9, 1.0))
+	_collapse_btn.add_theme_font_override("font", UITheme.font("semibold"))
+	_collapse_btn.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	_collapse_btn.add_theme_color_override("font_color", UITheme.C_TEXT)
+	_collapse_btn.add_theme_color_override("font_hover_color", UITheme.C_PRIMARY)
 	_collapse_btn.pressed.connect(_on_collapse_toggled)
 	header.add_child(_collapse_btn)
 
@@ -5315,8 +5684,11 @@ func _update_collapse_btn_text() -> void:
 		# path that left the panel showing collapses back to hidden.
 		visible = false
 		return
-	var title := title_label.text if title_label != null else "⚡ POWER SCOREBOARD"
-	_collapse_btn.text = ("▾ " if _expanded else "▸ ") + title
+	var title := title_label.text if title_label != null else "Power Scoreboard"
+	title = title.trim_prefix("⚡ ").strip_edges()
+	_collapse_btn.text = title
+	_collapse_btn.icon = UiIcons.icon("chevron-down" if _expanded else "chevron-right", 14)
+	_collapse_btn.icon_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_collapse_btn.tooltip_text = "Click to collapse or expand the power panel"
 
 ## The tucked pill's one line: net power, battery, and AC state when it is off.

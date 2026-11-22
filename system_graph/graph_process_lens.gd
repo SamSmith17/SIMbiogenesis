@@ -1231,9 +1231,14 @@ func _refresh_checks(items: Array, conns: Array) -> void:
 		for c in _checks:
 			if str(c["level"]) == "error":
 				errs += 1
+		var scol := UITheme.C_ERROR if errs > 0 else (UITheme.C_WARN if not _checks.is_empty() else UITheme.C_OK)
 		_checks_btn.text = ProcessChecks.summary(_checks)
-		_checks_btn.add_theme_color_override("font_color",
-			UITheme.C_ERROR if errs > 0 else (UITheme.C_WARN if not _checks.is_empty() else UITheme.C_OK))
+		UiIcons.apply(_checks_btn, "triangle-alert" if errs > 0 or not _checks.is_empty() else "circle-check", _checks_btn.tooltip_text, 14)
+		_checks_btn.add_theme_stylebox_override("normal", UITheme.chip_style(scol))
+		_checks_btn.add_theme_stylebox_override("hover", UITheme.chip_style(scol.lightened(0.16)))
+		_checks_btn.add_theme_stylebox_override("pressed", UITheme.chip_style(scol.lightened(0.24)))
+		_checks_btn.add_theme_color_override("font_color", scol)
+		_checks_btn.add_theme_color_override("icon_normal_color", scol)
 	if _checks_panel != null and _checks_panel.visible:
 		_fill_checks()
 

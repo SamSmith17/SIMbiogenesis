@@ -137,26 +137,35 @@ static func draw(ci: CanvasItem, rect: Rect2, z: float, spec: Dictionary) -> Dic
 		right_w = cw + 6.0
 	var tx := ix + icon_px + 5.0
 	var tw := header.end.x - pad - right_w - tx
-	var title := UiText.fit(semibold, str(spec.get("title", "")), hfs, tw, "graph card title")
-	ci.draw_string(semibold, Vector2(tx, hrow.get_center().y + hfs * 0.36), title,
-		HORIZONTAL_ALIGNMENT_LEFT, -1, hfs, _fade(GraphTheme.TEXT, a))
+	var raw_title := str(spec.get("title", ""))
+	var title_fs := hfs
+	while title_fs > 9 and semibold.get_string_size(raw_title, HORIZONTAL_ALIGNMENT_LEFT, -1, title_fs).x > tw:
+		title_fs -= 1
+	var audit_card := z >= 0.78
+	var title := UiText.fit(semibold, raw_title, title_fs, tw, "graph card title" if audit_card else "")
+	ci.draw_string(semibold, Vector2(tx, hrow.get_center().y + title_fs * 0.36), title,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, title_fs, _fade(GraphTheme.TEXT, a))
 	# Alert (destroyed): replaces the hero.
 	var alert: Dictionary = spec.get("alert", {})
 	var num := UITheme.font("semibold", true)
 	if not alert.is_empty():
 		# Centred in the body: the state overlay's reason chip sits on the
 		# card's top edge, and the alert title used to collide with it.
-		var afs := clampi(int(round(minf(body.size.y * 0.2, body.size.x * 0.16))), 9, 24)
-		var rfs := maxi(8, int(afs * 0.6))
-		var cy := body.position.y + body.size.y * 0.42
-		var at := UiText.fit(semibold, str(alert.get("title", "")), afs, body.size.x, "graph card alert")
+		var afs := clampi(int(round(minf(body.size.y * 0.19, body.size.x * 0.15))), 9, 22)
+		var rfs := maxi(8, int(afs * 0.62))
+		var cy := body.position.y + body.size.y * 0.34
+		var at := UiText.fit(semibold, str(alert.get("title", "")), afs, body.size.x, "graph card alert" if audit_card else "")
 		var aw := semibold.get_string_size(at, HORIZONTAL_ALIGNMENT_LEFT, -1, afs).x
 		ci.draw_string(semibold, Vector2(body.get_center().x - aw * 0.5, cy), at,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, afs, GraphTheme.ERROR)
-		var rt := UiText.fit(UITheme.font(), str(alert.get("text", "")), rfs, body.size.x, "graph card alert")
-		var rw := UITheme.font().get_string_size(rt, HORIZONTAL_ALIGNMENT_LEFT, -1, rfs).x
-		ci.draw_string(UITheme.font(), Vector2(body.get_center().x - rw * 0.5, cy + rfs + 5.0 * z), rt,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, rfs, GraphTheme.TEXT_DIM)
+		var alert_font := UITheme.font()
+		var raw_alert := str(alert.get("text", ""))
+		var alert_lines := _wrap_two_lines(alert_font, raw_alert, rfs, body.size.x, "graph card alert" if audit_card else "")
+		for li in alert_lines.size():
+			var ln_txt: String = alert_lines[li]
+			var rw := alert_font.get_string_size(ln_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, rfs).x
+			ci.draw_string(alert_font, Vector2(body.get_center().x - rw * 0.5, cy + rfs + (4.0 + float(li) * (float(rfs) + 2.0)) * z),
+				ln_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, rfs, Color(0.92, 0.94, 0.97, 0.96))
 		var act := str(alert.get("action", ""))
 		if not act.is_empty():
 			var bh := clampf(22.0 * z, 16.0, 30.0)
@@ -193,16 +202,19 @@ static func draw(ci: CanvasItem, rect: Rect2, z: float, spec: Dictionary) -> Dic
 		hero_fs = maxi(8, int(floor(float(hero_fs) * body.size.x / hw)))
 		hw = num.get_string_size(hero, HORIZONTAL_ALIGNMENT_LEFT, -1, hero_fs).x
 	if hw > body.size.x:
-		hero = UiText.fit(num, hero, hero_fs, body.size.x, "graph card hero")
+		hero = UiText.fit(num, hero, hero_fs, body.size.x, "graph card hero" if audit_card else "")
 		hw = num.get_string_size(hero, HORIZONTAL_ALIGNMENT_LEFT, -1, hero_fs).x
 	ci.draw_string(num, Vector2(body.get_center().x - hw * 0.5, top + hero_fs * 0.86), hero,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, hero_fs, _fade(hero_col, a))
 	if not sub.is_empty():
 		var reg := UITheme.font("regular", true)
-		var st := UiText.fit(reg, sub, sub_fs, body.size.x, "graph card sub")
-		var sw := reg.get_string_size(st, HORIZONTAL_ALIGNMENT_LEFT, -1, sub_fs).x
-		ci.draw_string(reg, Vector2(body.get_center().x - sw * 0.5, top + hero_fs + 2.0 * z + sub_fs * 0.86), st,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, sub_fs, _fade(spec.get("sub_color", GraphTheme.TEXT_DIM), a))
+		var sfs := sub_fs
+		while sfs > 8 and reg.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1, sfs).x > body.size.x:
+			sfs -= 1
+		var st := UiText.fit(reg, sub, sfs, body.size.x, "graph card sub" if audit_card else "")
+		var sw := reg.get_string_size(st, HORIZONTAL_ALIGNMENT_LEFT, -1, sfs).x
+		ci.draw_string(reg, Vector2(body.get_center().x - sw * 0.5, top + hero_fs + 2.0 * z + sfs * 0.86), st,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, sfs, _fade(spec.get("sub_color", GraphTheme.TEXT_DIM), a))
 	if bar_h > 0.0:
 		var br2 := Rect2(Vector2(body.position.x, body.end.y - bar_h - 2.0 * z), Vector2(body.size.x, bar_h))
 		_sb(ci, br2, GraphTheme.CARD_TRACK, int(bar_h * 0.5))
@@ -220,7 +232,10 @@ static func draw(ci: CanvasItem, rect: Rect2, z: float, spec: Dictionary) -> Dic
 		var frow := Rect2(footer.position, Vector2(footer.size.x, footer.size.y - inset))
 		var ffs := clampi(int(round(frow.size.y * 0.58)), 7, 14)
 		var reg2 := UITheme.font("regular", true)
-		var ft := UiText.fit(reg2, foot, ffs, footer.size.x - pad * 2.0, "graph card footer")
+		var fmax_w := footer.size.x - pad * 2.0
+		while ffs > 8 and reg2.get_string_size(foot, HORIZONTAL_ALIGNMENT_LEFT, -1, ffs).x > fmax_w:
+			ffs -= 1
+		var ft := UiText.fit(reg2, foot, ffs, fmax_w, "graph card footer" if audit_card else "")
 		ci.draw_line(Vector2(footer.position.x + pad, footer.position.y), Vector2(footer.end.x - pad, footer.position.y),
 			Color(1, 1, 1, 0.06), 1.0)
 		ci.draw_string(reg2, Vector2(footer.position.x + pad, frow.get_center().y + ffs * 0.38), ft,
@@ -292,27 +307,51 @@ static func draw_hub(ci: CanvasItem, rect: Rect2, z: float, spec: Dictionary) ->
 	var name_h := float(name_fs * lines.size()) + sp * float(maxi(lines.size() - 1, 0))
 	var total_h := (name_h + lsp if not lines.is_empty() else 0.0) + hero_fs \
 		+ ((sp + sub_fs) if not sub.is_empty() else 0.0) + ((lsp + foot_fs) if not foot.is_empty() else 0.0)
+	var audit_hub := "resource_hub" if z >= 0.78 else ""
 	var y := c.y - total_h * 0.5
 	for nl in lines:
-		var line := UiText.fit(semibold, nl, name_fs, minf(line_w, _chord(c, inner_r, y, name_fs)), "resource_hub")
+		var line := UiText.fit(semibold, nl, name_fs, minf(line_w, _chord(c, inner_r, y, name_fs)), audit_hub)
 		_hub_text(ci, semibold, line, name_fs, Vector2(c.x, y), _fade(Color(0.92, 0.93, 0.96), a), plate)
 		y += name_fs + sp
 	if not lines.is_empty():
 		y += lsp - sp
-	hero = UiText.fit(num, hero, hero_fs, line_w, "resource_hub")
+	hero = UiText.fit(num, hero, hero_fs, line_w, audit_hub)
 	_hub_text(ci, num, hero, hero_fs, Vector2(c.x, y), _fade(spec.get("hero_color", Color.WHITE), a), plate)
 	y += hero_fs
 	if not sub.is_empty():
 		y += sp
-		_hub_text(ci, reg, UiText.fit(reg, sub, sub_fs, line_w, "resource_hub"), sub_fs, Vector2(c.x, y),
+		_hub_text(ci, reg, UiText.fit(reg, sub, sub_fs, line_w, audit_hub), sub_fs, Vector2(c.x, y),
 			_fade(Color(0.85, 0.86, 0.90, 0.92), a), plate)
 		y += sub_fs
 	if not foot.is_empty():
 		y += lsp
-		_hub_text(ci, reg, UiText.fit(reg, foot, foot_fs, line_w, "resource_hub"), foot_fs, Vector2(c.x, y),
+		_hub_text(ci, reg, UiText.fit(reg, foot, foot_fs, line_w, audit_hub), foot_fs, Vector2(c.x, y),
 			_fade(spec.get("footer_color", GraphTheme.TEXT_DIM), a), plate)
 	_draw_hub_selection(ci, c, r, z, spec)
 	return {}
+
+
+static func _wrap_two_lines(font: Font, text: String, fs: int, max_w: float, where: String) -> PackedStringArray:
+	if text.is_empty() or font == null or max_w <= 0.0:
+		return PackedStringArray()
+	if font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x <= max_w:
+		return PackedStringArray([text])
+	var words := text.split(" ", false)
+	if words.size() <= 1:
+		return PackedStringArray([UiText.fit(font, text, fs, max_w, where)])
+	var best_idx := int(words.size() / 2)
+	var best_max := INF
+	for k in range(1, words.size()):
+		var l1 := " ".join(words.slice(0, k))
+		var l2 := " ".join(words.slice(k))
+		var w_max := maxf(font.get_string_size(l1, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x,
+			font.get_string_size(l2, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x)
+		if w_max < best_max:
+			best_max = w_max
+			best_idx = k
+	var line1 := UiText.fit(font, " ".join(words.slice(0, best_idx)), fs, max_w, where)
+	var line2 := UiText.fit(font, " ".join(words.slice(best_idx)), fs, max_w, where)
+	return PackedStringArray([line1, line2])
 
 
 ## Width of the circle's chord across a text line whose top is `y`.

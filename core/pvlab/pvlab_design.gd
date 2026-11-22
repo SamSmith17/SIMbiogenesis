@@ -140,7 +140,8 @@ static func _bom(d: Dictionary) -> Dictionary:
 	var mass := 0.0
 	var cost := 0.0
 	var mod_kg := PvLabModule.mass_kg(m)
-	var mod_cost := float(d["elec"]["wmp"]) * MODULE_USD_PER_W
+	var listed := float(m.get("price_usd", 0.0))
+	var mod_cost := listed if listed > 0.0 else float(d["elec"]["wmp"]) * MODULE_USD_PER_W
 	rows.append({"group": "Modules", "item": "%s (%s)" % [str(m["name"]), PvLabModule.describe(m)], "qty": n,
 		"unit": "ea", "length_m": 0.0, "cost": mod_cost * n, "kg": mod_kg * n})
 	mass += mod_kg * n
@@ -298,8 +299,9 @@ static func _checks(d: Dictionary) -> Array:
 	if str(m["type"]) == "flexible" and str(lay["mount"]) in ["ground", "pole", "tracker"]:
 		out.append({"level": "warn", "text": "Flexible modules need a solid backing — on open rails they flex and crack."})
 	var tot_n := (lay["panels"] as Array).size()
-	out.append({"level": "ok", "text": "%d modules, %s, %d string(s) on %d input(s)." % [tot_n,
-		_kw(float(e["wmp"]) * tot_n), (d["strings"] as Array).size(), reps.size()]})
+	out.append({"level": "ok", "text": "%s, %s, %s on %s." % [UiText.count(tot_n, "module"),
+		_kw(float(e["wmp"]) * tot_n), UiText.count((d["strings"] as Array).size(), "string"),
+		UiText.count(reps.size(), "input")]})
 	return out
 
 

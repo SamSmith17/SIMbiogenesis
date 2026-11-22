@@ -237,6 +237,10 @@ static func resolve(spec: Dictionary) -> Dictionary:
 	# A plate system has no struts; faces must be a sheet.
 	if sys == "plate" and str(f["material"]) == "none":
 		f["material"] = "ply_6"
+	if spec.has("peak_light"):
+		s["peak_light"] = bool(spec["peak_light"])
+	if spec.get("model_lights") is Array:
+		s["model_lights"] = (spec["model_lights"] as Array).duplicate(true)
 	return s
 
 
@@ -273,6 +277,8 @@ static func to_json_safe(spec: Dictionary) -> Dictionary:
 ## The part of the spec that changes the geometry / parts (cache key).
 static func key_of(spec: Dictionary) -> String:
 	var s := resolve(spec)
+	s.erase("peak_light")
+	s.erase("model_lights")
 	var cols := {}
 	for k in s["colors"]:
 		var c: Color = s["colors"][k]

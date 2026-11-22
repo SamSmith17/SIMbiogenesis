@@ -251,7 +251,7 @@ func _build_ui() -> void:
 
 	_panel = PanelContainer.new()
 	_panel.name = "Dock"
-	_panel.add_theme_stylebox_override("panel", UITheme.panel_style(0.93))
+	_panel.add_theme_stylebox_override("panel", UITheme.dock_panel_style(0.95))
 	_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_panel.anchor_left = 1.0
 	_panel.anchor_right = 1.0
@@ -546,11 +546,16 @@ func _rebuild_styles() -> void:
 		var kind := str(st.get("kind", "omni"))
 		var res := PlacedLightStyles.resolve(kind, st.get("fields", {}), {})
 		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 4)
+		row.add_theme_constant_override("separation", 6)
 		_styles_box.add_child(row)
-		var sw := ColorRect.new()
+		var sw := Panel.new()
 		sw.custom_minimum_size = Vector2(14, 14)
-		sw.color = PlacedLightPower.parse_color(str(res.get("color", "ffffff")))
+		var sw_sb := StyleBoxFlat.new()
+		sw_sb.bg_color = PlacedLightPower.parse_color(str(res.get("color", "ffffff")))
+		sw_sb.border_color = Color(1.0, 1.0, 1.0, 0.28)
+		sw_sb.set_border_width_all(1)
+		sw_sb.set_corner_radius_all(4)
+		sw.add_theme_stylebox_override("panel", sw_sb)
 		sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		row.add_child(sw)
 		var active := str(PlacedLightService.active_style.get(kind, "")) == str(sid)

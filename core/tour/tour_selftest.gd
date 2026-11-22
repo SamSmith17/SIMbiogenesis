@@ -127,9 +127,9 @@ func _test_labels() -> void:
 	_check(HarnessInput.event_label(mb) == "Right click", "a mouse button labels")
 	var s := TourStop.new()
 	s.action = ""
-	s.button = "📊"
+	s.button = "Site Report"
 	var hints := TourContext.open_hints(s)
-	_check(hints.size() == 1 and hints[0] == "Click 📊", "a button-only stop hints 'Click 📊'")
+	_check(hints.size() == 1 and hints[0] == "Click Site Report", "a button-only stop hints 'Click Site Report'")
 	_check(HarnessInput.action_label("definitely_not_an_action") == "", "an unknown action labels empty")
 
 

@@ -185,6 +185,51 @@ func set_item_subtitle(i: int, text: String) -> void:
 	sub.visible = not text.is_empty()
 
 
+## A shopping row: the price and a second figure (dollars per kWh) in a
+## heavier face, then the grey size line under them.
+func set_item_shop(i: int, price: String, per: String, detail: String) -> void:
+	if i < 0 or i >= _rows.size():
+		return
+	var r: Dictionary = _rows[i]
+	var v := (r["name"] as Label).get_parent() as VBoxContainer
+	var row: HBoxContainer = r.get("shop") as HBoxContainer
+	if row == null:
+		row = HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var price_l := Label.new()
+		price_l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		price_l.add_theme_font_override("font", UITheme.font("semibold", true))
+		price_l.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+		price_l.add_theme_color_override("font_color", UITheme.C_TEXT)
+		row.add_child(price_l)
+		var dot := Label.new()
+		dot.text = "·"
+		dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		dot.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+		dot.add_theme_color_override("font_color", UITheme.C_TEXT_M)
+		row.add_child(dot)
+		var per_l := Label.new()
+		per_l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		per_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		per_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		per_l.add_theme_font_override("font", UITheme.font("semibold", true))
+		per_l.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+		per_l.add_theme_color_override("font_color", UITheme.C_GOLD)
+		row.add_child(per_l)
+		v.add_child(row)
+		v.move_child(row, 1)
+		r["shop"] = row
+	(row.get_child(0) as Label).text = price
+	(row.get_child(2) as Label).text = per
+	row.visible = not price.is_empty()
+	var sub := r["sub"] as Label
+	sub.text = detail
+	sub.visible = not detail.is_empty()
+	var pictured := r["thumb"] != null
+	(r["btn"] as Button).custom_minimum_size = Vector2(0, 68.0 if pictured else 46.0)
+
+
 func get_item_text(i: int) -> String:
 	return str((_rows[i] as Dictionary)["text"]) if i >= 0 and i < _rows.size() else ""
 

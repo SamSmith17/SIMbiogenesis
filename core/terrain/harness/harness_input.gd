@@ -174,8 +174,19 @@ static func event_label(ev: InputEvent) -> String:
 	return ""
 
 
-## A visible Button whose text is `text` (exact), or whose text CONTAINS it
-## when `partial`.
+static func _button_matches(b: Button, text: String, partial: bool) -> bool:
+	if b.text == text or str(b.name) == text:
+		return true
+	if partial and (b.text.find(text) >= 0 or str(b.name).find(text) >= 0):
+		return true
+	if b.text.strip_edges().is_empty() and not b.tooltip_text.is_empty():
+		var head := b.tooltip_text.get_slice(" —", 0).get_slice("\n", 0).strip_edges()
+		if head == text or (partial and b.tooltip_text.find(text) >= 0):
+			return true
+	return false
+
+
+## A visible Button whose text, name or icon tooltip title is `text` (or contains it when `partial`).
 static func find_button(root: Node, text: String, partial: bool = false) -> Button:
 	if root == null:
 		return null
@@ -183,7 +194,7 @@ static func find_button(root: Node, text: String, partial: bool = false) -> Butt
 		var b := n as Button
 		if not b.is_visible_in_tree():
 			continue
-		if b.text == text or (partial and b.text.find(text) >= 0):
+		if _button_matches(b, text, partial):
 			return b
 	return null
 
@@ -197,7 +208,7 @@ static func find_button_revealing(root: Node, text: String, partial: bool = fals
 		return b
 	for n in root.find_children("*", "Button", true, false):
 		var c := n as Button
-		if not (c.text == text or (partial and c.text.find(text) >= 0)):
+		if not _button_matches(c, text, partial):
 			continue
 		var p: Node = c.get_parent()
 		var shell: Node = null

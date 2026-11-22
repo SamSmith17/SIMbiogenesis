@@ -22,8 +22,8 @@
       "status": "PASS",
       "failures": [],
       "image": "arrival.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "drone_view": {
       "id": "drone_view",
@@ -46,8 +46,8 @@
       "status": "PASS",
       "failures": [],
       "image": "drone_view.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "third_person": {
       "id": "third_person",
@@ -70,8 +70,8 @@
       "status": "PASS",
       "failures": [],
       "image": "third_person.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "day_night": {
       "id": "day_night",
@@ -94,8 +94,8 @@
       "status": "PASS",
       "failures": [],
       "image": "day_night.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "night_sky": {
       "id": "night_sky",
@@ -119,8 +119,8 @@
       "status": "PASS",
       "failures": [],
       "image": "night_sky.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "weather": {
       "id": "weather",
@@ -128,15 +128,15 @@
       "chapter": "World",
       "summary": "Archived and forecast weather drive the sky; smoke, dust and heat can be simulated.",
       "how": [
-        "Weather follows Open-Meteo automatically (the 🌤 / 🌎 indicator)",
-        "Settings ⚙ → Extreme Weather → Preview a hazard",
-        "🌫 on the timeline calibrates local fog and wind"
+        "Weather follows Open-Meteo automatically",
+        "Settings -> Extreme Weather -> Preview a hazard",
+        "Microclimate on the timeline calibrates local fog and wind"
       ],
       "action": "",
-      "button": "⚙ → Extreme Weather",
+      "button": "Settings -> Extreme Weather",
       "key": "",
       "open_hints": [
-        "Click ⚙ → Extreme Weather"
+        "Click Settings -> Extreme Weather"
       ],
       "world": "burningman",
       "blurb": "Clouds, wind, temperature and rain come from the real hourly record for the site, so solar output and the look of the day match what happened. Wildfire smoke, dust storms, damaging wind and heatwaves are resolved from alert and air-quality data — and can be previewed on demand.",
@@ -144,8 +144,8 @@
       "status": "PASS",
       "failures": [],
       "image": "weather.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "location_picker": {
       "id": "location_picker",
@@ -169,8 +169,8 @@
       "status": "PASS",
       "failures": [],
       "image": "location_picker.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "terrain_sculpt": {
       "id": "terrain_sculpt",
@@ -194,8 +194,8 @@
       "status": "PASS",
       "failures": [],
       "image": "terrain_sculpt.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:44:13",
+      "image_commit": "af08948"
     },
     "vegetation": {
       "id": "vegetation",
@@ -219,8 +219,8 @@
       "status": "PASS",
       "failures": [],
       "image": "vegetation.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "camps": {
       "id": "camps",
@@ -244,8 +244,8 @@
       "status": "PASS",
       "failures": [],
       "image": "camps.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "water": {
       "id": "water",
@@ -270,8 +270,8 @@
       "status": "PASS",
       "failures": [],
       "image": "water.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "prop_editor": {
       "id": "prop_editor",
@@ -295,18 +295,18 @@
       "status": "PASS",
       "failures": [],
       "image": "prop_editor.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "building_builder": {
       "id": "building_builder",
       "title": "Building builder",
       "chapter": "Build",
-      "summary": "Restyle any OSM building: roof shape and pitch, walls, doors, windows, facades.",
+      "summary": "Restyle an OSM building or design a house: roof, walls, doors, windows and a porch.",
       "how": [
-        "Aim at a building and press B (or Interact)",
-        "Click the preview walls to place doors and windows",
-        "The Library tab swaps the building for a placed model"
+        "Aim at a building and press B, or open Building designer…",
+        "Place a door, a window and a porch on the wall",
+        "Place in world drops the house on the map"
       ],
       "action": "building_builder",
       "button": "",
@@ -315,13 +315,13 @@
         "Press B"
       ],
       "world": "burningman",
-      "blurb": "OSM footprints become buildings with level eaves and real roof geometry (gable, hip, pyramid) from their tags, roofs textured from the aerial photo. Each building can be restyled in a studio preview and the change is saved per site.",
+      "blurb": "OSM footprints become buildings with level eaves and real roof geometry (gable, hip, pyramid) from their tags, roofs textured from the aerial photo. Doors and windows cut the wall, a porch runs along a face, and the same designer places a house of its own.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "building_builder.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "light_studio": {
       "id": "light_studio",
@@ -345,8 +345,8 @@
       "status": "PASS",
       "failures": [],
       "image": "light_studio.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:44:13",
+      "image_commit": "af08948"
     },
     "vehicles": {
       "id": "vehicles",
@@ -371,8 +371,8 @@
       "status": "PASS",
       "failures": [],
       "image": "vehicles.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "scad_store": {
       "id": "scad_store",
@@ -395,8 +395,8 @@
       "status": "PASS",
       "failures": [],
       "image": "scad_store.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "graph_freeform": {
       "id": "graph_freeform",
@@ -420,8 +420,8 @@
       "status": "PASS",
       "failures": [],
       "image": "graph_freeform.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "site_plan": {
       "id": "site_plan",
@@ -445,8 +445,8 @@
       "status": "PASS",
       "failures": [],
       "image": "site_plan.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "elevation": {
       "id": "elevation",
@@ -470,8 +470,8 @@
       "status": "PASS",
       "failures": [],
       "image": "elevation.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "globe": {
       "id": "globe",
@@ -495,8 +495,8 @@
       "status": "PASS",
       "failures": [],
       "image": "globe.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "snowglobe": {
       "id": "snowglobe",
@@ -519,8 +519,8 @@
       "status": "PASS",
       "failures": [],
       "image": "snowglobe.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "hydro_lab": {
       "id": "hydro_lab",
@@ -543,8 +543,8 @@
       "status": "PASS",
       "failures": [],
       "image": "hydro_lab.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "site_report": {
       "id": "site_report",
@@ -552,14 +552,14 @@
       "chapter": "Systems",
       "summary": "A month-by-month year of sun, wind, rain, temperature and your system's output.",
       "how": [
-        "Press K, or 📊 on the timeline"
+        "Press K, or click Site Report on the timeline"
       ],
       "action": "toggle_site_report",
-      "button": "📊",
+      "button": "Site Report",
       "key": "K",
       "open_hints": [
         "Press K",
-        "Click 📊"
+        "Click Site Report"
       ],
       "world": "mtvernon",
       "blurb": "The report runs a representative year of the site's real weather through the current graph: solar resource and PV yield, a windrose, rainfall, temperature bands, hydro potential, and what it would take to pack the site into a truck.",
@@ -567,14 +567,14 @@
       "status": "PASS",
       "failures": [],
       "image": "site_report.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "bootcamp": {
       "id": "bootcamp",
       "title": "Solar Bootcamp",
       "chapter": "Systems",
-      "summary": "Twelve short levels that teach DC electrics by letting you blow things up.",
+      "summary": "Twelve short levels that teach DC electrics by letting you blow things up. Level 1: a short circuit.",
       "how": [
         "In the graph (G), click 🎓 Bootcamp",
         "Each level runs in a sandbox — your real graph is put back on exit"
@@ -591,8 +591,8 @@
       "status": "PASS",
       "failures": [],
       "image": "bootcamp.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "challenges": {
       "id": "challenges",
@@ -615,8 +615,8 @@
       "status": "PASS",
       "failures": [],
       "image": "challenges.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "festival_mode": {
       "id": "festival_mode",
@@ -640,8 +640,8 @@
       "status": "PASS",
       "failures": [],
       "image": "festival_mode.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "settlement_view": {
       "id": "settlement_view",
@@ -665,8 +665,8 @@
       "status": "PASS",
       "failures": [],
       "image": "settlement_view.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "effigy_burn": {
       "id": "effigy_burn",
@@ -689,8 +689,8 @@
       "status": "PASS",
       "failures": [],
       "image": "effigy_burn.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "npc_anim_editor": {
       "id": "npc_anim_editor",
@@ -713,8 +713,8 @@
       "status": "PASS",
       "failures": [],
       "image": "npc_anim_editor.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "linkage_lab": {
       "id": "linkage_lab",
@@ -738,8 +738,8 @@
       "status": "PASS",
       "failures": [],
       "image": "linkage_lab.jpg",
-      "image_run": "2026-11-09T11:26:12",
-      "image_commit": "0c31ecf"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "packing_lab": {
       "id": "packing_lab",
@@ -763,8 +763,8 @@
       "status": "PASS",
       "failures": [],
       "image": "packing_lab.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "multiplayer": {
       "id": "multiplayer",
@@ -787,8 +787,8 @@
       "status": "PASS",
       "failures": [],
       "image": "multiplayer.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "planets": {
       "id": "planets",
@@ -811,8 +811,8 @@
       "status": "PASS",
       "failures": [],
       "image": "planets.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:44:13",
+      "image_commit": "af08948"
     },
     "moon_phases": {
       "id": "moon_phases",
@@ -821,8 +821,8 @@
       "summary": "The real moon: where it stands and how much of it is lit, for any date.",
       "how": [
         "Scrub the timeline across a month",
-        "🎬 Video export → Analemma: moon, for a lunation like this one",
-        "Settings → Sky: moon size and phase offset"
+        "Video export -> Analemma: moon, for a lunation like this one",
+        "Settings -> Sky: moon size and phase offset"
       ],
       "action": "",
       "button": "the timeline",
@@ -836,8 +836,8 @@
       "status": "PASS",
       "failures": [],
       "image": "moon_phases.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "analemma": {
       "id": "analemma",
@@ -861,8 +861,8 @@
       "status": "PASS",
       "failures": [],
       "image": "analemma.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "mud_printer": {
       "id": "mud_printer",
@@ -886,8 +886,8 @@
       "status": "PASS",
       "failures": [],
       "image": "mud_printer.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "pallet_rack": {
       "id": "pallet_rack",
@@ -913,8 +913,8 @@
       "status": "PASS",
       "failures": [],
       "image": "pallet_rack.jpg",
-      "image_run": "2026-11-09T11:26:12",
-      "image_commit": "0c31ecf"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "graph_tools": {
       "id": "graph_tools",
@@ -938,33 +938,34 @@
       "status": "PASS",
       "failures": [],
       "image": "graph_tools.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "conduit_routing": {
       "id": "conduit_routing",
-      "title": "3D wire and pipe routing",
+      "title": "3D pipe and cable routing",
       "chapter": "Systems",
-      "summary": "Pull a cord or a pipe off a device's port and plug it in — measured as you go.",
+      "summary": "Join machines with real runs: square, with proper bends, round what is in the way.",
       "how": [
-        "Aim at a device's port, press and drag to the other device, release",
-        "Shift+release keeps chaining from the device you plugged into",
-        "Click a run to restyle it live: kind, size, colour — Revert puts it back"
+        "Shift+R opens the Route tools: click a port, then a port on the other machine",
+        "Bend: click a run, click it again to add a bend point, drag it",
+        "Runs on the same line lie side by side in lanes; Lane drags one to another",
+        "Open in Process → As built: the system drawn where it really is"
       ],
-      "action": "",
-      "button": "a device's port (press and drag)",
-      "key": "",
+      "action": "route_edit",
+      "button": "",
+      "key": "Shift+R",
       "open_hints": [
-        "Click a device's port (press and drag)"
+        "Press Shift+R"
       ],
       "world": "mtvernon",
-      "blurb": "Every wire, hose, penstock and culvert on the graph can be a real run in the world, drawn from port to port over the ground and bent round obstacles. The HUD measures the run as it is pulled with the same rule the committed run uses, run-length tags show metres and feet, and the style modal edits the live run with the I²R loss and a stock-length fit in its header.",
+      "blurb": "Every pipe and cable on the graph can be a real run in the world. The router lays it square, with bends at the real minimum radius of what it is (NEC, PPI, TIA), round machines and buildings and over low things, through any bend points you add. Runs on one line become a bundle of lanes with matched bends. The style window lists the run's size, rating, weight, supports and cost, and the Process lens can draw it all as built.",
       "optional": false,
       "status": "PASS",
       "failures": [],
       "image": "conduit_routing.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "wind_turbines": {
       "id": "wind_turbines",
@@ -988,8 +989,8 @@
       "status": "PASS",
       "failures": [],
       "image": "wind_turbines.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "csp_heliostats": {
       "id": "csp_heliostats",
@@ -1013,8 +1014,8 @@
       "status": "PASS",
       "failures": [],
       "image": "csp_heliostats.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "starshade_crew": {
       "id": "starshade_crew",
@@ -1038,8 +1039,8 @@
       "status": "PASS",
       "failures": [],
       "image": "starshade_crew.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "home_assistant": {
       "id": "home_assistant",
@@ -1063,8 +1064,8 @@
       "status": "PASS",
       "failures": [],
       "image": "home_assistant.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "flatpack": {
       "id": "flatpack",
@@ -1090,8 +1091,8 @@
       "status": "PASS",
       "failures": [],
       "image": "flatpack.jpg",
-      "image_run": "2026-11-09T11:26:12",
-      "image_commit": "0c31ecf"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "domelab": {
       "id": "domelab",
@@ -1119,8 +1120,8 @@
       "status": "PASS",
       "failures": [],
       "image": "domelab.jpg",
-      "image_run": "2026-11-09T11:26:12",
-      "image_commit": "0c31ecf"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "gantrylab": {
       "id": "gantrylab",
@@ -1147,8 +1148,8 @@
       "status": "PASS",
       "failures": [],
       "image": "gantrylab.jpg",
-      "image_run": "2026-11-09T11:26:12",
-      "image_commit": "0c31ecf"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "toroidlab": {
       "id": "toroidlab",
@@ -1175,8 +1176,8 @@
       "status": "PASS",
       "failures": [],
       "image": "toroidlab.jpg",
-      "image_run": "2026-11-09T11:26:12",
-      "image_commit": "0c31ecf"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "pvlab": {
       "id": "pvlab",
@@ -1203,8 +1204,8 @@
       "status": "PASS",
       "failures": [],
       "image": "pvlab.jpg",
-      "image_run": "2026-11-09T11:26:12",
-      "image_commit": "0c31ecf"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "render_sim": {
       "id": "render_sim",
@@ -1213,14 +1214,14 @@
       "summary": "Pre-compute the next day of the whole site, then play it back from the cache.",
       "how": [
         "Ctrl-drag a range on the timeline (or leave it: the next 24 h)",
-        "Click 📈 Render on the timeline bar",
+        "Click Render on the timeline bar",
         "The green strip above the clips is what plays back without computing"
       ],
       "action": "",
-      "button": "📈",
+      "button": "Render",
       "key": "",
       "open_hints": [
-        "Click 📈"
+        "Click Render"
       ],
       "world": "mtvernon",
       "blurb": "The simulation is a deterministic function of sim time, so a stretch of it can be rendered ahead — battery, tanks, hydro, camp power and the people's supplies — and then scrubbed or played back from the cache while you explore in first person. A green strip above the clips marks what is rendered; editing the graph cuts it at the playhead, as Premiere drops a stale preview.",
@@ -1228,8 +1229,8 @@
       "status": "PASS",
       "failures": [],
       "image": "render_sim.jpg",
-      "image_run": "2026-10-28T15:04:16",
-      "image_commit": "ad3e00e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "arrive_at_camp": {
       "id": "arrive_at_camp",
@@ -1254,8 +1255,8 @@
       "status": "PASS",
       "failures": [],
       "image": "arrive_at_camp.jpg",
-      "image_run": "2026-11-02T22:00:23",
-      "image_commit": "7208a4e"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "globe_mode": {
       "id": "globe_mode",
@@ -1279,8 +1280,8 @@
       "status": "PASS",
       "failures": [],
       "image": "globe_mode.jpg",
-      "image_run": "2026-11-05T19:26:23",
-      "image_commit": "938feba"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "tc_process": {
       "id": "tc_process",
@@ -1306,8 +1307,8 @@
       "status": "PASS",
       "failures": [],
       "image": "tc_process.jpg",
-      "image_run": "2026-11-09T11:26:12",
-      "image_commit": "0c31ecf"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "esplab": {
       "id": "esplab",
@@ -1333,8 +1334,8 @@
       "status": "PASS",
       "failures": [],
       "image": "esplab.jpg",
-      "image_run": "2026-11-09T11:26:12",
-      "image_commit": "0c31ecf"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "peltonlab": {
       "id": "peltonlab",
@@ -1361,8 +1362,8 @@
       "status": "PASS",
       "failures": [],
       "image": "peltonlab.jpg",
-      "image_run": "2026-11-09T11:26:12",
-      "image_commit": "0c31ecf"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "windlab": {
       "id": "windlab",
@@ -1389,8 +1390,8 @@
       "status": "PASS",
       "failures": [],
       "image": "windlab.jpg",
-      "image_run": "2026-11-09T11:26:12",
-      "image_commit": "0c31ecf"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "vehiclelab": {
       "id": "vehiclelab",
@@ -1420,8 +1421,8 @@
       "status": "PASS",
       "failures": [],
       "image": "vehiclelab.jpg",
-      "image_run": "2026-11-09T11:26:12",
-      "image_commit": "0c31ecf"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "tclab": {
       "id": "tclab",
@@ -1447,8 +1448,8 @@
       "status": "PASS",
       "failures": [],
       "image": "tclab.jpg",
-      "image_run": "2026-11-09T11:26:12",
-      "image_commit": "0c31ecf"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "intermodal_units": {
       "id": "intermodal_units",
@@ -1472,8 +1473,8 @@
       "status": "PASS",
       "failures": [],
       "image": "intermodal_units.jpg",
-      "image_run": "2026-11-09T11:26:12",
-      "image_commit": "0c31ecf"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "graph_ring_3d": {
       "id": "graph_ring_3d",
@@ -1497,8 +1498,8 @@
       "status": "PASS",
       "failures": [],
       "image": "graph_ring_3d.jpg",
-      "image_run": "2026-11-10T02:52:43",
-      "image_commit": "6f9a2fb"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "earthship": {
       "id": "earthship",
@@ -1525,8 +1526,8 @@
       "status": "PASS",
       "failures": [],
       "image": "earthship.jpg",
-      "image_run": "2026-11-10T18:06:28",
-      "image_commit": "0b7bb36"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     },
     "flow_torus": {
       "id": "flow_torus",
@@ -1550,16 +1551,372 @@
       "status": "PASS",
       "failures": [],
       "image": "flow_torus.jpg",
-      "image_run": "2026-11-15T00:25:00",
-      "image_commit": "27de16d"
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
+    },
+    "terraces": {
+      "id": "terraces",
+      "title": "Terraced fields",
+      "chapter": "Build",
+      "summary": "Cut a hillside into level steps: rice paddies, reed beds or dry terraces, with water cascading down.",
+      "how": [
+        "Open the edit toolbar (T), pick Terrace",
+        "Hill: click a slope — everything above the click is terraced; or draw an outline",
+        "Click a field to change its steps, water, crop and wiring"
+      ],
+      "action": "terrain_edit",
+      "button": "Terrace",
+      "key": "T",
+      "open_hints": [
+        "Press T",
+        "Click Terrace"
+      ],
+      "world": "mtvernon",
+      "blurb": "The Terrace tool cuts a slope into level steps that follow its contours. Each step is a paddy behind a low bund: water pumped to the top fills it and spills to the next, down to the bottom. Rice, reeds or taro grow in flooded steps, potatoes or sorghum in dry ones, and each field is one node on the systems graph that takes water and gives a harvest.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "terraces.jpg",
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
+    },
+    "forklift": {
+      "id": "forklift",
+      "title": "Forklift",
+      "chapter": "Build",
+      "summary": "Drive a forklift, lift pallets and crates; crews use it to unload heavy deliveries.",
+      "how": [
+        "Library (U) → Vehicles tab → Forklift",
+        "Aim at it and Interact to get in; PgUp / PgDn raise and lower the forks",
+        "Crews unload anything over 60 kg (forklift class) with it"
+      ],
+      "action": "interact",
+      "button": "Library → Vehicles",
+      "key": "O",
+      "open_hints": [
+        "Press O",
+        "Click Library → Vehicles"
+      ],
+      "world": "burningman",
+      "blurb": "A 2.5 t counterbalance forklift with a working mast. Drive the forks under a pallet and lift it, or let a crew run a delivery: heavy crates come off the container on the forks while the light ones are carried by hand.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "forklift.jpg",
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
+    },
+    "walk_in_vehicle": {
+      "id": "walk_in_vehicle",
+      "title": "Step inside",
+      "chapter": "Build",
+      "summary": "Open a van's or a bus's door and walk through the rooms you designed.",
+      "how": [
+        "Library → Vehicles → place a van, bus, RV or trailer",
+        "Aim at one of its doors and press Interact: it opens",
+        "Walk up and in; Interact on a door again shuts it",
+        "Interact anywhere else on the vehicle drives it (the doors shut themselves)"
+      ],
+      "action": "interact",
+      "button": "",
+      "key": "O",
+      "open_hints": [
+        "Press O"
+      ],
+      "world": "burningman",
+      "blurb": "Every living vehicle is a real room. Its doors are leaves that swing, fold or slide open, its windows are glass you can see through from both sides, and the bed, galley and benches from the designer stand where you put them. Open a door, walk in, and look out at the camp from where the people who live there do.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "walk_in_vehicle.jpg",
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
+    },
+    "greenhouse": {
+      "id": "greenhouse",
+      "title": "Greenhouses",
+      "chapter": "Build",
+      "summary": "Design a greenhouse (gable, lean-to, hoop, gothic arch or dome), lay out its beds and crops, add lamps, vents, fans, water barrels and gutters, see a year of the climate inside, and place it: the beds move with the house, and on the graph it is one node that runs its own temperature and humidity.",
+      "how": [
+        "Library → Designers → Greenhouse designer…",
+        "Pick a form and its size, the glazing, vents, fans, heater, shade cloth, how deep it is dug in and how many water barrels it holds",
+        "Plan tab: click a bed to set its crops, a FarmBot gantry or grow lamps; drag it to move it, drag on the floor to draw one",
+        "Climate tab: a year at the site hour by hour — inside against outside, vent and heater hours, lamp energy, rain off the roof, the harvest",
+        "Place in world: the house and every bed, gantry and lamp rack in it move, pack and delete as one",
+        "On the graph it is one node (inside °C, RH, light); open it to see its beds, lamps, fans, barrels, roof and tank"
+      ],
+      "action": "",
+      "button": "Greenhouse designer…",
+      "key": "",
+      "open_hints": [
+        "Click Greenhouse designer…"
+      ],
+      "world": "burningman",
+      "blurb": "A greenhouse is a climate you build. The designer draws gable, lean-to, hoop, gothic and geodesic houses with their beds inside, and runs a year of weather through the design: sun through each pane, heat lost through the skin and to a clear night sky, the earth around a sunk house, water barrels storing the day's warmth, vents and fans under a controller, the crops' transpiration and the water condensing on the glass. Placed, the beds, FarmBot gantries and lamp racks are part of the house; the graph runs the same climate and grows each bed from it.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "greenhouse.jpg",
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
+    },
+    "battery_lab": {
+      "id": "battery_lab",
+      "title": "Battery Lab",
+      "chapter": "Build",
+      "summary": "Build a solar battery from its cells and a bank from its packs; watch the BMS protect it on a test bench, then place the bank and its limits drive the live sim.",
+      "how": [
+        "Library → Designers → Solar batteries, or Design this battery… on a graph battery",
+        "Pack: chemistry, cells in series and parallel, BMS, case; the cutaway shows cells, busbars and balance wires",
+        "BMS & test: charge, discharge, a frozen morning, an overload, a short; every trip in the log",
+        "Bank: packs in a cabinet, on a wall, shelf or cart; cables sized and measured, fuses picked, checks",
+        "Place bank in world: its graph battery carries the BMS limits the live sim honours"
+      ],
+      "action": "",
+      "button": "Solar batteries",
+      "key": "",
+      "open_hints": [
+        "Click Solar batteries"
+      ],
+      "world": "burningman",
+      "blurb": "Lead-acid (flooded, AGM, gel) and lithium (LFP, NMC) from real cells and blocks, in every form: car batteries, drop-ins, server-rack packs, wall units, rolling units and DIY boxes. The pack is drawn down to its cells, busbars, balance leads and BMS. The bench runs the BMS cell by cell: over- and under-voltage, charge and discharge current, short circuit, temperature, balancing, each with its delay and release. A bank sizes its cables for current and voltage drop, picks fuses that can break its fault current, and checks what a real installer would. Placed in the world, its charge and discharge limits, and its refusal to charge below freezing, are what the live simulation uses.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "battery_lab.jpg",
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
+    },
+    "controller_lab": {
+      "id": "controller_lab",
+      "title": "Controller Lab",
+      "chapter": "Build",
+      "summary": "Design charge controllers, inverters and hybrids down to their wiring bay and terminals, and inspect the solar chain's wiring sheet.",
+      "how": [
+        "Library -> Designers -> Solar controllers, or Design this controller... on a graph controller",
+        "Unit: enclosure, heatsinks, wiring bay cover, and connectors placed right on the faces",
+        "Terminals: 2D front and bay terminal drawing with fanned conductor labels, exportable as SVG",
+        "Panels > Controller > Battery bar: hop straight between the linked labs or open the chain's Sheet"
+      ],
+      "action": "",
+      "button": "Solar controllers",
+      "key": "",
+      "open_hints": [
+        "Click Solar controllers"
+      ],
+      "world": "mtvernon",
+      "blurb": "Every library MPPT and hybrid inverter has a real 3D enclosure, heatsink, mounting tabs and terminal bay in the Controller Lab. Open the bay cover to see the battery studs, PV MC4s or breaker blocks, place or slide connectors from the shared connector kit, switch to the Terminals tab for an installer-grade wiring drawing, or open the chain's Sheet to place fuses, breakers, shunts and busbars across Panels, Controller and Battery.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "controller_lab.jpg",
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
+    },
+    "festival_systems": {
+      "id": "festival_systems",
+      "title": "A festival of systems",
+      "chapter": "Systems",
+      "summary": "Every camp and vehicle is its own power system: see them all at once, then scroll into one.",
+      "how": [
+        "Press G: each camp is a tile with a status ring",
+        "Scroll into a camp to see its own tanks and power; Esc comes back out",
+        "View ▾ → Festival board lists what is going wrong, worst first"
+      ],
+      "action": "system_graph_toggle",
+      "button": "",
+      "key": "G",
+      "open_hints": [
+        "Press G"
+      ],
+      "world": "walton",
+      "blurb": "A festival site holds dozens of power systems: the player's own, every camp's and every living vehicle's. Far out each one is a tile whose ring shows power, water, food and people; closer in a card shows its interior live, and one more scroll goes inside with no jump. The dashboard follows the system you are in, and the Festival board ranks every system by what needs attention.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "festival_systems.jpg",
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
+    },
+    "element_lens": {
+      "id": "element_lens",
+      "title": "Where the nitrogen goes",
+      "chapter": "Systems",
+      "summary": "Colour every wire by the element it carries and follow it through the site.",
+      "how": [
+        "Press G, then Show ▾ → Colour by element → Nitrogen (or water, carbon …)",
+        "Show ▾ → Where it goes… follows it from source to sink",
+        "Timeline → Tracks ▾ → Add water & nutrients track"
+      ],
+      "action": "system_graph_toggle",
+      "button": "",
+      "key": "G",
+      "open_hints": [
+        "Press G"
+      ],
+      "world": "walton",
+      "blurb": "Every kind of resource is made of something: urine of water, urea and salts; food of protein, fat and starch; down to carbon, nitrogen, phosphorus and potassium. Colour the graph by one of them and each wire shows how much of it it carries, with dotted stubs where people breathe it out or plants take it from the air. Where it goes follows it through the site as a Sankey, over the hours the clock has run, and the timeline can track what the stores hold and how much used water comes back clean.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "element_lens.jpg",
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
+    },
+    "flow_lens": {
+      "id": "flow_lens",
+      "title": "Flows: a Sankey that can loop",
+      "chapter": "Systems",
+      "summary": "Wires as wide as what they carry, and a lens that lays the graph out as a loop Sankey.",
+      "how": [
+        "Press G, then View options ▾ → Flow: Sankey (or Flow style… to tune it)",
+        "Click the Flows lens: sources on top, returns up the sides",
+        "Hover a return to light its loop; pick a resource or a time window at the top"
+      ],
+      "action": "system_graph_toggle",
+      "button": "",
+      "key": "G",
+      "open_hints": [
+        "Press G"
+      ],
+      "world": "mtvernon",
+      "blurb": "Every wire is drawn as a ribbon as wide as what it carries, measured against the biggest flow of the same resource on screen, so watts and litres each keep their own scale (the legend says what a width means). Streaks move faster where more flows and never strobe at speed. The Flows lens lays the scope out as a Sankey that can loop: the main stream runs down the page, and what cycles back, water reused, nutrients returned to the beds, runs up the sides like field lines, with how much of each resource cycles (Finn's cycling index) in the header.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "flow_lens.jpg",
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
+    },
+    "circle_pack": {
+      "id": "circle_pack",
+      "title": "Circles inside circles",
+      "chapter": "Systems",
+      "summary": "Everything nested on the site (groups, arrays and their strings, stores and what they hold) as zoomable circles.",
+      "how": [
+        "Press G, then View options ▾ → Nesting as circles…",
+        "Click a circle to fly into it; right-click or Backspace to come back out",
+        "Size by one each, rated power or mass; tabs for what the stores hold and what the site is built from",
+        "A group's inspector has See inside as circles; a store's has its make-up"
+      ],
+      "action": "system_graph_toggle",
+      "button": "",
+      "key": "G",
+      "open_hints": [
+        "Press G"
+      ],
+      "world": "mtvernon",
+      "blurb": "Every group on the graph, the camps and vehicles with their own systems, a solar array's strings of panels, as circles inside circles. Click one to fly into it, right-click to come back out; size them one each, by rated power or by mass. The same view shows what the stores hold, each store split into what it is made of down to the elements, and what the site's structures are built from, down to their parts.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "circle_pack.jpg",
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
+    },
+    "process_control": {
+      "id": "process_control",
+      "title": "Process control: valves, loops, alarms",
+      "chapter": "Systems",
+      "summary": "The graph as a plant picture, with control loops, alarms, gauges and trends.",
+      "how": [
+        "Press G, then the Process lens",
+        "Templates drops in a whole process; Lessons teaches it in five steps",
+        "Logic, Alarms, Widgets, Trends and Hardware are in the bar under the picture"
+      ],
+      "action": "system_graph_toggle",
+      "button": "",
+      "key": "G",
+      "open_hints": [
+        "Press G"
+      ],
+      "world": "mtvernon",
+      "blurb": "The Process lens draws the piped part of the graph as tanks, pipes, valves and pumps. Click anything for its faceplate. Control blocks (on / off bands, PID loops, interlocks, sequences) run on the site's clock; alarms flash until acknowledged; gauges, buttons and trends can be set down on the picture and on extra screens. Templates drop in a whole process and can be shared as a code. With Home Assistant connected, in Live mode and armed, the same tags can drive real devices.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "process_control.jpg",
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
+    },
+    "bootcamp_overcharge": {
+      "id": "bootcamp_overcharge",
+      "title": "Bootcamp 2: Panels Push Too Hard",
+      "chapter": "Systems",
+      "summary": "Wire a solar panel straight to a battery and find out why nobody does.",
+      "how": [
+        "In the graph (G), click 🎓 Bootcamp, then level 2"
+      ],
+      "action": "",
+      "button": "🎓 Bootcamp",
+      "key": "",
+      "open_hints": [
+        "Click 🎓 Bootcamp"
+      ],
+      "world": "burningman",
+      "blurb": "A 300 W panel's open-circuit voltage is 40 V; a 12 V battery must never see more than about 14.6 V. Wired directly, the panel drives the cells past their ceiling and the battery is ruined, which unlocks the charge controller.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "bootcamp_overcharge.jpg",
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
+    },
+    "bootcamp_controller": {
+      "id": "bootcamp_controller",
+      "title": "Bootcamp 3: You've Got Power… Some of It",
+      "chapter": "Systems",
+      "summary": "Do it right through a charge controller, then see how much of the panel it can use.",
+      "how": [
+        "In the graph (G), click 🎓 Bootcamp, then level 3"
+      ],
+      "action": "",
+      "button": "🎓 Bootcamp",
+      "key": "",
+      "open_hints": [
+        "Click 🎓 Bootcamp"
+      ],
+      "world": "burningman",
+      "blurb": "Panel into the PWM controller's PV inputs, controller into the battery: it charges. But a controller delivers at the battery's voltage, capped at its rated current — 12 V × 10 A = 120 W of the 300 W panel. The next levels are about getting the rest.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "bootcamp_controller.jpg",
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
+    },
+    "community_schedule": {
+      "id": "community_schedule",
+      "title": "Community schedule",
+      "chapter": "People",
+      "summary": "Everyone's day, the week's events and the rota on one calendar, exported as .ics.",
+      "how": [
+        "Click the people button on the timeline (or Schedule… in Routines)",
+        "Day: a row per person; click one to see their week and edit their profile",
+        "Week: drag a deploy, a burn or a set to move it; Export calendars for any calendar app"
+      ],
+      "action": "",
+      "button": "Community schedule",
+      "key": "",
+      "open_hints": [
+        "Click Community schedule"
+      ],
+      "world": "walton",
+      "blurb": "Each person lives their own day: their body clock moves their night, the weekly rota names who does which recurring job and when, and nobody is planned to work in their sleep. The week shows every scheduled thing on the site in one place — deploys, arrivals, burns, stage sets, meals — and you can move them there. Export writes a calendar for the group and one per person.",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "image": "community_schedule.jpg",
+      "image_run": "2026-11-21T13:35:55",
+      "image_commit": "af08948"
     }
   },
   "last_run": {
-    "label": "tour_20261115-002145",
-    "generated": "2026-11-15T00:25:00",
-    "git_commit": "27de16d",
-    "passed": 1,
-    "total": 1,
+    "label": "tour_polish_fix3",
+    "generated": "2026-11-21T13:44:13",
+    "git_commit": "af08948",
+    "passed": 3,
+    "total": 3,
     "video_secs": null
   }
 }

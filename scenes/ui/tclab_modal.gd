@@ -85,7 +85,7 @@ func _ready() -> void:
 # Open / close / API
 # ---------------------------------------------------------------------------
 
-## opts: {spec, prop_id (edit a placed assembly; Apply writes it back)}
+## opts: {spec, preset, process_mode, auto_prerun, prop_id (edit a placed assembly; Apply writes it back)}
 func open(opts: Dictionary = {}) -> void:
 	if _active:
 		return
@@ -98,6 +98,10 @@ func open(opts: Dictionary = {}) -> void:
 			spec = TcBuilder.spec_for_model(str(rec.get("model_id", "")))
 		if rec.is_empty():
 			_bound_prop_id = ""
+	if spec.is_empty():
+		var preset_id := str(opts.get("preset", ""))
+		if not preset_id.is_empty():
+			spec = TcPresets.builtin(preset_id)
 	if spec.is_empty():
 		spec = TcPresets.builtin("elbow_run")
 	_undo.clear()
@@ -119,6 +123,10 @@ func open(opts: Dictionary = {}) -> void:
 	_set_status("")
 	_apply_btn.visible = not _bound_prop_id.is_empty()
 	_place_btn.text = "Place a copy" if not _bound_prop_id.is_empty() else "Place in world"
+	if bool(opts.get("process_mode", false)):
+		set_run_mode(true)
+		if bool(opts.get("auto_prerun", false)) and _proc != null and _proc.has_method("_on_prerun"):
+			_proc.call_deferred("_on_prerun")
 
 
 func close() -> void:

@@ -92,6 +92,8 @@ func _build_ui() -> void:
 	_space_row = NpcSpaceTagRow.new()
 	body.add_child(_space_row)
 
+	_frame.add_button("Lights & strings…", ModalFrame.SECONDARY, _on_lights,
+		"Attach lights and strings to this StarShade in a 3D studio")
 	_frame.add_button("Apply design", ModalFrame.SECONDARY, _on_apply_design,
 		"Rebuild the prop with the chosen design and specs")
 	_frame.add_button("Re-seed graph", ModalFrame.PRIMARY, _on_reseed,
@@ -179,3 +181,13 @@ func _on_reseed() -> void:
 		_status.text = "Re-seeded the graph: %s × %s" % [UiText.count(n, "panel"), UiText.num(w, "W")]
 	else:
 		_status.text = "Re-seed failed"
+
+
+func _on_lights() -> void:
+	var pid := _prop_id
+	if pid.is_empty():
+		return
+	var tree := get_tree()
+	close()
+	PropLightsModal.open(tree, pid)
+

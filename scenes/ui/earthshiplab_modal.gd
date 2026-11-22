@@ -20,6 +20,8 @@ var _shell: DesignerShell = null
 var _studio: StudioViewport = null
 var _list: DesignGallery = null
 var _col: DesignerColumn = null
+var _light_panel: ModelLightPanel = null
+var _earthship_3d: Node3D = null
 var _ids: Array = []        # parallel to the gallery rows: builtin id, "lib:<name>", "" header
 var _rows: Dictionary = {}  # key -> FormRow
 var _checks_box: VBoxContainer = null
@@ -60,6 +62,9 @@ func open_modal(opts: Dictionary = {}) -> void:
 	_prop_id = str(opts.get("prop_id", ""))
 	_refresh_list()
 	var s: Variant = opts.get("spec", null)
+	if (not (s is Dictionary) or (s as Dictionary).is_empty()) and not _prop_id.is_empty():
+		var rec := PlacedPropService.get_prop_record(_main(), _prop_id)
+		s = rec.get(EarthshipSpec.KEY, {})
 	if s is Dictionary and not (s as Dictionary).is_empty():
 		_load_spec(s)
 	else:
@@ -71,6 +76,8 @@ func open_modal(opts: Dictionary = {}) -> void:
 func close() -> void:
 	if not _open:
 		return
+	if _light_panel != null:
+		_light_panel.reset_studio_night()
 	if _shell.is_open():
 		_shell.close()
 	else:
@@ -91,7 +98,10 @@ func is_open() -> bool:
 
 
 func current_spec() -> Dictionary:
-	return EarthshipSpec.resolve(_spec)
+	var s := EarthshipSpec.resolve(_spec)
+	if _light_panel != null:
+		s[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
+	return s
 
 
 # --- UI -------------------------------------------------------------------
@@ -141,6 +151,8 @@ func _build_left() -> void:
 func _build_centre() -> void:
 	_studio = StudioViewport.create({"ground": false, "person": true, "ssao": true})
 	_studio.set_home(0.6, 0.38)
+	_studio.input_hook = func(e: InputEvent) -> bool:
+		return _light_panel != null and _light_panel.handle_viewport_event(e, _studio.camera, _studio.container, _earthship_3d)
 	_shell.centre.add_child(_studio)
 	_earth_check = CheckButton.new()
 	_earth_check.text = "Show the earth"
@@ -170,11 +182,12 @@ func _build_right() -> void:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", UITheme.SPACE_XS)
 	_shell.right.add_child(box)
+	_checks_box = VBoxContainer.new()
+	box.add_child(_checks_box)
+	box.add_child(SectionHeader.make("Dimensions", ""))
 	_summary_box = VBoxContainer.new()
 	_summary_box.add_theme_constant_override("separation", 2)
 	box.add_child(_summary_box)
-	_checks_box = VBoxContainer.new()
-	box.add_child(_checks_box)
 	box.add_child(SectionHeader.make("Rooms", ""))
 	_spin(box, "modules", "Rooms", 1, EarthshipSpec.MAX_MODULES, 1, "", "U-shaped rooms in the row")
 	_spin(box, "module_w", "Room width", 2.0, 8.0, 0.05, "m", "Inside, between the tyre walls (vigas span this)")
@@ -244,12 +257,27 @@ func _build_right() -> void:
 	box.add_child(SectionHeader.make("Water", ""))
 	_spin(box, "cisterns", "Cisterns", 0, 8, 1, "", "Buried behind the berm, fed from the roof")
 	_spin(box, "cistern_l", "Each holds", 500.0, 60000.0, 100.0, "L", "")
+	box.add_child(SectionHeader.make("Lighting", ""))
+	_light_panel = ModelLightPanel.new()
+	_light_panel.configure_auto_toggle("Warm ceiling bulb in every room", "Hang a warm white bulb in the middle of each U-module's ceiling")
+	_light_panel.bind_studio_night(_studio)
+	_light_panel.auto_toggle_changed.connect(func(on: bool) -> void:
+		_spec["room_lights"] = on
+		_light_panel.sync_with_spec(_spec)
+		_spec[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
+		if _col != null:
+			_col.set_summary("Lighting", _light_panel.summary_text()))
+	_light_panel.lights_changed.connect(func() -> void:
+		_spec[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
+		if _col != null:
+			_col.set_summary("Lighting", _light_panel.summary_text()))
+	box.add_child(_light_panel)
 	_status = Label.new()
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_status)
-	_col = DesignerColumn.setup(box, "earthship", {"open": ["Rooms", "Greenhouse", "Bottle walls"], "tile_cols": 2})
+	_col = DesignerColumn.setup(box, "earthship", {"open": ["Rooms"], "tile_cols": 3})
 
 
 func _spin(box: VBoxContainer, key: String, label: String, lo: float, hi: float, step: float,
@@ -275,6 +303,9 @@ func _set_field(key: String, v: Variant) -> void:
 	if _syncing:
 		return
 	_spec[key] = v
+	if _light_panel != null:
+		_light_panel.sync_with_spec(_spec)
+		_spec[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
 	_queue_rebuild()
 
 
@@ -344,12 +375,16 @@ func _on_list_selected(idx: int) -> void:
 		return
 	var spec := _spec_for_id(str(_ids[idx]))
 	if not spec.is_empty():
-		_load_spec(spec)
+		_load_spec(spec, false)
 
 
-func _load_spec(spec: Dictionary) -> void:
+func _load_spec(spec: Dictionary, use_bound_prop: bool = true) -> void:
 	_spec = EarthshipSpec.resolve(spec)
 	_sync_rows()
+	if _light_panel != null:
+		_light_panel.set_auto_pressed(bool(_spec.get("room_lights", true)))
+		_light_panel.load_from_context(_main() if use_bound_prop else null,
+			_prop_id if use_bound_prop else "", EarthshipBuilder.MODEL_ID, _spec)
 	_rebuild_preview()
 	_frame()
 
@@ -360,7 +395,8 @@ func _load_spec(spec: Dictionary) -> void:
 func _preview_node(spec: Dictionary) -> Node3D:
 	var root := Node3D.new()
 	root.name = "EarthshipPreview"
-	root.add_child(EarthshipBuilder.build_node(spec, "Earthship", {"cutaway": _roof_off}))
+	var bld := EarthshipBuilder.build_node(spec, "Earthship", {"cutaway": _roof_off})
+	root.add_child(bld)
 	if _show_earth:
 		root.add_child(earth_mesh(EarthshipDesign.earthworks(spec)))
 	return root
@@ -400,6 +436,7 @@ static func earth_mesh(ew: Dictionary) -> MeshInstance3D:
 					st.add_vertex(v)
 	var mi := MeshInstance3D.new()
 	mi.name = "Earth"
+	mi.set_meta("studio_no_frame", true)
 	mi.mesh = st.commit()
 	var m := StandardMaterial3D.new()
 	m.albedo_color = Color(0.62, 0.52, 0.38)
@@ -410,7 +447,13 @@ static func earth_mesh(ew: Dictionary) -> MeshInstance3D:
 
 
 func _rebuild_preview() -> void:
-	_studio.show_node(_preview_node(_spec))
+	var prev := _preview_node(_spec)
+	_earthship_3d = prev.get_node_or_null("Earthship") as Node3D
+	_studio.show_node(prev)
+	if _light_panel != null and _earthship_3d != null:
+		_light_panel.attach_preview(_earthship_3d)
+		if _col != null:
+			_col.set_summary("Lighting", _light_panel.summary_text())
 	_refresh_summary()
 
 
@@ -513,8 +556,11 @@ func _on_save() -> void:
 
 func _on_place() -> void:
 	var main := _main()
+	var js := EarthshipSpec.to_json_safe(current_spec())
 	var res: Dictionary = PlacedPropService.begin_placement(main, EarthshipBuilder.MODEL_ID,
-		{"record_extra": {EarthshipSpec.KEY: EarthshipSpec.to_json_safe(_spec), "collision_enabled": true}})
+		{"record_extra": {EarthshipSpec.KEY: js,
+			PropModelLights.KEY_MODEL_LIGHTS: _light_panel.serialized_items() if _light_panel != null else [],
+			"collision_enabled": true}})
 	if bool(res.get("ok", false)):
 		close()
 	else:
@@ -525,6 +571,9 @@ func _on_apply() -> void:
 	if _prop_id.is_empty():
 		return
 	var main := _main()
-	PlacedPropService.update_prop_record(main, _prop_id, {EarthshipSpec.KEY: EarthshipSpec.to_json_safe(_spec)}, true)
+	var js := EarthshipSpec.to_json_safe(current_spec())
+	PlacedPropService.update_prop_record(main, _prop_id, {EarthshipSpec.KEY: js}, true)
 	PlacedPropService.sync_earthship(main, _prop_id)
+	if _light_panel != null:
+		PropModelLights.sync_prop(main, _prop_id, _light_panel.items())
 	_status.text = "Applied to the placed Earthship."

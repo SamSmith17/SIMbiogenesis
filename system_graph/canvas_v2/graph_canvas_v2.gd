@@ -348,6 +348,15 @@ func _render_item(item: Dictionary) -> void:
 	if _is_physical_view():
 		super._render_item(item)
 		return
+	if show_as_models and _node_model_id(item) != "":
+		if _v3_on() and _model_stage_has(str(item.get("id", ""))):
+			_render_model_anchor(item)
+		else:
+			_render_model_picture(item)
+		_draw_overlay_outline(item)
+		_draw_twin_badge(item)
+		_draw_open_loop_badge(item)
+		return
 	var iid := item.get("id", "") as String
 	# Hide legacy aggregate panel card in V2; individual virtual panel nodes replace it.
 	if iid == "virtual_solar_array":
@@ -403,12 +412,19 @@ func _render_card_v2(item: Dictionary) -> void:
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	# Per-item live context (the one dict is reused; these keys are per card).
 	_card_ctx["live_w"] = -1.0
+	_card_ctx["peak_w"] = -1.0
 	_card_ctx["agg_soc"] = -1.0
-	if itype == "processor" or (itype == "compound" and _is_load_group_item(item)):
+	if itype == "processor" or itype == "appliance" or itype == "acload" \
+			or (itype == "compound" and _is_load_group_item(item)):
 		var tree := get_tree()
 		if tree != null and model != null:
-			_card_ctx["live_w"] = GraphAcLoad.sum_load_group_watts(model, item, tree, null) \
+			_card_ctx["live_w"] = GraphAcLoad.sum_load_group_watts(model, item, tree, null, true) \
 				if itype == "compound" else GraphAcLoad.item_draw_watts(model, item, tree, _find_sim_load_host())
+			var bus := tree.root.get_node_or_null("AcPowerBus") if tree.root != null else null
+			if bus != null and "load_by_item" in bus:
+				var rec: Variant = (bus.get("load_by_item") as Dictionary).get(iid, {})
+				if rec is Dictionary and float((rec as Dictionary).get("peak_w", -1.0)) >= 0.0:
+					_card_ctx["peak_w"] = float((rec as Dictionary).get("peak_w", -1.0))
 	elif itype == "compound" and _compound_displays_as_battery(specs):
 		_card_ctx["agg_soc"] = _aggregate_child_battery_soc(item)
 	_card_ctx["sys_level"] = str(system_status.get(iid, ""))
@@ -1066,14 +1082,17 @@ func _draw_port_annotations(item: Dictionary) -> void:
 				HORIZONTAL_ALIGNMENT_LEFT, -1, bfs, Color(0.92, 0.95, 1.0))
 		if not names or room < 18.0:
 			continue
-		var label := UiText.fit(fnt, GraphPortLabels.port_name(hid, str(h.get("resource_kind", ""))),
-			fs, room - 6.0, "graph port name")
-		var lw := fnt.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		var p_raw := GraphPortLabels.port_name(hid, str(h.get("resource_kind", "")))
+		var p_fs := fs
+		while p_fs > 8 and fnt.get_string_size(p_raw, HORIZONTAL_ALIGNMENT_LEFT, -1, p_fs).x > room - 6.0:
+			p_fs -= 1
+		var label := UiText.fit(fnt, p_raw, p_fs, room - 6.0, "graph port name" if _zoom >= 0.78 else "")
+		var lw := fnt.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, p_fs).x
 		var x0 := pos.x + dot_r + 2.0 if right else pos.x - dot_r - 2.0 - lw - 6.0
-		var r := Rect2(Vector2(x0, mid_y - float(fs) * 0.62), Vector2(lw + 6.0, float(fs) * 1.24))
+		var r := Rect2(Vector2(x0, mid_y - float(p_fs) * 0.62), Vector2(lw + 6.0, float(p_fs) * 1.24))
 		GraphFastDraw.rrect(self, r, r.size.y * 0.5, plate)
-		draw_string(fnt, Vector2(r.position.x + 3.0, mid_y + float(fs) * 0.36), label,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.80, 0.86, 0.95, 0.95))
+		draw_string(fnt, Vector2(r.position.x + 3.0, mid_y + float(p_fs) * 0.36), label,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, p_fs, Color(0.80, 0.86, 0.95, 0.95))
 
 
 ## The picture in a card's media zone: the GLB thumbnail, a group's miniature,

@@ -294,6 +294,7 @@ const LAYOUT_3D_SPHERE := 25
 const LAYOUT_3D_TORUS := 26
 const LAYOUT_3D_FLAT := 27
 const LAYOUT_3D_RESET := 28
+const LAYOUT_MODELS := 29
 var _ctrl_picker_dialog: AcceptDialog = null
 var _ctrl_picker_list: ItemList = null
 var _ctrl_picker_array_id: String = ""
@@ -1363,13 +1364,14 @@ var _alarm_chip: Control = null
 func _ensure_alarm_chip() -> void:
 	if _alarm_chip != null and is_instance_valid(_alarm_chip):
 		return
-	if _scada_hub == null or (_scada_hub.call("alarm_rules") as Array).is_empty() or get_parent() == null:
+	var host := _main_ui_layer()
+	if _scada_hub == null or (_scada_hub.call("alarm_rules") as Array).is_empty() or host == null:
 		return
 	_alarm_chip = Control.new()
 	_alarm_chip.set_script(load("res://scenes/ui/scada/alarm_chip.gd"))
 	_alarm_chip.name = "ScadaAlarmChip"
 	_alarm_chip.set("view", self)
-	get_parent().add_child.call_deferred(_alarm_chip)
+	host.add_child.call_deferred(_alarm_chip)
 
 
 func alarm_chip() -> Control:
@@ -1552,8 +1554,41 @@ func _refresh_item_card_preview(item_id: String) -> void:
 		_graph_canvas.call("queue_redraw")
 
 
+## True when SystemGraphView is hosted inside a secondary OS `Window` rather than
+## Main's `UILayer` on `tree.root`.
+func is_undocked_window() -> bool:
+	if not is_inside_tree() or get_tree() == null:
+		return false
+	var vp := get_viewport()
+	return vp != null and vp != get_tree().root
+
+
+## Focus the secondary OS window hosting SystemGraphView (used when pressing G
+## on the main monitor while the graph is open on a secondary/touch monitor).
+func focus_undocked_window() -> bool:
+	if not is_undocked_window():
+		return false
+	if not visible:
+		open_graph_view()
+	var win := get_window()
+	if win != null and win != get_tree().root:
+		win.grab_focus()
+		return true
+	return false
+
+
+func _main_ui_layer() -> Node:
+	var ul := ServiceLocator.ui_layer()
+	if ul != null:
+		return ul
+	return get_parent()
+
+
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_ENTER_TREE:
+		ServiceLocator.provide(ServiceLocator.GRAPH, self)
 	if what == NOTIFICATION_VISIBILITY_CHANGED:
+		var undocked := is_undocked_window()
 		var vp := get_viewport()
 		if vp != null:
 			vp.disable_3d = visible
@@ -1565,24 +1600,24 @@ func _notification(what: int) -> void:
 			Control.MOUSE_FILTER_STOP if visible
 			else Control.MOUSE_FILTER_IGNORE
 		)
-		# The graph covers the screen with its own dashboard: the first-person
-		# HUD hides under it (the scoreboard used to keep drawing beneath).
-		# Toasts stay (they are how the graph reports), clear of its sidebars.
-		if visible:
+		# The graph covers the screen with its own dashboard on the main window:
+		# the first-person HUD hides under it. When undocked onto a secondary
+		# monitor, leave the main window's HUD and snowglobe untouched.
+		if visible and not undocked:
 			HudLayout.claim("system_graph", {
 				"inset": {"left": SIDEBAR_L_W, "right": SIDEBAR_R_W, "top": 56.0},
 				"hide": ["top_left", "top_right", "top_center", "center_prompt"]})
 		else:
 			HudLayout.release("system_graph")
 		if visible:
-			# The full-screen globe and the graph cannot share the root
-			# viewport (this branch just turned its 3D off) — opening the graph
-			# ends the globe. Its exit path skips its own "reopen the graph"
-			# because we are already open.
-			var soi_g := get_node_or_null("/root/SoiService")
-			if soi_g != null and bool(soi_g.get("snowglobe_active")) \
-					and soi_g.has_method("exit_snowglobe"):
-				soi_g.call("exit_snowglobe")
+			if not undocked:
+				# The full-screen globe and the graph cannot share the root
+				# viewport (this branch just turned its 3D off) — opening the graph
+				# ends the globe.
+				var soi_g := get_node_or_null("/root/SoiService")
+				if soi_g != null and bool(soi_g.get("snowglobe_active")) \
+						and soi_g.has_method("exit_snowglobe"):
+					soi_g.call("exit_snowglobe")
 			_refresh_solar_ui_ref()
 			_init_bridge()
 			if _graph_canvas != null:
@@ -2958,6 +2993,12 @@ func _build_topbar() -> Control:
 	lp.add_radio_check_item("Flat ring", LAYOUT_3D_FLAT)
 	lp.set_item_tooltip(lp.get_item_index(LAYOUT_3D_FLAT), "Back to the flat 2D graph.")
 	lp.set_item_checked(lp.get_item_index(LAYOUT_3D_FLAT), true)
+	lp.add_check_item("Show models", LAYOUT_MODELS)
+	lp.set_item_tooltip(lp.get_item_index(LAYOUT_MODELS),
+		"Nodes that have a 3D model are drawn as that model. On the flat graph "
+		+ "each one is a picture from its default angle, in place of the card. "
+		+ "In the 3D ring, and in Site Plan and Elevation, it is the model itself. "
+		+ "A node with no model stays a card.")
 	lp.add_item("Reset 3D placements", LAYOUT_3D_RESET)
 	lp.set_item_tooltip(lp.get_item_index(LAYOUT_3D_RESET),
 		"Put every card you dragged over its shell back where the 3D view places it (one undo step).")
@@ -7555,6 +7596,12 @@ func _spawn_from_preset(preset: Dictionary, canvas_local_pos: Vector2) -> void:
 	var ptype: String = str(preset.get("type", "appliance"))
 	var specs: Dictionary = (preset.get("specs", {}) as Dictionary).duplicate(true)
 	var item_id: String = model.generate_item_id()
+	# A new battery-family load starts its charge at this hour. Without the
+	# stamp the curve is measured from hour 0 and the device is already full.
+	if str(specs.get("signature_family", "")) == "battery" and not specs.has("charge_started_h"):
+		var clock := _get_scene_main_node()
+		if clock != null and clock.has_method("get_absolute_hours"):
+			specs["charge_started_h"] = float(clock.call("get_absolute_hours"))
 	var dims := ComponentPresets.spawn_dimensions(preset)
 	var proc_w: float = dims.x
 	var proc_h: float = dims.y
@@ -12874,6 +12921,8 @@ func _on_layout_menu_id(id: int) -> void:
 		LAYOUT_3D_SPHERE:   set_graph_3d(GraphSchema3D.SPHERE)
 		LAYOUT_3D_TORUS:    set_graph_3d(GraphSchema3D.TORUS)
 		LAYOUT_3D_FLAT:     set_graph_3d("")
+		LAYOUT_MODELS:
+			_set_show_models(not _models_on())
 		LAYOUT_3D_RESET:
 			var n3 := int(_graph_canvas.call("reset_view_3d_placements")) if _graph_canvas != null else 0
 			_show_toast("Reset %s" % UiText.count(n3, "card") if n3 > 0
@@ -13013,6 +13062,28 @@ func _graph_3d_scope() -> String:
 		return ""
 	var st: Dictionary = _graph_canvas.call("view_3d_state")
 	return str(st.get("scope", "")) if not str(st.get("mode", "")).is_empty() else ""
+
+
+func _models_on() -> bool:
+	return _graph_canvas != null and bool(_graph_canvas.get("show_as_models"))
+
+
+func _set_show_models(on: bool) -> void:
+	if _graph_canvas == null:
+		return
+	_graph_canvas.set("show_as_models", on)
+	_graph_canvas.call("queue_redraw")
+	_sync_models_menu()
+	_schedule_graph_autosave()
+
+
+func _sync_models_menu() -> void:
+	if _layout_menu == null:
+		return
+	var lp := _layout_menu.get_popup()
+	var idx := lp.get_item_index(LAYOUT_MODELS)
+	if idx >= 0:
+		lp.set_item_checked(idx, _models_on())
 
 
 func _sync_3d_menu_checks() -> void:
@@ -15395,7 +15466,7 @@ func _ensure_feed_strip() -> void:
 		return
 	if _npc_population == null or not _npc_population.has_pop_driven():
 		return
-	var parent := get_parent()
+	var parent := _main_ui_layer()
 	if parent == null:
 		return
 	_feed_strip = _FEED_STRIP_SCRIPT.new()
@@ -16581,11 +16652,21 @@ func _input(event: InputEvent) -> void:
 		return
 
 	# Don't open while save/load panel is up
-	var ui_layer := get_parent()
+	var ui_layer := _main_ui_layer()
 	if ui_layer:
 		var sl := ui_layer.get_node_or_null("SaveLoadUI")
 		if sl != null and sl.has_method("is_panel_visible") and sl.is_panel_visible():
 			return
+
+	# When undocked onto a secondary monitor (e.g. Touchscreen), keep the graph
+	# open there; pressing G inside the graph window hands focus back to Main.
+	if is_undocked_window():
+		if not visible:
+			_apply_graph_open_side_effects()
+		elif get_tree() != null and get_tree().root != null:
+			get_tree().root.grab_focus()
+		get_viewport().set_input_as_handled()
+		return
 
 	if visible:
 		_apply_graph_close_side_effects()
@@ -16615,6 +16696,8 @@ func open_graph_view() -> void:
 func close_graph_view() -> void:
 	if not visible:
 		return
+	if is_undocked_window():
+		return
 	_apply_graph_close_side_effects()
 	_update_make_array_quick_button()
 
@@ -16623,14 +16706,16 @@ func _apply_graph_open_side_effects() -> void:
 	visible = true
 	_queue_world_inventory()
 	_apply_graph_open_mode_from_sim_state()
-	# Pause survival mechanics while graph is open
-	var m := _get_scene_main_node()
-	if m != null and m.get("gameplay_mechanics_paused") != null:
-		_gameplay_paused_before_graph = bool(m.gameplay_mechanics_paused)
-		m.gameplay_mechanics_paused = true
-	var gr: Variant = _GAMEPLAY_RULES_SCRIPT.from_node(self)
-	if gr != null:
-		gr.set_survival_paused(true)
+	# Pause survival mechanics only when the graph covers the main 3D window;
+	# on a secondary monitor the player is still walking/driving in 3D.
+	if not is_undocked_window():
+		var m := _get_scene_main_node()
+		if m != null and m.get("gameplay_mechanics_paused") != null:
+			_gameplay_paused_before_graph = bool(m.gameplay_mechanics_paused)
+			m.gameplay_mechanics_paused = true
+		var gr: Variant = _GAMEPLAY_RULES_SCRIPT.from_node(self)
+		if gr != null:
+			gr.set_survival_paused(true)
 	# Re-sync load automations so rules fire even if the graph was
 	# closed and the engine was cleared since last inspect
 	if _inspector_panel != null and _inspector_panel.has_method("sync_all_load_automations"):
@@ -16639,20 +16724,24 @@ func _apply_graph_open_side_effects() -> void:
 
 func _apply_graph_close_side_effects() -> void:
 	visible = false
-	# Restore survival state from before the graph was opened
-	var m := _get_scene_main_node()
-	if m != null and m.get("gameplay_mechanics_paused") != null:
-		m.gameplay_mechanics_paused = _gameplay_paused_before_graph
-	var gr: Variant = _GAMEPLAY_RULES_SCRIPT.from_node(self)
-	if gr != null:
-		gr.set_survival_paused(_gameplay_paused_before_graph)
+	if not is_undocked_window():
+		# Restore survival state from before the graph was opened
+		var m := _get_scene_main_node()
+		if m != null and m.get("gameplay_mechanics_paused") != null:
+			m.gameplay_mechanics_paused = _gameplay_paused_before_graph
+		var gr: Variant = _GAMEPLAY_RULES_SCRIPT.from_node(self)
+		if gr != null:
+			gr.set_survival_paused(_gameplay_paused_before_graph)
 
 
 # ---------------------------------------------------------------------------
-# Scene main (Main node under UILayer parent)
+# Scene main (Main node via ServiceLocator, fallback UILayer parent)
 # ---------------------------------------------------------------------------
 
 func _get_scene_main_node() -> Node:
+	var m := ServiceLocator.main()
+	if m != null:
+		return m
 	var ul := get_parent()
 	if ul == null:
 		return null
@@ -17353,8 +17442,10 @@ func _layout_history_panel() -> void:
 
 
 func _timeline_bottom_inset() -> float:
+	if is_undocked_window():
+		return 0.0
 	_ensure_timeline_inset_hook()
-	var ul := get_parent()
+	var ul := _main_ui_layer()
 	if ul != null:
 		var tl := ul.get_node_or_null("TimelineUI")
 		if tl != null and tl.has_method("get_stack_height"):
@@ -17367,7 +17458,7 @@ func _timeline_bottom_inset() -> float:
 func _ensure_timeline_inset_hook() -> void:
 	if _timeline_inset_hooked:
 		return
-	var ul := get_parent()
+	var ul := _main_ui_layer()
 	if ul == null:
 		return
 	var tl := ul.get_node_or_null("TimelineUI")
@@ -17385,7 +17476,9 @@ func _on_timeline_stack_height_changed(_height: float) -> void:
 
 
 func _set_graph_companion_ui_visible(graph_open: bool) -> void:
-	var ul := get_parent()
+	if is_undocked_window():
+		return
+	var ul := _main_ui_layer()
 	if ul == null:
 		return
 	var terrain_opts := ul.get_node_or_null("TerrainOptionsUI")
@@ -17489,6 +17582,9 @@ func _on_history_slider_value_changed(_v: float) -> void:
 
 func _apply_mouse_for_graph(graph_open: bool) -> void:
 	_set_graph_companion_ui_visible(graph_open)
+	if is_undocked_window():
+		CursorController.release_modal("system_graph")
+		return
 	if graph_open:
 		CursorController.request_modal("system_graph")
 	else:
@@ -17496,7 +17592,7 @@ func _apply_mouse_for_graph(graph_open: bool) -> void:
 
 
 func _other_ui_needs_free_mouse() -> bool:
-	var ul := get_parent()
+	var ul := _main_ui_layer()
 	if ul == null:
 		return false
 	var time_ui := ul.get_node_or_null("TimeUI")
@@ -18571,6 +18667,7 @@ func collect_save_state() -> Dictionary:
 		"pbi_bar_pinned":      _pbi_bar_pinned,
 		"wire_style_override": str(_graph_canvas.get("wire_style_override")) if _graph_canvas != null else "",
 		"node_display_mode":   str(_graph_canvas.get("node_display_mode")) if _graph_canvas != null else "preview",
+		"show_as_models":      _models_on(),
 		"show_preview_labels": bool(_graph_canvas.get("show_preview_labels")) if _graph_canvas != null else true,
 		"soi_ring_scale":      float(_graph_canvas.get("soi_ring_scale")) if _graph_canvas != null else 1.0,
 		"radial_layout_mode":  bool(_graph_canvas.get("radial_layout_mode")) if _graph_canvas != null else false,
@@ -18719,6 +18816,8 @@ func apply_save_state(data: Dictionary, options: Dictionary = {}) -> void:
 		var ndm := str(data.get("node_display_mode", "preview"))
 		_graph_canvas.set("node_display_mode",
 				ndm if ndm in ["preview", "card"] else "preview")
+		_graph_canvas.set("show_as_models", bool(data.get("show_as_models", false)))
+		_sync_models_menu()
 		_graph_canvas.set("show_preview_labels", bool(data.get("show_preview_labels", true)))
 		_graph_canvas.set("soi_ring_scale",
 				clampf(float(data.get("soi_ring_scale", 1.0)), 0.25, 4.0))
@@ -18942,6 +19041,7 @@ const _DC_THROTTLE_INTERVAL := 0.25
 var _breaker_acc := 0.0
 var _breaker_ids: Array = []
 var _breaker_key := -1
+var _breaker_from_h := -1.0
 
 
 ## In-line AC breakers (BreakerTrip): what each carries, and the trip. Runs
@@ -18964,20 +19064,28 @@ func _tick_breakers(delta: float) -> void:
 	if main == null or not main.has_method("get_absolute_hours"):
 		return
 	var now_h := float(main.call("get_absolute_hours"))
-	var ix: Dictionary = GraphAcLoad.delivered_index(model, get_tree())
-	var conns: Array = GraphNesting.flat_connections_cached(model)
+	var restore := -1.0
+	var bus := get_node_or_null("/root/AcPowerBus")
+	if bus != null and "ac_restore_h" in bus:
+		restore = float(bus.get("ac_restore_h"))
+		if now_h < restore:
+			restore = -1.0
+	if _breaker_from_h < 0.0 or now_h < _breaker_from_h:
+		_breaker_from_h = now_h
+	var step: Dictionary = GraphAcLoad.evaluate_step(model, get_tree(), _breaker_from_h, now_h, restore)
+	_breaker_from_h = now_h
+	var by_br: Dictionary = step.get("by_breaker", {}) as Dictionary
 	var patches := {}
 	for bid in _breaker_ids:
 		var it: Dictionary = model.get_item(bid)
 		if it.is_empty():
 			continue
 		var specs: Dictionary = it.get("specs", {}) as Dictionary
-		var watts := 0.0
-		if BreakerTrip.is_closed(specs):
-			for c: Dictionary in conns:
-				if str(c.get("source_item_id", "")) == bid and str(c.get("polarity", "")) in ["ac", "load", "ac_240"]:
-					watts += GraphAcLoad.delivered_watts_indexed(model, ix, c)
-		var patch := BreakerTrip.step(specs, watts, now_h)
+		var raw_info: Variant = by_br.get(bid, {})
+		var info: Dictionary = raw_info if raw_info is Dictionary else {}
+		var mean_w := float(info.get("mean_w", 0.0))
+		var peak_w := float(info.get("peak_w", mean_w))
+		var patch := BreakerTrip.step(specs, mean_w, now_h, peak_w)
 		if not patch.is_empty():
 			patches[bid] = patch
 	if patches.is_empty():
@@ -23896,7 +24004,8 @@ func open_separate(kind: String) -> void:
 	if scr == null:
 		return
 	var m: Node = scr.new()
-	get_tree().root.add_child(m)
+	var host: Node = get_viewport() if get_viewport() != null else get_tree().root
+	host.add_child(m)
 	m.call("open_for", self, kind)
 
 
@@ -24009,7 +24118,7 @@ func open_element_sankey(lens: String = "N") -> void:
 	if scr == null:
 		return
 	var m: Node = scr.new()
-	var host: Node = get_tree().root
+	var host: Node = get_viewport() if get_viewport() != null else get_tree().root
 	host.add_child(m)
 	m.call("open_for", self, lens, _active_scope_id)
 

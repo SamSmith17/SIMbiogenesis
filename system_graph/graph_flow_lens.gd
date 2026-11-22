@@ -960,7 +960,7 @@ func _draw_node_disc(cv: Control, sr: Rect2, nd: Dictionary, vis: Dictionary, ac
 		return
 	var f := UITheme.font("medium")
 	var lfs := clampi(int(round(11.5 * clampf(zoom, 0.75, 1.3) * label_scale)), 8, 20)
-	var shown := UiText.fit(f, name, lfs, 170.0 * clampf(zoom, 0.75, 1.3), "flow_lens")
+	var shown := UiText.fit(f, name, lfs, 170.0 * clampf(zoom, 0.75, 1.3), "flow_lens" if zoom >= 0.78 else "")
 	var ts := f.get_string_size(shown, HORIZONTAL_ALIGNMENT_LEFT, -1, lfs)
 	var half := Vector2(ts.x * 0.5 + 5.0, lfs * 0.78)
 	var pc := c + out_dir * (rr + 7.0) + Vector2(out_dir.x * half.x, out_dir.y * half.y)

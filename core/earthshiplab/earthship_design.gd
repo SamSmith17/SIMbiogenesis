@@ -706,7 +706,7 @@ static func _solve(s: Dictionary) -> Dictionary:
 	# What the terrain is asked for.
 	var ew := {
 		"sink_m": 0.0, "rect": [x0, z_back, x1, zf_out], "hole": true,
-		"floor_y": yf, "roof_y": roof_top, "slab": false, "walls": false,
+		"floor_y": yf, "roof_y": roof_top, "slab": false, "walls": false, "lights": false,
 		"berm": {"-z": -1.0}, "berm_run": float(s["berm_run"]),
 		"daylight": "+z", "cut_w": maxf(float(s["front_cut"]), cut_need),
 		"ramp_len": f * RAMP_GRADE if bool(s["ramp"]) and f > 0.1 else 0.0,

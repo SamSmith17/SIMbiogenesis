@@ -119,11 +119,7 @@ func _rebuild() -> void:
 		var group := str(t.get("group", ""))
 		if group != last_group:
 			last_group = group
-			var head := Label.new()
-			head.text = group if not group.is_empty() else "Other"
-			head.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-			head.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-			_list.add_child(head)
+			_list.add_child(SectionHeader.make(group if not group.is_empty() else "Other"))
 		_list.add_child(_row(t))
 		shown += 1
 
@@ -159,20 +155,21 @@ func _row(t: Dictionary) -> Control:
 			var cb: Callable = _opts["pick"]
 			_frame.close()
 			if cb.is_valid():
-				cb.call(t)))
+				cb.call(t), "Pick %s" % str(t["label"])))
 	else:
 		if str(t.get("kind", "")) == ScadaTags.KIND_SWITCH and bool(t.get("writable", false)):
-			row.add_child(_btn("on", "On", func() -> void: _command(id, 1.0)))
-			row.add_child(_btn("off", "Off", func() -> void: _command(id, 0.0)))
-		row.add_child(_btn("track", "Add to timeline", func() -> void: _add_track(t)))
+			row.add_child(_btn("on", "On", func() -> void: _command(id, 1.0), "Switch %s on" % str(t["label"])))
+			row.add_child(_btn("off", "Off", func() -> void: _command(id, 0.0), "Switch %s off" % str(t["label"])))
+		row.add_child(_btn("track", "Add to timeline", func() -> void: _add_track(t), "Add %s as a timeline track" % str(t["label"])))
 	_row_nodes[id] = row
 	return row
 
 
-func _btn(node_name: String, text: String, cb: Callable) -> Button:
+func _btn(node_name: String, text: String, cb: Callable, tip: String = "") -> Button:
 	var b := Button.new()
 	b.name = node_name
 	b.text = text
+	b.tooltip_text = tip
 	UITheme.style_button(b)
 	b.pressed.connect(cb)
 	return b
@@ -183,10 +180,13 @@ func _paint_value(lbl: Label, t: Dictionary) -> void:
 	if lbl.text != txt:
 		lbl.text = txt
 	var col := UITheme.C_TEXT
+	var low := txt.to_lower()
 	if t.is_empty() or not bool(t.get("available", false)):
 		col = UITheme.C_TEXT_M
-	elif txt == "blocked" or txt == "starved" or txt == "overflow":
+	elif low == "blocked" or low == "starved" or low == "overflow" or low == "fault":
 		col = UITheme.C_WARN
+	elif low == "on" or low == "ok" or low == "running":
+		col = UITheme.C_OK
 	lbl.add_theme_color_override("font_color", col)
 
 

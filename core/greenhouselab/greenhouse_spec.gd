@@ -68,6 +68,17 @@ const BERM_LABELS := {"none": "No berm", "north": "Bermed on the back (north)",
 const BED_STYLES := ["raised", "ground", "keyhole"]
 const BED_STYLE_LABELS := {"raised": "Raised beds", "ground": "In-ground rows",
 	"keyhole": "Keyhole rings"}
+const SPECTRUMS := ["blurple", "full_spectrum"]
+const SPECTRUM_LABELS := {
+	"blurple": "Hydroponic red/blue LED",
+	"full_spectrum": "Full spectrum white",
+}
+const LIGHT_SCHEDULES := ["dusk_dawn", "always", "controller"]
+const LIGHT_SCHEDULE_LABELS := {
+	"dusk_dawn": "Sunset to sunrise",
+	"always": "Always on",
+	"controller": "Controller photoperiod",
+}
 
 const MIN_W := 2.0
 const MAX_W := 40.0
@@ -90,7 +101,8 @@ const DEFAULTS := {
 	"ground": {"sink_m": 0.0, "berm": "none", "walls": "masonry"},
 	"mass": {"barrels": 0, "litres_each": 208.0, "colour": "black"},
 	"rain": {"gutters": true, "cistern_l": 2000.0, "to_barrels": true},
-	"lights": {"on": false, "ppfd": 200.0, "photoperiod_h": 16.0, "dli_target": 14.0, "hang_m": 0.7},
+	"lights": {"on": false, "spectrum": "blurple", "schedule": "dusk_dawn", "ppfd": 200.0,
+		"photoperiod_h": 16.0, "dli_target": 14.0, "hang_m": 0.7},
 	"beds": {"layout": "auto", "style": "raised", "bed_w_m": 1.2, "path_w_m": 0.6,
 		"end_clear_m": 0.9, "wall_h_m": 0.32, "crops": "garden", "gantry": false, "lights": false,
 		"feed": false, "items": []},
@@ -212,6 +224,14 @@ static func resolve(spec: Dictionary) -> Dictionary:
 	r["to_barrels"] = bool(r["to_barrels"])
 	var lt: Dictionary = s["lights"]
 	lt["on"] = bool(lt["on"])
+	if not SPECTRUMS.has(str(lt.get("spectrum", "blurple"))):
+		lt["spectrum"] = "blurple"
+	else:
+		lt["spectrum"] = str(lt["spectrum"])
+	if not LIGHT_SCHEDULES.has(str(lt.get("schedule", "dusk_dawn"))):
+		lt["schedule"] = "dusk_dawn"
+	else:
+		lt["schedule"] = str(lt["schedule"])
 	lt["ppfd"] = clampf(float(lt["ppfd"]), 20.0, 1000.0)
 	lt["photoperiod_h"] = clampf(float(lt["photoperiod_h"]), 4.0, 24.0)
 	lt["dli_target"] = clampf(float(lt["dli_target"]), 2.0, 40.0)
@@ -245,6 +265,8 @@ static func resolve(spec: Dictionary) -> Dictionary:
 	var cols: Dictionary = s["colors"]
 	for k in DEFAULTS["colors"]:
 		cols[k] = _color(cols.get(k), DEFAULTS["colors"][k])
+	if spec.get("model_lights") is Array:
+		s["model_lights"] = (spec["model_lights"] as Array).duplicate(true)
 	return s
 
 
@@ -324,6 +346,7 @@ static func to_json_safe(spec: Dictionary) -> Dictionary:
 static func key_of(spec: Dictionary) -> String:
 	var s := to_json_safe(spec)
 	s.erase("name")
+	s.erase("model_lights")
 	return str(hash(JSON.stringify(_rounded(s))))
 
 

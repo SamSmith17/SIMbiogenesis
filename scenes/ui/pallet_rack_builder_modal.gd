@@ -144,6 +144,8 @@ var _insp_suppress := false
 var _last_field_undo_ms := 0
 var _el_list_box: VBoxContainer = null
 var _col: DesignerColumn = null
+var _light_panel: ModelLightPanel = null
+var _rack_3d: Node3D = null
 var _el_list_sig := ""
 var _design_opt: OptionButton = null
 var _design_name: LineEdit = null
@@ -324,6 +326,8 @@ func _activate() -> void:
 	_refresh_module_ui()
 	_refresh_crew_ui()
 	_clear_fuse_list()
+	if _light_panel != null:
+		_light_panel.load_from_context(_main_node(), _bound_prop_id, PalletRackBuilder.MODEL_ID, _spec)
 	_draft_done = false
 	_active = true
 	visible = true
@@ -350,6 +354,8 @@ func _apply_edit_mode_ui() -> void:
 func close() -> void:
 	if not _active:
 		return
+	if _light_panel != null:
+		_light_panel.reset_studio_night()
 	if not _draft_done:
 		_save_draft()
 	_active = false
@@ -421,8 +427,8 @@ func _build_ui() -> void:
 	# a one-line summary ("In this design" used to be 20 rows on top).
 	_col = DesignerColumn.setup(side, "pallet_rack", {"open": ["Rack system", "Layout"],
 		"fold": ["In this design", "Rack system", "Layout", "Levels", "Decking", "Variants",
-			"Sections (joined racks)", "Placement", "Walls (plywood)", "Build it with a crew",
-			"Bill of materials"], "tile_cols": 3})
+			"Sections (joined racks)", "Placement", "Walls (plywood)", "Lighting",
+			"Build it with a crew", "Bill of materials"], "tile_cols": 3})
 	side.move_child(_insp_frame, 2)
 
 	_shell.set_hint("Right-drag orbits · click selects · drag moves · Alt-drag raises · " +
@@ -533,6 +539,15 @@ func _build_right(side: VBoxContainer) -> void:
 	_wall_bottom_spin = _add_spin(side, "Walls from", 0.0, 20.0, 0.25, 0.0, "ft")
 	_wall_top_spin = _add_spin(side, "Walls up to", 0.0, 20.0, 0.25, 0.0, "ft",
 		"Where the walls stop. 0 runs them to the top of the frame; 8 walls in just the ground floor.")
+
+	_section(side, "Lighting")
+	_light_panel = ModelLightPanel.new()
+	_light_panel.bind_studio_night(_studio)
+	_light_panel.lights_changed.connect(func() -> void:
+		_spec[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
+		if _col != null:
+			_col.set_summary("Lighting", _light_panel.summary_text()))
+	side.add_child(_light_panel)
 
 	_section(side, "Build it with a crew")
 	_crew_box = VBoxContainer.new()
@@ -660,6 +675,9 @@ func _on_control_changed() -> void:
 
 
 func _on_viewport_input(e: InputEvent) -> void:
+	if _light_panel != null and _light_panel.active_tool() != "select" \
+			and _light_panel.handle_viewport_event(e, _camera, _vp_container, _rack_3d):
+		return
 	if e is InputEventMouseButton:
 		var mb := e as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_RIGHT:
@@ -1901,6 +1919,7 @@ func _read_spec() -> Dictionary:
 			if _wall_top_spin else -1.0,
 		"elements": (_spec.get("elements", []) as Array),
 		"part_overrides": (_spec.get("part_overrides", {}) as Dictionary),
+		PropModelLights.KEY_MODEL_LIGHTS: _light_panel.serialized_items() if _light_panel != null else (_spec.get(PropModelLights.KEY_MODEL_LIGHTS, []) as Array),
 	})
 
 
@@ -1926,7 +1945,14 @@ func _rebuild_preview(light: bool = false) -> void:
 	var node := PalletRackBuilder.build_node(_full_spec(), "PalletRack",
 		{"record": true, "dim_ctx": str(_ctx[-1]) if not _ctx.is_empty() else "",
 			"module": _active_mod, "dim_others": _modules.size() > 1})
+	_rack_3d = node
 	_holder.add_child(node)
+	if _light_panel != null:
+		if not light:
+			_light_panel.sync_with_spec(_spec)
+		_light_panel.attach_preview(node)
+		if _col != null:
+			_col.set_summary("Lighting", _light_panel.summary_text())
 	_tree = node.get_meta("part_tree", {}) as Dictionary
 	# An open group the edit took away (fewer columns, a removed element):
 	# close back to the nearest group that still exists, and draw again.
@@ -2045,6 +2071,9 @@ func _on_apply_to_prop() -> void:
 		patch.merge(_xf_patch(_bound_world_xf()), true)
 		_root_shift = Transform3D.IDENTITY
 	_write_bound_record(patch)
+	var main := _main_node()
+	if main != null and _light_panel != null:
+		PropModelLights.sync_prop(main, _bound_prop_id, _light_panel.items())
 	_forget_draft(_bound_prop_id)
 	_draft_done = true
 	close()

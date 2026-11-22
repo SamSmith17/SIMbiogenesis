@@ -6,10 +6,10 @@ func _init() -> void:
 	title = "Weather and extreme events"
 	chapter = "World"
 	summary = "Archived and forecast weather drive the sky; smoke, dust and heat can be simulated."
-	how = PackedStringArray(["Weather follows Open-Meteo automatically (the 🌤 / 🌎 indicator)",
-		"Settings ⚙ → Extreme Weather → Preview a hazard",
-		"🌫 on the timeline calibrates local fog and wind"])
-	button = "⚙ → Extreme Weather"
+	how = PackedStringArray(["Weather follows Open-Meteo automatically",
+		"Settings -> Extreme Weather -> Preview a hazard",
+		"Microclimate on the timeline calibrates local fog and wind"])
+	button = "Settings -> Extreme Weather"
 	world = "burningman"
 	budget_s = 40.0
 	hour = 14.0

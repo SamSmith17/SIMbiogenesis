@@ -167,6 +167,7 @@ func _build_ui() -> void:
 	_style_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_opt.fit_to_longest_item = false
 	_style_opt.clip_text = true
+	_style_opt.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	for sid in CampStyles.STYLE_ORDER:
 		_style_opt.add_item(CampStyles.label(str(sid)))
 		_style_opt.set_item_metadata(_style_opt.item_count - 1, str(sid))
@@ -584,6 +585,7 @@ func _build_layout_rows() -> void:
 	opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	opt.fit_to_longest_item = false
 	opt.clip_text = true
+	opt.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	opt.add_item("Default")
 	opt.set_item_metadata(0, "")
 	for v: Dictionary in list:
@@ -737,6 +739,7 @@ func _model_row(class_id: String, model: Dictionary, mix: Dictionary) -> void:
 		float(sz[0]), float(sz[2]), float(sz[1]), CampStyleStore._k(int(model["tris"]))]
 	name_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	name_lbl.clip_text = true
+	name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(name_lbl)
 	var mode := OptionButton.new()

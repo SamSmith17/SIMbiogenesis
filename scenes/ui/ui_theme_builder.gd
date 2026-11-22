@@ -100,6 +100,11 @@ static func build() -> Theme:
 		t.set_stylebox("focus", cls, focus)
 	# MenuButtons are toolbar menus: flat until hovered.
 	t.set_stylebox("normal", "MenuButton", _box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, UITheme.CORNER_RADIUS, 10, 6))
+	var chev_down := UiIcons.icon("chevron-down", 14)
+	if chev_down != null:
+		t.set_icon("arrow", "OptionButton", chev_down)
+	t.set_constant("arrow_margin", "OptionButton", 8)
+	t.set_constant("modulate_arrow", "OptionButton", 1)
 	for cls in ["CheckBox", "CheckButton"]:
 		for s in ["normal", "pressed", "hover", "hover_pressed", "disabled"]:
 			t.set_stylebox(s, cls, empty)
@@ -110,9 +115,15 @@ static func build() -> Theme:
 	t.set_icon("checked", "CheckBox", _check_icon(true))
 	t.set_icon("unchecked_disabled", "CheckBox", _check_icon(false, true))
 	t.set_icon("checked_disabled", "CheckBox", _check_icon(true, true))
+	# Pill toggle switches for CheckButton instead of stock engine toggles.
+	t.set_icon("unchecked", "CheckButton", _switch_icon(false))
+	t.set_icon("checked", "CheckButton", _switch_icon(true))
+	t.set_icon("unchecked_disabled", "CheckButton", _switch_icon(false, true))
+	t.set_icon("checked_disabled", "CheckButton", _switch_icon(true, true))
+	t.set_constant("h_separation", "CheckButton", 8)
 	t.set_color("font_color", "LinkButton", UITheme.C_PRIMARY)
 
-	# --- Text fields -----------------------------------------------------------
+	# --- Text fields & SpinBox -------------------------------------------------
 	for cls in ["LineEdit", "TextEdit", "CodeEdit"]:
 		t.set_stylebox("normal", cls, field)
 		t.set_stylebox("focus", cls, field_focus)
@@ -122,6 +133,7 @@ static func build() -> Theme:
 		t.set_color("font_uneditable_color", cls, UITheme.C_TEXT_S)
 		t.set_color("caret_color", cls, UITheme.C_PRIMARY)
 		t.set_color("selection_color", cls, Color(UITheme.C_PRIMARY, 0.35))
+	t.set_icon("updown", "SpinBox", _updown_icon())
 	var num := numeric_font("regular")
 	if num != null:
 		t.set_font("font", "LineEdit", num)
@@ -176,26 +188,34 @@ static func build() -> Theme:
 	t.set_color("font_color", "Tree", UITheme.C_TEXT_S)
 	t.set_color("font_selected_color", "Tree", UITheme.C_TEXT)
 
-	# --- Scrollbars: slim, quiet until touched -----------------------------------
+	# --- Scrollbars: readable track + grabber ------------------------------------
 	for cls in ["VScrollBar", "HScrollBar"]:
-		t.set_stylebox("scroll", cls, _box(Color(UITheme.C_BG, 0.35), Color(0, 0, 0, 0), 0, 4, 3, 3))
-		t.set_stylebox("scroll_focus", cls, _box(Color(UITheme.C_BG, 0.35), Color(0, 0, 0, 0), 0, 4, 3, 3))
-		t.set_stylebox("grabber", cls, _box(Color(UITheme.C_BORDER, 0.9), Color(0, 0, 0, 0), 0, 4, 3, 3))
-		t.set_stylebox("grabber_highlight", cls, _box(Color(UITheme.C_TEXT_S, 0.9), Color(0, 0, 0, 0), 0, 4, 3, 3))
-		t.set_stylebox("grabber_pressed", cls, _box(UITheme.C_PRIMARY, Color(0, 0, 0, 0), 0, 4, 3, 3))
+		t.set_stylebox("scroll", cls, _box(Color(UITheme.C_BG, 0.45), Color(0, 0, 0, 0), 0, 4, 4, 4))
+		t.set_stylebox("scroll_focus", cls, _box(Color(UITheme.C_BG, 0.45), Color(0, 0, 0, 0), 0, 4, 4, 4))
+		t.set_stylebox("grabber", cls, _box(Color(UITheme.C_BORDER.lightened(0.18), 0.92), Color(0, 0, 0, 0), 0, 4, 4, 4))
+		t.set_stylebox("grabber_highlight", cls, _box(Color(UITheme.C_TEXT_S.lightened(0.12), 0.96), Color(0, 0, 0, 0), 0, 4, 4, 4))
+		t.set_stylebox("grabber_pressed", cls, _box(UITheme.C_PRIMARY, Color(0, 0, 0, 0), 0, 4, 4, 4))
 
 	# --- Range controls ----------------------------------------------------------
 	var bar_bg := _box(Color(UITheme.C_BG, 0.75), Color(UITheme.C_BORDER, 0.8), 1, 3)
 	t.set_stylebox("background", "ProgressBar", bar_bg)
 	t.set_stylebox("fill", "ProgressBar", _box(UITheme.C_PRIMARY, Color(0, 0, 0, 0), 0, 3))
 	t.set_color("font_color", "ProgressBar", UITheme.C_TEXT)
+	var grab_norm := _slider_grabber_icon(false, false)
+	var grab_hov := _slider_grabber_icon(true, false)
+	var grab_dis := _slider_grabber_icon(false, true)
 	for cls in ["HSlider", "VSlider"]:
-		var track := _box(Color(UITheme.C_BG, 0.85), Color(UITheme.C_BORDER, 0.8), 1, 3)
-		track.content_margin_top = 2
-		track.content_margin_bottom = 2
+		var track := _box(Color(UITheme.C_BG, 0.85), Color(UITheme.C_BORDER, 0.85), 1, 3)
+		track.content_margin_top = 3
+		track.content_margin_bottom = 3
+		track.content_margin_left = 3
+		track.content_margin_right = 3
 		t.set_stylebox("slider", cls, track)
-		t.set_stylebox("grabber_area", cls, _box(Color(UITheme.C_PRIMARY, 0.7), Color(0, 0, 0, 0), 0, 3))
+		t.set_stylebox("grabber_area", cls, _box(Color(UITheme.C_PRIMARY, 0.75), Color(0, 0, 0, 0), 0, 3))
 		t.set_stylebox("grabber_area_highlight", cls, _box(UITheme.C_PRIMARY, Color(0, 0, 0, 0), 0, 3))
+		t.set_icon("grabber", cls, grab_norm)
+		t.set_icon("grabber_highlight", cls, grab_hov)
+		t.set_icon("grabber_disabled", cls, grab_dis)
 
 	# --- Collapsible sections (FoldableContainer; scenes/ui/kit/collapsible.gd) --
 	# A quiet title row: no box, a hover tint, a Lucide chevron, small
@@ -277,6 +297,80 @@ static func _check_icon(checked: bool, disabled: bool = false) -> ImageTexture:
 		for p: Vector2i in pts:
 			img.set_pixel(p.x, p.y, ink)
 			img.set_pixel(p.x, p.y - 1, ink)
+	return ImageTexture.create_from_image(img)
+
+
+## Pill toggle switch for CheckButton (30x16 px).
+static func _switch_icon(checked: bool, disabled: bool = false) -> ImageTexture:
+	var w := 30
+	var h := 16
+	var img := Image.create_empty(w, h, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var a := 0.45 if disabled else 1.0
+	var r := 7.0
+	var track_col := Color(UITheme.C_PRIMARY, 0.88 * a) if checked else Color(UITheme.C_BG, 0.85 * a)
+	var border_col := Color(UITheme.C_PRIMARY, a) if checked else Color(UITheme.C_BORDER.lightened(0.1), 0.95 * a)
+	var thumb_cx := float(w - 8) if checked else 8.0
+	var thumb_cy := 8.0
+	var thumb_r := 5.0
+	var thumb_col := Color(1.0, 1.0, 1.0, a) if checked else Color(UITheme.C_TEXT_S.lightened(0.12), a)
+	for y in h:
+		for x in w:
+			var px := float(x) + 0.5
+			var py := float(y) + 0.5
+			var cx := clampf(px, 8.0, float(w) - 8.0)
+			var d := Vector2(px - cx, py - 8.0).length()
+			if d <= r + 0.5:
+				var cov := clampf(r + 0.5 - d, 0.0, 1.0)
+				var col := border_col if d >= r - 1.0 else track_col
+				var td := Vector2(px - thumb_cx, py - thumb_cy).length()
+				if td <= thumb_r + 0.5:
+					var tcov := clampf(thumb_r + 0.5 - td, 0.0, 1.0)
+					col = col.lerp(thumb_col, tcov)
+				img.set_pixel(x, y, Color(col.r, col.g, col.b, col.a * cov))
+	return ImageTexture.create_from_image(img)
+
+
+## Circular slider thumb (14x14 px normal, 16x16 px hovered with cyan halo).
+static func _slider_grabber_icon(hover: bool = false, disabled: bool = false) -> ImageTexture:
+	var n := 16 if hover else 14
+	var img := Image.create_empty(n, n, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var a := 0.45 if disabled else 1.0
+	var c := float(n) * 0.5
+	var outer := c - 1.0
+	var ring := UITheme.C_PRIMARY.lightened(0.15) if hover else UITheme.C_PRIMARY
+	var fill := Color.WHITE if hover else UITheme.C_TEXT
+	for y in n:
+		for x in n:
+			var d := Vector2(float(x) + 0.5 - c, float(y) + 0.5 - c).length()
+			if d <= outer + 0.5:
+				var cov := clampf(outer + 0.5 - d, 0.0, 1.0)
+				var col := Color(ring, a) if d >= outer - 1.6 else Color(fill, a)
+				img.set_pixel(x, y, Color(col.r, col.g, col.b, col.a * cov))
+	return ImageTexture.create_from_image(img)
+
+
+## Crisp SpinBox up/down stepper arrows (14x22 px).
+static func _updown_icon() -> ImageTexture:
+	var svg := ("<svg xmlns='http://www.w3.org/2000/svg' width='14' height='22' viewBox='0 0 14 22' "
+		+ "fill='none' stroke='#94a3b8' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'>"
+		+ "<polyline points='4 8.5 7 5.5 10 8.5'/>"
+		+ "<polyline points='4 13.5 7 16.5 10 13.5'/>"
+		+ "</svg>")
+	var dp := DPITexture.create_from_string(svg, 1.0)
+	if dp != null:
+		var im := dp.get_image()
+		if im != null:
+			return ImageTexture.create_from_image(im)
+	var img := Image.create_empty(14, 22, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var col := UITheme.C_TEXT_S
+	for i in 4:
+		img.set_pixel(7 - i, 5 + i, col)
+		img.set_pixel(7 + i, 5 + i, col)
+		img.set_pixel(7 - i, 16 - i, col)
+		img.set_pixel(7 + i, 16 - i, col)
 	return ImageTexture.create_from_image(img)
 
 
@@ -382,3 +476,37 @@ static func _apply_scale(root: Window) -> void:
 	var s := effective_scale(float(root.size.y))
 	if not is_equal_approx(root.content_scale_factor, s):
 		root.content_scale_factor = s
+
+
+## Configure a secondary OS `Window` with the project Theme, canvas-items
+## stretch, and automatic landscape (1920×1080) vs portrait (1080×1920) base
+## canvas sizing so dashboards and designers stay crisp in both orientations.
+static func install_window(win: Window, portrait_override: int = 0, ui_scale_override: float = 0.0) -> void:
+	if win == null:
+		return
+	win.theme = build()
+	win.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+	win.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
+	win.set_meta("mm_portrait_override", portrait_override)
+	win.set_meta("mm_ui_scale_override", ui_scale_override)
+	_apply_secondary_window_scale(win)
+	var cb := _apply_secondary_window_scale.bind(win)
+	if not win.has_meta("mm_scale_hooked"):
+		win.set_meta("mm_scale_hooked", true)
+		win.size_changed.connect(cb)
+
+
+static func _apply_secondary_window_scale(win: Window) -> void:
+	if win == null or not is_instance_valid(win):
+		return
+	var p_ovr := int(win.get_meta("mm_portrait_override", 0))
+	var s_ovr := float(win.get_meta("mm_ui_scale_override", 0.0))
+	var base := MultiMonitorDisplay.logical_canvas_size(win.size, p_ovr)
+	if win.content_scale_size != base:
+		win.content_scale_size = base
+	# Use the short edge (1080 on both 1920x1080 landscape and 1080x1920 portrait)
+	# so a full-HD portrait monitor renders at 1.0x without over-scaling.
+	var short_edge := float(mini(maxi(win.size.x, 1), maxi(win.size.y, 1)))
+	var factor := s_ovr if s_ovr > 0.05 else effective_scale(short_edge)
+	if not is_equal_approx(win.content_scale_factor, factor):
+		win.content_scale_factor = factor

@@ -362,12 +362,19 @@ func _parts_editor(ui: Control, tree: SceneTree, vp: SubViewport, dir: String) -
 		await HarnessInput.click(root, HarnessInput.center_of(eb))
 		await _settle(tree, 3)
 	_ok(eb != null and eb.button_pressed, "Edit parts is on")
+	var sh: DesignerShell = ui.call("shell") if ui.has_method("shell") else null
+	if sh != null and sh.is_folded():
+		sh.show_left_popup()
+		await _settle(tree, 4)
 	var btn := HarnessInput.find_button(ui, "NEMA17 L")
 	_ok(btn != null, "the palette has a NEMA 17 L mount")
 	if btn == null:
 		return
 	await _reveal(btn, tree)
 	await HarnessInput.click(root, HarnessInput.center_of(btn))
+	if sh != null and sh.left_popup_shown():
+		sh.hide_left_popup()
+		await _settle(tree, 2)
 	_ok(str(parts.get("tool_ref")) == "nema17_mount", "a click on the palette arms the L mount")
 	await _settle(tree, 2)
 	var spot := _visible_face(ui, res2, "cross.F")
@@ -383,10 +390,16 @@ func _parts_editor(ui: Control, tree: SceneTree, vp: SubViewport, dir: String) -
 	_ok(_count_label(res3, "M5 drop-in T-nut") >= tnuts_before + 2, "its two T-nuts and bolts are made (%d → %d T-nuts)" % [tnuts_before, _count_label(res3, "M5 drop-in T-nut")])
 	_shot(vp, dir, "parts_mount_placed")
 	if res3["parts"].has(placed):
+		if sh != null and sh.is_folded():
+			sh.show_left_popup()
+			await _settle(tree, 4)
 		var mb := HarnessInput.find_button(ui, "NEMA17")
 		if mb != null:
 			await _reveal(mb, tree)
 			await HarnessInput.click(root, HarnessInput.center_of(mb))
+			if sh != null and sh.left_popup_shown():
+				sh.hide_left_popup()
+				await _settle(tree, 2)
 			var mf := GantryLabAssembly.feature_of(res3["parts"][placed]["part"], "motor")
 			if mf.is_empty():
 				return

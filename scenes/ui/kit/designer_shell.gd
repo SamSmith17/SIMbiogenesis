@@ -80,6 +80,7 @@ var _header: HBoxContainer = null
 var _body: HBoxContainer = null
 var _left_scroll: ScrollContainer = null
 var _right_scroll: ScrollContainer = null
+var _footer_sep: HSeparator = null
 var _footer_row: HBoxContainer = null
 var _hint: Label = null
 var _left_btn: Button = null
@@ -99,6 +100,10 @@ var _pop_id := ""
 var _is_open := false
 var _folded := false
 var _short := false
+var _portrait := false
+var _vsplit: VSplitContainer = null
+var _vsplit_seeded := false
+var _claimed_cursor_modal := false
 
 
 ## Options: want (Vector2), name_id (the cursor-modal name), name_edit (bool,
@@ -126,7 +131,7 @@ func _build(title: String, icon: String, opts: Dictionary) -> void:
 	add_child(_backdrop)
 	panel = PanelContainer.new()
 	panel.name = "Panel"
-	panel.add_theme_stylebox_override("panel", UITheme.panel_style())
+	panel.add_theme_stylebox_override("panel", UITheme.modal_panel_style(0.99))
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(panel)
 	_root = VBoxContainer.new()
@@ -188,12 +193,21 @@ func _build(title: String, icon: String, opts: Dictionary) -> void:
 		_header.add_child(redo_btn)
 	_close_btn = IconButton.close(close)
 	_header.add_child(_close_btn)
+	_root.add_child(HSeparator.new())
 
-	# Body: three columns.
+	# Body: three columns in landscape; VSplitContainer (3D studio top, right
+	# charts/controls bottom, left folded into header) on portrait monitors.
 	_body = HBoxContainer.new()
 	_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_body.add_theme_constant_override("separation", UITheme.SPACE_MD)
 	_root.add_child(_body)
+	_vsplit = VSplitContainer.new()
+	_vsplit.name = "PortraitSplit"
+	_vsplit.visible = false
+	_vsplit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_vsplit.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_vsplit.add_theme_constant_override("separation", UITheme.SPACE_SM)
+	_body.add_child(_vsplit)
 	var lc := _scroll_column(left_w)
 	_left_scroll = lc[0]
 	_left_scroll.name = "LeftColumn"
@@ -228,6 +242,8 @@ func _build(title: String, icon: String, opts: Dictionary) -> void:
 	_body.add_child(_right_scroll)
 
 	# Footer: hint + buttons.
+	_footer_sep = HSeparator.new()
+	_root.add_child(_footer_sep)
 	_footer_row = HBoxContainer.new()
 	_footer_row.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	_root.add_child(_footer_row)
@@ -434,6 +450,7 @@ func show_flyout(id: String) -> void:
 	_pop_catcher.visible = true
 	_pop.visible = true
 	_place_pop()
+	UITheme.animate_open(_pop)
 	var s: Variant = (_pops[id] as Dictionary)["search"]
 	if s is LineEdit:
 		(s as LineEdit).grab_focus()
@@ -529,6 +546,13 @@ func set_badge(text: String, level: String = "warn", tip: String = "") -> void:
 
 
 ## An amber chip in the strip while a tool is armed; "" clears it.
+## A control in the header row, after the checks badge (the labs' power
+## chain bar).
+func add_header_widget(c: Control) -> void:
+	_header.add_child(c)
+	_header.move_child(c, badge.get_index() + 1)
+
+
 func set_mode(text: String) -> void:
 	_mode_lbl.text = text
 	_mode_chip.visible = not text.is_empty()
@@ -585,19 +609,20 @@ func set_undo_state(can_undo: bool, can_redo: bool) -> void:
 		redo_btn.disabled = not can_redo
 
 
-## A footer button. PRIMARY is the accent, DESTRUCTIVE the error colour.
+## A footer button. PRIMARY is filled in the accent, DESTRUCTIVE in the error colour.
 func add_button(text: String, kind: int, cb: Callable, tip: String = "") -> Button:
 	var b := Button.new()
 	b.text = text
 	b.tooltip_text = tip
 	b.focus_mode = Control.FOCUS_NONE
 	b.custom_minimum_size = Vector2(0, 32)
-	UITheme.style_button(b)
 	match kind:
 		PRIMARY:
-			b.add_theme_color_override("font_color", UITheme.C_PRIMARY)
+			UITheme.style_primary_button(b)
 		DESTRUCTIVE:
-			b.add_theme_color_override("font_color", UITheme.C_ERROR)
+			UITheme.style_destructive_button(b)
+		_:
+			UITheme.style_button(b)
 	if cb.is_valid():
 		b.pressed.connect(cb)
 	footer.add_child(b)
@@ -651,14 +676,21 @@ func open() -> void:
 	order_verbs(footer)
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
-	CursorController.request_modal(modal_name, close)
+	var in_secondary := UiFit.is_secondary_window(self)
+	_claimed_cursor_modal = not in_secondary
+	if _claimed_cursor_modal:
+		CursorController.request_modal(modal_name, close)
+	_backdrop.color = UITheme.C_BG if in_secondary else Color(0, 0, 0, 0.55)
 	# The fold rule (below) is about the SCREEN: where it has FOLD_W x SHORT_H
 	# to give, the zoom never takes the panel's logical size under them.
+	panel.set_meta("ui_fit_fullscreen", true)
 	panel.set_meta("ui_fit_min_logical", Vector2(FOLD_W, SHORT_H))
 	UiFit.keep_fitted(panel, want)
 	var own := get_canvas_layer_node()
 	_fly_layer.layer = (own.layer if own != null else 0) + 1
 	_apply_layout()
+	if not in_secondary:
+		UITheme.animate_open(panel, _backdrop)
 	if not get_viewport().size_changed.is_connected(_apply_layout):
 		get_viewport().size_changed.connect(_apply_layout)
 
@@ -671,7 +703,9 @@ func close() -> void:
 	hide_flyout()
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	CursorController.release_modal(modal_name)
+	if _claimed_cursor_modal:
+		CursorController.release_modal(modal_name)
+		_claimed_cursor_modal = false
 	closed.emit()
 
 
@@ -691,13 +725,24 @@ func is_folded() -> bool:
 	return _folded
 
 
+## Short screen: the footer has joined the header row.
+func is_short() -> bool:
+	return _short
+
+
+## Portrait screen: 3D studio stacked on top, right column stacked below.
+func is_portrait_layout() -> bool:
+	return _portrait
+
+
 func _exit_tree() -> void:
-	if _is_open:
+	if _is_open and _claimed_cursor_modal:
 		CursorController.release_modal(modal_name)
+		_claimed_cursor_modal = false
 
 
 # ---------------------------------------------------------------------------
-# The 720 rule
+# The 720 rule + Portrait vertical split
 # ---------------------------------------------------------------------------
 
 func _apply_layout() -> void:
@@ -706,28 +751,59 @@ func _apply_layout() -> void:
 	# The fold rule reads the panel's LOGICAL size: full screen, it is the
 	# screen divided by the zoom UiFit gives it.
 	var vp := UiFit.fill_logical_size(panel, want) if UiFit.fills_screen(want) else get_viewport().get_visible_rect().size
+	var portrait := vp.y > vp.x * 1.05
 	# Half a pixel of slack: 1920 / 1.2 is 1599.9999 in float.
-	var fold := vp.x < FOLD_W - 0.5
-	var short := vp.y < SHORT_H - 0.5
-	var changed := fold != _folded or short != _short
+	var fold := portrait or (vp.x < FOLD_W - 0.5)
+	var short := (not portrait) and (vp.y < SHORT_H - 0.5)
+	var changed := fold != _folded or short != _short or portrait != _portrait
 	_folded = fold
 	_short = short
+	_portrait = portrait
 	# The left column: in the body, or in the header's popup.
 	if fold and _left_scroll.get_parent() != _left_flyout:
-		_body.remove_child(_left_scroll)
+		if _left_scroll.get_parent() != null:
+			_left_scroll.get_parent().remove_child(_left_scroll)
 		_left_flyout.add_child(_left_scroll)
 		_left_scroll.custom_minimum_size = Vector2(left_w, 0)
 	elif not fold and _left_scroll.get_parent() != _body:
 		hide_left_popup()
-		_left_flyout.remove_child(_left_scroll)
+		if _left_scroll.get_parent() != null:
+			_left_scroll.get_parent().remove_child(_left_scroll)
 		_body.add_child(_left_scroll)
 		_body.move_child(_left_scroll, 0)
+	# Portrait vertical split: 3D studio + strip on top, charts/controls below.
+	if portrait and centre.get_parent() != _vsplit:
+		if centre.get_parent() != null:
+			centre.get_parent().remove_child(centre)
+		if _right_scroll.get_parent() != null:
+			_right_scroll.get_parent().remove_child(_right_scroll)
+		_vsplit.add_child(centre)
+		_vsplit.add_child(_right_scroll)
+		_vsplit.visible = true
+		centre.custom_minimum_size = Vector2(0, 260)
+		_right_scroll.custom_minimum_size = Vector2(0, 240)
+		_right_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_right_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		if not _vsplit_seeded:
+			_vsplit_seeded = true
+			_vsplit.split_offset = int(clampf((vp.y - 120.0) * 0.44 - 260.0, 0.0, 600.0))
+	elif not portrait and centre.get_parent() == _vsplit:
+		_vsplit.remove_child(centre)
+		_vsplit.remove_child(_right_scroll)
+		_vsplit.visible = false
+		_body.add_child(centre)
+		_body.add_child(_right_scroll)
+		if not fold and _left_scroll.get_parent() == _body:
+			_body.move_child(_left_scroll, 0)
+		centre.custom_minimum_size = Vector2.ZERO
+		_right_scroll.size_flags_horizontal = Control.SIZE_FILL
 	if _left_flyout.visible:
 		_place_flyout()
 	if _pop.visible:
 		_place_pop()
 	_left_btn.visible = fold
-	_right_scroll.custom_minimum_size = Vector2(RIGHT_W_NARROW if fold else right_w, 0)
+	if not portrait:
+		_right_scroll.custom_minimum_size = Vector2(RIGHT_W_NARROW if fold else right_w, 0)
 	# The footer: its own row, or in the header.
 	if short and footer.get_parent() != _header:
 		_footer_row.remove_child(footer)
@@ -740,6 +816,8 @@ func _apply_layout() -> void:
 		footer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_hint.visible = false
 	_footer_row.visible = not short
+	if _footer_sep != null:
+		_footer_sep.visible = not short
 	if changed:
 		layout_changed.emit(fold, short)
 

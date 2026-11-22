@@ -158,8 +158,18 @@ func _ready() -> void:
 		_refresh_panels()
 		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 		call_deferred("_layout_panel")
+		if DisplayServer.get_name() != "headless":
+			call_deferred("_open_default_globe")
 	else:
 		visible = false
+
+
+func _open_default_globe() -> void:
+	if not _is_launch_mode() or not is_inside_tree():
+		return
+	if get_tree() != null and get_tree().root.find_child("GlobeModeLayer", true, false) != null:
+		return
+	GlobeMode.open(self)
 
 
 func _is_launch_mode() -> bool:
@@ -184,11 +194,15 @@ func _open_hub_settings() -> void:
 		# the backdrop is covered on purpose.
 		var layer := CanvasLayer.new()
 		layer.name = "HubSettingsLayer"
-		layer.layer = UITheme.LAYER_MODAL
+		layer.layer = UITheme.LAYER_MODAL + 2
 		var host: Node = get_tree().current_scene if get_tree().current_scene != null else self
 		host.add_child(layer)
 		layer.add_child(p)
 		_settings_panel = p
+	else:
+		var p_layer := _settings_panel.get_parent() as CanvasLayer
+		if p_layer != null:
+			p_layer.layer = UITheme.LAYER_MODAL + 2
 	if _settings_panel.has_method("open"):
 		_settings_panel.call("open")
 
@@ -271,7 +285,7 @@ func _style_value_label(lbl: Label, accent: Color = _TEXT) -> void:
 	lbl.add_theme_color_override("font_color", accent)
 
 func _style_primary_button(btn: Button) -> void:
-	btn.add_theme_color_override("font_color", UITheme.C_PRIMARY)
+	UITheme.style_primary_button(btn)
 
 func _make_separator() -> HSeparator:
 	var sep := HSeparator.new()
@@ -293,6 +307,8 @@ func _notification(what: int) -> void:
 	elif what == NOTIFICATION_VISIBILITY_CHANGED and not visible:
 		# Every way the picker closes, not only hide_picker().
 		HudLayout.release("location_picker")
+		if not _is_launch_mode():
+			CursorController.release_modal("location_picker")
 
 ## Keep split ratio and map aspect in sync after the panel fills the viewport.
 func _layout_panel() -> void:
@@ -311,9 +327,12 @@ func show_picker() -> void:
 		# In a world: the HUD hides under the picker, and the picker covers
 		# the timeline like every modal (UiFit.timeline_clearance is 0 unless
 		# it would draw under the bar).
+		move_to_front()
 		HudLayout.claim_modal("location_picker")
+		CursorController.request_modal("location_picker", hide_picker)
 		set_meta("ui_modal", true)  # UiAudit.MODAL_META: it covers the bar on purpose
 		if _panel != null:
+			_panel.set_meta("ui_modal", true)
 			_panel.offset_bottom = -(UiFit.timeline_clearance(_panel) + 10.0)
 	_legend_picked = -1
 	_sel_lat = NAN
@@ -447,7 +466,7 @@ func _build_ui() -> void:
 		var globe_btn := Button.new()
 		globe_btn.name = "HubGlobeButton"
 		globe_btn.text = "Globe"
-		globe_btn.tooltip_text = "Explore the whole Earth in 3D: search, see the solar zones and city lights, start a world anywhere."
+		UiIcons.apply(globe_btn, "globe", "Explore the whole Earth in 3D: load worlds, search addresses or coordinates, inspect solar zones, and launch anywhere.", 15)
 		globe_btn.pressed.connect(func() -> void: GlobeMode.open(self))
 		header_btns.add_child(globe_btn)
 		header_btns.add_child(share_btn)
@@ -1512,24 +1531,20 @@ func _make_world_row(index: int) -> PanelContainer:
 	play.tooltip_text = "Jump back in exactly where you left off."
 	play.pressed.connect(_play_world.bind(index))
 	h.add_child(play)
-	var ren := Button.new()
-	ren.text = "Rename"
-	ren.pressed.connect(_begin_rename.bind(index))
+	var ren := IconButton.make("pencil", "Rename this world", _begin_rename.bind(index))
+	ren.name = "Rename"
 	h.add_child(ren)
-	var dup := Button.new()
-	dup.text = "Copy"
-	dup.tooltip_text = "Make an independent copy of this world (a checkpoint)."
-	dup.pressed.connect(_duplicate_world.bind(index))
+	var dup := IconButton.make("copy", "Make an independent copy of this world (a checkpoint).", _duplicate_world.bind(index))
+	dup.name = "Copy"
 	h.add_child(dup)
-	var share := Button.new()
-	share.text = "Share…"
-	share.tooltip_text = "Export this world (and what it needs) as a zip for a friend."
-	share.pressed.connect(func() -> void: AssetPackModal.open_export(self, str(rec.get("id", ""))))
+	var share := IconButton.make("upload", "Export this world (and what it needs) as a zip for a friend.",
+		func() -> void: AssetPackModal.open_export(self, str(rec.get("id", ""))))
+	share.name = "Share"
 	h.add_child(share)
-	var del := Button.new()
-	del.text = "Delete"
-	del.tooltip_text = "Move this world to the trash (user://worlds/_trash). The map's terrain cache is kept."
-	del.pressed.connect(_confirm_delete_world.bind(index))
+	var del := IconButton.make("trash-2", "Move this world to the trash (user://worlds/_trash). The map's terrain cache is kept.",
+		_confirm_delete_world.bind(index))
+	del.name = "Delete"
+	del.add_theme_color_override("icon_hover_color", UITheme.C_ERROR)
 	h.add_child(del)
 	return row
 

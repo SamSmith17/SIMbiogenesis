@@ -51,8 +51,10 @@ static func find_battery_for_dc_port(model: GraphModel, item_id: String,
 		var ot := str(other.get("type", ""))
 		if ot in ["battery", "smartbattery"]:
 			return other_id
-		if ot == "controller" and other_handle in ["pvPositive", "pvNegative"]:
-			var next_handle := "batteryPositive" if other_handle == "pvPositive" else "batteryNegative"
+		# Any PV input (a designed controller has pvPositive2 … for its other
+		# MPPTs) leads through to the battery side.
+		if ot == "controller" and other_handle.begins_with("pv") and (other_handle.contains("Positive") or other_handle.contains("Negative")):
+			var next_handle := "batteryPositive" if other_handle.contains("Positive") else "batteryNegative"
 			var found := find_battery_for_dc_port(model, other_id, next_handle, visited, hops + 1, flat_conns)
 			if not found.is_empty():
 				return found

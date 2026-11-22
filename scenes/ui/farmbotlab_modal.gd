@@ -308,7 +308,7 @@ func _build_right() -> void:
 	_checks_box = VBoxContainer.new()
 	_checks_box.add_theme_constant_override("separation", 4)
 	box.add_child(_checks_box)
-	var res := Collapsible.make("Labour and cost", true, "Hand work against the robot, a year at a time (the hand rates are estimates)")
+	var res := Collapsible.make("Labour and cost", false, "Hand work against the robot, a year at a time (the hand rates are estimates)")
 	box.add_child(res)
 	for r in [["hand", "Hand work it does", "The same seeding, watering, weeding and looking done by hand (estimates)"],
 			["hand_split", "  of which", "Sowing · watering · weeding · looking, minutes a day"],

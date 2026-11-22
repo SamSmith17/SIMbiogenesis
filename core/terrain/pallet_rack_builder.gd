@@ -695,6 +695,8 @@ static func resolve_spec(overrides: Dictionary = {}) -> Dictionary:
 	s["_stepped_cells"] = claims
 	s["_open_cells"] = _open_cells_of(s, els)
 	s["fused"] = _normalize_fused(s.get("fused"))
+	if overrides.get("model_lights") is Array:
+		s["model_lights"] = (overrides["model_lights"] as Array).duplicate(true)
 	return s
 
 

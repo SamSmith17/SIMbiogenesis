@@ -41,6 +41,15 @@ const GOBOS: Array[String] = ["none", "dots", "star", "breakup", "rings", "bars"
 ## J-placed string and a graph-wired one look the same out of the box.
 const PRESETS := {
 	"omni": {
+		"warm_bulb": {"label": "Warm ceiling bulb (2700 K)", "fields": {"color": "ffd194",
+			"energy": 1.4, "range": 7.0, "show_body": true, "shadow_enabled": false,
+			"fade_m": 55.0, "watts": 9.0}},
+		"grow_blurple": {"label": "Hydroponic grow LED (red/blue)", "fields": {"color": "df28ff",
+			"energy": 1.85, "range": 8.5, "schedule": "dusk_dawn", "shadow_enabled": false,
+			"fade_m": 85.0, "watts": 120.0}},
+		"grow_full": {"label": "Full-spectrum grow LED", "fields": {"color": "fff1dc",
+			"energy": 1.85, "range": 8.5, "schedule": "dusk_dawn", "shadow_enabled": false,
+			"fade_m": 85.0, "watts": 120.0}},
 		"lantern": {"label": "Lantern (warm flicker)", "fields": {"color": "ffae5c",
 			"energy": 1.4, "range": 7.0, "effect": "flicker", "fx_speed": 6.0,
 			"show_body": true, "watts": 6.0}},
@@ -147,7 +156,7 @@ const PRESETS := {
 	},
 }
 const PRESET_ORDER := {
-	"omni": ["lantern", "brazier", "party_bulb", "area_5000k", "blacklight"],
+	"omni": ["warm_bulb", "grow_blurple", "grow_full", "lantern", "brazier", "party_bulb", "area_5000k", "blacklight"],
 	"spot": ["uplight_par", "tree_uplight", "flood_4000k", "pin_spot"],
 	"string": ["patio", "fairy", "strip", "pixel_rainbow", "rope", "neon_flex",
 		"glass_neon", "el_wire"],

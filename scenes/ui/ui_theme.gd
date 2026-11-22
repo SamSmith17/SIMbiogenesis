@@ -82,6 +82,11 @@ static func install(root: Window) -> void:
 	UiThemeBuilder.install(root)
 
 
+## Theme + portrait-aware canvas scale on a secondary OS `Window`.
+static func install_window(win: Window, portrait_override: int = 0, ui_scale_override: float = 0.0) -> void:
+	UiThemeBuilder.install_window(win, portrait_override, ui_scale_override)
+
+
 ## Inter at a weight ("regular" | "medium" | "semibold"); tabular figures with
 ## `numeric` for readouts that change while you watch them.
 static func font(weight: String = "regular", numeric: bool = false) -> Font:
@@ -100,9 +105,31 @@ static func panel_style(alpha: float = 1.0, bg: Color = C_PANEL,
 	return sb
 
 
-## Raised card inside a panel (lighter bg, tighter margins).
+## Elevated modal panel: crisp border, slightly larger corner radius, and soft drop shadow.
+static func modal_panel_style(alpha: float = 0.99, bg: Color = C_PANEL,
+		border: Color = C_BORDER) -> StyleBoxFlat:
+	var sb := panel_style(alpha, bg, Color(border.lightened(0.08), 0.92))
+	sb.set_corner_radius_all(CORNER_RADIUS + 2)
+	sb.shadow_color = Color(0.0, 0.0, 0.0, 0.48)
+	sb.shadow_size = 14
+	sb.shadow_offset = Vector2(0.0, 4.0)
+	return sb
+
+
+## Floating tool dock panel: slightly tighter shadow and crisp border over the 3D scene.
+static func dock_panel_style(alpha: float = 0.96, bg: Color = C_PANEL,
+		border: Color = C_BORDER) -> StyleBoxFlat:
+	var sb := panel_style(alpha, bg, Color(border.lightened(0.06), 0.90))
+	sb.set_corner_radius_all(CORNER_RADIUS + 1)
+	sb.shadow_color = Color(0.0, 0.0, 0.0, 0.42)
+	sb.shadow_size = 10
+	sb.shadow_offset = Vector2(0.0, 3.0)
+	return sb
+
+
+## Raised card inside a panel (lighter bg, subtle border, tighter margins).
 static func card_style() -> StyleBoxFlat:
-	var sb := panel_style(1.0, C_PANEL_RAISED)
+	var sb := panel_style(1.0, C_PANEL_RAISED, Color(C_BORDER.lightened(0.06), 0.78))
 	sb.set_content_margin_all(SPACE_SM)
 	return sb
 
@@ -112,13 +139,16 @@ static func button_style(state: String = "normal") -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	match state:
 		"hover":
-			sb.bg_color = C_PANEL_RAISED
+			sb.bg_color = C_PANEL_RAISED.lightened(0.05)
 			sb.border_color = C_PRIMARY
 		"pressed":
 			sb.bg_color = Color(C_PRIMARY, 0.25)
 			sb.border_color = C_PRIMARY
+		"disabled":
+			sb.bg_color = Color(C_PANEL, 0.5)
+			sb.border_color = Color(C_BORDER, 0.45)
 		_:
-			sb.bg_color = C_PANEL
+			sb.bg_color = C_PANEL.lightened(0.03)
 			sb.border_color = C_BORDER
 	sb.set_border_width_all(1)
 	sb.set_corner_radius_all(CORNER_RADIUS)
@@ -128,11 +158,110 @@ static func button_style(state: String = "normal") -> StyleBoxFlat:
 	return sb
 
 
+## Filled accent button stylebox for primary calls-to-action.
+static func primary_button_style(state: String = "normal") -> StyleBoxFlat:
+	var sb := button_style("normal")
+	match state:
+		"hover":
+			sb.bg_color = Color(C_PRIMARY, 0.34)
+			sb.border_color = C_PRIMARY.lightened(0.15)
+		"pressed":
+			sb.bg_color = Color(C_PRIMARY, 0.44)
+			sb.border_color = C_PRIMARY.lightened(0.20)
+		"disabled":
+			sb.bg_color = Color(C_PANEL, 0.5)
+			sb.border_color = Color(C_BORDER, 0.45)
+		_:
+			sb.bg_color = Color(C_PRIMARY, 0.22)
+			sb.border_color = Color(C_PRIMARY, 0.90)
+	return sb
+
+
+## Tinted error button stylebox for destructive actions.
+static func destructive_button_style(state: String = "normal") -> StyleBoxFlat:
+	var sb := button_style("normal")
+	match state:
+		"hover":
+			sb.bg_color = Color(C_ERROR, 0.26)
+			sb.border_color = C_ERROR.lightened(0.12)
+		"pressed":
+			sb.bg_color = Color(C_ERROR, 0.36)
+			sb.border_color = C_ERROR.lightened(0.18)
+		"disabled":
+			sb.bg_color = Color(C_PANEL, 0.5)
+			sb.border_color = Color(C_BORDER, 0.45)
+		_:
+			sb.bg_color = Color(C_ERROR, 0.14)
+			sb.border_color = Color(C_ERROR, 0.75)
+	return sb
+
+
 ## Apply normal/hover/pressed styleboxes to a Button in one call.
 static func style_button(btn: Button) -> void:
 	btn.add_theme_stylebox_override("normal", button_style("normal"))
 	btn.add_theme_stylebox_override("hover", button_style("hover"))
 	btn.add_theme_stylebox_override("pressed", button_style("pressed"))
+	btn.add_theme_stylebox_override("hover_pressed", button_style("pressed"))
+	btn.add_theme_stylebox_override("disabled", button_style("disabled"))
+
+
+## Style a primary CTA button: filled cyan tint, crisp cyan border, semibold bright text.
+static func style_primary_button(btn: Button) -> void:
+	btn.add_theme_stylebox_override("normal", primary_button_style("normal"))
+	btn.add_theme_stylebox_override("hover", primary_button_style("hover"))
+	btn.add_theme_stylebox_override("pressed", primary_button_style("pressed"))
+	btn.add_theme_stylebox_override("hover_pressed", primary_button_style("hover"))
+	btn.add_theme_stylebox_override("disabled", primary_button_style("disabled"))
+	var semi := font("semibold")
+	if semi != null:
+		btn.add_theme_font_override("font", semi)
+	var ink := Color(0.93, 0.99, 1.0)
+	btn.add_theme_color_override("font_color", ink)
+	btn.add_theme_color_override("font_hover_color", Color.WHITE)
+	btn.add_theme_color_override("font_pressed_color", Color.WHITE)
+	btn.add_theme_color_override("font_focus_color", ink)
+	btn.add_theme_color_override("font_disabled_color", C_TEXT_M)
+	btn.add_theme_color_override("icon_normal_color", C_PRIMARY.lightened(0.25))
+	btn.add_theme_color_override("icon_hover_color", Color.WHITE)
+
+
+## Style a destructive action button: tinted error surface and high-contrast rose text.
+static func style_destructive_button(btn: Button) -> void:
+	btn.add_theme_stylebox_override("normal", destructive_button_style("normal"))
+	btn.add_theme_stylebox_override("hover", destructive_button_style("hover"))
+	btn.add_theme_stylebox_override("pressed", destructive_button_style("pressed"))
+	btn.add_theme_stylebox_override("hover_pressed", destructive_button_style("hover"))
+	btn.add_theme_stylebox_override("disabled", destructive_button_style("disabled"))
+	var ink := Color(1.0, 0.58, 0.58)
+	btn.add_theme_color_override("font_color", ink)
+	btn.add_theme_color_override("font_hover_color", Color(1.0, 0.85, 0.85))
+	btn.add_theme_color_override("font_pressed_color", Color.WHITE)
+	btn.add_theme_color_override("font_focus_color", ink)
+	btn.add_theme_color_override("font_disabled_color", C_TEXT_M)
+
+
+## Subtle 110 ms fade-in for modals, flyouts and docks during interactive play.
+## Automatically skipped in headless runs and harness sandboxes so automated
+## screenshot and UiAudit checks see final alpha immediately on frame 1.
+static func animate_open(panel: CanvasItem, backdrop: CanvasItem = null) -> void:
+	if panel == null or not panel.is_inside_tree():
+		return
+	if DisplayServer.get_name() == "headless" or FileAccess.file_exists("user://.harness_sandbox"):
+		panel.modulate.a = 1.0
+		if backdrop != null:
+			backdrop.modulate.a = 1.0
+		return
+	var tree := panel.get_tree()
+	if tree == null:
+		return
+	panel.modulate.a = 0.0
+	var tw := panel.create_tween()
+	tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	tw.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(panel, "modulate:a", 1.0, 0.11)
+	if backdrop != null:
+		backdrop.modulate.a = 0.0
+		tw.parallel().tween_property(backdrop, "modulate:a", 1.0, 0.11)
 
 
 ## Four-state toggle face for tool / mode buttons (tool strips, shape pickers,

@@ -99,7 +99,7 @@ var _made_lbl: Label
 func _ready() -> void:
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_STOP
-	add_theme_stylebox_override("panel", UITheme.panel_style(0.94))
+	add_theme_stylebox_override("panel", UITheme.dock_panel_style(0.95))
 	anchor_left = 1.0
 	anchor_right = 1.0
 	anchor_top = 0.0
@@ -952,6 +952,9 @@ func _rebuild_dynamic_sections() -> void:
 	if mid == EarthshipBuilder.MODEL_ID:
 		_button("Edit Earthship…", "The Earthship designer, bound to this one (its earthworks follow the design)",
 			_model_btns, _on_earthship)
+	if mid == ShowerHouseBuilder.MODEL_ID:
+		_button("Edit shower house…", "The shower house designer, bound to this house (stalls, roof tank, lights)",
+			_model_btns, _on_shower_house)
 	if mid == GreenhouseBuilder.MODEL_ID:
 		_button("Edit greenhouse…", "The greenhouse designer, bound to this one (its beds, gantries and lights follow the design)",
 			_model_btns, _on_greenhouse)
@@ -995,6 +998,9 @@ func _rebuild_dynamic_sections() -> void:
 	if mid == WindLabBuilder.MODEL_ID or mid == "vawt" or mid == "small_hawt":
 		_button("Design wind turbine…", "The wind turbine designer, bound to this turbine: rotor, gearing, generator, power curve",
 			_model_btns, _on_windlab)
+	if mid == CtrlBuilder.MODEL_ID:
+		_button("Edit controller…", "The Controller Lab, bound to this unit: shape, colours, every terminal, its numbers on the graph",
+			_model_btns, _on_ctrllab)
 	if mid == BankBuilder.MODEL_ID:
 		_button("Edit battery bank…", "The Battery Lab, bound to this bank: its packs, mount, cables and fuses",
 			_model_btns, _on_batterylab)
@@ -1034,6 +1040,14 @@ func _rebuild_dynamic_sections() -> void:
 		_button("Hydro Lab…", "The turbine's lab, on its graph node", _model_btns, _on_edit_siphon)
 		_build_dip_tube_toggle()
 	_build_material_fix_row(mid)
+	_resolve_main()
+	var n_lights := PropModelLights.count_for_prop(_main, _prop_id)
+	var ltxt := "Lights & strings… (%d)" % n_lights if n_lights > 0 else "Lights & strings…"
+	_button(ltxt, "Attach or edit lights and strings on this model in a 3D studio (moves with it; editable with J)",
+		_model_btns, _on_edit_lights)
+	if n_lights > 0:
+		_button("Edit its lights in J Studio", "Open the J Light Studio in the world with this prop's lights selected",
+			_model_btns, _on_open_lights_j)
 	_button("Connection ports…", "Where pipes and wires plug into this prop", _model_btns, _on_edit_ports)
 	if bool(BuiltStock.of_record(_rec).get("known", false)):
 		var mb := _button("What it is made of…", "Its parts by material as circles inside circles, sized by mass",
@@ -1841,6 +1855,33 @@ func _on_earthship() -> void:
 		{"spec": spec if spec is Dictionary else {}, "prop_id": pid})
 
 
+func _on_shower_house() -> void:
+	var pid := _prop_id
+	var spec: Variant = _rec.get("shower_spec", {})
+	var tree := get_tree()
+	close()
+	ShowerHouseModal.open(tree, {"spec": spec if spec is Dictionary else {}, "prop_id": pid})
+
+
+func _on_edit_lights() -> void:
+	var pid := _prop_id
+	if pid.is_empty():
+		return
+	var tree := get_tree()
+	close()
+	PropLightsModal.open(tree, pid)
+
+
+func _on_open_lights_j() -> void:
+	var pid := _prop_id
+	_resolve_main()
+	if _main == null or pid.is_empty():
+		return
+	var ids := PropModelLights.ids_for_prop(_main, pid)
+	close()
+	PlacedLightService.open_studio_on(_main, ids)
+
+
 func _on_domelab() -> void:
 	var pid := _prop_id
 	if _loader != null and _loader.has_method("open_domelab_for_prop"):
@@ -1909,6 +1950,16 @@ func _on_batterylab() -> void:
 		return
 	close()
 	main.call("open_batterylab", {"prop_id": pid})
+
+
+func _on_ctrllab() -> void:
+	var pid := _prop_id
+	var tree := get_tree()
+	var main := tree.current_scene if tree != null else null
+	if main == null or not main.has_method("open_ctrllab"):
+		return
+	close()
+	main.call("open_ctrllab", {"prop_id": pid})
 
 
 func _on_esplab() -> void:

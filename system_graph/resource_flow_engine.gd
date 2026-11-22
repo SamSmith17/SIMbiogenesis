@@ -4955,6 +4955,12 @@ func _write_node_state(item_id: String, specs: Dictionary, state: String,
 				break
 	if prev_state == state and prev_reason == reason and not kinds_changed:
 		return
+	if state == GraphNodeState.RUNNING and prev_state != GraphNodeState.RUNNING:
+		var since_h := _get_abs_hours()
+		if since_h >= 0.0:
+			specs["powered_since_h"] = since_h
+	elif state != GraphNodeState.RUNNING and specs.has("powered_since_h"):
+		specs.erase("powered_since_h")
 	specs["node_state"] = state
 	specs["node_state_reason"] = reason
 	specs["node_state_kinds"] = kinds.duplicate()

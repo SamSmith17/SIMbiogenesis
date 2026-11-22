@@ -56,7 +56,7 @@ static func for_item(item: Dictionary, ctx: Dictionary) -> Dictionary:
 		"controller":
 			_controller(spec, specs, ctx)
 		"appliance", "acload":
-			_load(spec, specs)
+			_load(spec, specs, ctx)
 		"wind":
 			_wind(spec, specs)
 		"hydro":
@@ -231,13 +231,19 @@ static func _controller(spec: Dictionary, specs: Dictionary, ctx: Dictionary = {
 			spec["bar"] = {"frac": clampf(ac / rating, 0.0, 1.0), "color": GraphTheme.accent("controller")}
 
 
-static func _load(spec: Dictionary, specs: Dictionary) -> void:
+static func _load(spec: Dictionary, specs: Dictionary, ctx: Dictionary = {}) -> void:
 	var state := str(specs.get("current_state", "")).to_lower()
 	var on := state == "on" or (state.is_empty() and str(specs.get("requested_state", "on")).to_lower() != "off")
-	var w := float(specs.get("avg_watts", specs.get("watts", specs.get("max_watts", 0.0))))
+	var nameplate := float(specs.get("avg_watts", specs.get("watts", specs.get("max_watts", 0.0))))
+	var live := float(ctx.get("live_w", -1.0))
+	var w := live if on and live >= 0.0 else nameplate
 	spec["hero"] = UiText.num(w if on else 0.0, "W")
+	var peak := float(ctx.get("peak_w", -1.0))
 	var rated := float(specs.get("max_watts", 0.0))
-	spec["sub"] = ("up to " + UiText.num(rated, "W")) if rated > w + 0.5 else ""
+	if on and peak > w + 1.0:
+		spec["sub"] = "peak " + UiText.num(peak, "W")
+	else:
+		spec["sub"] = ("up to " + UiText.num(rated, "W")) if rated > w + 0.5 else ""
 	spec["pill"] = {"text": "ON" if on else "OFF", "color": GraphTheme.OK if on else GraphTheme.TEXT_MUTED}
 	if on:
 		spec["footer"] = "Powered"

@@ -113,7 +113,7 @@ Godot.exe.exe --headless --path . --script core/terrain/watershed_selftest.gd
 | **P** | Light menu / pallet rack | Contextual — see [Key conflicts](#key-conflicts--gotchas) |
 | **I** | Projection canvas: sim camera \| live feed or timelapse video, with projection mapping | F9 warp, F10 calibrate (drag corners), F8 reset, Enter save |
 | **F1** | Help overlay | |
-| **F11** | Window wall (multi-monitor viewport) | `toggle_window_wall`; off until enabled in Settings → Window Wall. In the view: Esc/F11 leave, U toggles UI, WASD/QE nudge, ←→ or mouse-drag turn, R reset, Ctrl+S save viewpoint, I identify screens |
+| **F11** | Multi-Monitor / Window wall | `toggle_window_wall`; configure secondary monitor views and the Window Wall sub-option in Settings → Multi-Monitor. In Window Wall view: Esc/F11 leave, U toggles UI, WASD/QE nudge, ←→ or mouse-drag turn, R reset, Ctrl+S save viewpoint, I identify screens |
 | **Enter** | Multiplayer chat compose | `mp_chat` |
 | Esc | Close modal / cancel | |
 

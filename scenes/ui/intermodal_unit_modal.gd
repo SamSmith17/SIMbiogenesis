@@ -16,6 +16,8 @@ var _shell: DesignerShell = null
 var _studio: StudioViewport = null
 var _list: DesignGallery = null
 var _col: DesignerColumn = null
+var _light_panel: ModelLightPanel = null
+var _unit_3d: Node3D = null
 var _ids: Array = []          # parallel to the list rows ("" = header)
 var _fields_box: VBoxContainer = null
 var _summary_box: VBoxContainer = null
@@ -62,6 +64,8 @@ func open_modal(preselect_id: String = "") -> void:
 func close() -> void:
 	if not _open:
 		return
+	if _light_panel != null:
+		_light_panel.reset_studio_night()
 	if _shell.is_open():
 		_shell.close()   # emits closed -> _on_shell_closed
 	else:
@@ -135,6 +139,8 @@ func _build_left() -> void:
 func _build_centre() -> void:
 	_studio = StudioViewport.create({"ground": true, "person": true, "ssao": true})
 	_studio.set_home(0.75, 0.32)
+	_studio.input_hook = func(e: InputEvent) -> bool:
+		return _light_panel != null and _light_panel.handle_viewport_event(e, _studio.camera, _studio.container, _unit_3d)
 	_shell.centre.add_child(_studio)
 	_doors_check = CheckButton.new()
 	_doors_check.text = "Doors open"
@@ -164,6 +170,13 @@ func _build_right() -> void:
 	_notes.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 	_notes.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_notes)
+	box.add_child(SectionHeader.make("Lighting", ""))
+	_light_panel = ModelLightPanel.new()
+	_light_panel.bind_studio_night(_studio)
+	_light_panel.lights_changed.connect(func() -> void:
+		if _col != null:
+			_col.set_summary("Lighting", _light_panel.summary_text()))
+	box.add_child(_light_panel)
 	box.add_child(SectionHeader.make("What the solver sees", ""))
 	_summary_box = VBoxContainer.new()
 	_summary_box.add_theme_constant_override("separation", 2)
@@ -173,7 +186,7 @@ func _build_right() -> void:
 	_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	box.add_child(_status)
-	_col = DesignerColumn.setup(box, "intermodal", {"fold": ["What the solver sees"], "finder": false, "tile_cols": 2})
+	_col = DesignerColumn.setup(box, "intermodal", {"fold": ["Lighting", "What the solver sees"], "finder": false, "tile_cols": 2})
 
 
 func _refresh_list() -> void:
@@ -243,6 +256,8 @@ func _load_unit(uid: String) -> void:
 	_shell.set_subtitle(str(IntermodalUnits.FAMILY_LABELS.get(str(t.get("family", "")), "")))
 	_doors_check.visible = str(t.get("family", "")) == "container"
 	_build_fields()
+	if _light_panel != null:
+		_light_panel.load_from_context(null, "", IntermodalUnitBuilder.MODEL_ID, _current_spec())
 	_rebuild_preview()
 	_frame()
 
@@ -312,7 +327,12 @@ func _rebuild_preview() -> void:
 		_studio.clear()
 		return
 	var node := IntermodalUnitBuilder.build_node(_preview_spec(), "Preview")
+	_unit_3d = node
 	_studio.show_node(node)
+	if _light_panel != null:
+		_light_panel.attach_preview(node)
+		if _col != null:
+			_col.set_summary("Lighting", _light_panel.summary_text())
 	_refresh_summary()
 
 
@@ -435,7 +455,8 @@ func _on_place() -> void:
 		main = tree.current_scene
 	var res: Dictionary = PlacedPropService.begin_placement(main,
 		IntermodalUnitBuilder.MODEL_ID,
-		{"record_extra": {"intermodal_spec": _current_spec()}})
+		{"record_extra": {"intermodal_spec": _current_spec(),
+			PropModelLights.KEY_MODEL_LIGHTS: _light_panel.serialized_items() if _light_panel != null else []}})
 	if bool(res.get("ok", false)):
 		close()
 	else:

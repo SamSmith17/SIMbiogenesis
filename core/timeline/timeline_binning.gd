@@ -60,11 +60,14 @@ static func empty(w: float, i0: int, n: int) -> Dictionary:
 ## Regularly sampled values (the energy timeline, a CSV clip): sample j holds
 ## from base_t + j·step to the next sample. Every sample in a bin counts.
 static func from_regular(values: PackedFloat32Array, base_t: float, step: float,
-		w: float, i0: int, n: int) -> Dictionary:
+		w: float, i0: int, n: int, peaks: PackedFloat32Array = PackedFloat32Array()) -> Dictionary:
 	var out := empty(w, i0, n)
 	var cnt := values.size()
 	if cnt == 0 or step <= 0.0:
 		return out
+	# A parallel peak series (same length) lifts only the top of the band.
+	# The mean stays the energy average, so an inrush does not look sustained.
+	var use_peaks := peaks.size() == cnt
 	var mn: PackedFloat32Array = out["mn"]
 	var me: PackedFloat32Array = out["mean"]
 	var mx: PackedFloat32Array = out["mx"]
@@ -87,8 +90,13 @@ static func from_regular(values: PackedFloat32Array, base_t: float, step: float,
 			var v := values[j]
 			if is_nan(v):
 				continue
+			var spike := v
+			if use_peaks:
+				spike = peaks[j]
+				if is_nan(spike):
+					spike = v
 			lo = minf(lo, v)
-			hi = maxf(hi, v)
+			hi = maxf(hi, maxf(v, spike))
 			sum += v
 			k += 1
 		if k > 0:

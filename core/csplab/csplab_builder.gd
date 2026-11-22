@@ -131,10 +131,12 @@ func _build() -> void:
 	add_child(_base)
 	_rays = MeshInstance3D.new()
 	_rays.name = "Rays"
+	_rays.set_meta("studio_no_frame", true)
 	_rays.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_rays.material_override = _mat("rays")
 	_axes = Node3D.new()
 	_axes.name = "Axes"
+	_axes.set_meta("studio_no_frame", true)
 	add_child(_axes)
 	if show_sun_marker:
 		_sun_mark = Node3D.new()

@@ -31,7 +31,7 @@ const PREFS_PATH := "user://ui_prefs.cfg"
 ## reads and writes files, not Main. The Lighting page is built in its
 ## graphics-preset form there (quality tier, performance, terrain detail,
 ## shadows); the sky / sun / fog fine-tuning needs a lit world.
-const HUB_PAGES := ["Lighting", "Interface", "Player", "Controls", "NPC", "Stars & Planets", "Window Wall", "Home Assistant"]
+const HUB_PAGES := ["Lighting", "Interface", "Player", "Controls", "NPC", "Stars & Planets", "Multi-Monitor", "Home Assistant"]
 
 ## Set BEFORE the node enters the tree (the hub creates it by script): only
 ## HUB_PAGES are built, the sliders read SimSettingsController.hub_snapshot()
@@ -45,7 +45,7 @@ const CATEGORIES := [
 	["Simulation", ["Gameplay", "NPC", "Extreme Weather", "Live Mode"]],
 	["Player & controls", ["Player", "Controls", "Drone", "Interface", "Keys"]],
 	["Graphics & sky", ["Lighting", "Environment", "Stars & Planets"]],
-	["Site & hardware", ["Location", "Solar", "Window Wall"]],
+	["Site & hardware", ["Location", "Solar", "Multi-Monitor"]],
 	["Integrations", ["Home Assistant"]],
 ]
 
@@ -240,6 +240,7 @@ func _layout_center_panel() -> void:
 	if _center_panel == null:
 		return
 	# The HUD claim is made by open()/close() under its own owner id.
+	_center_panel.set_meta("ui_fit_fullscreen", true)
 	UiFit.keep_fitted(_center_panel, PANEL_DESIRED_SIZE, UiFit.MARGIN, false)
 	UiFit.set_content_column(_center_panel, 1100.0)  # full screen: a centred column, not edge to edge
 	_center_panel.set_meta("ui_modal", true)  # UiAudit.MODAL_META (the HUD claim is made by hand below)
@@ -590,9 +591,11 @@ func _collect_text_into(n: Node, parts: PackedStringArray) -> void:
 		_collect_text_into(c, parts)
 
 
-## Opens a settings page by its title ("Solar", "Window Wall"…). False when
-## there is no such page.
+## Opens a settings page by its title ("Solar", "Multi-Monitor"…). False when
+## there is no such page. Accepts legacy "Window Wall" as an alias.
 func open_page(title: String) -> bool:
+	if title == "Window Wall":
+		title = "Multi-Monitor"
 	if _tabs == null:
 		return false
 	for i in _tabs.get_tab_count():
@@ -2058,7 +2061,7 @@ func _build_stars_planets_tab(tabs: TabContainer) -> void:
 	_stars_point_size = _add_slider(v, "Point size", -1.0, 1.0, 0.05, _on_stars_point_size)
 	_stars_saturation = _add_slider(v, "Colour saturation", 0.0, 3.0, 0.05, _on_stars_saturation)
 	_stars_contrast = _add_slider(v, "Contrast", 1.0, 4.0, 0.05, _on_stars_contrast)
-	_stars_bg_cut = _add_slider(v, "Faint-star cut", 0.0, 0.3, 0.005, _on_stars_bg_cut)
+	_stars_bg_cut = _add_slider(v, "Faint-star cut", 0.0, 0.3, 0.01, _on_stars_bg_cut)
 	_stars_twinkle = _add_slider(v, "Twinkle", 0.0, 1.0, 0.05, _on_stars_twinkle)
 	_stars_horizon = _add_slider(v, "Horizon fade", 0.0, 1.0, 0.05, _on_stars_horizon_fade)
 	_stars_wash = _add_slider(v, "Sky-glow washout", 0.0, 1.0, 0.05, _on_stars_wash)
@@ -2135,8 +2138,11 @@ func _build_location_tab(tabs: TabContainer) -> void:
 	_longitude.value_changed.connect(_on_longitude)
 	loc_row.add_child(_wrap_spin("Lat", _latitude))
 	loc_row.add_child(_wrap_spin("Lon", _longitude))
+	loc_row.set_meta("ui_allow_decimals", true)
 	_lat_lbl    = _add_status_label(v, "")
 	_lon_lbl    = _add_status_label(v, "")
+	_lat_lbl.set_meta("ui_allow_decimals", true)
+	_lon_lbl.set_meta("ui_allow_decimals", true)
 	_auto_dst   = _add_check(v, "Auto DST", _on_auto_dst)
 	_manual_dst = _add_check(v, "Manual DST (force +1 h)", _on_manual_dst)
 	_dst_status = _add_status_label(v, "")
@@ -2473,6 +2479,8 @@ func _build_planet_section(parent: Control, id: String, title: String) -> void:
 		func(v: float) -> void: _on_planet_brightness(pid, v))
 	_planet_size[id] = _add_slider(parent, "Size", 0.001, 0.02, 0.0005,
 		func(v: float) -> void: _on_planet_size(pid, v))
+	if _planet_size[id] != null and _planet_size[id].get_parent() != null:
+		_planet_size[id].get_parent().set_meta("ui_allow_decimals", true)
 	_planet_glow[id] = _add_slider(parent, "Glow", 0.0, 2.0, 0.05,
 		func(v: float) -> void: _on_planet_glow(pid, v))
 	_planet_color[id] = _add_color_row(parent, "Color", Color.WHITE,
@@ -2504,7 +2512,7 @@ func _wrap_spin(title: String, spin: SpinBox) -> VBoxContainer:
 	var hdr := Label.new()
 	hdr.text = title
 	hdr.add_theme_color_override("font_color", C_TEXT_S)
-	hdr.add_theme_font_size_override("font_size", 9)
+	hdr.add_theme_font_size_override("font_size", 11)
 	box.add_child(hdr)
 	box.add_child(spin)
 	return box
@@ -3462,15 +3470,14 @@ func _on_open_location_picker() -> void:
 ## Both styles are posed from the SAME NpcPoseMachine, so behaviour is
 ## identical either way — people still walk the whole route, lie down on
 ## arrival and sit for the bathroom. Only the rendering differs.
-## Settings → Window Wall (multi-monitor viewport). The tab body lives in its
-## own script (scenes/ui/window_wall_settings_tab.gd) so this file does not
-## grow another few hundred lines; it rebuilds itself from WindowWallPrefs on
-## every open.
+## Settings → Multi-Monitor (with Window Wall nested as a sub-option).
+## The tab body lives in `scenes/ui/multi_monitor_settings_tab.gd` and rebuilds
+## itself from `MultiMonitorPrefs` + `WindowWallPrefs` on every open.
 var _window_wall_tab: Control = null
 
 func _build_window_wall_tab(tabs: TabContainer) -> void:
-	var v := _make_tab(tabs, "Window Wall")
-	var script := load("res://scenes/ui/window_wall_settings_tab.gd") as Script
+	var v := _make_tab(tabs, "Multi-Monitor")
+	var script := load("res://scenes/ui/multi_monitor_settings_tab.gd") as Script
 	if script == null:
 		return
 	_window_wall_tab = VBoxContainer.new()

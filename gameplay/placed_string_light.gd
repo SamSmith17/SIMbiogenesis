@@ -294,7 +294,14 @@ func _perf_tick(delta: float) -> void:
 
 
 func _update_lit() -> void:
-	var lit := PlacedLightPower.is_lit(_main, record, fields)
+	var packed := PlacedLightPower.host_packed(_main, record)
+	if _tube != null:
+		_tube.visible = not _continuous and not packed
+	if _bulbs != null:
+		_bulbs.visible = not _continuous and bool(fields.get("show_body", true)) and not packed
+	if _rope != null:
+		_rope.visible = _continuous and not packed
+	var lit := not packed and PlacedLightPower.is_lit(_main, record, fields)
 	if lit != _lit:
 		_lit = lit
 		_push_energy()

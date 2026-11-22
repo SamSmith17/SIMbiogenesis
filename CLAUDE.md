@@ -1294,6 +1294,38 @@ Godot.exe.exe --headless --path . --script core/connectors/connector_selftest.gd
 # Every connector on one look sheet (WINDOWED, APPDATA at a scratch folder;
 # -- --out=<png> --only=a,b --cell=220):
 Godot.exe.exe --path . --windowed --resolution 220x220 --script tools/diag/connector_look_diag.gd
+# Controller Lab (offline — core/ctrllab/, Phase 1): every built-in solves
+# with no error, ports on their faces and not overlapping, every library
+# controller's graph numbers exactly the library's, roles → handles, JSON
+# round trip, builder winding, bay cover, a ray picking a port.
+# Phase 3: CtrlSheet's words + conductor colours, the 6000XP's front sheet
+# (bay folded in, every pin on the face, a lead per wired pin fanned a label
+# apart below it), the SVG well-formed with every face. EXPECTED_CHECKS;
+# --import first:
+Godot.exe.exe --headless --path . --script core/ctrllab/ctrllab_selftest.gd
+# Every built-in front / back / underneath / bay open (WINDOWED, APPDATA at
+# a scratch folder; -- --out=<png> --only=a,b --cell=300 --views=...):
+Godot.exe.exe --path . --windowed --resolution 300x300 --script tools/diag/ctrllab_look_diag.gd
+# The Controller Lab with REAL input (sandbox; run at 1080 AND with
+# -UserArgs @("--window-size=1280x720")): every built-in by a gallery click,
+# UiAudit, a width typed + Ctrl+Z, a USB-C from Add port clicked onto the
+# front, dragged along it, R, Delete, Ctrl+Z, Cover off + a click on BAT +,
+# the Terminals tab (the front sheet with its bay, a click and a drag on
+# BAT −, an MC4 clicked onto the drawing, the face picker, Export wiring
+# sheet), Close-up with its terminal labels, save / forget in
+# user://ctrllab_library.json (restored):
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/ctrllab_designer_check.gd -Label ctrllab
+# The Controller Lab on the graph and in the world (sandbox; run at 720
+# too): a REAL click on the inspector's Design this controller on Mount
+# Vernon's EG4, Apply (its terminals as handles, Voc 480 V, no wire lost),
+# the unit placed bound to that node with its 3D ports, a bank placed and
+# its + cable ending on the BAT + stud, the unit's screen, delete:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/ctrllab_world_check.gd -Label ctrllab_world -Timeout 900
+# Panels > Controller > Battery across the three labs (sandbox; run at 720
+# too): the bar on Mount Vernon's EG4, REAL clicks hop Controller >
+# Battery Lab > back > the solar designer aimed at the EG4's 480 V window,
+# + Add a battery on a lone controller, UiAudit on each lab:
+tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/power_chain_check.gd -Label power_chain -Timeout 900
 # Battery Lab data (offline — core/batterylab/, plans/BATTERY_LAB_PLAN.md
 # Phase 0): BattChem's six chemistries (FLA / SLA / AGM / GEL / LFP / NMC:
 # ordered charge voltages, monotone OCV + its inverse, temperature
@@ -7165,6 +7197,185 @@ of connector and terminal standards every designer draws from.
   selftest's frozen copies) and PvLab module leads
   (`PvLabBuilder._lead_connector`: MC4 / Evo 2 inline, a single Powerpole
   per lead, XT60 / SAE on the + lead).
+
+## Controller Lab data and builder (core/ctrllab/, 2026-11-19)
+
+Phase 1 of `plans/CONTROLLER_LAB_PLAN.md`: inverters, charge controllers and
+hybrids as designed 3D units. No modal yet (Phase 2), no graph or world
+binding yet (Phase 4).
+- **Frame** (`CtrlSpec`, record key `controller_spec`): mm, origin on the
+  mounting plane at the unit's bottom centre, +Y up, +Z out from the wall,
+  body x ∈ ±w/2, y ∈ [y0, y0 + h], z ∈ [z0, z0 + d] (z0 = back heatsink or
+  bracket, y0 = feet). A car-style inverter uses the same frame, its AC end
+  "front", its battery end "back". Faces front / back / left / right /
+  top / bottom / bay, each with its own x, y (x = y × normal; documented in
+  CtrlSpec). Spec: form, body (w h d, corner_r = front-view radius, edge_r =
+  front-edge rounding, colour, finish, split = two-tone below a height,
+  plate = a front plate over a smaller shell), bands, panels (raised), heatsink
+  (back with fins and slotted wings, or fins all over a car extrusion),
+  mount (tabs / flange / side_feet / bracket / feet / ears / handles), caps,
+  bay (recess, back plate, cover with an optional glass window), vents,
+  texts, ports, elec. Colours are [r, g, b] arrays (JSON-safe;
+  `CtrlSpec.color_of`). ConnectorParts takes array colours too (`_col`).
+- **Ports** = {connector, face, u, v, rot, dz, group, roles, label, opts}.
+  `CtrlRoles`: a pin's role = the port's group + the connector pin's hint
+  ("bat" + "+" → "bat+", "ac_out" + "N" → "ac_out_N"), or the port's
+  `roles` list (terminal strips). A single-pin connector takes its
+  `polarity` opt as its hint. `required(elec)` per kind (split-phase L1
+  stands in for L), `handle_for(role)`: pv1 → pvPositive / pvNegative (old
+  wiring keeps working), pvN → pvPositiveN, bat → battery*, ac_out →
+  acOutput, ac_in → acInput, gen → genInput, comms → "data".
+- `CtrlDesign.solve(spec)` (LRU 32 on key_of): faces with frames, ports with
+  their placed transform, pins and roles, `roles` map, checks (port off
+  its face or over a rounded corner, overlaps — breakers on their own DIN
+  rail exempt, missing roles, a connector rated under its current: battery =
+  max(charge A, AC W / (V × 0.85)), PV = MPPT input A; outlets carrying less
+  than the AC output; MPPT window past max Voc; PV over trackers),
+  `graph_specs` (exactly the keys the graph reads; parity with
+  `ComponentPresets.CONTROLLERS` pinned), `handles`, `bounds`.
+- `CtrlBuilder` (MODEL_ID `ctrllab_unit`): the body is a LOFT of
+  rounded-rectangle rings (each ring SEG + 1 points a corner so radii line
+  up; a split height or bay cut is inserted as points on the straight sides;
+  the cut edge gets its own −Y points). Nodes Mesh / BayCover / Window
+  (alpha) / Ports / Labels (Label3D, UITheme font) / CollisionMesh (hidden
+  box). `pick(origin, dir)`, `set_cover_visible`, meta "parts".
+- `CtrlPresets` (29): the ten library controllers (`library` = the label,
+  graph numbers identical) plus MultiPlus 12/3000 and MultiPlus-II 48/3000,
+  Phoenix 12/1200, SmartSolar 100/30 and 250/100-Tr, BlueSolar 75/15, Orion
+  DC-DC, EG4 12kPV / 18kPV / 12000XP, Growatt SPF 5000 ES / 6000 ES Plus,
+  PowMR 3 kW, Sol-Ark 15K, EPEver 4210AN, Renogy Wanderer, generic 1 kW and
+  2 kW car inverters, AIMS 3 kW. Built by family functions
+  (`_victron_mppt`, `_victron_box`, `_wall_hybrid` with looks growatt /
+  powmr / eg4 / solark / ecoworthy, `_mppt_box`, `_pwm_box`,
+  `_car_inverter`, `_power_station`, `_dc_dc`); `source` says data sheet or
+  estimate. The EG4 / Sol-Ark bay reproduces the 6000XP wiring photo (DIN
+  breakers LOAD / GRID / GEN with L1 / L2 terminals, N and PE bars, BAT
+  studs, PV 1+ 1− 2+ 2− block, RSD, knockouts with one conduit).
+  `search`, `size_line`, `for_library_label`.
+
+## Controller Lab modal (scenes/ui/ctrllab_modal.gd, 2026-11-20)
+
+Phase 2 of `plans/CONTROLLER_LAB_PLAN.md`. Library → Designers →
+"Controllers & inverters", or `Main.open_ctrllab({spec, preset})` (layer
+`CtrlLabLayer`, LAYER_MODAL + 1). `DesignerShell` + `StudioViewport` +
+`FormRow` + `DesignerColumn`.
+- Left: the built-ins grouped by form (captions) and the player's library,
+  `user://ctrllab_library.json` (`CtrlPresets.load_library /
+  save_to_library / forget`).
+- Centre: the unit; view buttons Front / Back / Underside / Side
+  (`set_view`), **Cover off** (`set_cover_off`), and **Add port**, a
+  searchable flyout of the whole connector kit by domain (buttons
+  `conn_<id>`).
+- Placing: a pick arms the connector (`_tool`, a ghost follows the pointer
+  through `CtrlDesign.face_hit(d, o_mm, dir, bay_open)`); a click on a face
+  adds it (`add_port`; Shift keeps the tool); its job is guessed by
+  `CtrlRoles.suggest(connector, ports)` (PV pins go + then − and on to the
+  next MPPT, DC to the battery, AC to the output, RJ45 to RS485 …). A press
+  on a port and a drag slides it along its own face (the studio's
+  `input_hook`, so the view does not orbit). R turns the selected port a
+  quarter turn (Shift: back), Delete removes it, Esc puts the tool down.
+- Right: Checks (badge in the header), Ports (the selected port's card
+  above the list: connector, label, what it is for, polarity, poles, face,
+  across / up / turned / out, its pins and their roles), Size & shape,
+  Colours, Heatsink & mounting, Wiring bay, Front panel (maker, model, every
+  printed text), Electrical. Field paths go three deep
+  (`set_path_value`). Undo is whole-spec snapshots, coalesced per field.
+- ⚠ World toasts (Main's ToastUI, a CanvasLayer over every modal) take
+  clicks; a harness check that clicks low in a modal hides them first.
+- **Terminals (Phase 3, 2026-11-20).** `CtrlSheet` (core/ctrllab/ctrl_sheet.gd,
+  pure) is ONE flat description of a face both renderers draw: mm in the
+  face's own frame (x right, y UP), every port's outline (`corners`) and pins,
+  and a lead per wired pin dropped below the face then FANNED to slots a
+  label apart (the mean of the tightest packing pushed right and pushed left,
+  so the gap holds exactly). The front takes the wiring bay's ports and
+  outline (the bay plate has the front's axes). Conductor colours
+  (`wire_color`): L / L1 black, L2 red, N white, G / PE green, DC + red,
+  − black, data / IO teal. `short(role)` = "PV2 +", "GRID L1", "BAT −".
+  - The **Terminals** tab (`scenes/ui/ctrllab_sheet_view.gd`, preloaded):
+    the face picker (faces with ports first, with counts), Wires, Fit (F),
+    Export wiring sheet. Wheel zooms about the pointer, a drag on paper
+    pans, a press on a connector selects it and a drag moves it
+    (`port_moved(id, delta)`), a click with a connector armed places it (a
+    point inside the bay lands on the bay plate).
+  - **Export**: `CtrlSheet.svg(d)` = every face with terminals side by side in
+    mm on white with a title and a colour key →
+    `user://ctrllab_designs/<name>/wiring.svg`, plus the view on screen as
+    `terminals_<face>.png`.
+  - **Close-up** (Unit strip): cover off, straight on at the bay (or the face
+    with the most terminals), **Labels** on: a callout per wired pin facing
+    the camera (`callouts()`), greedy so labels never overlap. ⚠ A pin's
+    `dir` is the way its WIRE leaves (along the panel), not the face normal:
+    face culling uses the port's `xf.basis.z`.
+  - Not done: wires from the real graph drawn on the sheet (gauge, what is
+    on the far end, routed through the knockouts).
+- **On the graph and in the world (Phase 4, 2026-11-20).**
+  - **Handles.** `CtrlDesign.graph_handles(d)`: top row pvPositive /
+    pvNegative (always), pvPositive2..4 / pvNegative2..4, dcIn±, acInput,
+    genInput where the design has them; bottom row batteryPositive /
+    batteryNegative / acOutput (always), load±, data; the plain controller's
+    acOutputLeft / Top / Bottom kept, so every wire drawn to an undesigned
+    controller still lands. `graph_specs` stamps `controller_preset`.
+    `GraphPortLabels` names them, `_PRIMARY_HANDLES["controller"]` shows them.
+  - **Engine.** `DcPowerWiring`: any controller pv* handle leads to its
+    battery terminals. `GraphAcLoad._enqueue_ac_neighbors` never walks out
+    of a controller's acInput / genInput (a grid input is not an output).
+    PvElectrical already counted pvPositive2 as PV ("pv" + "pos"). NOT done:
+    a per-MPPT string window, acInput as a real supply (charger,
+    pass-through).
+  - **Apply.** Inspector "Design this controller…" (`design_controller`) /
+    prop editor "Edit controller…" → `Main.open_ctrllab({graph_item_id |
+    prop_id})`. The Lab's spec comes from `controller_spec`, else
+    `controller_preset` (every `ComponentPresets.CONTROLLERS` entry carries
+    one), else the library label, else a builtin with the node's NAME
+    (`CtrlPresets.for_name`), else the generic MPPT with the node's numbers.
+    ⚠ `for_library_label("")` matched every builtin with no `library` key
+    (an EG4 opened as a MultiPlus): it refuses an empty label now. Apply
+    writes `graph_specs` + `controller_spec` + `handles` and toasts wires
+    left on a terminal the design does not have.
+  - **World.** ModelCatalog `ctrllab_unit` (procedural, tools); record key
+    `controller_spec` forwarded by `model_extras` and the ghost.
+    `PlacedPropService.seed_controller` (both placement chains, deferred)
+    binds the record's `graph_item_id` controller or makes one, then
+    `_wire_waiting_banks` runs `wire_bank_to_inverter` for every placed bank.
+    `ConnectionPortDefs.resolve_ports_for_prop` takes the design's
+    `connection_ports`: one per handle ON its terminal (a stud or MC4 at its
+    pin, a strip or outlet at its middle), battery handles with the
+    battery_cable kinds — a bank's main cable ends on the BAT stud.
+    `packed_spec` = a crate round the unit. `CtrlRuntime` (gameplay/) writes
+    PV W / BAT % / AC W (or OFF / FAULT) on the unit's LCD twice a second.
+  - NOT done: wall placement (PvSurfaceAim / mount_host), editing bands /
+    panels / vents, a tour stop and modal-audit entry.
+- **One flow across the three labs (Phase 5, 2026-11-20).**
+  - `PowerChain` (core/ctrllab/power_chain.gd, pure over a GraphModel):
+    `find(model, id)` from any panel, solar array, controller or battery
+    gives {start, arrays, controller, battery}. A panel inside an "array" /
+    "pv_design" group counts as its group (`unit_of`). The chain follows DC
+    wires only: a controller's pv* terminals out through panel-to-panel
+    wires, its battery* terminals out through battery-to-battery wires.
+    A designed array (`pvlab_tag`) names its placed prop.
+  - `PowerChain.checks(model, chain, window)` (the window is
+    `PvElectrical.string_window_report`): the strings' issues, a bank more
+    than 20 % off the controller's system voltage (error), charge current
+    over the BMS's, the inverter's draw at full AC over the BMS's discharge
+    limit (at 90 % efficiency), and no CAN / RS485 protocol shared with the
+    BMS (`BattBms.get_bms(bms_id).comms`; info). `pv_target(specs)` is the
+    solar designer's window from a controller. `add_missing(model, chain,
+    "battery" | "controller")` puts a library part on the graph, wired in.
+  - `PowerChainBar` (scenes/ui/kit/power_chain_bar.gd) in the header of all
+    three labs (`DesignerShell.add_header_widget`; the solar designer's own
+    header row). The lab you are in is lit amber. A click on another chip
+    applies this lab's changes when it is bound and has undo history,
+    closes it, and opens that lab bound to the item (`PowerChainBar.go`).
+    Several arrays get a menu. A missing link is "+ Add …". A notes chip
+    lists the checks. While the shell is short (720p), chips are
+    icon-only with their names in the tooltips (`follow(shell)`).
+  - Panels with no design of their own open the solar designer fresh,
+    aimed at the controller's window. A placed design wired to a controller
+    takes that controller's window as its target when opened
+    (`_aim_at_chain_controller`).
+  - NOT done: the chain on the graph inspector, chain checks inside each
+    lab's own Checks list (they are on the bar's notes only), a battery
+    found through a battery_bank group.
 
 ## ESP board designer (core/esplab/, 2026-11-07)
 

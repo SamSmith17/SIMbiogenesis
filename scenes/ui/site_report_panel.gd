@@ -492,14 +492,24 @@ func toggle() -> void:
 		open()
 
 
+var _claimed_main_modal: bool = false
+
+
 func open() -> void:
 	_main_node = _timeline.get("_main") if _timeline != null else _main_node
 	if _main_node == null:
+		_main_node = ServiceLocator.main()
+	if _main_node == null:
 		_main_node = get_tree().current_scene
+	var in_secondary := UiFit.is_secondary_window(self)
+	if _backdrop != null:
+		_backdrop.color = UITheme.C_BG if in_secondary else Color(0, 0, 0, 0.55)
 	visible = true
 	move_to_front()
-	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
-	HudLayout.claim_modal(MODAL_NAME)
+	_claimed_main_modal = not in_secondary
+	if _claimed_main_modal:
+		CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
+		HudLayout.claim_modal(MODAL_NAME)
 	_begin(false)
 
 
@@ -510,8 +520,10 @@ func close() -> void:
 	if _builder != null and _builder.is_building():
 		_builder.cancel()
 		_building = false
-	CursorController.release_modal(MODAL_NAME)
-	HudLayout.release(MODAL_NAME)
+	if _claimed_main_modal:
+		_claimed_main_modal = false
+		CursorController.release_modal(MODAL_NAME)
+		HudLayout.release(MODAL_NAME)
 
 
 func is_open() -> bool:
@@ -725,6 +737,17 @@ func _draw_windrose() -> void:
 
 func _draw_wind() -> void:
 	if _data == null:
+		return
+	if _data.wind_turbine_count <= 0:
+		var r := Rect2(Vector2.ZERO, _wind_canvas.size)
+		_wind_canvas.draw_rect(r, Color(UITheme.C_BG, 0.55), true)
+		_wind_canvas.draw_rect(r, Color(UITheme.C_BORDER, 0.45), false, 1.0)
+		var f := _font()
+		if f != null:
+			var msg := "Mean wind %.1f m/s — place a turbine to chart monthly yield" % _data.wind_mean_speed_ms
+			var tw := f.get_string_size(msg, HORIZONTAL_ALIGNMENT_LEFT, -1, UITheme.FONT_SM).x
+			_wind_canvas.draw_string(f, Vector2(maxf((r.size.x - tw) * 0.5, 8.0), r.size.y * 0.5 + 5.0),
+				msg, HORIZONTAL_ALIGNMENT_LEFT, maxf(r.size.x - 16.0, 40.0), UITheme.FONT_SM, UITheme.C_TEXT_M)
 		return
 	SiteReportCharts.draw_monthly_bars(_wind_canvas, _data.wind_monthly_kwh,
 		UITheme.C_LAVENDER, "kWh", _font(), _hover_of(_wind_canvas), "%.0f")

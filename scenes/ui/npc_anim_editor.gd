@@ -253,6 +253,9 @@ func _build_topbar() -> Control:
 	_status = Label.new()
 	_status.add_theme_color_override("font_color", C_TEXT_S)
 	_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_status.clip_text = true
+	_status.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_status.custom_minimum_size.x = 160
 	bar.add_child(_status)
 	var close_btn := IconButton.close(request_close)
 	bar.add_child(close_btn)
@@ -390,16 +393,26 @@ func _build_sidebar() -> Control:
 	_euler_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	v.add_child(_euler_lbl)
 	var eh := HBoxContainer.new()
+	eh.add_theme_constant_override("separation", 4)
 	for i in 3:
+		var cell := HBoxContainer.new()
+		cell.add_theme_constant_override("separation", 2)
+		cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var ax_lbl := Label.new()
+		ax_lbl.text = ["X", "Y", "Z"][i]
+		ax_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		ax_lbl.add_theme_color_override("font_color", [UITheme.C_ERROR, UITheme.C_OK, UITheme.C_INFO][i])
+		cell.add_child(ax_lbl)
 		var sp := SpinBox.new()
 		sp.min_value = -360.0
 		sp.max_value = 360.0
 		sp.step = 0.5
-		sp.custom_minimum_size.x = 86
+		sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		sp.tooltip_text = ["X (pitch)", "Y (yaw)", "Z (roll)"][i] + " in degrees, keyed at the playhead. Body: height (m), pitch, yaw."
 		var idx := i
 		sp.value_changed.connect(func(val: float) -> void: _on_euler_edited(idx, val))
-		eh.add_child(sp)
+		cell.add_child(sp)
+		eh.add_child(cell)
 		_euler_spins.append(sp)
 	v.add_child(eh)
 	return wrap
@@ -511,12 +524,19 @@ func _build_timeline() -> Control:
 	bar.add_child(_play_btn)
 	# Plain glyphs: the UI font has no media-control symbols.
 	for spec in [["|◀", func(): _step_key(-1)], ["▶|", func(): _step_key(1)],
-			["◆ Key", _key_selected], ["✕ Key", _delete_key], ["Copy", _copy_pose],
+			["Key", _key_selected], ["Delete key", _delete_key], ["Copy", _copy_pose],
 			["Paste", _paste_pose], ["Mirror", _mirror_pose]]:
 		var b := Button.new()
 		b.text = spec[0]
 		b.focus_mode = Control.FOCUS_NONE
-		UITheme.style_button(b)
+		if spec[0] == "Key":
+			UiIcons.apply(b, "plus", "Key the selected joint at the playhead", 14)
+			UITheme.style_primary_button(b)
+		elif spec[0] == "Delete key":
+			UiIcons.apply(b, "trash-2", "Delete the key at the playhead", 14)
+			UITheme.style_destructive_button(b)
+		else:
+			UITheme.style_button(b)
 		b.pressed.connect(spec[1])
 		bar.add_child(b)
 	_onion_chk = CheckBox.new()

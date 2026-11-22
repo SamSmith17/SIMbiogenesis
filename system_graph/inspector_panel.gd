@@ -96,6 +96,8 @@ var _auto_id_counter: int = 0
 var _glb_file_dialog: FileDialog = null
 ## FileDialog + staged parse for a Cartesian-machine G-code/STL job upload.
 var _machine_file_dialog: FileDialog = null
+var _sig_csv_dialog: FileDialog = null
+var _sig_csv_item_id: String = ""
 var _pending_job_parse: Dictionary = {}
 var _pending_job_item_id: String = ""
 
@@ -480,6 +482,25 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_build_battery_cells_section(item)
 
 		"controller":
+			var cl_btn := Button.new()
+			cl_btn.name = "design_controller"
+			cl_btn.text = "Design this controller…"
+			cl_btn.tooltip_text = ("Build it in the Controller Lab: its shape, colours and every terminal where it really is. "
+					+ "Apply writes its numbers and its terminals (a second MPPT, grid and generator inputs, data) back here.")
+			var cl_id := str(item.get("id", ""))
+			cl_btn.pressed.connect(func() -> void:
+				var tree := get_tree()
+				var main := tree.current_scene if tree != null else null
+				if main != null and main.has_method("open_ctrllab"):
+					main.call("open_ctrllab", {"graph_item_id": cl_id}))
+			_form_vbox.add_child(cl_btn)
+			if specs.get("controller_spec") is Dictionary:
+				_section("Designed (Controller Lab)")
+				var cspec: Dictionary = specs["controller_spec"]
+				_readonly_field("Unit", str(cspec.get("name", "")))
+				var extra: Array = (item.get("handles", []) as Array).filter(func(h): return not str((h as Dictionary).get("id", "")) in ["pvPositive", "pvNegative", "batteryPositive", "batteryNegative", "acOutput", "acOutputLeft", "acOutputTop", "acOutputBottom"])
+				if not extra.is_empty():
+					_readonly_field("Extra terminals", ", ".join(extra.map(func(h): return GraphPortLabels.port_name(str((h as Dictionary)["id"])))))
 			_section("Specs")
 			_text_field("Name",              specs.get("name", ""),             "specs/name")
 			_num_field("Max PV Voltage (V)", specs.get("max_voc", 150.0),       "specs/max_voc",         0, 1000,  1.0)
@@ -4715,6 +4736,172 @@ func _build_load_calibration_section(item: Dictionary) -> void:
 	# ---- Last-calibration summary ----
 	if not calib.is_empty():
 		_render_calibration_summary(calib)
+	_build_signature_section(item, calib)
+
+
+## The curve this load actually follows: the generic family, or a trace the
+## player kept. Clearing the trace puts the generic family back.
+func _build_signature_section(item: Dictionary, calib: Dictionary) -> void:
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	var item_id := str(item.get("id", ""))
+	if item_id.is_empty():
+		return
+	var fam := str(specs.get("signature_family", ""))
+	_section("Power signature")
+	var preview: Dictionary = PowerSignature.preview(specs, item_id)
+	var graph: Control = _CAL_GRAPH_SCRIPT.new()
+	graph.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	graph.custom_minimum_size = Vector2(0, 110)
+	_form_vbox.add_child(_wrap_margin(graph, 12, 4))
+	graph.set_data(preview.get("samples", []), float(preview.get("duration_s", 60.0)),
+		float(preview.get("avg_w", 0.0)), float(preview.get("peak_w", 0.0)), 0.0, -1.0)
+	var words := "Steady" if fam.is_empty() or fam == "steady" else fam.replace("_", " ")
+	if fam == "measured":
+		words = "Measured trace"
+	_readonly_field("Curve", words.capitalize())
+	if fam == "inductive_cyclic" or fam == "inductive_start":
+		_num_field("Inrush ×", float(specs.get("inrush_mult", 5.0)), "specs/inrush_mult", 1.0, 20.0, 0.1)
+		_num_field("Inrush (s)", float(specs.get("inrush_s", 0.5)), "specs/inrush_s", 0.05, 5.0, 0.05)
+	if fam == "battery" or str(specs.get("load_type", "")) == "battery":
+		_num_field("Pack (Wh)", float(specs.get("capacity_wh", specs.get("battery_capacity_wh", 0.0))),
+			"specs/capacity_wh", 0.0, 200000.0, 1.0)
+		var start := Button.new()
+		start.focus_mode = Control.FOCUS_NONE
+		start.flat = true
+		start.text = "Start a charge now"
+		start.add_theme_color_override("font_color", C_PRIMARY)
+		start.pressed.connect(_on_signature_charge_now.bind(item_id))
+		_form_vbox.add_child(_wrap_margin(start, 12, 2))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var trace: Array = calib.get("trace", []) as Array
+	if trace.size() >= 2 and fam != "measured":
+		var use := Button.new()
+		use.focus_mode = Control.FOCUS_NONE
+		use.flat = true
+		use.text = "Use this trace"
+		use.add_theme_color_override("font_color", C_PRIMARY)
+		use.pressed.connect(_on_signature_use_trace.bind(item_id))
+		row.add_child(use)
+	var csv := Button.new()
+	csv.focus_mode = Control.FOCUS_NONE
+	csv.flat = true
+	csv.text = "Import CSV"
+	csv.add_theme_color_override("font_color", C_PRIMARY)
+	csv.pressed.connect(_on_signature_import_csv.bind(item_id))
+	row.add_child(csv)
+	if fam == "measured":
+		var clear := Button.new()
+		clear.focus_mode = Control.FOCUS_NONE
+		clear.flat = true
+		clear.text = "Use the generic curve"
+		clear.add_theme_color_override("font_color", C_TEXT)
+		clear.pressed.connect(_on_signature_clear_trace.bind(item_id))
+		row.add_child(clear)
+	_form_vbox.add_child(_wrap_margin(row, 12, 4))
+
+
+func _on_signature_use_trace(item_id: String) -> void:
+	if _model == null:
+		return
+	var it := _model.get_item(item_id)
+	if it.is_empty():
+		return
+	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	var calib: Dictionary = specs.get("load_calibration", {}) as Dictionary
+	var trace: Array = calib.get("trace", []) as Array
+	if trace.size() < 2:
+		_toast("That calibration has no trace to keep.")
+		return
+	var kind := str(calib.get("type", specs.get("load_type", "")))
+	var loop := kind != "battery" and kind != "batch"
+	_apply_signature_patch(item_id, PowerSignature.apply_trace(specs, trace, loop))
+	_toast("Using the measured trace.")
+
+
+func _on_signature_clear_trace(item_id: String) -> void:
+	if _model == null:
+		return
+	var it := _model.get_item(item_id)
+	if it.is_empty():
+		return
+	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	_apply_signature_patch(item_id, PowerSignature.clear_trace(specs))
+	_toast("Back to the generic curve.")
+
+
+func _on_signature_charge_now(item_id: String) -> void:
+	var h := _inspector_abs_hours()
+	if h < 0.0:
+		_toast("The clock is not running.")
+		return
+	_set_spec(item_id, "charge_started_h", h)
+	_toast("Charge started.")
+	if _model != null:
+		var it := _model.get_item(item_id)
+		if not it.is_empty() and item_id == _item_id:
+			_rebuild_for_item(it)
+
+
+func _on_signature_import_csv(item_id: String) -> void:
+	_sig_csv_item_id = item_id
+	if _sig_csv_dialog == null or not is_instance_valid(_sig_csv_dialog):
+		_sig_csv_dialog = FileDialog.new()
+		_sig_csv_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+		_sig_csv_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		_sig_csv_dialog.filters = PackedStringArray(["*.csv ; Power trace (t, watts)"])
+		_sig_csv_dialog.title = "Import a power trace"
+		_sig_csv_dialog.file_selected.connect(_on_signature_csv_selected)
+		add_child(_sig_csv_dialog)
+	_sig_csv_dialog.popup_centered(Vector2i(720, 480))
+
+
+func _on_signature_csv_selected(path: String) -> void:
+	var item_id := _sig_csv_item_id
+	if _model == null or item_id.is_empty():
+		return
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		_toast("Could not read that file.")
+		return
+	var text := f.get_as_text()
+	f.close()
+	var trace := PowerSignature.parse_csv(text)
+	if trace.size() < 2:
+		_toast("Need at least two rows of t_seconds, watts.")
+		return
+	var it := _model.get_item(item_id)
+	if it.is_empty():
+		return
+	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	var fam := str(specs.get("signature_family", ""))
+	var kind := str(specs.get("load_type", ""))
+	var loop := fam != "battery" and kind != "battery" and kind != "batch"
+	_apply_signature_patch(item_id, PowerSignature.apply_trace(specs, trace, loop))
+	_toast("Imported %d points." % trace.size())
+
+
+func _apply_signature_patch(item_id: String, patch: Dictionary) -> void:
+	if _model == null or item_id.is_empty():
+		return
+	var it := _model.get_item(item_id)
+	if it.is_empty():
+		return
+	var specs: Dictionary = (it.get("specs", {}) as Dictionary).duplicate(true)
+	specs.merge(patch, true)
+	_model.update_item(item_id, {"specs": specs})
+	if item_id == _item_id:
+		_rebuild_for_item(_model.get_item(item_id))
+
+
+func _inspector_abs_hours() -> float:
+	var tree := get_tree()
+	if tree == null:
+		return -1.0
+	var main := tree.current_scene
+	if main != null and main.has_method("get_absolute_hours"):
+		return float(main.call("get_absolute_hours"))
+	return -1.0
 
 
 func _cal_make_label(txt: String, color: Color, fsize: int) -> Label:

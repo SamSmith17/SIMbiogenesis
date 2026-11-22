@@ -41,8 +41,8 @@ func _init() -> void:
 	chapter = "World"
 	summary = "The real moon: where it stands and how much of it is lit, for any date."
 	how = PackedStringArray(["Scrub the timeline across a month",
-		"🎬 Video export → Analemma: moon, for a lunation like this one",
-		"Settings → Sky: moon size and phase offset"])
+		"Video export -> Analemma: moon, for a lunation like this one",
+		"Settings -> Sky: moon size and phase offset"])
 	button = "the timeline"
 	world = "burningman"
 	budget_s = 45.0

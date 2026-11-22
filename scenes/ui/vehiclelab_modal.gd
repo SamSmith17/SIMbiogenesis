@@ -547,7 +547,7 @@ func _build_right() -> void:
 	_add_row(cb, "battery_kwh", FormRow.spin("Traction battery", 0.0, 300.0, 1.0, " kWh",
 		func(v): _edit(["chassis", "battery_kwh"], v), "An electric chassis' pack", "vl_battery"))
 	# Body size.
-	var sb := _section("Body size", true)
+	var sb := _section("Body size", false)
 	_add_row(sb, "length_m", FormRow.spin("Length", 1.5, 14.0, 0.05, " m",
 		func(v): _edit(["body", "length_m"], v), "The box (or the whole van shell)", "vl_length"))
 	_add_row(sb, "width_m", FormRow.spin("Width", 1.4, 2.6, 0.01, " m",

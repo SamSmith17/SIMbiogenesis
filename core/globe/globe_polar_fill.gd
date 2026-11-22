@@ -136,6 +136,8 @@ func _pump(key: String) -> void:
 			return
 		(job.tried as Array)[col] = true
 		var h: HTTPRequest = _free.pop_back()
+		if not is_instance_valid(h) or not h.is_inside_tree():
+			return
 		var row: int = 0 if job.north == true else _rows() - 1
 		var url := _URL % [str(job.date), ZOOM, row, col]
 		h.set_meta("polar_key", key)

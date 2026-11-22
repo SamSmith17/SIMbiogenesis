@@ -207,6 +207,11 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		return EspBuilder.build_node(extras.get("esp_spec", {}) as Dictionary, "EspBoard")
 	if model_id == BankBuilder.MODEL_ID:
 		return BankBuilder.build_node(extras.get("battery_bank_spec", {}) as Dictionary, "BatteryBank")
+	if model_id == CtrlBuilder.MODEL_ID:
+		var cs: Dictionary = extras.get("controller_spec", {}) as Dictionary
+		if cs.is_empty():
+			cs = CtrlPresets.builtin(str(extras.get("controller_preset", "generic_mppt_150_50")))
+		return CtrlBuilder.build_node(cs, "Controller")
 	if model_id == FarmBotBuilder.MODEL_ID:
 		return FarmBotBuilder.build_node(extras.get("farmbot_spec", {}) as Dictionary, "FarmBot")
 	if model_id == CspLabBuilder.MODEL_ID:
@@ -266,6 +271,8 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		var veh_spec: Dictionary = extras.get("vehicle_spec", {}) as Dictionary
 		return VehicleBuilder.build_node(veh_spec, model_id,
 			{"cutaway": bool(extras.get("cutaway", false))})
+	if model_id == WireAccessory.MODEL_ID:
+		return WireAccessory.build_node(extras)
 	if model_id == GENERIC_BOX_ID:
 		var box_spec: Dictionary = extras.get("box_spec", extras) as Dictionary
 		return _build_generic_box(box_spec)
@@ -351,6 +358,8 @@ static func default_twin_model_id(item: Dictionary) -> String:
 	var mid := str(specs.get("model_id", ""))
 	if not mid.is_empty():
 		return mid
+	if WireAccessory.kind_of_item(item) != "":
+		return WireAccessory.MODEL_ID
 	var itype := str(item.get("type", ""))
 	if GraphSiteLayout.is_circular_node(itype):
 		return GENERIC_TANK_ID
@@ -359,6 +368,9 @@ static func default_twin_model_id(item: Dictionary) -> String:
 
 ## Footprint / height dict for procedural twins (metres).
 static func twin_box_spec_for_item(item: Dictionary) -> Dictionary:
+	var accessory := WireAccessory.kind_of_item(item)
+	if accessory != "":
+		return WireAccessory.box_spec(accessory)
 	var fp := GraphSiteLayout.physical_footprint_m(item)
 	var side := maxf(fp.x, fp.y)
 	var h := clampf(side * 0.85, 0.8, 3.0)
@@ -492,6 +504,8 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": GENERIC_BOX_ID, "label": "Placeholder box", "procedural": true,
 			"preserve_scale": true},
 		{"id": GENERIC_TANK_ID, "label": "Placeholder tank", "procedural": true,
+			"preserve_scale": true},
+		{"id": "wire_accessory", "label": "Wiring accessory", "procedural": true,
 			"preserve_scale": true},
 		{"id": "shiftpod", "label": "Shiftpod", "path": "res://Imported Models/Soak Terrain/Camps/Camp Components/Shiftpod.glb",
 			"target_height_m": 2.5, "mesh_scale": 1.0, "category": "structures"},
@@ -819,6 +833,12 @@ static func _shipped_models() -> Array[Dictionary]:
 		# bus, cables and fuses (record key battery_bank_spec); one graph
 		# battery bound to it carries its BMS limits.
 		{"id": "batterylab_bank", "label": "Battery bank (designed)",
+			"procedural": true, "preserve_scale": true, "category": "tools"},
+		# A charge controller / inverter / hybrid from the Controller Lab
+		# (CtrlBuilder): its body, heatsink, mounting and every terminal
+		# (record key controller_spec); one graph controller bound to it
+		# carries its numbers and its terminals as graph handles.
+		{"id": "ctrllab_unit", "label": "Controller / inverter (designed)",
 			"procedural": true, "preserve_scale": true, "category": "tools"},
 		{"id": "farmbot", "label": "FarmBot bed (designed)",
 			"procedural": true, "preserve_scale": true, "category": "structures"},

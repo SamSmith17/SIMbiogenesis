@@ -307,11 +307,19 @@ static func follow_prop(main: Node, prop_id: String, old_rec: Dictionary, new_re
 		notify()
 
 
-## A prop was deleted: its lights stay where they stand.
+## A prop was deleted: model-owned lights go with it; hand-placed J lights
+## stay where they stand on the world.
 static func release_prop(main: Node, prop_id: String) -> void:
 	var layer := get_layer(main)
 	if layer == null:
 		return
+	var owned: Array = []
+	for rec in layer.lights:
+		var r := rec as Dictionary
+		if str(r.get("host_id", "")) == prop_id and bool(r.get("model_owned", false)):
+			owned.append(str(r.get("id", "")))
+	if not owned.is_empty():
+		delete_ids(main, owned)
 	LightHosts.release(layer, prop_id)
 	save(main)
 

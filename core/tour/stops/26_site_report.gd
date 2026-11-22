@@ -6,9 +6,9 @@ func _init() -> void:
 	title = "Site Report"
 	chapter = "Systems"
 	summary = "A month-by-month year of sun, wind, rain, temperature and your system's output."
-	how = PackedStringArray(["Press K, or 📊 on the timeline"])
+	how = PackedStringArray(["Press K, or click Site Report on the timeline"])
 	action = "toggle_site_report"
-	button = "📊"
+	button = "Site Report"
 	world = "mtvernon"
 	budget_s = 45.0
 	hour = 14.0

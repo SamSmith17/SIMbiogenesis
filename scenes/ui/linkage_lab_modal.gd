@@ -448,10 +448,16 @@ func _build_topbar() -> Control:
 	var g_sun := _topbar_group(bar)
 	var g_act := _topbar_group(bar)
 
+	var title_ic := TextureRect.new()
+	title_ic.texture = UiIcons.icon("layers", 20)
+	title_ic.modulate = UITheme.C_AMBER
+	title_ic.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	g_title.add_child(title_ic)
 	var title := Label.new()
-	title.text = "  Linkage Lab"
-	title.add_theme_color_override("font_color", C_PRIMARY)
-	title.add_theme_font_size_override("font_size", UITheme.FONT_LG)
+	title.text = "Linkage Lab"
+	title.add_theme_font_override("font", UITheme.font("semibold"))
+	title.add_theme_color_override("font_color", UITheme.C_TEXT)
+	title.add_theme_font_size_override("font_size", UITheme.FONT_XL)
 	g_title.add_child(title)
 
 	var fold_lbl := Label.new()
@@ -557,11 +563,11 @@ func _build_topbar() -> Control:
 
 
 	_btn_place = _topbar_btn("Place in world", "Ghost-place this structure in the 3D world (live-foldable)")
-	_btn_place.add_theme_color_override("font_color", C_PRIMARY)
+	UITheme.style_primary_button(_btn_place)
 	_btn_place.pressed.connect(_on_place_pressed)
 	g_act.add_child(_btn_place)
 	_btn_apply_prop = _topbar_btn("Apply to structure", "Rebuild the placed structure with this design")
-	_btn_apply_prop.add_theme_color_override("font_color", C_PRIMARY)
+	UITheme.style_primary_button(_btn_apply_prop)
 	_btn_apply_prop.visible = false
 	_btn_apply_prop.pressed.connect(_on_apply_to_prop_pressed)
 	g_act.add_child(_btn_apply_prop)
@@ -1686,7 +1692,8 @@ func _build_center() -> Control:
 	_viewport = SubViewport.new()
 	_viewport.size = Vector2i(900, 700)
 	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE  # idle while the modal is hidden
-	_viewport.own_world_3d = true
+	var shared_world := World3D.new()
+	_viewport.world_3d = shared_world
 	vp_container.add_child(_viewport)
 	_build_studio_world()
 	var col := VBoxContainer.new()
@@ -1719,6 +1726,8 @@ func _build_studio_world() -> void:
 	e.fog_light_energy = 1.0
 	e.fog_density = 0.0018
 	env.environment = e
+	if _viewport.world_3d != null:
+		_viewport.world_3d.environment = e
 	_studio.add_child(env)
 	_sun_light = DirectionalLight3D.new()
 	_sun_light.light_energy = 1.2
@@ -1889,9 +1898,11 @@ func _build_right_panel() -> Control:
 
 func _ortho_inset(label_text: String) -> Array:
 	var wrap := PanelContainer.new()
-	wrap.add_theme_stylebox_override("panel", UITheme.panel_style(1.0))
+	wrap.add_theme_stylebox_override("panel", UITheme.card_style())
 	wrap.custom_minimum_size = Vector2(RIGHT_W, 190)
 	var overlay := Control.new()
+	overlay.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	overlay.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	wrap.add_child(overlay)
 	var vpc := SubViewportContainer.new()
 	vpc.stretch = true

@@ -490,8 +490,11 @@ func _draw_group_titles(ci: CanvasItem, origin: Vector2, zoom: float, font: Font
 		var col: Color = GraphSchemaLayout.COLORS.get(str(gd.get("domain", "")), Color.WHITE)
 		var title := str(gd.get("title", ""))
 		var tw := font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		var alpha := (0.45 + 0.55 * near) * b
+		var pr := Rect2(Vector2(s.x - tw * 0.5 - 8.0, s.y - float(fs) * 0.62 - 2.0), Vector2(tw + 16.0, float(fs) + 8.0))
+		GraphFastDraw.rrect(ci, pr, pr.size.y * 0.5, Color(0.05, 0.08, 0.15, 0.86 * alpha))
 		ci.draw_string(font, Vector2(s.x - tw * 0.5, s.y + float(fs) * 0.35), title,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(col.r, col.g, col.b, (0.25 + 0.7 * near) * b))
+			HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(col.lightened(0.18), alpha))
 
 
 ## The wires as curves through the inside, under the cards. `info(conn)`
@@ -566,3 +569,18 @@ func fit_zoom(canvas_size: Vector2) -> float:
 
 func centre() -> Vector2:
 	return _centre
+
+
+## Eye distance from the arrangement's centre (graph pixels).
+func camera_dist() -> float:
+	return _dist
+
+
+## A node's place in the 3D arrangement (graph pixels, relative to the
+## centre). Vector3.ZERO when it is not on the shell.
+func node_pos(iid: String) -> Vector3:
+	var pos: Dictionary = layout.get("pos", {})
+	var v: Variant = pos.get(iid, null)
+	if v is Vector3:
+		return v as Vector3
+	return Vector3.ZERO

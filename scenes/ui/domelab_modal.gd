@@ -63,6 +63,8 @@ var _family_box: VBoxContainer
 var _system_box: VBoxContainer
 var _design_list: DesignGallery
 var _col: DesignerColumn
+var _light_panel: ModelLightPanel = null
+var _dome_3d: Node3D = null
 var _design_entries: Array = []
 var _tabs: TabBar
 var _view_stack: Control
@@ -150,6 +152,9 @@ func _activate() -> void:
 	_place_btn.text = "Place a copy" if not _bound_prop_id.is_empty() else "Place in world"
 	_refresh_design_list()
 	_built_key = ""
+	if _light_panel != null:
+		_light_panel.set_auto_pressed(bool(_spec.get("peak_light", true)))
+		_light_panel.load_from_context(_main_node(), _bound_prop_id, DomeLabBuilder.MODEL_ID, _spec)
 	_rebuild_now()
 	_frame_camera()
 
@@ -157,6 +162,8 @@ func _activate() -> void:
 func close() -> void:
 	if not _active:
 		return
+	if _light_panel != null:
+		_light_panel.reset_studio_night()
 	_active = false
 	_playing = false
 	visible = false
@@ -294,6 +301,8 @@ func _build_centre() -> void:
 	_studio_view = StudioViewport.create({"ground": true, "person": true})
 	_studio_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_studio_view.set_home(0.8, 0.35)
+	_studio_view.input_hook = func(e: InputEvent) -> bool:
+		return _light_panel != null and _light_panel.handle_viewport_event(e, _camera, _studio_view.container, _dome_3d)
 	_studio_view.clicked.connect(_on_studio_click)
 	_studio_view.hovered.connect(_on_studio_hover)
 	_view_stack.add_child(_studio_view)
@@ -395,6 +404,23 @@ func _build_right() -> void:
 	sec = Collapsible.make("Colours", false)
 	box.add_child(sec)
 	_color_box = sec.body
+	sec = Collapsible.make("Lighting", false)
+	box.add_child(sec)
+	_light_panel = ModelLightPanel.new()
+	_light_panel.configure_auto_toggle("Peak omni light", "Hang a warm omni light inside the dome's peak by default")
+	_light_panel.bind_studio_night(_studio_view)
+	_light_panel.auto_toggle_changed.connect(func(on: bool) -> void:
+		_push_undo("peak_light")
+		_spec["peak_light"] = on
+		_light_panel.sync_with_spec(_spec)
+		_spec[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
+		if _col != null:
+			_col.set_summary("Lighting", _light_panel.summary_text()))
+	_light_panel.lights_changed.connect(func() -> void:
+		_spec[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
+		if _col != null:
+			_col.set_summary("Lighting", _light_panel.summary_text()))
+	sec.body.add_child(_light_panel)
 	box.add_child(SectionHeader.make("Checks", "circle-check"))
 	_warn_box = VBoxContainer.new()
 	box.add_child(_warn_box)
@@ -521,6 +547,9 @@ func _rebuild_now() -> void:
 		_built_key = key
 		_build_settings_rows()
 	_sync_settings()
+	if _light_panel != null:
+		_light_panel.set_auto_pressed(bool(_spec.get("peak_light", true)))
+		_light_panel.sync_with_spec(_spec)
 	_rebuild_studio()
 	_refresh_parts()
 	_refresh_bom()
@@ -1250,6 +1279,9 @@ func _on_design_activated(idx: int) -> void:
 	_spec = DomeLabSpec.resolve((_design_entries[idx]["spec"] as Dictionary).duplicate(true))
 	_highlight = ""
 	_built_key = ""
+	if _light_panel != null:
+		_light_panel.set_auto_pressed(bool(_spec.get("peak_light", true)))
+		_light_panel.load_from_context(null, "", DomeLabBuilder.MODEL_ID, _spec)
 	_rebuild_now()
 	_frame_camera()
 
@@ -1302,7 +1334,12 @@ func _rebuild_studio() -> void:
 		return
 	var node := DomeLabBuilder.build_from_design(_design, "Dome", {"explode": _explode,
 		"assembly": _assembly, "highlight": _highlight, "record": true})
+	_dome_3d = node
 	_studio_view.show_node(node)
+	if _light_panel != null:
+		_light_panel.attach_preview(node)
+		if _col != null:
+			_col.set_summary("Lighting", _light_panel.summary_text())
 	_studio_view.place_person(float(_design["stats"]["radius_max_m"]))
 
 
@@ -1441,6 +1478,8 @@ func _prop_record(prop_id: String) -> Dictionary:
 
 
 func _on_place() -> void:
+	if _light_panel != null:
+		_spec[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
 	if _loader != null and _loader.has_method("begin_domelab_placement"):
 		if bool(_loader.call("begin_domelab_placement", DomeLabSpec.to_json_safe(_spec))):
 			close()
@@ -1452,9 +1491,13 @@ func _on_apply() -> void:
 	if _bound_prop_id.is_empty():
 		return
 	var main := _main_node()
+	if _light_panel != null:
+		_spec[PropModelLights.KEY_MODEL_LIGHTS] = _light_panel.serialized_items()
 	var patch := {"domelab_spec": DomeLabSpec.to_json_safe(_spec)}
 	if main != null:
 		PlacedPropService.update_prop_record(main, _bound_prop_id, patch, true)
+		if _light_panel != null:
+			PropModelLights.sync_prop(main, _bound_prop_id, _light_panel.items())
 	close()
 
 

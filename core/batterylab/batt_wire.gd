@@ -50,6 +50,17 @@ static func bend_r_mm(od: float, kind: String = "battery") -> float:
 	return od * float(BEND_X.get(kind, 5.0))
 
 
+## A laminated flexible busbar for a high-current run (4 AWG and up): a 2 mm
+## copper stack in an insulating sleeve. Above 55 mm² (about 1/0) one strap
+## gets too wide to bend, so the copper is split into two straps side by side.
+## `r` is the centre-line radius the strap can take, about four times the
+## stack. The electrical cross-section stays the round-wire size this replaces.
+static func flex_stack(mm2: float) -> Dictionary:
+	var n := 1 if mm2 <= 55.0 else 2
+	var w := clampf(mm2 / float(n) / 2.0, 12.0, 32.0)
+	return {"n": n, "w": w + 2.2, "th": 3.4, "r": 8.0}
+
+
 ## A ring lug for a conductor of `mm2` on a stud of `stud` mm:
 ## {barrel_od, barrel_len, tongue_w, tongue_len, tongue_t, hole_d, sleeve_len,
 ## reach (stud centre to barrel end)}.
@@ -142,6 +153,16 @@ static func bend(corners: PackedVector3Array, r: float) -> Dictionary:
 ## up (or down) from each exit to that height, across in two legs.
 static func via_mids(sa: Vector3, sb: Vector3, via_y: float) -> Array:
 	return [Vector3(sa.x, via_y, sa.z), Vector3(sb.x, via_y, sa.z), Vector3(sb.x, via_y, sb.z)]
+
+
+## How far (mm) to run straight out of a barrel along `t` before turning toward
+## `next`. At most one bend radius, and never past `next`: a stub longer than
+## the gap runs past the corner and the cable has to fold back on itself.
+static func stub_len(s: Vector3, t: Vector3, r: float, next: Vector3) -> float:
+	var ahead := (next - s).dot(t)
+	if ahead <= 1.0:
+		return 0.0
+	return minf(r, ahead * 0.45)
 
 
 ## Drop repeated points and points in a straight line with their

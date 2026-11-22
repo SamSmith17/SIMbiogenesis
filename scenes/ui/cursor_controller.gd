@@ -45,6 +45,13 @@ func _ready() -> void:
 		# A friend's asset pack dropped onto the window opens the Share modal
 		# on it, from any screen.
 		tree.root.files_dropped.connect(_on_files_dropped)
+		# Multi-monitor focus handoff: touching/clicking a secondary monitor
+		# window unfocuses root (freeing the OS pointer); clicking back into
+		# the main 3D window re-applies mouse capture cleanly.
+		tree.root.focus_entered.connect(_request_apply_capture)
+		tree.root.focus_exited.connect(_on_root_focus_exited)
+		# Apply the user's primary game-window screen & mode preference on boot.
+		MultiMonitorHost.apply_main_window_prefs.call_deferred(tree)
 	# The player's key bindings (Settings → Controls) over the project's
 	# InputMap, before any scene reads a key.
 	var rebound := InputOverrides.apply_saved()
@@ -197,18 +204,45 @@ func _apply_capture_deferred() -> void:
 	if not is_inside_tree():
 		return
 	var player := _find_player()
+	# If a secondary monitor window currently holds OS focus, keep the pointer
+	# visible so the user can interact with that dashboard/touchscreen freely.
+	var secondary_focused := _is_secondary_window_focused()
 	# Overlay RMB-look captures the mouse too, but through its own player branch:
 	# is_mouse_captured stays false so the legacy captured-look path stays dead.
-	var want_capture := (should_capture_look() or overlay_look_active()) and player != null
+	var want_capture := (not secondary_focused) and (should_capture_look() or overlay_look_active()) and player != null
 	var want_mode := Input.MOUSE_MODE_CAPTURED if want_capture else Input.MOUSE_MODE_VISIBLE
 	if want_capture:
 		_release_gui_focus()
 	if Input.mouse_mode != want_mode:
 		Input.set_mouse_mode(want_mode)
 	if player != null:
-		player.is_mouse_captured = should_capture_look()
+		player.is_mouse_captured = (not secondary_focused) and should_capture_look()
 	# Whatever we just applied is by definition not a desync.
 	_reported_desyncs.clear()
+
+
+func _on_root_focus_exited() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	var player := _find_player()
+	if player != null:
+		player.is_mouse_captured = false
+	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+
+
+func _is_secondary_window_focused() -> bool:
+	if DisplayServer.get_name() == "headless":
+		return false
+	var tree := get_tree()
+	if tree == null or tree.root == null:
+		return false
+	if tree.root.has_focus():
+		return false
+	for w in tree.root.find_children("*", "Window", true, false):
+		if w is Window and w != tree.root and (w as Window).visible and (w as Window).has_focus():
+			return true
+	return false
 
 
 ## Mouse mode this controller believes is correct, or -1 when it cannot tell

@@ -43,9 +43,10 @@ func run(ctx: TourContext) -> void:
 	await ctx.wait(2.0)
 	ctx.caption("Your site, with its Sphere of Influence", 3.0)
 	await ctx.wait(3.0)
-	var rain := gm.find_child("RainToggle", true, false) as CheckBox
-	if rain != null and not rain.button_pressed:
-		rain.button_pressed = true
+	for tn in ["RainToggle", "CloudsToggle", "WindToggle"]:
+		var tb := gm.find_child(tn, true, false) as CheckBox
+		if tb != null and not tb.button_pressed:
+			tb.button_pressed = true
 	# The imagery under the weather reads better than the zone bands.
 	var cb := gm.find_child("ColourBy", true, false) as OptionButton
 	if cb != null:

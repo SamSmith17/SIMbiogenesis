@@ -33,9 +33,25 @@ static func setup(box: Control, id: String, opts: Dictionary = {}) -> DesignerCo
 	var open_titles: Array = []
 	for t in opts.get("open", []):
 		open_titles.append(str(t).to_lower())
-	# Headers → folded sections.
+	# Headers → folded sections (explicit `fold` names, plus all SectionHeaders
+	# when `open` is passed on a column that built only SectionHeaders).
 	for title in opts.get("fold", []):
 		col._fold_header(box, str(title))
+	var has_collapsibles := false
+	for ch0 in box.get_children():
+		if ch0 is Collapsible:
+			has_collapsibles = true
+			break
+	if opts.has("open") and not has_collapsibles:
+		var remaining_headers: Array = []
+		for ch in box.get_children():
+			if ch is SectionHeader:
+				var sh := ch as SectionHeader
+				var nm := sh.raw_title if not sh.raw_title.is_empty() else (sh._label.text.capitalize() if sh._label != null else "")
+				if not nm.is_empty() and nm.to_lower() != "checks":
+					remaining_headers.append(nm)
+		for htitle in remaining_headers:
+			col._fold_header(box, str(htitle))
 	for c in box.get_children():
 		if c is Collapsible:
 			var sec := c as Collapsible

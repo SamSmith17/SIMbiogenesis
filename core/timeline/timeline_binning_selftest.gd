@@ -16,7 +16,7 @@ extends SceneTree
 ##     counted in min / max, gaps, nothing after NOW.
 ## Run: Godot --headless --path . --script core/timeline/timeline_binning_selftest.gd
 
-const EXPECTED_CHECKS := 26
+const EXPECTED_CHECKS := 28
 
 var _checks := 0
 var _fails := 0
@@ -146,6 +146,17 @@ func _run() -> void:
 	# ---- unit mapping ----
 	var m := B.mapped(r1, func(v: float) -> float: return v * 2.0)
 	_ok(_near(m["mx"][0], 18.0) and _near(m["mean"][0], 9.0), "mapped converts every series")
+
+	# ---- a load average with one coincident spike ----
+	var means := PackedFloat32Array([0.45, 0.45, 0.45])
+	var spikes := PackedFloat32Array([0.45, 6.0, 0.45])
+	var minute := 1.0 / 60.0
+	var spike_bins := B.from_regular(means, 0.0, minute, minute, 0, 3, spikes)
+	_ok(_near(spike_bins["mean"][1], 0.45) and _near(spike_bins["mn"][1], 0.45) and _near(spike_bins["mx"][1], 6.0),
+		"a spike lifts the band and leaves the mean at the energy average")
+	var zoomed := B.from_regular(means, 0.0, minute, 1.0, 0, 1, spikes)
+	_ok(_near(zoomed["mean"][0], 0.45) and _near(zoomed["mx"][0], 6.0) and _near(zoomed["mn"][0], 0.45),
+		"zoomed out, the load bin keeps the spike above the average")
 
 	if _checks != EXPECTED_CHECKS:
 		_fails += 1

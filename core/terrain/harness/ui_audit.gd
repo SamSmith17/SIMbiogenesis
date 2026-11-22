@@ -104,7 +104,7 @@ static func run(vp: Viewport) -> Dictionary:
 				findings.append(_f("clipped", "error", c, owner, r, clip))
 			if _hard_truncated(c):
 				findings.append(_f("truncated", "warn", c, owner, r))
-			var raw := _raw_text_issue(_text_of(c))
+			var raw := "" if _has_allow_decimals(c) else _raw_text_issue(_text_of(c))
 			if not raw.is_empty():
 				findings.append(_f("raw_text", "warn", c, owner, r, raw))
 			var ink := _ink_rect(c, r).intersection(vis)
@@ -189,6 +189,15 @@ static func _has_modal_meta(c: Node) -> bool:
 	var n: Node = c
 	while n != null and not (n is CanvasLayer):
 		if n.has_meta(MODAL_META) and bool(n.get_meta(MODAL_META)):
+			return true
+		n = n.get_parent()
+	return false
+
+
+static func _has_allow_decimals(c: Node) -> bool:
+	var n: Node = c
+	while n != null and not (n is CanvasLayer):
+		if n.has_meta("ui_allow_decimals") and bool(n.get_meta("ui_allow_decimals")):
 			return true
 		n = n.get_parent()
 	return false

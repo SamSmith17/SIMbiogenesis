@@ -139,15 +139,19 @@ func _ensure_studio() -> void:
 	e.background_mode = Environment.BG_COLOR
 	e.background_color = Color(0, 0, 0, 0)
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.85, 0.88, 0.95)
-	e.ambient_light_energy = 0.75
+	e.ambient_light_color = Color(0.88, 0.91, 0.97)
+	e.ambient_light_energy = 0.95
 	e.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	we.environment = e
 	_vp.add_child(we)
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-42, 150, 0)
-	sun.light_energy = 1.4
+	sun.light_energy = 1.65
 	_vp.add_child(sun)
+	var fill := DirectionalLight3D.new()
+	fill.rotation_degrees = Vector3(-25, -35, 0)
+	fill.light_energy = 0.55
+	_vp.add_child(fill)
 	_holder = Node3D.new()
 	_vp.add_child(_holder)
 	_cam = Camera3D.new()

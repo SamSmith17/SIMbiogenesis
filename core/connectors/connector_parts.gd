@@ -167,9 +167,18 @@ static func append_to(am: ArrayMesh, g: BattParts.Geo) -> void:
 		am.surface_set_material(am.get_surface_count() - 1, BattParts.material(str(k)))
 
 
+## A colour given as a Color or as [r, g, b] (JSON-safe specs).
+static func _col(v: Variant, fallback: Color) -> Color:
+	if v is Color:
+		return v
+	if v is Array and (v as Array).size() >= 3:
+		return Color(float(v[0]), float(v[1]), float(v[2]))
+	return fallback
+
+
 static func _pol_col(o: Dictionary, fallback: Color) -> Color:
 	if o.has("color"):
-		return o["color"]
+		return _col(o["color"], fallback)
 	var pol := str(o.get("polarity", ""))
 	if pol == "+":
 		return ConnectorCatalog.C_RED
@@ -238,7 +247,7 @@ static func _powerpole(k: K, b: Vector3, o: Dictionary) -> void:
 	var single := bool(o.get("single", false))
 	for i in (1 if single else 2):
 		var x := 0.0 if single else (-1.0 if i == 0 else 1.0) * hw
-		var col: Color = cols[i]
+		var col := _col(cols[i], ConnectorCatalog.C_RED)
 		k.box(Vector3(x, 0, b.z * 0.5), Vector3(b.x * 0.5 - 0.15, b.y, b.z), col)
 		# The hood over the contact and its mating opening.
 		k.box(Vector3(x, b.y * 0.25, b.z + 0.6), Vector3(b.x * 0.5 - 1.2, b.y * 0.5, 1.2), col.darkened(0.08))
@@ -247,7 +256,7 @@ static func _powerpole(k: K, b: Vector3, o: Dictionary) -> void:
 
 
 static func _sb(k: K, b: Vector3, o: Dictionary) -> void:
-	var col: Color = o.get("color", Color(0.5, 0.52, 0.54))
+	var col := _col(o.get("color"), Color(0.5, 0.52, 0.54))
 	k.box(Vector3(0, 0, b.z * 0.5), Vector3(b.x, b.y * 0.8, b.z), col)
 	# Handle hump on top.
 	k.box(Vector3(0, b.y * 0.42, b.z * 0.55), Vector3(b.x * 0.55, b.y * 0.2, b.z * 0.6), col.darkened(0.1))
@@ -256,7 +265,7 @@ static func _sb(k: K, b: Vector3, o: Dictionary) -> void:
 
 
 static func _xt(k: K, b: Vector3, o: Dictionary) -> void:
-	var col: Color = o.get("color", Color(0.92, 0.76, 0.1))
+	var col := _col(o.get("color"), Color(0.92, 0.76, 0.1))
 	var c := b.y * 0.3
 	var ol := [Vector2(-b.x * 0.5, -b.y * 0.5), Vector2(b.x * 0.5 - c, -b.y * 0.5), Vector2(b.x * 0.5, -b.y * 0.5 + c),
 		Vector2(b.x * 0.5, b.y * 0.5), Vector2(-b.x * 0.5, b.y * 0.5)]
@@ -375,7 +384,7 @@ static func _nema_face(k: K, c: Vector2, variant: String, top: float, col: Color
 
 
 static func _nema(k: K, b: Vector3, o: Dictionary) -> void:
-	var col: Color = o.get("color", Color(0.13, 0.13, 0.14))
+	var col := _col(o.get("color"), Color(0.13, 0.13, 0.14))
 	var variant := str(o.get("variant", "5-15"))
 	if bool(o.get("duplex", false)):
 		k.box(Vector3(0, 0, 1.0), Vector3(b.x, b.y, 2.0), col.darkened(0.1))
@@ -394,7 +403,7 @@ static func _nema(k: K, b: Vector3, o: Dictionary) -> void:
 
 
 static func _round_ac(k: K, b: Vector3, o: Dictionary) -> void:
-	var col: Color = o.get("color", Color(0.13, 0.13, 0.14))
+	var col := _col(o.get("color"), Color(0.13, 0.13, 0.14))
 	var r := b.x * 0.5
 	var variant := str(o.get("variant", "l14_30"))
 	k.turn(Vector3.ZERO, Vector3.BACK, [Vector2(0, 0), Vector2(r, 0), Vector2(r, b.z - 1.0), Vector2(r - 1.5, b.z),
@@ -457,7 +466,7 @@ static func _iec(k: K, b: Vector3, o: Dictionary) -> void:
 
 
 static func _rocker(k: K, b: Vector3, o: Dictionary) -> void:
-	var col: Color = o.get("color", Color(0.08, 0.08, 0.09))
+	var col := _col(o.get("color"), Color(0.08, 0.08, 0.09))
 	k.box(Vector3(0, 0, 1.0), Vector3(b.x, b.y, 2.0), col.darkened(0.1))
 	k.rbox(Vector3(0, 0, 4.0), Basis(Vector3.RIGHT, deg_to_rad(12.0)), Vector3(b.x - 3.0, b.y - 3.0, 4.0), col)
 	k.label("I", Vector3(0, 4.0, 6.3), 3.0)
@@ -482,7 +491,7 @@ static func _terminal_block(k: K, e: Dictionary, o: Dictionary) -> void:
 	var b: Vector3 = e["body"]
 	var n := (e["pins"] as Array).size()
 	var pitch := b.x / float(maxi(n, 1))
-	var col: Color = o.get("color", ConnectorCatalog.C_GREEN_TB)
+	var col := _col(o.get("color"), ConnectorCatalog.C_GREEN_TB)
 	for i in n:
 		var x := (float(i) - float(n - 1) * 0.5) * pitch
 		k.box(Vector3(x, 0, b.z * 0.5), Vector3(pitch - 0.25, b.y, b.z), col)
@@ -523,7 +532,7 @@ static func _din_breaker(k: K, _e: Dictionary, o: Dictionary) -> void:
 	var n := clampi(int(o.get("poles", 2)), 1, 4)
 	var w := 17.5 * float(n)
 	var body := Color(0.93, 0.93, 0.92)
-	var tog: Color = o.get("toggle", Color(0.16, 0.32, 0.82))
+	var tog := _col(o.get("toggle"), Color(0.16, 0.32, 0.82))
 	# Base (on the rail), the raised front, the shoulders with the screws.
 	k.box(Vector3(0, 0, 29.0), Vector3(w - 0.4, 85.0, 58.0), body)
 	k.box(Vector3(0, 0, 65.0), Vector3(w - 0.4, 45.0, 14.0), body)
@@ -591,7 +600,7 @@ static func _rj_jack(k: K, b: Vector3, o: Dictionary) -> void:
 ## An RJ45 patch plug pushed into a port facing +Z, its boot behind it
 ## (moved from the Battery Lab's bank builder; same boxes).
 static func _rj_plug(k: K, o: Dictionary) -> void:
-	var boot: Color = o.get("boot", Color(0.18, 0.42, 0.85))
+	var boot := _col(o.get("boot"), Color(0.18, 0.42, 0.85))
 	k.box(Vector3(0, 0, 9.0), Vector3(11.7, 8.0, 18.0), Color(0.85, 0.88, 0.9, 1.0), "plastic")
 	k.box(Vector3(0, 0, 22.0), Vector3(13.0, 9.5, 12.0), boot, "rubber")
 	k.box(Vector3(0, 4.6, 6.0), Vector3(6.0, 1.2, 9.0), Color(0.8, 0.82, 0.85), "plastic")
@@ -640,7 +649,7 @@ static func _antenna(k: K, o: Dictionary) -> void:
 
 static func _gland(k: K, b: Vector3, o: Dictionary) -> void:
 	var t := float(o.get("thread", 20.0))
-	var col: Color = o.get("color", ConnectorCatalog.C_BLACK)
+	var col := _col(o.get("color"), ConnectorCatalog.C_BLACK)
 	var af := t + 6.0
 	k.hexp(Vector3.ZERO, Vector3.BACK, af, 4.0, 0.0, col, "plastic")
 	k.turn(Vector3(0, 0, 4.0), Vector3.BACK, [Vector2(0, 0), Vector2(t * 0.55, 0), Vector2(t * 0.55, 3.0), Vector2(0, 3.0)],
@@ -670,7 +679,7 @@ static func _knockout(k: K, o: Dictionary) -> void:
 	else:
 		k.ring(Vector3(0, 0, 10.0), Vector3.BACK, r - 1.5, r - 3.0, 1.0, zinc, "metal", 20)
 	# Inside: the plastic bushing with its lip.
-	var bush: Color = o.get("bushing", Color(0.62, 0.62, 0.64))
+	var bush := _col(o.get("bushing"), Color(0.62, 0.62, 0.64))
 	k.turn(Vector3(0, 0, -7.0), Vector3.BACK, [Vector2(r - 3.5, 0), Vector2(r + 3.5, 0), Vector2(r + 3.5, 2.0),
 		Vector2(r - 0.5, 2.5), Vector2(r - 0.5, 7.0), Vector2(r - 3.5, 7.0), Vector2(r - 3.5, 0)], bush, "plastic", 24)
 
@@ -681,7 +690,7 @@ static func _knockout(k: K, o: Dictionary) -> void:
 
 static func _led(k: K, o: Dictionary) -> void:
 	var d := float(o.get("d", 5.0))
-	var col: Color = o.get("color", Color(0.2, 0.9, 0.3))
+	var col := _col(o.get("color"), Color(0.2, 0.9, 0.3))
 	k.turn(Vector3.ZERO, Vector3.BACK, [Vector2(0, 0), Vector2(d * 0.5, 0), Vector2(d * 0.5, d * 0.3), Vector2(d * 0.35, d * 0.5),
 		Vector2(0, d * 0.58)], col, "plastic", 12)
 
@@ -689,13 +698,13 @@ static func _led(k: K, o: Dictionary) -> void:
 static func _lcd(k: K, o: Dictionary) -> void:
 	var w := float(o.get("w", 70.0))
 	var h := float(o.get("h", 45.0))
-	var bezel: Color = o.get("bezel", ConnectorCatalog.C_BLACK)
-	var screen: Color = o.get("screen", Color(0.16, 0.32, 0.62))
+	var bezel := _col(o.get("bezel"), ConnectorCatalog.C_BLACK)
+	var screen := _col(o.get("screen"), Color(0.16, 0.32, 0.62))
 	if bool(o.get("round", false)):
 		var r := sqrt(w * w + h * h) * 0.5 + 10.0
 		k.disc(Vector3.ZERO, Vector3.BACK, r, 1.5, bezel, "plastic", 40)
 		if o.has("ring"):
-			k.ring(Vector3(0, 0, 1.6), Vector3.BACK, r + 1.5, r - 1.5, 0.6, o["ring"], "plastic", 40)
+			k.ring(Vector3(0, 0, 1.6), Vector3.BACK, r + 1.5, r - 1.5, 0.6, _col(o["ring"], Color.ORANGE), "plastic", 40)
 		k.box(Vector3(0, h * 0.2, 1.6), Vector3(w, h, 0.2), screen, "board")
 	else:
 		k.slab(rrect(w + 8.0, h + 8.0, 3.0), 0.0, 1.5, bezel)
@@ -704,7 +713,7 @@ static func _lcd(k: K, o: Dictionary) -> void:
 
 static func _button(k: K, o: Dictionary) -> void:
 	var d := float(o.get("d", 8.0))
-	var col: Color = o.get("color", Color(0.12, 0.12, 0.13))
+	var col := _col(o.get("color"), Color(0.12, 0.12, 0.13))
 	if bool(o.get("round", true)):
 		k.turn(Vector3.ZERO, Vector3.BACK, [Vector2(0, 0), Vector2(d * 0.5, 0), Vector2(d * 0.5, 2.0), Vector2(d * 0.42, 3.0),
 			Vector2(0, 3.0)], col, "rubber", 16)

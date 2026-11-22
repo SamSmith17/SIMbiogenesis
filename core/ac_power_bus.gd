@@ -10,8 +10,27 @@ var power_available: bool = true
 var ac_output_enabled: bool = true
 var shutdown_active: bool = false
 var shutdown_reason: String = ""
+## Sim hour the AC output last came back. -1 until a real off-to-on edge,
+## so a world that loads already powered does not inrush every compressor.
+var ac_restore_h: float = -1.0
+## Last step's per-item draw, so a card can show the spike after it has ended.
+## {item_id: {now_w, peak_w, mean_w}}
+var load_by_item: Dictionary = {}
 
 var _authority: Node = null
+var _output_known: bool = false
+var _output_on: bool = false
+
+
+## Call before publish, with the clock's absolute hours. A scrub back past
+## the stamp clears it. The first observation does not count as a restore.
+func note_output(enabled: bool, abs_h: float) -> void:
+	if ac_restore_h >= 0.0 and abs_h < ac_restore_h:
+		ac_restore_h = -1.0
+	if _output_known and enabled and not _output_on:
+		ac_restore_h = abs_h
+	_output_known = true
+	_output_on = enabled
 
 
 func register_authority(node: Node) -> void:

@@ -732,6 +732,7 @@ func _perf_tick(delta: float) -> void:
 		_request_bar_layout()
 		_layout_enforced = true
 	_run_lane_jobs()
+	_pump_power_spans()
 	_update_accum += delta
 	if _update_accum >= UPDATE_INTERVAL:
 		_update_accum = 0.0
@@ -1283,9 +1284,10 @@ func _update_display() -> void:
 	var ts : float = float(_main.get("time_scale") if _main.get("time_scale") != null else 0.0)
 	var analemma := _analemma_active()
 	_is_playing    = ts > 0.0 or analemma
-	var play_text := "⏸" if _is_playing else ("◀" if ts < 0.0 else "▶")
-	if _play_btn.text != play_text:
-		_play_btn.text = play_text
+	var play_icon := "pause" if _is_playing else ("rewind" if ts < 0.0 else "play")
+	if str(_play_btn.get_meta("icon_name", "")) != play_icon:
+		_play_btn.set_meta("icon_name", play_icon)
+		UiIcons.apply(_play_btn, play_icon, "", 20)
 	# The ring border and icon colour signal play/pause state. Written only
 	# when the state CHANGES: two StyleBoxFlats and four theme overrides every
 	# 0.1 s re-themed the button (and re-laid out its row) while nothing moved.
@@ -1304,8 +1306,10 @@ func _update_display() -> void:
 		_play_btn.add_theme_stylebox_override("normal",  sb_n)
 		_play_btn.add_theme_stylebox_override("hover",   sb_h)
 		_play_btn.add_theme_stylebox_override("pressed", sb_h)
-		_play_btn.add_theme_color_override("font_color",
-			Color(ring_col.r * 1.6, ring_col.g * 1.6, ring_col.b * 1.6, 1.0).clamp())
+		var icon_col := Color(ring_col.r * 1.4, ring_col.g * 1.4, ring_col.b * 1.4, 1.0).clamp()
+		_play_btn.add_theme_color_override("icon_normal_color", icon_col)
+		_play_btn.add_theme_color_override("icon_hover_color", Color.WHITE)
+		_play_btn.add_theme_color_override("icon_pressed_color", Color.WHITE)
 	if _is_playing and ts > 0.0:
 		_stored_scale = ts
 		_speed_idx    = _nearest_speed_idx(ts)
@@ -2472,8 +2476,8 @@ func _lane_grid(lane_rect : Rect2, win_start : float, span : float, min_w : floa
 
 ## Cached bins for a lane. The key is the anchored grid, so a pan smaller than
 ## a bin reuses them; `ttl` lets live data refresh.
-func _lane_bins_cached(td : TimelineTrackDef, g : Dictionary, ttl : float, make : Callable) -> Dictionary:
-	var key : Array = [td.source, td.channel, g["w"], g["i0"], g["n"]]
+func _lane_bins_cached(td : TimelineTrackDef, g : Dictionary, ttl : float, make : Callable, salt : int = 0) -> Dictionary:
+	var key : Array = [td.source, td.channel, g["w"], g["i0"], g["n"], salt]
 	var now := Time.get_ticks_msec() / 1000.0
 	var cached : Dictionary = _waveform_cache.get(td.id, {})
 	if cached.get("key", []) == key and now - float(cached.get("t", -1.0)) < ttl:
@@ -2598,6 +2602,15 @@ static func _axis_for(r : Vector2, floor_zero : bool = false) -> Vector2:
 	return Vector2(r.x - pad, r.y + pad)
 
 
+## Keep the power-span fill pointed at the week on screen.
+func _pump_power_spans() -> void:
+	var solar := _get_solar()
+	if solar == null or not solar.has_method("pump_power_spans"):
+		return
+	if int(solar.call("pump_power_spans", LANE_JOB_BUDGET_US)) > 0 and _track != null:
+		_track.queue_redraw()
+
+
 ## Power: the energy timeline / simulated run / CSV clip (SolarUI).
 func _draw_power_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : float, span : float,
 		fnt : Font, solar : Node) -> void:
@@ -2605,8 +2618,13 @@ func _draw_power_lane(td : TimelineTrackDef, lane_rect : Rect2, win_start : floa
 		return
 	var step := float(solar.call("get_timeline_step_hours", td.source))
 	var g := _lane_grid(lane_rect, win_start, span, step)
+	if td.source != "sim" and td.source != "observed" and solar.has_method("note_power_window"):
+		solar.call("note_power_window", win_start, win_start + span, _playhead_abs(), float(g["w"]))
+	var salt := 0
+	if solar.has_method("power_span_generation"):
+		salt = int(solar.call("power_span_generation"))
 	var bins : Dictionary = _lane_bins_cached(td, g, WAVEFORM_CACHE_TTL, func() -> Dictionary:
-		return solar.call("get_timeline_bins", td.source, td.channel, float(g["w"]), int(g["i0"]), int(g["n"])))
+		return solar.call("get_timeline_bins", td.source, td.channel, float(g["w"]), int(g["i0"]), int(g["n"])), salt)
 	var cap := float(solar.call("get_timeline_capacity_kwh")) if solar.has_method("get_timeline_capacity_kwh") else 16.0
 	var r := _bins_range(td.id, bins)
 	var axis := _axis_for(r, true)
@@ -3204,12 +3222,11 @@ func _build_scrubber_row(parent: VBoxContainer) -> void:
 	_track_lbl_end.custom_minimum_size  = Vector2(58, 0)
 	_track_lbl_end.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_track_lbl_end.add_theme_color_override("font_color", C_TEXT_M)
-	_track_lbl_end.add_theme_font_size_override("font_size", 9)
+	_track_lbl_end.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	row.add_child(_track_lbl_end)
 
 
 ## LEFT — NLE / clip / video icon cluster (pinned left, mirrors right system icons).
-## Icons deliberately differ from the right cluster (📥 vs 📂, 📈 vs ⚙).
 func _build_left_cluster() -> Control:
 	var left := HBoxContainer.new()
 	left.alignment = BoxContainer.ALIGNMENT_BEGIN
@@ -3235,38 +3252,40 @@ func _build_left_cluster() -> Control:
 	needs.theme_changed.connect(_pin_needs_chips)
 	call_deferred("_update_needs_strip")
 
-	_import_btn = _mk_icon_btn("📥", _on_import_pressed,
-			"Import datastream — load a Home Assistant CSV as an observed comparison clip")
+	_import_btn = _mk_icon_btn("download", _on_import_pressed,
+			"Import datastream — load a Home Assistant CSV as an observed comparison clip", "ImportCsvBtn")
 	left.add_child(_import_btn)
 
-	_render_btn = _mk_icon_btn("📈", _on_render_pressed, RENDER_TIP)
+	_render_btn = _mk_icon_btn("trending-up", _on_render_pressed, RENDER_TIP, "RenderSimBtn")
 	left.add_child(_render_btn)
 
-	_export_mp4_btn = _mk_icon_btn("🎬", _on_export_clim_mp4_pressed,
+	_export_mp4_btn = _mk_icon_btn("clapperboard", _on_export_clim_mp4_pressed,
 			"Export video — choose the range (the Ctrl-drag selection), speed, size, frame "
-			+ "rate and render settings, preview it, then render an MP4 (needs ffmpeg)")
-	_export_mp4_btn.add_theme_color_override("font_color", Color(0.45, 0.75, 1.0))
+			+ "rate and render settings, preview it, then render an MP4 (needs ffmpeg)",
+			"ExportVideoBtn", Color(0.45, 0.78, 1.0))
 	left.add_child(_export_mp4_btn)
 
-	var path_add := _mk_icon_btn("📍", _on_clim_path_add_pressed,
+	var path_add := _mk_icon_btn("map-pin", _on_clim_path_add_pressed,
 			"Camera keyframe — key the current view at the playhead. Keys sit on the CLIM "
 			+ "lane: drag to retime, double-click to jump there, right-click to edit, delete "
-			+ "or preview. The video camera flies between them in time.")
+			+ "or preview. The video camera flies between them in time.", "AddCameraKeyBtn")
 	left.add_child(path_add)
-	var path_clr := _mk_icon_btn("🧹", _on_clim_path_clear_pressed,
-			"Clear every camera keyframe")
+	var path_clr := _mk_icon_btn("eraser", _on_clim_path_clear_pressed,
+			"Clear every camera keyframe", "ClearCameraKeysBtn")
 	left.add_child(path_clr)
 
-	_loadmode_btn = _mk_icon_btn("📄", _on_loadmode_pressed,
-			"Render load source — CSV uses observed load (isolates solar/weather error); Modeled also simulates load")
+	_loadmode_btn = _mk_icon_btn("file-spreadsheet", _on_loadmode_pressed,
+			"Render load source — CSV uses observed load (isolates solar/weather error); Modeled also simulates load",
+			"RenderLoadModeBtn")
 	left.add_child(_loadmode_btn)
 
-	_compare_btn = _mk_icon_btn("⧉", _on_compare_pressed,
-			"Compare — simulate a past span and lay it over what really happened (Home Assistant or the imported CSV)")
+	_compare_btn = _mk_icon_btn("git-compare", _on_compare_pressed,
+			"Compare — simulate a past span and lay it over what really happened (Home Assistant or the imported CSV)",
+			"CompareBtn")
 	left.add_child(_compare_btn)
 
-	_tracks_btn = _mk_icon_btn("🎚", _on_tracks_pressed,
-			"Tracks — show/hide sensor waveform lanes and add channels")
+	_tracks_btn = _mk_icon_btn("sliders-horizontal", _on_tracks_pressed,
+			"Tracks — show/hide sensor waveform lanes and add channels", "TracksBtn")
 	left.add_child(_tracks_btn)
 	_setup_tracks_menu()
 
@@ -3274,35 +3293,37 @@ func _build_left_cluster() -> Control:
 	_left_video_sep = _mk_vsep()
 	left.add_child(_left_video_sep)
 
-	_load_video_btn = _mk_icon_btn("📹", _on_load_video_pressed,
-			"Load video — open a timelapse file for the TR panel (auto-synced to timecode)")
-	_load_video_btn.add_theme_color_override("font_color", C_GREEN)
+	_load_video_btn = _mk_icon_btn("video", _on_load_video_pressed,
+			"Load video — open a timelapse file for the TR panel (auto-synced to timecode)",
+			"LoadVideoBtn", C_GREEN)
 	left.add_child(_load_video_btn)
 
-	_live_feed_btn = _mk_icon_btn("📷", _on_live_feed_pressed,
-			"Live feed — pick a camera / OBS virtual camera for the TR panel")
-	_live_feed_btn.add_theme_color_override("font_color", C_GREEN)
+	_live_feed_btn = _mk_icon_btn("camera", _on_live_feed_pressed,
+			"Live feed — pick a camera / OBS virtual camera for the TR panel",
+			"LiveFeedBtn", C_GREEN)
 	left.add_child(_live_feed_btn)
 
-	_snap_video_btn = _mk_icon_btn("⏲", _on_snap_video_pressed,
-			"Snap video — align video frame 0 to the current playhead (re-syncs the VID track)")
+	_snap_video_btn = _mk_icon_btn("clock", _on_snap_video_pressed,
+			"Snap video — align video frame 0 to the current playhead (re-syncs the VID track)",
+			"SnapVideoBtn")
 	left.add_child(_snap_video_btn)
 
 	_render_progress_lbl = Label.new()
 	_render_progress_lbl.text = ""
 	_render_progress_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_render_progress_lbl.add_theme_font_size_override("font_size", 9)
+	_render_progress_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_render_progress_lbl.add_theme_color_override("font_color", C_TEXT_S)
 	_render_progress_lbl.custom_minimum_size = Vector2(52, 0)
 	left.add_child(_render_progress_lbl)
 
 	_left_overflow = MenuButton.new()
-	_left_overflow.text = "⋯"
+	_left_overflow.text = ""
+	UiIcons.apply(_left_overflow, "ellipsis", "More timeline tools", 18)
+	_left_overflow.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_left_overflow.flat = false
 	_left_overflow.focus_mode = Control.FOCUS_NONE
 	_left_overflow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_left_overflow.custom_minimum_size = Vector2(38, 38)
-	_left_overflow.add_theme_font_size_override("font_size", 18)
 	_left_overflow.visible = false
 	_left_overflow.get_popup().id_pressed.connect(_on_left_overflow_id)
 	left.add_child(_left_overflow)
@@ -3314,7 +3335,7 @@ func _build_left_cluster() -> Control:
 			[path_add, "Camera keyframe"], [_compare_btn, "Compare sim with reality"],
 			[_tracks_btn, "Tracks"], [_export_mp4_btn, "Export video"], [_render_btn, "Render the sim"]]:
 		var b: Button = pair[0]
-		_left_fold_items.append({"btn": b, "label": "%s  %s" % [b.text, str(pair[1])]})
+		_left_fold_items.append({"btn": b, "label": str(pair[1])})
 
 	return left
 
@@ -3895,7 +3916,9 @@ func _update_nle_controls() -> void:
 			_solar_signals_connected = true
 		if _loadmode_btn != null and s.has_method("get_render_load_mode"):
 			var csv_mode := int(s.call("get_render_load_mode")) == 0
-			_loadmode_btn.text = "📄" if csv_mode else "🧮"
+			var lm_icon := "file-spreadsheet" if csv_mode else "cpu"
+			_loadmode_btn.set_meta("icon_name", lm_icon)
+			UiIcons.apply(_loadmode_btn, lm_icon, "", 18)
 			_loadmode_btn.tooltip_text = (
 					"Render load source: CSV (observed load — isolates solar/weather error). Click for Modeled."
 					if csv_mode else
@@ -4133,9 +4156,13 @@ func _apply_fold(items: Array, count: int, overflow: MenuButton) -> void:
 	pop.clear()
 	for i in items.size():
 		var fold := i < count
-		(items[i]["btn"] as Control).visible = not fold
+		var btn := items[i]["btn"] as Button
+		btn.visible = not fold
 		if fold:
 			pop.add_item(str(items[i]["label"]), i)
+			var ic_name := str(btn.get_meta("icon_name", "")) if btn.has_meta("icon_name") else ""
+			if not ic_name.is_empty():
+				pop.set_item_icon(pop.item_count - 1, UiIcons.icon(ic_name, 15))
 	overflow.visible = count > 0
 	overflow.tooltip_text = "More — %s" % UiText.count(count, "tool")
 
@@ -4197,21 +4224,21 @@ func _build_center_cluster() -> Control:
 	var ctrl := HBoxContainer.new()
 	ctrl.alignment = BoxContainer.ALIGNMENT_CENTER
 	ctrl.add_theme_constant_override("separation", 10)
-	var slow_btn := _mk_transport_btn("◀◀", _on_slower_pressed, "Slower (D-pad Left on controller)")
+	var slow_btn := _mk_transport_btn("rewind", _on_slower_pressed, "Slower (D-pad Left on controller)")
 	ctrl.add_child(slow_btn)
 	_play_btn = _mk_play_btn()
 	ctrl.add_child(_play_btn)
-	var fast_btn := _mk_transport_btn("▶▶", _on_faster_pressed, "Faster (D-pad Right on controller)")
+	var fast_btn := _mk_transport_btn("fast-forward", _on_faster_pressed, "Faster (D-pad Right on controller)")
 	ctrl.add_child(fast_btn)
 	var spd_box := VBoxContainer.new()
 	spd_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	spd_box.add_theme_constant_override("separation", 0)
-	spd_box.tooltip_text = "Time-lapse speed. ◀◀ / ▶▶ to change (1× = real time)."
+	spd_box.tooltip_text = "Time-lapse speed. Rewind / Fast-forward to change (1× = real time)."
 	var spd_hdr := Label.new()
 	spd_hdr.text = "SPEED"
 	spd_hdr.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	spd_hdr.add_theme_color_override("font_color", C_TEXT_M)
-	spd_hdr.add_theme_font_size_override("font_size", 8)
+	spd_hdr.add_theme_font_size_override("font_size", 9)
 	spd_box.add_child(spd_hdr)
 	_speed_lbl = Label.new()
 	_speed_lbl.text = str(SPEED_STEPS[_speed_idx][0])
@@ -4226,7 +4253,7 @@ func _build_center_cluster() -> Control:
 	_hold_lbl = Label.new()
 	_hold_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hold_lbl.add_theme_color_override("font_color", C_AMBER)
-	_hold_lbl.add_theme_font_size_override("font_size", 9)
+	_hold_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_hold_lbl.add_theme_stylebox_override("normal", UITheme.chip_style(C_AMBER))
 	_hold_lbl.mouse_filter = Control.MOUSE_FILTER_PASS
 	_hold_lbl.visible = false
@@ -4319,7 +4346,7 @@ func _build_right_cluster() -> Control:
 	right.alignment             = BoxContainer.ALIGNMENT_END
 	right.add_theme_constant_override("separation", 4)
 
-	var sl_btn := _mk_icon_btn("💾", _on_save_load_pressed, "World — save, copy, start a new world on this map, exit to menu")
+	var sl_btn := _mk_icon_btn("save", _on_save_load_pressed, "World — save, copy, start a new world on this map, exit to menu", "WorldSaveBtn")
 	right.add_child(sl_btn)
 	_mp_chip = _mk_chip_btn("Multiplayer", _on_mp_pressed,
 		"Multiplayer — host or join a private listen-server session (avatars + shared clock)")
@@ -4343,57 +4370,58 @@ func _build_right_cluster() -> Control:
 	_deploy_chip = _mk_chip_btn("Deploy", _on_deploy_chip_pressed,
 		"Site deployment schedule — set a time on the timeline when the crews build every structure and camp, or pack it all up")
 	right.add_child(_deploy_chip)
-	_sfx_btn = _mk_icon_btn("🔇", _on_sfx_pressed, "")
+	_sfx_btn = _mk_icon_btn("volume-x", _on_sfx_pressed, "", "SoundToggleBtn")
 	right.add_child(_sfx_btn)
 	var sfx := get_node_or_null("/root/UiSound")
 	if sfx != null and sfx.has_signal("muted_changed") and not sfx.is_connected("muted_changed", _on_sfx_muted_changed):
 		sfx.connect("muted_changed", _on_sfx_muted_changed)
 	_refresh_sfx_btn()
-	var gear_btn := _mk_icon_btn("⚙", _on_settings_pressed, "Settings — simulation, player, graphics & sky, site, integrations")
+	var gear_btn := _mk_icon_btn("settings", _on_settings_pressed, "Settings — simulation, player, graphics & sky, site, integrations", "SettingsBtn")
 	right.add_child(gear_btn)
-	_shading_btn = _mk_icon_btn("🔆", _on_solar_shading_pressed, "Solar shading — compute a year-long shadow heatmap")
+	_shading_btn = _mk_icon_btn("sun", _on_solar_shading_pressed, "Solar shading — compute a year-long shadow heatmap", "SolarShadingBtn")
 	right.add_child(_shading_btn)
-	var csv_btn := _mk_icon_btn("📂", _on_csv_playback_pressed, "Open datastream CSV (same as Import on the left)")
+	var csv_btn := _mk_icon_btn("upload", _on_csv_playback_pressed, "Open datastream CSV (same as Import on the left)", "OpenCsvBtn")
 	right.add_child(csv_btn)
-	_linkagelab_btn = _mk_icon_btn("🎮", _on_linkagelab_import_pressed,
-		"LinkageLab — import a .gamebundle.json into this map")
+	_linkagelab_btn = _mk_icon_btn("layers", _on_linkagelab_import_pressed,
+		"LinkageLab — import a .gamebundle.json into this map", "ImportLinkageBtn")
 	right.add_child(_linkagelab_btn)
-	var record_btn := _mk_icon_btn("🌡", _on_record_book_pressed, "Climate Record Book — historical records & trends for this location")
+	var record_btn := _mk_icon_btn("thermometer", _on_record_book_pressed, "Climate Record Book — historical records & trends for this location", "RecordBookBtn")
 	right.add_child(record_btn)
-	var report_btn := _mk_icon_btn("📊", _on_site_report_pressed, "Site Report — year-round & month-by-month solar/wind/rain/PV analysis for this site")
+	var report_btn := _mk_icon_btn("chart-column", _on_site_report_pressed, "Site Report — year-round & month-by-month solar/wind/rain/PV analysis for this site", "SiteReportBtn")
 	right.add_child(report_btn)
-	var patterns_btn := _mk_icon_btn("🗓", _on_patterns_pressed,
-		"Patterns — the recorded days hour by hour, the battery against a store, and where the energy went")
+	var patterns_btn := _mk_icon_btn("calendar", _on_patterns_pressed,
+		"Patterns — the recorded days hour by hour, the battery against a store, and where the energy went", "PatternsBtn")
 	right.add_child(patterns_btn)
-	var sched_btn := _mk_icon_btn("👥", _on_community_schedule_pressed,
-		"Community schedule — everyone's day, the week's events, who is on the rota; export calendars (.ics)")
-	sched_btn.name = "CommunityScheduleBtn"
+	var sched_btn := _mk_icon_btn("users", _on_community_schedule_pressed,
+		"Community schedule — everyone's day, the week's events, who is on the rota; export calendars (.ics)", "CommunityScheduleBtn")
 	right.add_child(sched_btn)
-	var mc_btn := _mk_icon_btn("🌫", _on_microclimate_pressed,
-		"Microclimate — calibrate how this site's fog, haze, cloud and wind look against the weather data")
+	var mc_btn := _mk_icon_btn("cloud-fog", _on_microclimate_pressed,
+		"Microclimate — calibrate how this site's fog, haze, cloud and wind look against the weather data", "MicroclimateBtn")
 	right.add_child(mc_btn)
-	var lib_btn := _mk_icon_btn("📦", _on_library_pressed,
-		"Library — buildings, graph nodes, vegetation & structures")
+	var lib_btn := _mk_icon_btn("package", _on_library_pressed,
+		"Library — buildings, graph nodes, vegetation & structures", "LibraryBtn")
 	right.add_child(lib_btn)
-	# One control for both states: "🎯 Mission" idle, "🎯 <name> 12/72h" amber
+	# One control for both states: "Mission" idle, "<name> 12/72h" amber
 	# while a challenge runs (_update_challenge_chip, driven by the runner's
 	# signals through Main and the 1 s refresh below).
-	_challenge_chip = _mk_chip_btn("🎯 Mission", _on_challenge_chip_pressed,
+	_challenge_chip = _mk_chip_btn("Mission", _on_challenge_chip_pressed,
 			"Challenges — structured survival missions")
+	UiIcons.apply(_challenge_chip, "target", "Challenges — structured survival missions", 13)
 	_challenge_chip.name = "MissionChip"
 	_challenge_chip.add_theme_font_size_override("font_size", 11)
 	right.add_child(_challenge_chip)
 	call_deferred("_update_challenge_chip")
-	var map_btn := _mk_icon_btn("🗺", _on_map_select_pressed, "Map select — return to the map chooser")
+	var map_btn := _mk_icon_btn("map", _on_map_select_pressed, "Map select — return to the map chooser", "MapSelectBtn")
 	right.add_child(map_btn)
 
 	_right_overflow = MenuButton.new()
-	_right_overflow.text = "⋯"
+	_right_overflow.text = ""
+	UiIcons.apply(_right_overflow, "ellipsis", "More tools", 18)
+	_right_overflow.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_right_overflow.flat = false
 	_right_overflow.focus_mode = Control.FOCUS_NONE
 	_right_overflow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_right_overflow.custom_minimum_size = Vector2(38, 38)
-	_right_overflow.add_theme_font_size_override("font_size", 18)
 	_right_overflow.visible = false
 	_right_overflow.get_popup().id_pressed.connect(_on_right_overflow_id)
 	right.add_child(_right_overflow)
@@ -4411,10 +4439,7 @@ func _build_right_cluster() -> Control:
 			[_settlement_chip, "Settlement view"],
 			[_projects_chip, "Site Projects"], [_ha_chip, "Home Assistant"]]:
 		var b: Button = pair[0]
-		var lbl := str(pair[1])
-		if b.text.length() <= 2:
-			lbl = "%s  %s" % [b.text, lbl]
-		_right_fold_items.append({"btn": b, "label": lbl})
+		_right_fold_items.append({"btn": b, "label": str(pair[1])})
 
 	return right
 
@@ -4437,7 +4462,9 @@ func _refresh_sfx_btn() -> void:
 		return
 	var sfx := get_node_or_null("/root/UiSound")
 	var muted := sfx == null or bool(sfx.call("is_muted"))
-	_sfx_btn.text = "🔇" if muted else "🔊"
+	var ic_name := "volume-x" if muted else "volume-2"
+	_sfx_btn.set_meta("icon_name", ic_name)
+	UiIcons.apply(_sfx_btn, ic_name, "", 18)
 	_sfx_btn.tooltip_text = ("Sound effects are OFF — click to turn them on" if muted
 		else "Sound effects are ON — click to mute them (wind, rain, birds, thunder, UI chirps; not stage music)")
 
@@ -4754,7 +4781,7 @@ func _update_challenge_chip(def: Variant = null, elapsed_h: float = -1.0) -> voi
 	if _main != null:
 		runner = _main.get_node_or_null("ChallengeRunner") as Node
 	if runner == null or not bool(runner.call("is_active")):
-		_challenge_chip.text = "🎯 Mission"
+		_challenge_chip.text = "Mission"
 		_challenge_chip.tooltip_text = "Challenges — click to pick a mission"
 		_style_challenge_chip(UITheme.C_TEXT_M)
 		return
@@ -4768,7 +4795,7 @@ func _update_challenge_chip(def: Variant = null, elapsed_h: float = -1.0) -> voi
 	var short := title
 	if short.length() > 10:
 		short = short.substr(0, 9) + "…"
-	_challenge_chip.text = "🎯 %s %.0f/%.0fh" % [short, elapsed_h, dur]
+	_challenge_chip.text = "%s %.0f/%.0fh" % [short, elapsed_h, dur]
 	_challenge_chip.tooltip_text = "%s — %.0f / %.0f h elapsed · click for missions" % [
 			title, elapsed_h, dur]
 	_style_challenge_chip(UITheme.C_AMBER)
@@ -4782,6 +4809,7 @@ func _style_challenge_chip(col: Color) -> void:
 		sbf.bg_color = Color(col.r, col.g, col.b, 0.18)
 		_challenge_chip.add_theme_stylebox_override("normal", sbf)
 	_challenge_chip.add_theme_color_override("font_color", col)
+	_challenge_chip.add_theme_color_override("icon_normal_color", col)
 
 
 func _on_year_changed(value: float) -> void:
@@ -5153,10 +5181,14 @@ func _month_day_for_abs(abs_hours: float) -> Vector2i:
 
 func _mk_play_btn() -> Button:
 	var btn := Button.new()
-	btn.text       = "⏸"
+	btn.name       = "PlayPauseBtn"
+	btn.text       = ""
 	btn.flat       = false
 	btn.focus_mode = Control.FOCUS_NONE
 	btn.custom_minimum_size = Vector2(42, 42)
+	btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	btn.set_meta("icon_name", "pause")
+	UiIcons.apply(btn, "pause", "Play / Pause  (Space  |  controller: D-pad Left to slow/pause/reverse)", 20)
 	var sb_n := StyleBoxFlat.new()
 	sb_n.bg_color   = Color(C_PRIMARY.r * 0.22, C_PRIMARY.g * 0.22, C_PRIMARY.b * 0.22, 1.0)
 	sb_n.border_color = Color(C_PRIMARY.r, C_PRIMARY.g, C_PRIMARY.b, 0.90)
@@ -5168,20 +5200,22 @@ func _mk_play_btn() -> Button:
 	btn.add_theme_stylebox_override("normal",  sb_n)
 	btn.add_theme_stylebox_override("hover",   sb_h)
 	btn.add_theme_stylebox_override("pressed", sb_h)
-	btn.add_theme_color_override("font_color", Color(C_PRIMARY.r * 1.6, C_PRIMARY.g * 1.6, C_PRIMARY.b * 1.6, 1.0).clamp())
-	btn.add_theme_font_size_override("font_size", 24)
-	btn.tooltip_text = "Play / Pause  (Space  |  controller: D-pad Left to slow/pause/reverse)"
+	var icon_col := Color(C_PRIMARY.r * 1.4, C_PRIMARY.g * 1.4, C_PRIMARY.b * 1.4, 1.0).clamp()
+	btn.add_theme_color_override("icon_normal_color", icon_col)
+	btn.add_theme_color_override("icon_hover_color", Color.WHITE)
+	btn.add_theme_color_override("icon_pressed_color", Color.WHITE)
 	btn.pressed.connect(_on_play_pressed)
 	return btn
 
 
-func _mk_transport_btn(txt: String, callback: Callable, tip: String) -> Button:
+func _mk_transport_btn(icon_name: String, callback: Callable, tip: String) -> Button:
 	var btn := Button.new()
-	btn.text = txt
+	btn.text = ""
 	btn.flat = false
 	btn.focus_mode = Control.FOCUS_NONE
-	btn.tooltip_text = tip
 	btn.custom_minimum_size = Vector2(36, 36)
+	btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UiIcons.apply(btn, icon_name, tip, 16)
 	var sb_n := StyleBoxFlat.new()
 	sb_n.bg_color = Color(C_TEXT_M.r * 0.25, C_TEXT_M.g * 0.25, C_TEXT_M.b * 0.25, 0.85)
 	sb_n.border_color = Color(C_BORDER.r, C_BORDER.g, C_BORDER.b, 0.75)
@@ -5196,10 +5230,9 @@ func _mk_transport_btn(txt: String, callback: Callable, tip: String) -> Button:
 	btn.add_theme_stylebox_override("normal", sb_n)
 	btn.add_theme_stylebox_override("hover", sb_h)
 	btn.add_theme_stylebox_override("pressed", sb_p)
-	btn.add_theme_color_override("font_color", C_TEXT_S)
-	btn.add_theme_color_override("font_hover_color", C_PRIMARY)
-	btn.add_theme_color_override("font_pressed_color", C_AMBER)
-	btn.add_theme_font_size_override("font_size", 13)
+	btn.add_theme_color_override("icon_normal_color", C_TEXT_S)
+	btn.add_theme_color_override("icon_hover_color", C_PRIMARY)
+	btn.add_theme_color_override("icon_pressed_color", C_AMBER)
 	btn.pressed.connect(callback)
 	return btn
 
@@ -5219,13 +5252,19 @@ func _mk_flat_btn(txt: String, callback: Callable, tip: String = "") -> Button:
 	return btn
 
 
-func _mk_icon_btn(txt: String, callback: Callable, tip: String = "") -> Button:
-	var btn := _mk_flat_btn(txt, callback, tip)
+func _mk_icon_btn(icon_name: String, callback: Callable, tip: String = "",
+		btn_name: String = "", tint: Color = C_TEXT_S) -> Button:
+	var btn := Button.new()
+	if not btn_name.is_empty():
+		btn.name = btn_name
+	btn.text = ""
 	btn.flat = false
+	btn.focus_mode = Control.FOCUS_NONE
 	btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	btn.custom_minimum_size = Vector2(38, 38)
-	btn.add_theme_font_size_override("font_size", 18)
-	# Subtle rounded hover/pressed fill so the icon row reads as a button group.
+	btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	btn.set_meta("icon_name", icon_name)
+	UiIcons.apply(btn, icon_name, tip, 18)
 	var sb_n := StyleBoxFlat.new()
 	sb_n.bg_color = Color(0, 0, 0, 0)
 	sb_n.set_corner_radius_all(8)
@@ -5240,12 +5279,12 @@ func _mk_icon_btn(txt: String, callback: Callable, tip: String = "") -> Button:
 	btn.add_theme_stylebox_override("normal", sb_n)
 	btn.add_theme_stylebox_override("hover", sb_h)
 	btn.add_theme_stylebox_override("pressed", sb_p)
-	# A DISABLED icon button must look disabled: these are colour emoji, which
-	# ignore the font colour, so the whole button dims (the 📈 Render button sat
-	# disabled-but-identical for every player without a CSV clip loaded, which
-	# read as "the button does nothing").
 	btn.add_theme_stylebox_override("disabled", sb_n)
-	btn.add_theme_color_override("font_disabled_color", Color(C_TEXT_M.r, C_TEXT_M.g, C_TEXT_M.b, 0.6))
+	btn.add_theme_color_override("icon_normal_color", tint)
+	btn.add_theme_color_override("icon_hover_color", C_PRIMARY)
+	btn.add_theme_color_override("icon_pressed_color", C_AMBER)
+	btn.add_theme_color_override("icon_disabled_color", Color(C_TEXT_M.r, C_TEXT_M.g, C_TEXT_M.b, 0.45))
+	btn.pressed.connect(callback)
 	return btn
 
 
@@ -5253,7 +5292,7 @@ func _mk_icon_btn(txt: String, callback: Callable, tip: String = "") -> Button:
 func _dim_disabled(btn: Button) -> void:
 	if btn == null:
 		return
-	btn.modulate.a = 0.38 if btn.disabled else 1.0
+	btn.modulate.a = 0.45 if btn.disabled else 1.0
 
 
 func _mk_ctrl_btn(txt: String, callback: Callable) -> Button:

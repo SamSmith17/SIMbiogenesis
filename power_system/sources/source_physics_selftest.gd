@@ -1120,6 +1120,29 @@ func _test_timecode() -> void:
 		absf(er.integrate_channel(3000.0, 3001.0, "raw") - 3.0) < 0.02
 		and er.sample_at(3001.0).has("raw_kw"))
 
+	# Load track: the minute stores the average the battery integrates AND the
+	# coincident spike the waveform band draws. A 6 kW inrush must not bill
+	# like a 6 kW load.
+	var ep := EnergyTimeline.new()
+	ep.step_hours = 1.0 / 60.0
+	ep.configure(16.0, 0.95, 0.95, 1.6)
+	ep.init_anchor(10.0, 8.0, 0.0, 0.0, 0.45, -1.0, 0.45)
+	ep.record_step(10.0 + 1.0 / 60.0, 0.0, 0.0, 0.45, -1.0, 6.0)
+	var load_slice: Dictionary = ep.channel_slice("load_kw", 10.0, 10.0 + 2.0 / 60.0)
+	var load_vals: PackedFloat32Array = load_slice.get("values", PackedFloat32Array())
+	var load_peaks: PackedFloat32Array = load_slice.get("peaks", PackedFloat32Array())
+	var quiet := EnergyTimeline.new()
+	quiet.step_hours = 1.0 / 60.0
+	quiet.configure(16.0, 0.95, 0.95, 1.6)
+	quiet.init_anchor(10.0, 8.0, 0.0, 0.0, 0.45)
+	quiet.record_step(10.0 + 1.0 / 60.0, 0.0, 0.0, 0.45)
+	_check("timeline load: peak sits beside the average",
+		load_vals.size() >= 2 and load_peaks.size() == load_vals.size()
+		and absf(load_vals[load_vals.size() - 1] - 0.45) < 1e-4
+		and absf(load_peaks[load_peaks.size() - 1] - 6.0) < 1e-4)
+	_check("timeline load: a spike does not move the battery",
+		absf(ep.soc_at(10.0 + 1.0 / 60.0) - quiet.soc_at(10.0 + 1.0 / 60.0)) < 1e-4)
+
 	# Measured (live-mirror) samples: stored verbatim, readable on rewind.
 	var em := EnergyTimeline.new()
 	em.step_hours = 1.0 / 60.0

@@ -25,14 +25,15 @@ func run(ctx: TourContext) -> void:
 	if not ctx.require(tb != null and is_instance_valid(tb), "the edit toolbar exists"):
 		return
 	tb.call("open_with_section", "terrain")
-	# Open level ground, so the mound and the pond read against flat land.
-	var site := ctx.find_flat(ctx.player_xz(), 22.0, 180.0)
+	if tb.has_method("_select_tool"):
+		tb.call("_select_tool", "raise")
+	# Sculpt in front of the start clearing and shoot from above the Douglas-fir canopy.
 	var f := ctx.player_forward()
 	var r := f.cross(Vector3.UP)
+	var site := _clear_flat(ctx, ctx.player_xz() + Vector2(f.x, f.z) * 28.0, 18.0, 90.0)
 	var mound := site - f * 8.0
 	var pc := site + f * 14.0
-	# Low and grazing: a mound only silhouettes from near ground level.
-	var eye := site - f * 46.0 + r * 10.0 + Vector3.UP * 9.0
+	var eye := site - f * 44.0 + r * 12.0 + Vector3.UP * 36.0
 	ctx.place_camera(eye, site + Vector3.UP * 1.5)
 	await ctx.wait(1.5)
 	ctx.caption("Raise: one brush stroke", 3.0)
@@ -53,9 +54,47 @@ func run(ctx: TourContext) -> void:
 		pond.append(Vector2(pc.x, pc.z) + Vector2(cos(a), sin(a)) * 10.0)
 	if bool(ctx.loader.call("pond_command", pond, 2.5, "Tour pond")):
 		_undos += 1
-	var eye2 := site - f * 30.0 - r * 22.0 + Vector3.UP * 16.0
+	var eye2 := site - f * 34.0 - r * 18.0 + Vector3.UP * 40.0
 	await ctx.fly([[eye, site + Vector3.UP * 1.5], [eye2, site + f * 4.0]], 3.5)
 	await ctx.hero()
+
+
+func _clear_flat(ctx: TourContext, around: Vector2, radius: float, search_m: float) -> Vector3:
+	var polys: Array = []
+	if ctx.loader != null and "_auto_veg_data" in ctx.loader:
+		var av: Variant = ctx.loader.get("_auto_veg_data")
+		if av is Dictionary and (av as Dictionary).has("polygons"):
+			polys = (av as Dictionary)["polygons"] as Array
+	var best := around
+	var best_score := INF
+	var step := 14.0
+	var r := 0.0
+	while r <= search_m:
+		var n := 1 if r == 0.0 else int(ceil(TAU * r / step))
+		for i in n:
+			var a := TAU * float(i) / float(n)
+			var c := around + Vector2(cos(a), sin(a)) * r
+			var wooded := false
+			for pv in polys:
+				var pd: Dictionary = pv
+				var pts: Variant = pd.get("points_xz", pd.get("polygon", PackedVector2Array()))
+				if pts is PackedVector2Array and (pts as PackedVector2Array).size() >= 3:
+					if Geometry2D.is_point_in_polygon(c, pts as PackedVector2Array):
+						wooded = true
+						break
+			var lo := INF
+			var hi := -INF
+			for k in 9:
+				var q := c if k == 0 else c + Vector2(cos(TAU * float(k) / 8.0), sin(TAU * float(k) / 8.0)) * radius
+				var y := ctx.ground_y(q.x, q.y)
+				lo = minf(lo, y)
+				hi = maxf(hi, y)
+			var score := (hi - lo) + r * 0.004 + (25.0 if wooded else 0.0)
+			if score < best_score:
+				best_score = score
+				best = c
+		r += step
+	return Vector3(best.x, ctx.ground_y(best.x, best.y), best.y)
 
 
 func teardown(ctx: TourContext) -> void:

@@ -46,6 +46,7 @@ static func make(text: String, ctl: Control, tip: String = "", unit: String = ""
 		(ctl as OptionButton).clip_text = true
 		(ctl as OptionButton).text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	r.add_child(ctl)
+	r.resized.connect(r._cap_control_width)
 	if not unit.is_empty():
 		if ctl is SpinBox:
 			(ctl as SpinBox).suffix = unit
@@ -239,3 +240,24 @@ func set_enabled(on: bool) -> void:
 		(control as LineEdit).editable = on
 	elif control is BaseButton:
 		(control as BaseButton).disabled = not on
+
+
+func _cap_control_width() -> void:
+	if control == null or not is_instance_valid(control):
+		return
+	var cap := 0.0
+	if control is HSlider:
+		cap = 320.0
+	elif control is OptionButton:
+		cap = 360.0
+	elif control is LineEdit:
+		cap = 480.0
+	if cap <= 0.0:
+		return
+	var avail := size.x - LABEL_W - float(UITheme.SPACE_SM)
+	if avail > cap + 8.0:
+		control.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		control.custom_minimum_size.x = cap
+	else:
+		control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		control.custom_minimum_size.x = 0.0

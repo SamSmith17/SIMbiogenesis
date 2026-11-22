@@ -145,6 +145,7 @@ func _build_ui() -> void:
 	_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
 	_panel.add_theme_stylebox_override("panel", UITheme.panel_style())
 	add_child(_panel)
+	_panel.set_meta("ui_fit_fullscreen", true)
 	UiFit.adopt(_panel)
 	UiFit.set_content_column(_panel, 1500.0)  # a page of cards, not edge to edge
 
@@ -291,6 +292,8 @@ func _populate() -> void:
 			"Lenses and mirrors: ray trace, suns, heat through a year, tracking structure.", "csplab_concentrator", "sun"),
 		_designer("batterylab", "Solar batteries",
 			"Packs from their cells up: form, chemistry, series and parallel, busbars, BMS and case, exploded and explained.", "", "battery"),
+		_designer("ctrllab", "Controllers & inverters",
+			"Charge controllers, inverters and hybrids: shape, colours, heatsink, every terminal where it really is.", "", "cpu"),
 		_designer("farmbotlab", "Garden robots (FarmBot)",
 			"A gantry robot on a raised bed of any size: crop mix, packing, its day move by move, labour saved vs cost.", "farmbot", "sprout"),
 		_designer("windlab", "Wind turbines",
@@ -308,6 +311,9 @@ func _populate() -> void:
 		_designer("earthship", "Earthships",
 			"Tyre-wall rooms sunk into the ground behind a sloped greenhouse; digs and berms the site.",
 			EarthshipBuilder.MODEL_ID, "house"),
+		_designer("shower_house", "Shower houses",
+			"Slatted timber or tin shower houses with curtained stalls, roof water tank and per-stall lights.",
+			ShowerHouseBuilder.MODEL_ID, "waves"),
 		_designer("intermodal", "Containers and pallets",
 			"Containers, pallets, IBC totes, drums and rack bays to place or pack into.", "cargo_container", "package"),
 		_designer("vehiclelab", "Living vehicles",
@@ -540,8 +546,8 @@ func _make_card(e: Dictionary, big: bool) -> Control:
 		col.add_child(_picture(e, Vector2(CARD_W - 16.0, PIC_H), 44))
 		col.add_child(title)
 		detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		detail.custom_minimum_size = Vector2(CARD_W - 16.0, 50)
-		detail.max_lines_visible = 3
+		detail.custom_minimum_size = Vector2(CARD_W - 16.0, 36)
+		detail.max_lines_visible = 2
 		detail.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		col.add_child(detail)
 		col.add_child(verbs)
@@ -646,6 +652,10 @@ func _activate(e: Dictionary, force_place: bool) -> void:
 			var etree: SceneTree = get_tree()
 			close()
 			esm.call("open", etree)
+		"shower_house":
+			var sh_tree: SceneTree = get_tree()
+			close()
+			ShowerHouseModal.open(sh_tree)
 		"intermodal":
 			var ims: GDScript = load("res://scenes/ui/intermodal_unit_modal.gd")
 			if ims != null:
@@ -709,6 +719,13 @@ func _activate(e: Dictionary, force_place: bool) -> void:
 				main_bl.call("open_batterylab", {})
 			else:
 				_status.text = "The Battery Lab needs a world."
+		"ctrllab":
+			var main_cl := get_tree().current_scene if get_tree() != null else null
+			if main_cl != null and main_cl.has_method("open_ctrllab"):
+				close()
+				main_cl.call("open_ctrllab", {})
+			else:
+				_status.text = "The Controller Lab needs a world."
 		"farmbotlab":
 			# Hosted by Main, so it opens on every map.
 			var main_fb := get_tree().current_scene if get_tree() != null else null

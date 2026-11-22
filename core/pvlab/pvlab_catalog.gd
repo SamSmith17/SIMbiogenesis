@@ -17,6 +17,9 @@ extends RefCounted
 ## Each entry: [id, maker, model, type, tech, cut, cols, rows (pieces),
 ##   w, h, t (mm), kg, Pmax, Voc, Vmp, Isc, Imp, Voc %/°C, Pmax %/°C,
 ##   Isc %/°C, NOCT °C, frame, sheet front, busbars]
+## `STREET_USD` is a typical 2026 US retail price for that module, shown on
+## the preset card. Commodity modules are about $0.40/W; all-black and
+## premium cell types cost more. A dealer quote will move.
 
 const ENTRIES := [
 	["ja_jam60s20_380", "JA Solar", "JAM60S20-380/MR", "rigid", "mono_perc", "half", 6, 20,
@@ -61,7 +64,45 @@ const ENTRIES := [
 		1016.0, 1700.0, 40.0, 18.5, 370.0, 42.8, 37.0, 10.82, 10.01, -0.24, -0.29, 0.040, 44.0, "black", "black", 0],
 	["firstsolar_fs6420", "First Solar", "Series 6 FS-6420", "thin_film", "cdte", "strip", 1, 264,
 		1232.0, 2009.0, 49.0, 34.5, 420.0, 219.2, 180.5, 2.54, 2.33, -0.28, -0.32, 0.04, 45.0, "black", "black", 0],
+	# Renogy RNG-100D sheet: 100 W, Vmp 18.9, Imp 5.29, Voc 22.5, Isc 5.75,
+	# 1195 × 541 × 35 mm, 7.5 kg, 36 mono cells, NOCT 47, −0.30 / −0.44 / +0.04 %/°C.
+	["renogy_rng_100d", "Renogy", "RNG-100D 100W", "rigid", "mono_perc", "full", 4, 9,
+		541.0, 1195.0, 35.0, 7.5, 100.0, 22.5, 18.9, 5.75, 5.29, -0.30, -0.44, 0.04, 47.0, "silver", "white", 4],
+	# RSP200D / G3 sheet: 200 W, Vmp 19.2, Imp 10.42, Voc 23.0, Isc 11.05,
+	# 1491 × 699 × 35 mm, 12 kg, 68 cells (6.5 × 3.3 in), NOCT 47,
+	# −0.28 / −0.37 / +0.05 %/°C. Laid out half-cut so those cells fill the face.
+	# Busbar count is not on the sheet.
+	["renogy_rsp200d", "Renogy", "RSP200D 200W", "rigid", "mono_perc", "half", 4, 17,
+		699.0, 1491.0, 35.0, 12.0, 200.0, 23.0, 19.2, 11.05, 10.42, -0.28, -0.37, 0.05, 47.0, "silver", "white", 9],
 ]
+
+
+## Typical 2026 US retail, dollars per module.
+const STREET_USD := {
+	"ja_jam60s20_380": 160.0,
+	"ja_jam54s30_410": 165.0,
+	"ja_jam72s20_450": 180.0,
+	"longi_lr5_54hph_410": 165.0,
+	"longi_lr5_72hph_545": 220.0,
+	"cs_cs6r_400ms": 160.0,
+	"cs_cs3w_400p": 140.0,
+	"cs_cs6k_300ms": 120.0,
+	"cs_cs7n_660mb_ag": 265.0,
+	"trina_de09_400": 160.0,
+	"trina_deg21c_660": 265.0,
+	"jinko_jkm540m_72hl4": 215.0,
+	"jinko_jkm420n_54hl4b": 190.0,
+	"qcells_peak_g10_400": 200.0,
+	"rec_alpha_pure_410": 330.0,
+	"sunpower_max3_400": 380.0,
+	"sunpower_x22_360": 320.0,
+	"panasonic_n330": 250.0,
+	"lg_neon2_350": 245.0,
+	"lg_neonr_370": 300.0,
+	"firstsolar_fs6420": 170.0,
+	"renogy_rng_100d": 119.0,
+	"renogy_rsp200d": 170.0,
+}
 
 
 ## Every entry as a dictionary.
@@ -78,7 +119,7 @@ static func entry(e: Array) -> Dictionary:
 		"t": float(e[10]), "kg": float(e[11]), "wmp": float(e[12]), "voc": float(e[13]), "vmp": float(e[14]),
 		"isc": float(e[15]), "imp": float(e[16]), "voc_coeff": float(e[17]), "pmax_coeff": float(e[18]),
 		"isc_coeff": float(e[19]), "noct_c": float(e[20]), "frame": str(e[21]), "sheet": str(e[22]),
-		"busbars": int(e[23])}
+		"busbars": int(e[23]), "usd": float(STREET_USD.get(str(e[0]), 0.0))}
 
 
 static func by_id(id: String) -> Dictionary:
@@ -86,6 +127,17 @@ static func by_id(id: String) -> Dictionary:
 		if str(e[0]) == id:
 			return entry(e)
 	return {}
+
+
+## "$160 · 380 W · 1769 × 1052 mm" for a preset card.
+static func shop_line(e: Dictionary) -> String:
+	var bits: PackedStringArray = PackedStringArray([
+		"%.0f W" % float(e["wmp"]),
+		"%.0f × %.0f mm" % [float(e["h"]), float(e["w"])],
+	])
+	if float(e.get("usd", 0.0)) > 0.0:
+		bits.insert(0, "$%s" % UiText.thousands(int(round(float(e["usd"])))))
+	return " · ".join(bits)
 
 
 ## One line for a list: "JA Solar JAM54S30-410/MR — 410 W · 1722 × 1134 mm".
@@ -101,7 +153,8 @@ static func tooltip(e: Dictionary) -> String:
 		int(e["cols"]) * int(e["rows"]) if str(e["cut"]) != "strip" else int(e["rows"]),
 		str((PvLabCells.CUTS[str(e["cut"])] as Dictionary)["label"]).to_lower(),
 		str(PvLabCells.tech(str(e["tech"]))["label"]), float(e["h"]), float(e["w"]), float(e["t"]), float(e["kg"]),
-		float(e["voc_coeff"]), float(e["pmax_coeff"]), float(e["noct_c"]), str(e["frame"]), str(e["sheet"])]
+		float(e["voc_coeff"]), float(e["pmax_coeff"]), float(e["noct_c"]), str(e["frame"]), str(e["sheet"])] + (
+		"\nTypical US street price $%s (2026)." % UiText.thousands(int(round(float(e["usd"])))) if float(e.get("usd", 0.0)) > 0.0 else "")
 
 
 ## The words a search matches against.
@@ -192,6 +245,7 @@ static func module_spec(e: Dictionary) -> Dictionary:
 				fr["overlap_mm"] = minf(4.0, float(fr["width_mm"]) * 0.4)
 	base["cells"] = c
 	base["bypass_diodes"] = 0 if str(e["type"]) == "thin_film" else 3
+	base["price_usd"] = float(e.get("usd", 0.0))
 	base["electrical"] = {"mode": "datasheet", "wmp": float(e["wmp"]), "voc": float(e["voc"]), "vmp": float(e["vmp"]),
 		"isc": float(e["isc"]), "imp": float(e["imp"]), "voc_coeff": float(e["voc_coeff"]),
 		"pmax_coeff": float(e["pmax_coeff"]), "isc_coeff": float(e["isc_coeff"]), "noct_c": float(e["noct_c"]),

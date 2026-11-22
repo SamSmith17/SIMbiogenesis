@@ -193,36 +193,35 @@ func _build() -> void:
 	_status.custom_minimum_size.x = 120
 	_status.mouse_filter = Control.MOUSE_FILTER_PASS
 	_frame.footer.add_child(_status)
-	var ex := _frame.add_button("Export calendars (.ics)", ModalFrame.SECONDARY, _export,
+	var ex := _frame.add_button("Export calendars (.ics)", ModalFrame.PRIMARY, _export,
 		"Write the group calendar and one per person for the next 7 days to user://schedule_export/. Import into any calendar app; re-importing updates the events.")
+	UiIcons.apply(ex, "download", ex.tooltip_text, 15)
 	ex.name = "export_ics"
 	var of := _frame.add_button("Open folder", ModalFrame.SECONDARY, _open_folder,
 		"Show the exported calendars")
+	UiIcons.apply(of, "external-link", of.tooltip_text, 15)
 	of.name = "open_folder"
-	_frame.add_button("Close", ModalFrame.PRIMARY, _frame.close)
+	_frame.add_button("Close", ModalFrame.SECONDARY, _frame.close)
 
 
 func _nav_row(prev_cb: Callable, today_cb: Callable, next_cb: Callable, unit: String) -> Array:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
-	var p := Button.new()
-	p.text = "◀"
-	p.tooltip_text = "Previous %s" % unit
+	var p := IconButton.make("chevron-left", "Previous %s" % unit, prev_cb)
+	p.flat = false
 	UITheme.style_button(p)
-	p.pressed.connect(prev_cb)
 	row.add_child(p)
 	var t := Button.new()
 	t.text = "Today"
 	UITheme.style_button(t)
 	t.pressed.connect(today_cb)
 	row.add_child(t)
-	var n := Button.new()
-	n.text = "▶"
-	n.tooltip_text = "Next %s" % unit
+	var n := IconButton.make("chevron-right", "Next %s" % unit, next_cb)
+	n.flat = false
 	UITheme.style_button(n)
-	n.pressed.connect(next_cb)
 	row.add_child(n)
 	var lbl := Label.new()
+	lbl.add_theme_font_override("font", UITheme.font("semibold"))
 	lbl.add_theme_font_size_override("font_size", UITheme.FONT_MD)
 	row.add_child(lbl)
 	return [row, lbl]
@@ -232,7 +231,26 @@ func _build_day() -> Control:
 	var v := VBoxContainer.new()
 	v.name = "page_day"
 	var nr := _nav_row(_day_prev, _day_today, _day_next, "day")
-	v.add_child(nr[0])
+	var nav_bar: HBoxContainer = nr[0]
+	var sp := Control.new()
+	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	nav_bar.add_child(sp)
+	for pair in [["sleep", "Sleep"], ["eat", "Meals"], ["work", "Work"], ["shift", "Rota"],
+			["enrichment", "Enrichment"], ["social", "Social"], ["free", "Free"]]:
+		var sw := Panel.new()
+		sw.custom_minimum_size = Vector2(10, 10)
+		sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		var ssb := StyleBoxFlat.new()
+		ssb.bg_color = DAY_KIND_COLORS[pair[0]]
+		ssb.set_corner_radius_all(2)
+		sw.add_theme_stylebox_override("panel", ssb)
+		nav_bar.add_child(sw)
+		var kl := Label.new()
+		kl.text = str(pair[1])
+		kl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+		kl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+		nav_bar.add_child(kl)
+	v.add_child(nav_bar)
 	_day_label = nr[1]
 	_day_gantt = GanttRows.new()
 	_day_gantt.name = "day_gantt"
@@ -586,7 +604,7 @@ func _refresh_day() -> void:
 		var chrono := NpcPersona.chronotype_label(r.persona_of(pid) if r != null else {})
 		var rota_h := float(by.get("shift", 0.0))
 		rows.append({"id": pid, "label": str(p["name"]),
-			"sub": chrono if rota_h < 0.01 else "%s · rota %s" % [chrono, UiText.duration(rota_h)],
+			"sub": "%s · no shifts" % chrono if rota_h < 1.0 / 60.0 else "%s · rota %s" % [chrono, UiText.duration(rota_h)],
 			"t0": t0, "segs": segs})
 	if ps.is_empty():
 		_status.text = "No simulated people here yet: tag a pop-driven habitat on the graph."

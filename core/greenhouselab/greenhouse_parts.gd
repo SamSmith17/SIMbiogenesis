@@ -36,7 +36,8 @@ static func parts(d: Dictionary) -> Array:
 			var crop_h := GreenhouseBeds.tallest_crop(bd["crops"])
 			var hang := float(bd["wall_h_m"]) + maxf(float(bd["light"]["hang_m"]), crop_h * 0.6 + 0.3)
 			hang = minf(hang, float(bd["wall_h_m"]) + float(bd["headroom_m"]) - 0.15)
-			var ls := {"watts": float(bd["light"]["w"]), "hang_m": maxf(hang, float(bd["wall_h_m"]) + 0.3)}
+			var ls := {"watts": float(bd["light"]["w"]), "hang_m": maxf(hang, float(bd["wall_h_m"]) + 0.3),
+				"spectrum": str((s.get("lights", {}) as Dictionary).get("spectrum", "blurple"))}
 			if str(bd["kind"]) == "keyhole":
 				ls["shape"] = "ring"
 				ls["outer_r"] = float(bd["keyhole"]["outer_r"])

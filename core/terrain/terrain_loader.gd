@@ -13641,6 +13641,7 @@ func _rebuild_placed_props() -> void:
 	# Placed lights (J Light Studio) — keyed by this site, so rebuild now
 	# that the site is known; they live under Main, not Terrain.
 	PlacedLightService.rebuild_all(_main)
+	PropModelLights.ensure_world_props_seeded(_main)
 
 
 func _try_seed_starshade_graph() -> void:
@@ -15809,6 +15810,7 @@ func _duplicate_hosted(source_id: String, new_id: String, copy: Dictionary) -> v
 		ccopy[PlacedPropHosts.KEY] = {"kind": "prop", "id": new_id,
 			"local": (link["local"] as Array).duplicate(), "owned": true}
 		duplicate_prop_record(ccopy, false)
+	PropModelLights.duplicate_for_prop(_main, source_id, new_id)
 
 
 ## Restore / "forget the fire": the FireNode disposes itself on its next frame.

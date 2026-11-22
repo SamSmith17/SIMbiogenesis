@@ -99,16 +99,17 @@ func _process(delta: float) -> void:
 
 func _refresh() -> void:
 	var sp := state()
+	var want_lights := _desired_lights(sp)
 	if sp.is_empty():
 		_vent_target = 0.0
 		_fans = false
-		_set_lights(false)
+		_set_lights(want_lights)
 		_mist_target = 0.0
 		_label.visible = false
 		return
 	_vent_target = clampf(float(sp.get("gh_vent_pct", 0.0)) / 100.0, 0.0, 1.0)
 	_fans = bool(sp.get("gh_fans", false))
-	_set_lights(bool(sp.get("gh_lights", false)))
+	_set_lights(want_lights)
 	_mist_target = clampf(float(sp.get("gh_cond_lph", 0.0)) / MIST_LPH, 0.0, 1.0)
 	var bits: PackedStringArray = PackedStringArray()
 	bits.append("%.0f °C · %d %%" % [float(sp["gh_t_air"]), int(sp.get("gh_rh", 0))])
@@ -131,6 +132,17 @@ func _model_height() -> float:
 	var rec := PlacedPropService.get_prop_record(_main, prop_id) if _main != null else {}
 	var d := GreenhouseDesign.solve(GreenhouseWorld.spec_of(rec))
 	return float(d["stats"].get("height_m", 3.0))
+
+
+func _desired_lights(sp: Dictionary) -> bool:
+	var rec := PlacedPropService.get_prop_record(_main, prop_id) if _main != null else {}
+	var gspec := GreenhouseSpec.resolve(GreenhouseWorld.spec_of(rec))
+	var sched := str((gspec.get("lights", {}) as Dictionary).get("schedule", "dusk_dawn"))
+	if sched == "controller":
+		return bool(sp.get("gh_lights", false))
+	if sched == "always":
+		return true
+	return PlacedLightPower.schedule_on(_main, "dusk_dawn")
 
 
 ## The light racks mounted in this house glow with its lamps.

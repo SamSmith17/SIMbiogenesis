@@ -528,9 +528,15 @@ func _build_header(parent: VBoxContainer) -> void:
 	hbox.add_theme_constant_override("separation", 8)
 	parent.add_child(hbox)
 
+	var ic := TextureRect.new()
+	ic.texture = UiIcons.icon("thermometer", 20)
+	ic.modulate = UITheme.C_PRIMARY
+	ic.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	hbox.add_child(ic)
 	_header_lbl = Label.new()
-	_header_lbl.text = "🌡 Climate Record Book"
-	_header_lbl.add_theme_color_override("font_color", C_PRIMARY)
+	_header_lbl.text = "Climate Record Book"
+	_header_lbl.add_theme_font_override("font", UITheme.font("semibold"))
+	_header_lbl.add_theme_color_override("font_color", UITheme.C_TEXT)
 	_header_lbl.add_theme_font_size_override("font_size", UITheme.FONT_LG)
 	_header_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hbox.add_child(_header_lbl)
@@ -538,6 +544,7 @@ func _build_header(parent: VBoxContainer) -> void:
 	var close_btn := IconButton.close(close)
 	close_btn.custom_minimum_size = Vector2(32, 32)
 	hbox.add_child(close_btn)
+	parent.add_child(HSeparator.new())
 
 
 func _build_legend(parent: VBoxContainer) -> void:
@@ -548,8 +555,8 @@ func _build_legend(parent: VBoxContainer) -> void:
 	_mk_legend_item(hbox, C_BLUE,   "▼ Record lows")
 	_mk_legend_item(hbox, C_CYAN,   "◆ Precip records")
 	_mk_legend_item(hbox, C_ORANGE, "● NWS alerts")
-	_mk_legend_item(hbox, Color(0.90, 0.22, 0.22, 0.72), "▲ Generated highs")
-	_mk_legend_item(hbox, Color(0.35, 0.35, 0.35, 0.42), "▲ CMIP6 estimate")
+	_mk_legend_item(hbox, Color(1.0, 0.54, 0.68, 0.92), "△ Generated highs")
+	_mk_legend_item(hbox, Color(0.55, 0.62, 0.72, 0.72), "▫ CMIP6 estimate")
 	var sc_lbl := Label.new()
 	sc_lbl.text = "Warming"
 	sc_lbl.add_theme_color_override("font_color", C_TEXT_S)

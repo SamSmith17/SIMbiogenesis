@@ -55,6 +55,7 @@ var _sim_speed := 1.0
 var _jog := Vector3.ZERO
 
 # UI
+var _shell: DesignerShell = null
 var _panel: PanelContainer
 var _name_edit: LineEdit
 var _subtitle: Label
@@ -156,6 +157,10 @@ func is_open() -> bool:
 	return _active
 
 
+func shell() -> DesignerShell:
+	return _shell
+
+
 func _activate() -> void:
 	_undo.clear()
 	_redo.clear()
@@ -164,8 +169,7 @@ func _activate() -> void:
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_process(true)
-	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
-	UiFit.keep_fitted(_panel, WANT)
+	_shell.open()
 	_apply_btn.visible = not _bound_prop_id.is_empty()
 	_send_btn.visible = not _bound_prop_id.is_empty()
 	_place_btn.text = "Place a copy" if not _bound_prop_id.is_empty() else "Place in world"
@@ -184,7 +188,8 @@ func close() -> void:
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_process(false)
-	CursorController.release_modal(MODAL_NAME)
+	if _shell != null and _shell.is_open():
+		_shell.close()
 
 
 func _process(delta: float) -> void:
@@ -229,26 +234,26 @@ func _input(e: InputEvent) -> void:
 # ---------------------------------------------------------------------------
 
 func _build_ui() -> void:
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.55)
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	add_child(dim)
-	_panel = PanelContainer.new()
-	_panel.add_theme_stylebox_override("panel", UITheme.panel_style())
-	add_child(_panel)
-	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	_panel.add_child(root)
-	root.add_child(_build_header())
-	var body := HBoxContainer.new()
-	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body.add_theme_constant_override("separation", UITheme.SPACE_MD)
-	root.add_child(body)
-	body.add_child(_build_left())
-	body.add_child(_build_centre())
-	body.add_child(_build_right())
-	root.add_child(_build_footer())
+	_shell = DesignerShell.create("CNC gantry designer", "cpu", {
+		"name_id": MODAL_NAME, "want": WANT, "name_edit": true, "undo": true,
+		"left_label": "Machines", "left_w": 250.0, "right_w": 400.0})
+	add_child(_shell)
+	_panel = _shell.panel
+	_name_edit = _shell.name_edit
+	_name_edit.placeholder_text = "Machine name"
+	_name_edit.text_submitted.connect(func(_t): _on_name_changed())
+	_name_edit.focus_exited.connect(_on_name_changed)
+	_subtitle = _shell.subtitle
+	_undo_btn = _shell.undo_btn
+	_redo_btn = _shell.redo_btn
+	_shell.undo_requested.connect(_undo_step)
+	_shell.redo_requested.connect(_redo_step)
+	_shell.closed.connect(close)
+	_left_scroll = _shell._left_scroll
+	_shell.left.add_child(_build_left())
+	_shell.centre.add_child(_build_centre())
+	_shell.right.add_child(_build_right())
+	_build_footer()
 	_file_dialog = FileDialog.new()
 	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
 	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -266,55 +271,10 @@ func _build_ui() -> void:
 	add_child(_gcode_dialog)
 
 
-func _build_header() -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	var icon := TextureRect.new()
-	icon.texture = UiIcons.icon("cpu", 22)
-	icon.modulate = UITheme.C_AMBER
-	icon.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
-	row.add_child(icon)
-	var title := Label.new()
-	title.text = "CNC gantry designer"
-	title.add_theme_font_size_override("font_size", UITheme.FONT_XL)
-	title.add_theme_color_override("font_color", UITheme.C_TEXT)
-	row.add_child(title)
-	_name_edit = LineEdit.new()
-	_name_edit.custom_minimum_size = Vector2(240, 0)
-	_name_edit.placeholder_text = "Machine name"
-	_name_edit.text_submitted.connect(func(_t): _on_name_changed())
-	_name_edit.focus_exited.connect(_on_name_changed)
-	row.add_child(_name_edit)
-	_subtitle = Label.new()
-	_subtitle.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	_subtitle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_subtitle.clip_text = true
-	_subtitle.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	row.add_child(_subtitle)
-	_undo_btn = IconButton.make("undo-2", "Undo (Ctrl+Z)", _undo_step)
-	row.add_child(_undo_btn)
-	_redo_btn = IconButton.make("redo-2", "Redo (Ctrl+Y)", _redo_step)
-	row.add_child(_redo_btn)
-	row.add_child(IconButton.close(close))
-	return row
-
-
-func _scroll_column(width: float) -> Array:
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(width, 0)
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+func _build_left() -> Control:
 	var box := VBoxContainer.new()
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	scroll.add_child(box)
-	return [scroll, box]
-
-
-func _build_left() -> Control:
-	var col := _scroll_column(250)
-	var box: VBoxContainer = col[1]
-	_left_scroll = col[0]
 	# The parts bin: only while "Edit parts" is on (it used to head the
 	# column, ahead of choosing a machine at all).
 	_palette_sec = Collapsible.make("Parts to add", true, "Click one, then a slot or face on the machine")
@@ -370,7 +330,7 @@ func _build_left() -> Control:
 		UITheme.style_button(b)
 		b.pressed.connect(_on_application.bind(str(a["id"])))
 		_app_box.add_child(b)
-	return col[0]
+	return box
 
 
 func _build_centre() -> Control:
@@ -674,8 +634,9 @@ func _build_config_panel() -> Control:
 
 
 func _build_right() -> Control:
-	var col := _scroll_column(400)
-	var box: VBoxContainer = col[1]
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	_part_sec = Collapsible.make("Selected part", true)
 	_part_sec.visible = false
 	box.add_child(_part_sec)
@@ -734,7 +695,7 @@ func _build_right() -> Control:
 	# Essentials: the work volume. Everything else folded with its summary.
 	_col = DesignerColumn.setup(box, "gantrylab", {"open": ["Work volume"], "fold": ["Bill of materials", "Files"], "tile_cols": 4})
 	_part_sec.folded = false
-	return col[0]
+	return box
 
 
 ## "Edit parts": the parts bin (left) and the selected part's card (right).
@@ -746,7 +707,8 @@ func _set_edit_parts(on: bool) -> void:
 	if on:
 		_palette_sec.folded = false
 		_part_sec.folded = false
-		_left_scroll.set_deferred("scroll_vertical", 0)
+		if _left_scroll != null:
+			_left_scroll.set_deferred("scroll_vertical", 0)
 	else:
 		_parts.call("_disarm")
 		_parts.sel = ""
@@ -779,40 +741,13 @@ func _kin_thumb_for(i: int) -> Dictionary:
 		return GantryLabBuilder.build_node(spec, "Thumb")}
 
 
-func _build_footer() -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	var hint := Label.new()
-	hint.text = "Drag empty space to orbit · click a part to pick it, drag it to slide it along its slot · R turns · Del removes · Kinematics jogs · Simulate plays G-code"
-	hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hint.clip_text = true
-	hint.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	row.add_child(hint)
-	_apply_btn = Button.new()
-	_apply_btn.text = "Apply to placed machine"
-	UITheme.style_button(_apply_btn)
-	_apply_btn.pressed.connect(_on_apply)
-	row.add_child(_apply_btn)
-	_place_btn = Button.new()
-	_place_btn.text = "Place in world"
-	UITheme.style_button(_place_btn)
-	_place_btn.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	_place_btn.pressed.connect(_on_place)
-	row.add_child(_place_btn)
-	var crew_b := Button.new()
-	crew_b.text = "👷 Build with a crew"
-	crew_b.tooltip_text = "Place a packed kit in front of you and hand it to the site's crew: they lay it out and put it up piece by piece"
-	UITheme.style_button(crew_b)
-	crew_b.pressed.connect(_on_crew_build)
-	row.add_child(crew_b)
-	var close_b := Button.new()
-	close_b.text = "Close"
-	UITheme.style_button(close_b)
-	close_b.pressed.connect(close)
-	row.add_child(close_b)
-	return row
+func _build_footer() -> void:
+	_shell.set_hint("Drag empty space to orbit · click a part to pick it, drag it to slide it along its slot · R turns · Del removes · Kinematics jogs · Simulate plays G-code")
+	_apply_btn = _shell.add_button("Apply to placed machine", DesignerShell.SECONDARY, _on_apply)
+	_place_btn = _shell.add_button("Place in world", DesignerShell.PRIMARY, _on_place)
+	_shell.add_button("Build with a crew", DesignerShell.SECONDARY, _on_crew_build,
+		"Place a packed kit in front of you and hand it to the site's crew: they lay it out and put it up piece by piece")
+	_shell.add_button("Close", DesignerShell.SECONDARY, close)
 
 
 # ---------------------------------------------------------------------------

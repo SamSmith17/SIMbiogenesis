@@ -187,7 +187,7 @@ static func _connection_delivered_watts(model: GraphModel, conn: Dictionary,
 ## _side_summary does: the wire losses use that rule; the canvas's wire
 ## widths walk through ghosts as they always have.
 static func delivered_index(model: GraphModel, tree: SceneTree, sim_host: Node = null,
-		flat_conns: Array = [], block_ghosts: bool = false) -> Dictionary:
+		flat_conns: Array = [], block_ghosts: bool = false, sample_now: bool = false) -> Dictionary:
 	if sim_host == null and tree != null:
 		sim_host = _find_sim_load_host(tree)
 	var adj := {}
@@ -207,7 +207,7 @@ static func delivered_index(model: GraphModel, tree: SceneTree, sim_host: Node =
 			(adj[sid] as Array).append([cid, tid])
 			(adj[tid] as Array).append([cid, sid])
 	return {"adj": adj, "w": {}, "ctrl": {}, "ghost": {}, "tree": tree, "host": sim_host,
-		"block_ghosts": block_ghosts}
+		"block_ghosts": block_ghosts, "sample_now": sample_now}
 
 
 static func delivered_watts_indexed(model: GraphModel, ix: Dictionary, conn: Dictionary) -> float:
@@ -260,9 +260,11 @@ static func _side_summary_ix(model: GraphModel, ix: Dictionary, start_id: String
 				if ty == "compound":
 					var sp: Dictionary = item.get("specs", {}) as Dictionary
 					if str(sp.get("compound_kind", "")) == "load_group":
-						w = sum_load_group_watts(model, item, ix["tree"], ix["host"])
+						w = sum_load_group_watts(model, item, ix["tree"], ix["host"],
+							bool(ix.get("sample_now", false)))
 				elif ty in LOAD_TYPES:
-					w = _item_draw_watts(nid, item, ix["tree"], ix["host"], model)
+					w = _item_draw_watts(nid, item, ix["tree"], ix["host"], model,
+						bool(ix.get("sample_now", false)))
 			memo_w[nid] = w
 			memo_c[nid] = ctl
 		if block and bool(memo_g.get(nid, false)):
@@ -329,7 +331,8 @@ static func sum_load_group_watts(
 		model: GraphModel,
 		compound_item: Dictionary,
 		tree: SceneTree,
-		sim_host: Node) -> float:
+		sim_host: Node,
+		sample_now: bool = false) -> float:
 	var child_scope := str(compound_item.get("child_scope_id", ""))
 	if child_scope.is_empty():
 		var specs: Dictionary = compound_item.get("specs", {}) as Dictionary
@@ -342,12 +345,36 @@ static func sum_load_group_watts(
 		if cid.is_empty():
 			continue
 		if str(child.get("type", "")) in LOAD_TYPES:
-			total += _item_draw_watts(cid, child, tree, sim_host, model)
+			total += _item_draw_watts(cid, child, tree, sim_host, model, sample_now)
 	return total
 
 
 static func compute_kw(model: GraphModel, tree: SceneTree) -> float:
 	return compute_watts(model, tree) / 1000.0
+
+
+## Mean and coincident peak over [t0_h, t1_h]. mean_w is what the battery
+## integrates; peak_w and by_breaker are what the inverter and the breakers
+## see. Wire loss is added as a steady term (a spike does not heat a conductor).
+static func evaluate_step(model: GraphModel, tree: SceneTree, t0_h: float, t1_h: float,
+		restore_h: float = -1.0, continuous_w: float = -1.0, surge_w: float = -1.0) -> Dictionary:
+	var empty := {"mean_w": 0.0, "peak_w": 0.0, "watt_hours": 0.0, "now_w": 0.0,
+		"above_continuous_s": 0.0, "above_surge_s": 0.0, "by_item": {}, "by_breaker": {}}
+	if model == null:
+		return empty
+	if _ac_bus_off(tree):
+		return empty
+	var sim_host := _find_sim_load_host(tree)
+	var flat := GraphNesting.flat_connections_cached(model)
+	var loads := _collect_signature_loads(model, tree, sim_host, flat, restore_h)
+	var step := PowerSignature.coincide(loads, t0_h, t1_h, restore_h, continuous_w, surge_w)
+	var loss := connection_losses_watts(model, tree, sim_host, flat, -1) if tree != null else 0.0
+	var dt := maxf(t1_h - t0_h, 0.0)
+	step["mean_w"] = float(step.get("mean_w", 0.0)) + loss
+	step["watt_hours"] = float(step.get("watt_hours", 0.0)) + loss * dt
+	step["now_w"] = float(step.get("now_w", 0.0)) + loss
+	step["peak_w"] = float(step.get("peak_w", 0.0)) + loss
+	return step
 
 
 ## True when `circuit_idx` on a switched AC passthrough node is currently ON.
@@ -443,14 +470,22 @@ static func vehicle_scopes(model: GraphModel) -> Dictionary:
 
 static func _enqueue_ac_neighbors(model: GraphModel, item_id: String, queue: Array[String],
 		flat_conns: Array = []) -> void:
+	for other in _ac_neighbor_ids(model, item_id, flat_conns):
+		queue.append(str(other))
+
+
+## AC neighbours of one node, with the same open-breaker and switched-circuit
+## stops as the reachability walk. An open breaker returns nothing.
+static func _ac_neighbor_ids(model: GraphModel, item_id: String, flat_conns: Array = []) -> Array:
+	var out: Array = []
 	var item: Dictionary = model.get_item(item_id)
 	var ty := str(item.get("type", ""))
 	var specs: Dictionary = item.get("specs", {}) as Dictionary
 	# Whole-panel open: breaker panel main or simple AC breaker.
 	if ty == "breaker_panel" and not bool(specs.get("main_on", true)):
-		return
+		return out
 	if ty == "acbreaker" and not bool(specs.get("closed", specs.get("on", true))):
-		return
+		return out
 	if flat_conns.is_empty():
 		flat_conns = GraphNesting.flat_connections(model)
 
@@ -473,6 +508,10 @@ static func _enqueue_ac_neighbors(model: GraphModel, item_id: String, queue: Arr
 			continue
 		if other.is_empty():
 			continue
+		# A hybrid's grid and generator inputs feed the unit; what hangs off
+		# them is upstream, not a load on its inverter.
+		if ty == "controller" and out_handle in ["acInput", "genInput"]:
+			continue
 		# Switched passthrough: only traverse circuit_N when that channel is ON.
 		# Never forward through ac_in (that would walk back upstream).
 		if ty in SWITCHED_CIRCUIT_TYPES:
@@ -484,7 +523,8 @@ static func _enqueue_ac_neighbors(model: GraphModel, item_id: String, queue: Arr
 					var cidx := int(parts[1])
 					if not is_circuit_on(item, cidx):
 						continue
-		queue.append(other)
+		out.append(other)
+	return out
 
 
 ## Each item id -> the flat connections that end on it, in flat order (a
@@ -551,7 +591,7 @@ static func item_draw_watts(
 	var iid := str(item.get("id", ""))
 	if sim_host == null and tree != null:
 		sim_host = _find_sim_load_host(tree)
-	return _item_draw_watts(iid, item, tree, sim_host, model)
+	return _item_draw_watts(iid, item, tree, sim_host, model, true)
 
 
 ## Watts delivered through one AC connection (load-side of the cut). Used by
@@ -573,44 +613,128 @@ static func _item_draw_watts(
 		item: Dictionary,
 		tree: SceneTree,
 		sim_host: Node,
-		model: GraphModel = null) -> float:
-		
+		model: GraphModel = null,
+		sample_now: bool = false) -> float:
 	# 1. Global check: If AC output is disabled at the bus, there is no AC load.
-	if tree != null and tree.root != null:
-		var apb: Node = tree.root.get_node_or_null("AcPowerBus")
-		if apb != null and "ac_output_enabled" in apb:
-			if not bool(apb.get("ac_output_enabled")):
-				return 0.0
-
-	var ty := str(item.get("type", ""))
-	# Read only below: no copy (this ran for every load, ten times a second).
-	var specs: Dictionary = item.get("specs", {}) as Dictionary
-
-	# 2. Processors: draw is driven by the resource engine's RUNNING state (which
-	# already encodes switched-on + powered + fed), NOT the sim-load switch. A
-	# running continuous processor draws its rated watts; a batch draws its active
-	# phase watts; anything else (ready/blocked/idle) draws nothing.
-	if ty == "processor":
-		if item.has("batch_active_watts"):
-			return float(item.get("batch_active_watts", 0.0))
-		if str(specs.get("node_state", "")) == GraphNodeState.RUNNING:
-			if specs.has("live_watts"):
-				return maxf(float(specs.get("live_watts", 0.0)), 0.0)
-			return _rated_watts_from_specs(specs)
+	if _ac_bus_off(tree):
 		return 0.0
+	var classified := _classify_draw(item_id, item, tree, sim_host, model)
+	if str(classified.get("kind", "")) == "off":
+		return 0.0
+	if str(classified.get("kind", "")) == "fixed":
+		return float(classified.get("w", 0.0))
+	var specs: Dictionary = classified.get("specs", {}) as Dictionary
+	var level := float(classified.get("level_w", -1.0))
+	if sample_now:
+		var clk := _sim_clock(tree)
+		if clk.x >= 0.0:
+			return PowerSignature.watts_at(specs, clk.x,
+				_signature_origin(specs, clk.y), item_id, level)
+	return PowerSignature.mean_watts(specs, level)
 
-	# 3. Non-processor loads: ON = requested on and power available.
+
+static var _clk_frame := -1
+static var _clk_abs := -1.0
+static var _clk_restore := -1.0
+
+
+static func _ac_bus_off(tree: SceneTree) -> bool:
+	if tree == null or tree.root == null:
+		return false
+	var apb: Node = tree.root.get_node_or_null("AcPowerBus")
+	if apb != null and "ac_output_enabled" in apb:
+		return not bool(apb.get("ac_output_enabled"))
+	return false
+
+
+## Vector2(absolute hours, restore hour). x < 0 when this scene has no clock,
+## which keeps a reading on the cycle average.
+static func _sim_clock(tree: SceneTree) -> Vector2:
+	var frame := Engine.get_process_frames()
+	if frame == _clk_frame and frame > 0:
+		return Vector2(_clk_abs, _clk_restore)
+	_clk_frame = frame
+	_clk_abs = -1.0
+	_clk_restore = -1.0
+	if tree == null or tree.root == null:
+		return Vector2(-1.0, -1.0)
+	var scene := tree.current_scene
+	if scene != null and scene.has_method("get_absolute_hours"):
+		_clk_abs = float(scene.call("get_absolute_hours"))
+	else:
+		var main := tree.root.find_child("Main", true, false)
+		if main != null and main.has_method("get_absolute_hours"):
+			_clk_abs = float(main.call("get_absolute_hours"))
+	var bus := tree.root.get_node_or_null("AcPowerBus")
+	if bus != null and "ac_restore_h" in bus:
+		_clk_restore = float(bus.get("ac_restore_h"))
+		if _clk_abs >= 0.0 and _clk_restore >= 0.0 and _clk_abs < _clk_restore:
+			_clk_restore = -1.0
+	return Vector2(_clk_abs, _clk_restore)
+
+
+## Where a signature's phase zero sits. A pump uses the hour it entered
+## RUNNING. A battery uses the later of its charge start and the last outage.
+## Cyclic loads share the outage.
+static func _signature_origin(specs: Dictionary, restore_h: float) -> float:
+	var fam := str(specs.get("signature_family", ""))
+	if fam == "inductive_start":
+		return float(specs.get("powered_since_h", -1.0)) if specs.has("powered_since_h") else -1.0
+	if fam == "battery":
+		var started := float(specs.get("charge_started_h", -1.0)) if specs.has("charge_started_h") else -1.0
+		if restore_h >= 0.0 and (started < 0.0 or restore_h > started):
+			return restore_h
+		return started
+	return restore_h
+
+
+## {kind: off} | {kind: fixed, w} | {kind: sig, specs, level_w}.
+## The bus-off check stays with the caller. Scene devices, a live meter, and a
+## measured light-string length stay a flat number; a declared family shapes
+## whatever wattage the processor is actually drawing.
+static func _classify_draw(item_id: String, item: Dictionary, tree: SceneTree,
+		sim_host: Node, model: GraphModel) -> Dictionary:
+	var ty := str(item.get("type", ""))
+	var specs: Dictionary = item.get("specs", {}) as Dictionary
+	if ty == "processor":
+		var drawing := false
+		var level := -1.0
+		if item.has("batch_active_watts"):
+			drawing = true
+			level = maxf(float(item.get("batch_active_watts", 0.0)), 0.0)
+		elif str(specs.get("node_state", "")) == GraphNodeState.RUNNING:
+			drawing = true
+			if specs.has("live_watts"):
+				level = maxf(float(specs.get("live_watts", 0.0)), 0.0)
+		if not drawing:
+			return {"kind": "off"}
+		var fixed_p := _fixed_override_w(item_id, item, specs, tree, model)
+		if fixed_p >= 0.0:
+			return {"kind": "fixed", "w": fixed_p}
+		if PowerSignature.has_family(specs):
+			return {"kind": "sig", "specs": specs, "level_w": level if level >= 0.0 else -1.0}
+		if level >= 0.0:
+			return {"kind": "fixed", "w": level}
+		return {"kind": "fixed", "w": _rated_watts_from_specs(specs)}
 	var is_on := false
 	if sim_host != null and sim_host.has_method("has_sim_load") \
 			and bool(sim_host.call("has_sim_load", item_id)):
 		is_on = bool(sim_host.call("is_load_on", item_id))
 	else:
 		is_on = _item_is_on(item, specs)
-
 	if not is_on:
-		return 0.0
+		return {"kind": "off"}
+	var fixed := _fixed_override_w(item_id, item, specs, tree, model)
+	if fixed >= 0.0:
+		return {"kind": "fixed", "w": fixed}
+	if PowerSignature.has_family(specs):
+		return {"kind": "sig", "specs": specs, "level_w": -1.0}
+	return {"kind": "fixed", "w": _rated_watts_from_specs(specs)}
 
-	# 4. Live scene devices report their own draw.
+
+## Scene device, live HA power, or a routed light string. -1 means "no override".
+static func _fixed_override_w(item_id: String, item: Dictionary, specs: Dictionary,
+		tree: SceneTree, model: GraphModel) -> float:
 	var dev_path := str(item.get("device_path", specs.get("scene_device_path", "")))
 	if not dev_path.is_empty():
 		var node := _resolve_node(tree, dev_path)
@@ -619,18 +743,109 @@ static func _item_draw_watts(
 				return maxf(0.0, float(node.call("get_current_power")))
 			if node.has_method("get_power_consumption"):
 				return maxf(0.0, float(node.call("get_power_consumption")))
-
-	# 5. Wave 8 lights-as-wires: light-string loads scale with the routed 3D
-	# length of their feed wire (watts_per_m × route_length_m). Falls back to
-	# the rated wattage until the wire has a measured run.
+	if tree != null and tree.root != null:
+		var sm := tree.root.get_node_or_null("SimMode")
+		if sm != null and sm.has_method("is_live") and bool(sm.call("is_live")):
+			var live: Dictionary = specs.get("ha_live", {}) as Dictionary
+			var power: Variant = live.get("power", null)
+			if power is Dictionary and (power as Dictionary).has("value"):
+				return maxf(0.0, float((power as Dictionary).get("value", 0.0)))
 	var wpm := float(specs.get("watts_per_m", 0.0))
 	if wpm > 0.0 and model != null:
 		var run_m := _longest_route_length_m(model, item_id)
 		if run_m > 0.001:
 			return wpm * run_m
+	return -1.0
 
-	# 6. Fallback for simple loads: use rated wattage.
-	return _rated_watts_from_specs(specs)
+
+## Reachable loads as PowerSignature.coincide records, each tagged with every
+## closed breaker on the path from the site controller. Load-group children
+## are separate loads so each one keeps its own curve.
+static func _collect_signature_loads(model: GraphModel, tree: SceneTree, sim_host: Node,
+		flat: Array, restore_h: float) -> Array:
+	var out: Array = []
+	var visited := {}
+	var queue: Array = []
+	var own := GraphSystems.island_scopes(model)
+	for item: Dictionary in model.items:
+		if str(item.get("type", "")) != "controller":
+			continue
+		var cid := str(item.get("id", ""))
+		if cid.is_empty():
+			continue
+		if not own.is_empty() and own.has(str(item.get("scope_id", "root"))):
+			continue
+		var csp: Dictionary = item.get("specs", {}) as Dictionary
+		if bool(csp.get("destroyed", false)):
+			continue
+		for other in _ac_neighbor_ids(model, cid, flat):
+			queue.append([str(other), []])
+	while not queue.is_empty():
+		var pair: Array = queue.pop_front()
+		var nid := str(pair[0])
+		if visited.has(nid):
+			continue
+		visited[nid] = true
+		var brs: Array = pair[1]
+		var it: Dictionary = model.get_item(nid)
+		if it.is_empty() or bool(it.get("is_ghost", false)):
+			continue
+		var ty := str(it.get("type", ""))
+		var specs: Dictionary = it.get("specs", {}) as Dictionary
+		var next_brs := brs
+		if ty == "acbreaker" and BreakerTrip.is_closed(specs):
+			next_brs = brs.duplicate()
+			next_brs.append(nid)
+		if ty == "compound":
+			if str(specs.get("compound_kind", "")) == "load_group":
+				_append_group_loads(out, model, it, tree, sim_host, next_brs, restore_h)
+				continue
+			for other2 in _ac_neighbor_ids(model, nid, flat):
+				queue.append([str(other2), next_brs])
+			continue
+		if ty in LOAD_TYPES:
+			var rec := _coincide_record(nid, it, tree, sim_host, model, next_brs, restore_h)
+			if not rec.is_empty():
+				out.append(rec)
+		if ty in PASS_THROUGH_TYPES:
+			for other3 in _ac_neighbor_ids(model, nid, flat):
+				queue.append([str(other3), next_brs])
+	return out
+
+
+static func _append_group_loads(out: Array, model: GraphModel, compound: Dictionary,
+		tree: SceneTree, sim_host: Node, breakers: Array, restore_h: float) -> void:
+	var child_scope := str(compound.get("child_scope_id", ""))
+	if child_scope.is_empty():
+		return
+	for child: Dictionary in model.get_items_in_scope(child_scope):
+		if bool(child.get("is_ghost", false)):
+			continue
+		if str(child.get("type", "")) not in LOAD_TYPES:
+			continue
+		var cid := str(child.get("id", ""))
+		var rec := _coincide_record(cid, child, tree, sim_host, model, breakers, restore_h)
+		if not rec.is_empty():
+			out.append(rec)
+
+
+static func _coincide_record(item_id: String, item: Dictionary, tree: SceneTree,
+		sim_host: Node, model: GraphModel, breakers: Array, restore_h: float) -> Dictionary:
+	var classified := _classify_draw(item_id, item, tree, sim_host, model)
+	var kind := str(classified.get("kind", ""))
+	if kind == "off":
+		return {}
+	var rec := {"id": item_id, "breakers": breakers}
+	if kind == "fixed":
+		rec["fixed_w"] = float(classified.get("w", 0.0))
+		return rec
+	var specs: Dictionary = classified.get("specs", {}) as Dictionary
+	rec["specs"] = specs
+	rec["level_w"] = float(classified.get("level_w", -1.0))
+	var fam := str(specs.get("signature_family", ""))
+	if fam == "inductive_start" or fam == "battery":
+		rec["origin_h"] = _signature_origin(specs, restore_h)
+	return rec
 
 
 static func _longest_route_length_m(model: GraphModel, item_id: String) -> float:

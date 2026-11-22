@@ -335,11 +335,15 @@ func _draw_seg(r: int, i: int, s: Dictionary, fnt: Font, fs: int) -> void:
 		draw_string(fnt, Vector2(tx, rc.position.y + 12), UiText.fit(fnt, txt, fs, maxf(size.x - tx - 4, 20.0)),
 			HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(col, 1.0))
 	else:
-		draw_rect(rc, Color(col, 0.95 if hot or sel else 0.78), true)
-		if rc.size.x > 26.0:
+		var fill_a := 0.95 if hot or sel else 0.84
+		draw_rect(rc, Color(col, fill_a), true)
+		draw_rect(rc, Color(col.lightened(0.22), 0.55), false, 1.0)
+		if rc.size.x >= 38.0:
+			var lum := col.r * 0.299 + col.g * 0.587 + col.b * 0.114
+			var ink := Color(0.05, 0.07, 0.11, 0.96) if lum >= 0.50 else Color(0.95, 0.97, 1.0, 0.96)
 			var txt2 := UiText.fit(fnt, str(s.get("label", "")), fs, rc.size.x - 6.0)
-			draw_string(fnt, Vector2(rc.position.x + 3, rc.position.y + 12), txt2,
-				HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.06, 0.07, 0.10, 0.95))
+			draw_string(fnt, Vector2(rc.position.x + 4, rc.position.y + 12), txt2,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, fs, ink)
 	if hot or sel:
 		draw_rect(rc.grow(1.0), Color(1, 1, 1, 0.9 if sel else 0.6), false, 1.5)
 	if bool(s.get("editable", false)) and hot:

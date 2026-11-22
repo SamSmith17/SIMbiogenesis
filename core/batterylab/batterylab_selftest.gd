@@ -16,7 +16,7 @@ extends SceneTree
 ## JSON, graph specs read back by BatteryChemistry, the builder's parts,
 ## cutaway and picking.
 
-const EXPECTED_CHECKS := 2057
+const EXPECTED_CHECKS := 2532
 
 var _pass := 0
 var _fail := 0
@@ -44,6 +44,7 @@ func _initialize() -> void:
 	_test_conductors()
 	_test_presets()
 	_test_pack_by_hand()
+	_test_drag()
 	_test_spec_key()
 	_test_builder()
 	_test_bms_logic()
@@ -454,6 +455,23 @@ func _test_presets() -> void:
 	_ok(int(rk["layout"]["enclosure"]["rack_u"]) == 4, "48 V 105 Ah rack is 4U")
 	var td: Vector3 = rk["layout"]["cells"][0]["term_d"]
 	_ok(absf(td.y) < 0.1, "laid-down cells' terminals face sideways")
+	# The gallery shops on the street price per nameplate kWh, not the parts estimate.
+	var shop_bad: Array = []
+	for b2 in bs:
+		var pb: Dictionary = b2
+		var price := float(pb["price_usd"])
+		var facts := BattPresets.shop_facts(pb["spec"], price)
+		var want := price / float(facts["kwh"])
+		var line := BattPresets.shop_line(pb["spec"], price)
+		if price <= 0.0 or absf(float(facts["per_kwh"]) - want) > 0.01 \
+				or not str(facts["price"]).begins_with("$") or not str(facts["per"]).ends_with("/kWh") \
+				or not line.begins_with(str(facts["price"])):
+			shop_bad.append(str(pb["id"]))
+	_ok(shop_bad.is_empty(), "every built-in shows its street price and $/kWh (%s)" % str(shop_bad))
+	var rack_shop := BattPresets.shop_facts(BattPresets.builtin("rack_48v_105"), 1099.0)
+	_near(float(rack_shop["per_kwh"]), 1099.0 / 5.376, 0.05, "48 V 105 Ah rack is $204/kWh at $1,099")
+	_ok(str(rack_shop["price"]) == "$1,099" and str(rack_shop["per"]) == "$204/kWh",
+			"the rack card reads $1,099 · $204/kWh")
 
 
 func _test_pack_by_hand() -> void:
@@ -468,6 +486,8 @@ func _test_pack_by_hand() -> void:
 	_near(float(e["r_cells"]), 16.0 * 0.25e-3, 1e-9, "cells 16 × 0.25 mΩ")
 	_ok(str(e["limit_by"]) == "bms" and is_equal_approx(float(e["cont_discharge_a"]), 200.0), "the 200 A BMS sets the current")
 	_near(float(e["sag_v"]), 200.0 * float(e["r_ohm"]), 1e-9, "sag = I × R")
+	_ok(int(d["arrange"]["rows"]) == 2 and int(d["arrange"]["layers"]) == 1 and str(d["arrange"]["face"]) == "z" and str(d["arrange"]["orient"]) == "up",
+			"the YIXIANG kit is one layer, two rows, panel on the short end")
 	_ok(bool(d["plates"]), "prismatic LFP gets a compression fixture")
 	_ok(not (d["layout"]["rods"] as Array).is_empty(), "the fixture has rods")
 	# A 4S2P drop-in: two cells per group.
@@ -505,6 +525,129 @@ func _test_pack_by_hand() -> void:
 	sp7["bms"] = {"id": ""}
 	var d7 := BattDesign.solve(sp7)
 	_ok(str(d7["bms_id"]) == "batrium_watchmon", "40S falls to the Batrium")
+
+
+func _fit_c(d: Dictionary, id: String) -> Vector3:
+	for f in (d["layout"]["fittings"] as Array):
+		if str(f["id"]) == id:
+			return f["c"]
+	return Vector3.INF
+
+
+func _cell_c(d: Dictionary, id: String) -> Vector3:
+	for ce in (d["layout"]["cells"] as Array):
+		if str(ce["id"]) == id:
+			return ce["c"]
+	return Vector3.INF
+
+
+func _lead_last(d: Dictionary, id: String) -> Vector3:
+	for ld in (d["layout"]["leads"] as Array):
+		if str(ld["id"]) == id:
+			var pts: Array = ld["pts"]
+			return pts[pts.size() - 1]
+	return Vector3.INF
+
+
+func _harness_last(d: Dictionary, id: String) -> Vector3:
+	for h in (d["layout"]["harness"] as Array):
+		if str(h["id"]) == id:
+			var pts: Array = h["pts"]
+			return pts[pts.size() - 1]
+	return Vector3.INF
+
+
+func _pack_pos(d: Dictionary, id: String) -> Vector3:
+	for p in (d["packs"] as Array):
+		if str(p["id"]) == id:
+			return p["pos"]
+	return Vector3.INF
+
+
+func _cable_pt(d: Dictionary, id: String) -> Vector3:
+	for cb in (d["cables"] as Array):
+		if str(cb["id"]) == id:
+			return (cb["pts"] as Array)[0]
+	return Vector3.INF
+
+
+## Drag-to-reposition: the nudge is a plain offset in the finished frame,
+## and the leads are drawn again so they still land on the part.
+func _test_drag() -> void:
+	var n5 := BattLayout.drag_nudge(Vector3(1, 2, 3), Vector3.ZERO, Vector3(10.2, -4.4, 0.2), 5.0)
+	_near(n5.x, 10.0, 1e-6, "a drag snaps x to 5 mm")
+	_near(n5.y, 0.0, 1e-6, "a drag snaps y to 5 mm")
+	_near(n5.z, 5.0, 1e-6, "a drag snaps z to 5 mm")
+	var n1 := BattLayout.drag_nudge(Vector3.ZERO, Vector3(1, 1, 1), Vector3(2.4, 1.2, 0.1), 1.0)
+	_near(n1.x, 1.0, 1e-6, "Shift drag snaps x to 1 mm")
+	_near(n1.y, 0.0, 1e-6, "Shift drag snaps y to 1 mm")
+	_near(n1.z, -1.0, 1e-6, "Shift drag snaps z to 1 mm")
+	var nf := BattLayout.drag_nudge(Vector3(1, 0, 0), Vector3.ZERO, Vector3(0.4, 0.2, -0.3), 0.0)
+	_near(nf.x, 1.4, 1e-6, "Alt drag keeps the fraction in x")
+	_near(nf.y, 0.2, 1e-6, "Alt drag keeps the fraction in y")
+	_near(nf.z, -0.3, 1e-6, "Alt drag keeps the fraction in z")
+	var stored := {}
+	BattLayout.write_nudge(stored, "breaker", Vector3(12.04, -8.02, 0.0))
+	var got := BattLayout.nudge_of(stored, "breaker")
+	_near(got.x, 12.0, 1e-4, "a stored nudge rounds to 0.1 mm")
+	_near(got.y, -8.0, 1e-4, "a stored nudge rounds y to 0.1 mm")
+	_ok(BattLayout.nudge_of(stored, "nope").is_zero_approx(), "a part with no nudge reads zero")
+	BattLayout.write_nudge(stored, "breaker", Vector3(0.2, 0.1, 0.0))
+	_ok(not stored.has("nudge"), "a nudge under 0.5 mm is dropped")
+	_ok(BattLayout.can_drag("cell") and BattLayout.can_drag("term_pos") and BattLayout.can_drag("breaker") and BattLayout.can_drag("bms"),
+			"cells, terminals, the breaker and the BMS can be dragged")
+	_ok(not BattLayout.can_drag("case") and not BattLayout.can_drag("busbar") and not BattLayout.can_drag("lead"),
+			"the case, the busbars and the leads cannot be dragged")
+	var rack := BattPresets.builtin("rack_48v_105")
+	var d0 := BattDesign.solve(rack)
+	var rack_b := rack.duplicate(true)
+	BattLayout.write_nudge(rack_b, "breaker", Vector3(12, -8, 0))
+	_ok(BattSpec.key_of(rack_b) != BattSpec.key_of(rack), "a nudge changes the design key")
+	var d1 := BattDesign.solve(rack_b)
+	var c0 := _fit_c(d0, "breaker")
+	var c1 := _fit_c(d1, "breaker")
+	_near(c1.x - c0.x, 12.0, 0.05, "the breaker moves 12 mm in x")
+	_near(c1.y - c0.y, -8.0, 0.05, "the breaker moves 8 mm down")
+	_near(c1.z - c0.z, 0.0, 0.05, "the breaker stays in z")
+	var e0 := _lead_last(d0, "lead_pos_breaker")
+	var e1 := _lead_last(d1, "lead_pos_breaker")
+	_near(e1.x - e0.x, 12.0, 0.05, "the breaker lead follows in x")
+	_near(e1.y - e0.y, -8.0, 0.05, "the breaker lead follows in y")
+	var bin: Vector3 = d1["layout"]["terminals"]["breaker_in"]
+	_ok(e1.distance_to(bin) < 1.0, "the breaker lead lands on the breaker")
+	_near(_cell_c(d1, "cell_8_0").distance_to(_cell_c(d0, "cell_8_0")), 0.0, 0.05, "moving the breaker leaves the cells")
+	var rack_c := rack.duplicate(true)
+	BattLayout.write_nudge(rack_c, "cell_8_0", Vector3(0, 14, 0))
+	var d2 := BattDesign.solve(rack_c)
+	var a := _cell_c(d0, "cell_8_0")
+	var b := _cell_c(d2, "cell_8_0")
+	_near(b.y - a.y, 14.0, 0.05, "a cell moves up by its nudge")
+	_near(b.x - a.x, 0.0, 0.05, "a cell nudge does not slide it sideways")
+	_near(_cell_c(d2, "cell_0_0").distance_to(_cell_c(d0, "cell_0_0")), 0.0, 0.05, "the other cells stay put")
+	var rack_m := rack.duplicate(true)
+	BattLayout.write_nudge(rack_m, "bms", Vector3(15, 0, 0))
+	var d3 := BattDesign.solve(rack_m)
+	var bc0: Vector3 = d0["layout"]["bms"]["c"]
+	var bc1: Vector3 = d3["layout"]["bms"]["c"]
+	_near(bc1.x - bc0.x, 15.0, 0.05, "the BMS moves 15 mm")
+	var cn0: Vector3 = d0["layout"]["bms"]["conn"]
+	var cn1: Vector3 = d3["layout"]["bms"]["conn"]
+	_ok((cn1 - cn0).distance_to(Vector3(15, 0, 0)) < 0.05, "the BMS connector moves with the board")
+	var h0 := _harness_last(d0, "tap_B0")
+	var h1 := _harness_last(d3, "tap_B0")
+	_ok((h1 - h0).distance_to(Vector3(15, 0, 0)) < 0.05, "the balance lead follows the BMS")
+	var bk := BankSpec.of_pack(BattPresets.builtin("rack_48v_105"), 1, 4, "Nudge")
+	var bd0 := BankDesign.solve(bk)
+	BattLayout.write_nudge(bk, "pack_1", Vector3(40, 0, 25))
+	var bd1 := BankDesign.solve(bk)
+	var p0 := _pack_pos(bd0, "pack_1")
+	var p1 := _pack_pos(bd1, "pack_1")
+	_near(p1.x - p0.x, 40.0, 0.05, "a pack moves 40 mm")
+	_near(p1.z - p0.z, 25.0, 0.05, "a pack moves 25 mm forward")
+	_near(_pack_pos(bd1, "pack_0").distance_to(_pack_pos(bd0, "pack_0")), 0.0, 0.05, "the other packs stay")
+	var w0 := _cable_pt(bd0, "str_pos_1")
+	var w1 := _cable_pt(bd1, "str_pos_1")
+	_ok((w1 - w0).distance_to(Vector3(40, 0, 25)) < 1.0, "the string cable follows the pack")
 
 
 func _test_spec_key() -> void:
@@ -562,11 +705,42 @@ func _test_builder() -> void:
 	var b3 := BattBuilder.build_from_design(BattDesign.solve(BattPresets.builtin("fla_6v_225")))
 	_ok(b3.get_node_or_null("VentCaps") != null, "a flooded block has vent caps")
 	b3.free()
+	var folded: Array = []
+	var kit_flex := false
 	for bi in BattPresets.builtins():
 		var bb := BattBuilder.build_from_design(BattDesign.solve((bi as Dictionary)["spec"]))
 		_ok(bb.cell_count() == int(bb.design["spec"]["series"]) * int(bb.design["spec"]["parallel"]),
 				"%s builds every cell" % (bi as Dictionary)["id"])
+		var kit := str((bi as Dictionary)["id"]) == "diy_16s_280"
+		if kit:
+			kit_flex = not (bb._lead_routes as Dictionary).is_empty()
+		for lead_id in bb._lead_routes:
+			var route: Dictionary = bb._lead_routes[lead_id]
+			if kit and float(route["r"]) > 12.0:
+				kit_flex = false
+			var path: PackedVector3Array = route["path"]
+			for i in range(2, path.size()):
+				var d0 := path[i - 1] - path[i - 2]
+				var d1 := path[i] - path[i - 1]
+				if d0.length() < 0.4 or d1.length() < 0.4:
+					continue
+				if d0.normalized().dot(d1.normalized()) < 0.3:
+					folded.append("%s %s" % [(bi as Dictionary)["id"], lead_id])
+					break
 		bb.free()
+	_ok(folded.is_empty(), "no lead folds back on itself (%s)" % str(folded))
+	_ok(kit_flex, "the YIXIANG pack's main leads are flexible busbars")
+	# A stub of one bend radius used to run past a close corner and come back.
+	_near(BattWire.stub_len(Vector3.ZERO, Vector3.UP, 40.0, Vector3(0, 200, 0)), 40.0, 1e-6,
+			"a long run leaves the barrel for a full bend radius")
+	_near(BattWire.stub_len(Vector3.ZERO, Vector3.UP, 40.0, Vector3(0, 10, 0)), 4.5, 1e-6,
+			"a close corner stops the stub short of it")
+	_ok(BattWire.stub_len(Vector3.ZERO, Vector3.UP, 40.0, Vector3(0, -5, 0)) == 0.0,
+			"a corner behind the lug gets no stub")
+	var wide := BattWire.flex_stack(85.0)
+	var one := BattWire.flex_stack(21.2)
+	_ok(int(wide["n"]) == 2 and int(one["n"]) == 1 and is_equal_approx(float(wide["r"]), 8.0),
+			"a 3/0 run is two flexible bars and a 4 AWG run is one, both bent at 8 mm")
 
 
 # ---------------------------------------------------------------------------

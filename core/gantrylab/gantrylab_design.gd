@@ -210,7 +210,8 @@ static func _checks(s: Dictionary, d: Dictionary) -> Array:
 		if stretch > tol:
 			out.append({"level": "warn", "text": "The %s stretches %.2f mm under %.0f N of acceleration over %.1f m of belt: ringing and corner bulge. A wider belt, less acceleration, or input shaping." % [str(x_dr["label"]), stretch, f_n, span_m]})
 		else:
-			out.append({"level": "ok", "text": "Belt stretch %.3f mm under %.0f N on %.1f m of %s." % [stretch, f_n, span_m, str(x_dr["label"])]})
+			var stretch_txt := ("%.0f µm" % (stretch * 1000.0)) if stretch < 0.1 else ("%.2f mm" % stretch)
+			out.append({"level": "ok", "text": "Belt stretch %s under %.0f N on %.1f m of %s." % [stretch_txt, f_n, span_m, str(x_dr["label"])]})
 		var hz := float(d["stats"]["ringing_hz"])
 		if hz > 0.0:
 			out.append({"level": "ok", "text": "The toolhead rings at about %.0f Hz on its belts — the frequency input shaping is tuned to." % hz})
@@ -227,7 +228,8 @@ static func _checks(s: Dictionary, d: Dictionary) -> Array:
 		if sag > tol:
 			out.append({"level": "warn" if sag < tol * 4.0 else "error", "text": "The %.2f m %s X beam sags %.2f mm under %.0f N at mid-span (tolerance %.2f mm): a deeper profile (2060, C-Beam) or a shorter span." % [span_x, str(GantryLabParts.profile(gf)["label"]), sag, f_n, tol]})
 		else:
-			out.append({"level": "ok", "text": "X beam sag %.3f mm under %.0f N over %.2f m of %s." % [sag, f_n, span_x, str(GantryLabParts.profile(gf)["label"])]})
+			var sag_txt := ("%.0f µm" % (sag * 1000.0)) if sag < 0.1 else ("%.2f mm" % sag)
+			out.append({"level": "ok", "text": "X beam sag %s under %.0f N over %.2f m of %s." % [sag_txt, f_n, span_x, str(GantryLabParts.profile(gf)["label"])]})
 	if kin == "router":
 		var pf := str(s["frame"]["profile"])
 		var span_y := float(lay["spans"].get("y_rail_m", 0.0))

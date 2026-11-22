@@ -158,6 +158,10 @@ const CURATED_MODELS := {
 const DYNAMIC_MODELS := {
 	# A Battery Lab bank: its packs as crates (BankDesign.packed_spec, from the
 	# record's battery_bank_spec); this is the fallback.
+	# A Controller Lab unit: one box the size of the unit (CtrlDesign.packed_spec
+	# from the record's controller_spec); this is the fallback.
+	"ctrllab_unit": {"w_m": 0.4, "d_m": 0.25, "h_m": 0.55, "mass_kg": 12.0,
+		"form": "crate", "this_side_up": true, "source": "estimated"},
 	"batterylab_bank": {"w_m": 0.6, "d_m": 0.5, "h_m": 0.25, "mass_kg": 50.0, "count": 2,
 		"form": "crate", "this_side_up": true, "source": "estimated"},
 	# Computed from the record's rack_spec (PalletRackBuilder.packed_spec_for);

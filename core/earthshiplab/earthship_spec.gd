@@ -131,13 +131,20 @@ static func resolve(spec_in: Variant) -> Dictionary:
 		s[b] = bool(s.get(b, false))
 	s["berm_ends"] = bool(s.get("berm_ends", true))
 	s["ramp"] = bool(s.get("ramp", true))
+	if spec_in is Dictionary and (spec_in as Dictionary).has("room_lights"):
+		s["room_lights"] = bool((spec_in as Dictionary)["room_lights"])
+	if spec_in is Dictionary and (spec_in as Dictionary).get("model_lights") is Array:
+		s["model_lights"] = ((spec_in as Dictionary)["model_lights"] as Array).duplicate(true)
 	s["name"] = str(s.get("name", "Earthship"))
 	return s
 
 
 ## Stable cache key (JSON keeps ints and floats apart the way a save does).
 static func key_of(spec: Dictionary) -> String:
-	return JSON.stringify(resolve(spec))
+	var s := resolve(spec)
+	s.erase("room_lights")
+	s.erase("model_lights")
+	return JSON.stringify(s)
 
 
 static func to_json_safe(spec: Dictionary) -> Dictionary:

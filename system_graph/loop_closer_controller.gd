@@ -389,7 +389,8 @@ func open_list(scope: String = "") -> void:
 	if scr == null:
 		return
 	var md: Node = scr.new()
-	get_tree().root.add_child(md)
+	var host: Node = view.get_viewport() if (view != null and view.get_viewport() != null) else get_tree().root
+	host.add_child(md)
 	md.call("open_for", self, scope)
 
 
@@ -550,7 +551,8 @@ func open_challenges() -> void:
 	if scr == null:
 		return
 	var md: Node = scr.new()
-	get_tree().root.add_child(md)
+	var host: Node = view.get_viewport() if (view != null and view.get_viewport() != null) else get_tree().root
+	host.add_child(md)
 	md.call("open_for", self)
 
 

@@ -50,6 +50,7 @@ var _sheet_index := 0
 var _keep_glb := true
 
 # UI
+var _shell: DesignerShell = null
 var _panel: PanelContainer
 var _name_edit: LineEdit
 var _subtitle: Label
@@ -132,8 +133,7 @@ func open(opts: Dictionary = {}) -> void:
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_process(true)
-	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
-	UiFit.keep_fitted(_panel, WANT)
+	_shell.open()
 	_refresh_design_list()
 	_built_geom = ""
 	_studio_wind = float(_spec["site"]["design_wind_ms"])
@@ -151,7 +151,8 @@ func close() -> void:
 	set_process(false)
 	if _viewport != null:
 		_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
-	CursorController.release_modal(MODAL_NAME)
+	if _shell != null and _shell.is_open():
+		_shell.close()
 
 
 func is_open() -> bool:
@@ -217,77 +218,37 @@ func _input(e: InputEvent) -> void:
 # Layout
 # ---------------------------------------------------------------------------
 
+func shell() -> DesignerShell:
+	return _shell
+
+
 func _build_ui() -> void:
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.55)
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	add_child(dim)
-	_panel = PanelContainer.new()
-	_panel.add_theme_stylebox_override("panel", UITheme.panel_style())
-	add_child(_panel)
-	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	_panel.add_child(root)
-	root.add_child(_build_header())
-	var body := HBoxContainer.new()
-	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body.add_theme_constant_override("separation", UITheme.SPACE_MD)
-	root.add_child(body)
-	body.add_child(_build_left())
-	body.add_child(_build_centre())
-	body.add_child(_build_right())
-	root.add_child(_build_footer())
-
-
-func _build_header() -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	var icon := TextureRect.new()
-	icon.texture = UiIcons.icon("wind", 22)
-	icon.modulate = UITheme.C_PRIMARY
-	icon.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
-	row.add_child(icon)
-	var title := Label.new()
-	title.text = "Wind turbine designer"
-	title.add_theme_font_size_override("font_size", UITheme.FONT_XL)
-	title.add_theme_color_override("font_color", UITheme.C_TEXT)
-	row.add_child(title)
-	_name_edit = LineEdit.new()
-	_name_edit.custom_minimum_size = Vector2(240, 0)
+	_shell = DesignerShell.create("Wind turbine designer", "wind", {
+		"name_id": MODAL_NAME, "want": WANT, "name_edit": true, "undo": true,
+		"left_label": "Turbines", "left_w": 250.0, "right_w": 410.0,
+		"icon_color": UITheme.C_PRIMARY})
+	add_child(_shell)
+	_panel = _shell.panel
+	_name_edit = _shell.name_edit
 	_name_edit.placeholder_text = "Design name"
 	_name_edit.text_submitted.connect(func(_t): _on_name_changed())
 	_name_edit.focus_exited.connect(_on_name_changed)
-	row.add_child(_name_edit)
-	_subtitle = Label.new()
-	_subtitle.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	_subtitle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_subtitle.clip_text = true
-	_subtitle.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	row.add_child(_subtitle)
-	_undo_btn = IconButton.make("undo-2", "Undo (Ctrl+Z)", _undo_step)
-	row.add_child(_undo_btn)
-	_redo_btn = IconButton.make("redo-2", "Redo (Ctrl+Y)", _redo_step)
-	row.add_child(_redo_btn)
-	row.add_child(IconButton.close(close))
-	return row
-
-
-func _scroll_column(width: float) -> Array:
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(width, 0)
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var box := VBoxContainer.new()
-	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	box.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	scroll.add_child(box)
-	return [scroll, box]
+	_subtitle = _shell.subtitle
+	_undo_btn = _shell.undo_btn
+	_redo_btn = _shell.redo_btn
+	_shell.undo_requested.connect(_undo_step)
+	_shell.redo_requested.connect(_redo_step)
+	_shell.closed.connect(close)
+	_shell.left.add_child(_build_left())
+	_shell.centre.add_child(_build_centre())
+	_shell.right.add_child(_build_right())
+	_build_footer()
 
 
 func _build_left() -> Control:
-	var col := _scroll_column(250)
-	var box: VBoxContainer = col[1]
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	box.add_child(SectionHeader.make("Turbines", "layout-grid"))
 	_design_list = DesignGallery.make("windlab")
 	_design_list.set_thumbnailer(_thumb_for)
@@ -303,12 +264,14 @@ func _build_left() -> Control:
 		btn.pressed.connect(b[2])
 		lib.add_child(btn)
 	box.add_child(lib)
-	_note(box, "Power in the wind is ½·ρ·A·v³: twice the wind, eight times the power, so the site's wind and the hub's " +
+	var how_sec := Collapsible.make("How it works", false).persist("windlab", "how")
+	box.add_child(how_sec)
+	_note(how_sec.body, "Power in the wind is ½·ρ·A·v³: twice the wind, eight times the power, so the site's wind and the hub's " +
 		"height matter more than anything else here. A rotor turns a fraction Cp of it into shaft power at its best " +
 		"tip speed ratio λ = ω·R / v — drag rotors (Savonius, Ugrinsky) near λ 0.5–1 with Cp 0.15–0.3, lift rotors " +
 		"(Darrieus, propellers) near λ 3–7 with Cp 0.3–0.47; no rotor beats Betz's 16/27. The generator has to be " +
 		"geared so it makes its voltage at the rotor's speed, and its cogging decides the wind it starts in.")
-	return col[0]
+	return box
 
 
 func _build_centre() -> Control:
@@ -438,8 +401,9 @@ func _build_studio_world() -> void:
 
 
 func _build_right() -> Control:
-	var col := _scroll_column(420)
-	var box: VBoxContainer = col[1]
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	_bound_lbl = Label.new()
 	_bound_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_bound_lbl.add_theme_color_override("font_color", UITheme.C_PRIMARY)
@@ -499,43 +463,22 @@ func _build_right() -> Control:
 	box.add_child(_status_lbl)
 	_build_settings_rows()
 	_col = DesignerColumn.setup(box, "windlab", {"open": ["Rotor"], "fold": ["At the design wind", "Bill of materials", "Files and making it"]})
-	return col[0]
+	return box
 
 
-func _build_footer() -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	var hint := Label.new()
-	hint.text = "Drag to orbit · wheel to zoom · hover a part to name it"
-	hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(hint)
+func _build_footer() -> void:
+	_shell.set_hint("Drag to orbit · wheel to zoom · hover a part to name it")
 	_keep_chk = CheckBox.new()
 	_keep_chk.text = "Keep its 3D model"
 	_keep_chk.tooltip_text = "A shipped turbine model (VAWT, small HAWT) keeps its look and just turns and generates as designed"
 	_keep_chk.button_pressed = true
 	_keep_chk.toggled.connect(func(v): _keep_glb = v)
-	row.add_child(_keep_chk)
-	_apply_btn = Button.new()
-	_apply_btn.text = "Apply to turbine"
-	_apply_btn.tooltip_text = "Write this design onto the graph's turbine: its power curve, speeds and (unless kept) its 3D model"
-	UITheme.style_button(_apply_btn)
-	_apply_btn.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	_apply_btn.pressed.connect(func(): apply())
-	row.add_child(_apply_btn)
-	_place_btn = Button.new()
-	_place_btn.text = "Place in world"
-	_place_btn.tooltip_text = "Place a new turbine built to this design (its graph node comes with it)"
-	UITheme.style_button(_place_btn)
-	_place_btn.pressed.connect(_on_place)
-	row.add_child(_place_btn)
-	var close_b := Button.new()
-	close_b.text = "Close"
-	UITheme.style_button(close_b)
-	close_b.pressed.connect(close)
-	row.add_child(close_b)
-	return row
+	_shell.footer.add_child(_keep_chk)
+	_apply_btn = _shell.add_button("Apply to turbine", DesignerShell.PRIMARY, func(): apply(),
+		"Write this design onto the graph's turbine: its power curve, speeds and (unless kept) its 3D model")
+	_place_btn = _shell.add_button("Place in world", DesignerShell.PRIMARY, _on_place,
+		"Place a new turbine built to this design (its graph node comes with it)")
+	_shell.add_button("Close", DesignerShell.SECONDARY, close)
 
 
 # ---------------------------------------------------------------------------

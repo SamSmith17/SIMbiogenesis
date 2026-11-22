@@ -45,11 +45,14 @@ static func amps(specs: Dictionary, watts: float) -> float:
 	return maxf(watts, 0.0) / volts(specs)
 
 
-## One look at a breaker carrying `watts` at sim hour `now_h`. Returns the
-## spec keys to write ({} = nothing changed): `live_amps`, `over_since_h`
-## (-1 = not over), and on a trip `closed: false`, `tripped: true`,
-## `trip_amps`.
-static func step(specs: Dictionary, watts: float, now_h: float) -> Dictionary:
+## One look at a breaker carrying average `watts` at sim hour `now_h`.
+## `peak_watts` < 0 means the average is also the peak (the old callers).
+## The thermal element follows the average. The magnetic element trips this
+## step when the coincident peak reaches INSTANT_X times the rating, even
+## while the average is still under it. Returns the spec keys to write
+## ({} = nothing changed): `live_amps`, `over_since_h` (-1 = not over), and
+## on a trip `closed: false`, `tripped: true`, `trip_amps`.
+static func step(specs: Dictionary, watts: float, now_h: float, peak_watts: float = -1.0) -> Dictionary:
 	var out := {}
 	if not is_closed(specs):
 		if absf(float(specs.get("live_amps", 0.0))) > 0.001:
@@ -58,15 +61,24 @@ static func step(specs: Dictionary, watts: float, now_h: float) -> Dictionary:
 			out["over_since_h"] = -1.0
 		return out
 	var a := amps(specs, watts)
+	var peak_a := a if peak_watts < 0.0 else amps(specs, peak_watts)
+	var shown := maxf(a, peak_a)
 	var rate := rating_a(specs)
-	if absf(float(specs.get("live_amps", 0.0)) - a) > 0.05:
-		out["live_amps"] = snappedf(a, 0.01)
+	if absf(float(specs.get("live_amps", 0.0)) - shown) > 0.05:
+		out["live_amps"] = snappedf(shown, 0.01)
+	if peak_a >= rate * INSTANT_X:
+		out["closed"] = false
+		out["tripped"] = true
+		out["trip_amps"] = snappedf(peak_a, 0.1)
+		out["live_amps"] = 0.0
+		out["over_since_h"] = -1.0
+		return out
 	var since := float(specs.get("over_since_h", -1.0))
 	if a <= rate:
 		if since >= 0.0:
 			out["over_since_h"] = -1.0
 		return out
-	# Over. A scrub back before the overload began starts the count again.
+	# Over on the average. A scrub back before the overload began starts the count again.
 	if since < 0.0 or now_h < since:
 		since = now_h
 		out["over_since_h"] = now_h

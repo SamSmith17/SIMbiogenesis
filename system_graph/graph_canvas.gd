@@ -627,6 +627,11 @@ func _site_draws_schematic_wires() -> bool:
 ## Node body rendering for model-bearing nodes: "preview" = full-bleed GLB
 ## thumbnail (default); "card" = classic framed node card. View options ▾.
 var node_display_mode: String = "preview"
+## Layout ▾ → Show models. A node with a linked model is drawn AS that model:
+## a picture from the default angle on the flat graph, the mesh itself in the
+## 3D ring, and the placed model (no card frame) in Site Plan and Elevation.
+var show_as_models: bool = false
+var _model_stage: GraphModelStage = null
 ## Title band on full-bleed preview nodes (View options ▾ toggle).
 var show_preview_labels: bool = true
 ## Freeform-only display scale for the SoI reference ring. Shift+scroll (with
@@ -4648,9 +4653,10 @@ func _v3_draw_hint() -> void:
 	var tw := fnt.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	var ph := float(fs) + 12.0
 	var plate := Rect2(Vector2(14.0, size.y - ph - 14.0), Vector2(tw + 20.0, ph))
-	GraphFastDraw.rrect(self, plate, 6.0, Color(0.05, 0.08, 0.16, 0.78))
+	GraphFastDraw.rrect(self, plate, 8.0, Color(UITheme.C_PANEL.r, UITheme.C_PANEL.g, UITheme.C_PANEL.b, 0.90))
+	draw_rect(plate, Color(UITheme.C_BORDER, 0.75), false, 1.0)
 	draw_string(fnt, plate.position + Vector2(10.0, float(fs) + 3.0), txt,
-		HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.80, 0.88, 0.98, 0.92))
+		HORIZONTAL_ALIGNMENT_LEFT, -1, fs, UITheme.C_TEXT_S.lightened(0.15))
 
 
 func _draw_layout_regions() -> void:
@@ -5702,7 +5708,7 @@ func _estimate_connection_flow_now(
 		var actual_w := 0.0
 		if tree != null:
 			if _ac_index.is_empty():
-				_ac_index = GraphAcLoad.delivered_index(model, tree, _find_sim_load_host())
+				_ac_index = GraphAcLoad.delivered_index(model, tree, _find_sim_load_host(), [], false, true)
 			actual_w = GraphAcLoad.delivered_watts_indexed(model, _ac_index, conn)
 		# Fallback when delivered-side BFS can't see a controller (island / hostless):
 		# use the sink item's live draw if one endpoint is a load.
@@ -6716,6 +6722,126 @@ func _flows_icon_of(item_id: String) -> Array:
 var _flows_last_pic: Dictionary = {}
 var _flows_prop_models: Dictionary = {}
 var _flows_prop_models_rev := -1
+
+
+## The catalog id of a node's linked model, or "" when it has none.
+func _node_model_id(item: Dictionary) -> String:
+	var pair: Array = _flows_model_of(item)
+	return str(pair[0]) if not pair.is_empty() else ""
+
+
+func _stage_model_of(item: Dictionary) -> Array:
+	return _flows_model_of(item)
+
+
+func _ensure_model_stage() -> GraphModelStage:
+	if _model_stage != null and is_instance_valid(_model_stage):
+		return _model_stage
+	_model_stage = GraphModelStage.new()
+	_model_stage.name = "GraphModelStage"
+	add_child(_model_stage)
+	return _model_stage
+
+
+func _release_model_stage() -> void:
+	if _model_stage != null and is_instance_valid(_model_stage):
+		_model_stage.set_live(false)
+
+
+func _model_stage_has(item_id: String) -> bool:
+	return _model_stage != null and is_instance_valid(_model_stage) and _model_stage.has_model(item_id)
+
+
+## The 3D ring's meshes, drawn where the cards are. The texture is shifted by
+## the pan and the arrangement centre so a mesh centre lands on its card.
+func _draw_model_stage() -> void:
+	var stage := _ensure_model_stage()
+	stage.set_live(true)
+	var tex := stage.present(_v3, _visible_items(), Callable(self, "_stage_model_of"), size, _zoom)
+	if tex == null:
+		return
+	var shift := _pan + _v3.centre() * _zoom
+	draw_texture_rect(tex, Rect2(shift, size), false)
+
+
+## Flat graph: the node IS the model's picture, from the preview camera
+## (default angle unless the item set its own). Ports stay on the rect.
+func _render_model_picture(item: Dictionary) -> void:
+	var center := size * 0.5
+	var rect := Rect2(_item_screen_tl(item, center), _item_screen_size(item))
+	var iid := str(item.get("id", ""))
+	var is_sel := iid == selected_item_id or selected_item_ids.has(iid)
+	var accent: Color = NODE_BORDER_COLORS.get(str(item.get("type", "")), C_BORDER)
+	if is_sel:
+		accent = C_SELECTED_BORDER
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate()
+	specs["model_id"] = _node_model_id(item)
+	if not _draw_model_fit(rect, specs):
+		GraphFastDraw.rrect(self, rect, clampf(8.0 * _zoom, 3.0, 14.0),
+			Color(accent.r, accent.g, accent.b, 0.16))
+	if is_sel:
+		draw_rect(rect.grow(maxf(1.0, 1.4 * _zoom)), Color(accent.r, accent.g, accent.b, 0.95),
+			false, maxf(1.2, 1.6 * _zoom))
+	if show_preview_labels:
+		_draw_model_caption(rect, GraphPortLabels.node_name(item), accent)
+	_draw_item_handles(item, rect.position, rect.size)
+
+
+## 3D ring: the mesh is drawn by the stage. This pass is the ports, the name
+## and the selection, with no card behind them.
+func _render_model_anchor(item: Dictionary) -> void:
+	var center := size * 0.5
+	var rect := Rect2(_item_screen_tl(item, center), _item_screen_size(item))
+	var iid := str(item.get("id", ""))
+	var is_sel := iid == selected_item_id or selected_item_ids.has(iid)
+	var accent: Color = NODE_BORDER_COLORS.get(str(item.get("type", "")), C_BORDER)
+	if is_sel:
+		accent = C_SELECTED_BORDER
+		draw_rect(rect.grow(maxf(1.0, 1.4 * _zoom)), Color(accent.r, accent.g, accent.b, 0.95),
+			false, maxf(1.2, 1.6 * _zoom))
+	if show_preview_labels:
+		_draw_model_caption(rect, GraphPortLabels.node_name(item), accent)
+	_draw_item_handles(item, rect.position, rect.size)
+
+
+func _draw_model_fit(rect: Rect2, specs: Dictionary) -> bool:
+	if model_preview_service == null or not is_instance_valid(model_preview_service):
+		return false
+	if str(specs.get("model_id", "")).is_empty():
+		return false
+	if not model_preview_service.has_method("get_or_request"):
+		return false
+	var tex: ImageTexture = model_preview_service.call("get_or_request", specs) as ImageTexture
+	if tex == null:
+		return false
+	var tex_sz := tex.get_size()
+	if tex_sz.x < 1.0 or tex_sz.y < 1.0:
+		return false
+	var sc := minf(rect.size.x / tex_sz.x, rect.size.y / tex_sz.y)
+	var draw_sz := tex_sz * sc
+	draw_texture_rect(tex, Rect2(rect.position + (rect.size - draw_sz) * 0.5, draw_sz), false)
+	return true
+
+
+func _draw_model_caption(rect: Rect2, title: String, accent: Color) -> void:
+	if title.is_empty() or rect.size.y < 28.0:
+		return
+	var band_h := clampf(16.0 * _zoom, 13.0, 22.0)
+	var band := Rect2(Vector2(rect.position.x, rect.end.y - band_h), Vector2(rect.size.x, band_h))
+	GraphFastDraw.rrect(self, band, 5.0, Color(0.04, 0.06, 0.11, 0.82))
+	var fsize := int(clampf(band_h * 0.62, 10.0, 15.0))
+	_draw_fitted_label(Vector2(band.position.x + 6.0, band.position.y + band_h * 0.5 + float(fsize) * 0.36),
+		title, maxf(8.0, band.size.x - 12.0), fsize, accent.lerp(Color.WHITE, 0.35))
+
+
+## True when Site Plan / Elevation should drop the card and leave the placed
+## model as the node.
+func _model_stands_in(item: Dictionary, specs: Dictionary) -> bool:
+	if not show_as_models or not GraphSiteLayout.has_site_coords(item):
+		return false
+	if not str(specs.get("model_id", "")).is_empty():
+		return true
+	return not str(specs.get("bound_prop_id", item.get("bound_prop_id", ""))).is_empty()
 
 
 ## [model id, build extras] of a node: its own `model_id`, else its placed
@@ -9716,6 +9842,8 @@ func _draw() -> void:
 		draw_rect(Rect2(Vector2.ZERO, size), fill)
 	PerfSpan.begin("gv_d_bg")
 	var v3 := _v3_on()
+	if not (v3 and show_as_models):
+		_release_model_stage()
 	if v3:
 		_v3_draw_backdrop()
 	else:
@@ -9742,6 +9870,8 @@ func _draw() -> void:
 			_v3_draw_connectors()
 		else:
 			_draw_connections()
+		if v3 and show_as_models:
+			_draw_model_stage()
 		if pm != null:
 			pm.end("gv_wires")
 			pm.begin("gv_cards")
@@ -9767,7 +9897,8 @@ func _draw() -> void:
 			for item: Dictionary in on_screen:
 				_render_item(item)
 				_draw_item_overlays(item)
-				_v3_fog(item, cul_c)
+				if not (show_as_models and _node_model_id(item) != ""):
+					_v3_fog(item, cul_c)
 		else:
 			for item: Dictionary in on_screen:
 				_render_item(item)
@@ -11529,7 +11660,11 @@ func _draw_plant_body(rect: Rect2, specs: Dictionary) -> void:
 ## when not wired, so the user knows where to grab.  All other handles are only
 ## shown when they are actually connected to a wire.
 const _PRIMARY_HANDLES := {
-	"controller":  ["pvPositive", "pvNegative", "batteryPositive", "batteryNegative", "acOutput"],
+	# A designed controller's extra terminals (Controller Lab) show too; a
+	# plain controller has none of them.
+	"controller":  ["pvPositive", "pvNegative", "batteryPositive", "batteryNegative", "acOutput",
+		"pvPositive2", "pvNegative2", "pvPositive3", "pvNegative3", "pvPositive4", "pvNegative4",
+		"acInput", "genInput", "loadPositive", "loadNegative", "dcInPositive", "dcInNegative", "data"],
 	"appliance":   ["input"],
 	"acload":      ["input"],
 	"processor":   ["power_in", "energy_in"],
@@ -13597,6 +13732,16 @@ func _draw_site_magnifier(item: Dictionary, rect: Rect2, is_sel: bool) -> void:
 		elif itype == "plant":
 			border = Color(0.35, 0.85, 0.42, 1.0)
 	var c := rect.get_center()
+	# Show models: the placed mesh is the node. Keep a name and a selection
+	# halo, not the ring that reads as a card.
+	if _model_stands_in(item, specs):
+		if is_sel or is_hover or is_drag:
+			var side_m := maxf(minf(rect.size.x, rect.size.y), GraphSiteLayout.MIN_SITE_HIT_PX)
+			draw_arc(c, maxf(side_m * 0.5, 0.5) + 3.0, 0.0, TAU, 32,
+				Color(border.r, border.g, border.b, 0.7), maxf(1.25, 1.6 * _zoom), true)
+		if site_show_chips or is_sel or is_drag:
+			_draw_site_plan_chip_label(rect, _site_plan_chip_title(item, specs, itype), is_sel or is_drag)
+		return
 	# True footprint / OSM poly under the ring (ground truth, not opaque chrome).
 	_draw_true_footprint_outline(item, c, border)
 	_draw_osm_site_poly(item, c, border, is_sel)
@@ -13634,6 +13779,11 @@ func _draw_site_plan_chip(item: Dictionary, rect: Rect2, is_sel: bool) -> void:
 	var border := NODE_BORDER_COLORS.get(itype, C_BORDER) as Color
 	if is_sel:
 		border = C_SELECTED_BORDER
+	if _model_stands_in(item, specs):
+		if is_sel:
+			draw_rect(rect, Color(border.r, border.g, border.b, 0.85), false, minf(1.5, ELEV_STROKE_MAX_PX))
+		_draw_site_plan_chip_label(rect, _site_plan_chip_title(item, specs, itype), is_sel)
+		return
 	# OSM imports: amber roof / green field highlight matching world outlines.
 	# Watershed hillside catchments use teal so they read apart from roof rain.
 	if not str(specs.get("osm_tag", "")).is_empty():

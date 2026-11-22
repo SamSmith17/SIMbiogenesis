@@ -352,6 +352,7 @@ func _refresh_side() -> void:
 		row.text = str(_view.node(k)["name"]) if vt.is_empty() else "%s  ·  %s" % [str(_view.node(k)["name"]), vt]
 		row.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 		row.clip_text = true
+		row.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		row.tooltip_text = row.text
 		var kk := int(k)
 		row.pressed.connect(func() -> void: _view.zoom_to(kk))

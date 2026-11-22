@@ -511,6 +511,7 @@ static func tag(ci: CanvasItem, pos: Vector2, text: String, font: Font, fs: int,
 	var sz := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
 	var r := Rect2(pos, Vector2(sz.x + 12.0, fs + 8.0))
 	GraphFastDraw.rrect(ci, r, 4.0, TAG_BG)
+	ci.draw_rect(r, Color(STEEL, 0.45), false, 1.0)
 	if accent.a > 0.0:
 		ci.draw_rect(Rect2(r.position.x, r.position.y + 2.0, 3.0, r.size.y - 4.0), accent)
 	ci.draw_string(font, r.position + Vector2(6.0, fs + 2.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)

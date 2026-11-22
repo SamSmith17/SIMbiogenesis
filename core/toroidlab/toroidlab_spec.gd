@@ -235,6 +235,7 @@ static func to_json_safe(spec: Dictionary) -> Dictionary:
 ## The cache key (everything that changes geometry, parts or looks).
 static func key_of(spec: Dictionary) -> String:
 	var s := to_json_safe(spec)
+	s.erase("model_lights")
 	return str(hash(var_to_str(s)))
 
 

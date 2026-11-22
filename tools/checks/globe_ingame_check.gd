@@ -64,6 +64,9 @@ func run(main: Node, harness: Node) -> Dictionary:
 	_ok(gm.globe.has_rain(), "rain loads on the sim clock", dt)
 	_ok(dt.contains("Rain " + want.substr(0, 16).replace("T", " ")), "the rain slot is the sim clock's", "%s / %s" % [dt, want])
 	_ok(gm.globe.has_outline("soi") and gm.globe.has_outline("map"), "the SoI ring and the map's square are drawn")
+	var wind := gm.find_child("WindToggle", true, false) as CheckBox
+	if wind != null and not wind.button_pressed:
+		wind.button_pressed = true
 	var waited_w := 0
 	while gm.wind_line_segments() == 0 and waited_w < 2400:
 		await tree.process_frame

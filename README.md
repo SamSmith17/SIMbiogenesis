@@ -121,7 +121,7 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 <tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#moon_phases"><img src="docs/tour/moon_phases.jpg" width="260" alt="Moon phases"></a><br><b>Moon phases</b><br><sub>the timeline</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#analemma"><img src="docs/tour/analemma.jpg" width="260" alt="Analemma mode"></a><br><b>Analemma mode</b><br><sub>∞ on the timeline speed control</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#weather"><img src="docs/tour/weather.jpg" width="260" alt="Weather and extreme events"></a><br><b>Weather and extreme events</b><br><sub>⚙ → Extreme Weather</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#weather"><img src="docs/tour/weather.jpg" width="260" alt="Weather and extreme events"></a><br><b>Weather and extreme events</b><br><sub>Settings -> Extreme Weather</sub></td>
 </tr>
 <tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#location_picker"><img src="docs/tour/location_picker.jpg" width="260" alt="Choose a location"></a><br><b>Choose a location</b><br><sub>L</sub></td>
@@ -139,37 +139,47 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 </tr>
 <tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#water"><img src="docs/tour/water.jpg" width="260" alt="Streams and drainage"></a><br><b>Streams and drainage</b><br><sub>T</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#terraces"><img src="docs/tour/terraces.jpg" width="260" alt="Terraced fields"></a><br><b>Terraced fields</b><br><sub>T</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#prop_editor"><img src="docs/tour/prop_editor.jpg" width="260" alt="Placed things and the prop editor"></a><br><b>Placed things and the prop editor</b><br><sub>U</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#building_builder"><img src="docs/tour/building_builder.jpg" width="260" alt="Building builder"></a><br><b>Building builder</b><br><sub>B</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#building_builder"><img src="docs/tour/building_builder.jpg" width="260" alt="Building builder"></a><br><b>Building builder</b><br><sub>B</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#light_studio"><img src="docs/tour/light_studio.jpg" width="260" alt="Light Studio"></a><br><b>Light Studio</b><br><sub>J</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#vehicles"><img src="docs/tour/vehicles.jpg" width="260" alt="Vehicles"></a><br><b>Vehicles</b><br><sub>O</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#scad_store"><img src="docs/tour/scad_store.jpg" width="260" alt="Parametric hardware store"></a><br><b>Parametric hardware store</b><br><sub>H</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#forklift"><img src="docs/tour/forklift.jpg" width="260" alt="Forklift"></a><br><b>Forklift</b><br><sub>O</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#scad_store"><img src="docs/tour/scad_store.jpg" width="260" alt="Parametric hardware store"></a><br><b>Parametric hardware store</b><br><sub>H</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#mud_printer"><img src="docs/tour/mud_printer.jpg" width="260" alt="Mud printer"></a><br><b>Mud printer</b><br><sub>U</sub></td>
+</tr>
+<tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#pallet_rack"><img src="docs/tour/pallet_rack.jpg" width="260" alt="Pallet rack builder"></a><br><b>Pallet rack builder</b><br><sub>P</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#flatpack"><img src="docs/tour/flatpack.jpg" width="260" alt="Flat-pack furniture"></a><br><b>Flat-pack furniture</b><br><sub>Flat-pack furniture designer…</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#domelab"><img src="docs/tour/domelab.jpg" width="260" alt="Dome & zome designer"></a><br><b>Dome & zome designer</b><br><sub>Dome & zome designer…</sub></td>
 </tr>
 <tr>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#domelab"><img src="docs/tour/domelab.jpg" width="260" alt="Dome & zome designer"></a><br><b>Dome & zome designer</b><br><sub>Dome & zome designer…</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#gantrylab"><img src="docs/tour/gantrylab.jpg" width="260" alt="CNC gantry designer"></a><br><b>CNC gantry designer</b><br><sub>CNC gantry designer…</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#toroidlab"><img src="docs/tour/toroidlab.jpg" width="260" alt="Toroid designer"></a><br><b>Toroid designer</b><br><sub>Toroid designer…</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#pvlab"><img src="docs/tour/pvlab.jpg" width="260" alt="Solar designer"></a><br><b>Solar designer</b><br><sub>Solar designer…</sub></td>
 </tr>
 <tr>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#pvlab"><img src="docs/tour/pvlab.jpg" width="260" alt="Solar designer"></a><br><b>Solar designer</b><br><sub>Solar designer…</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#peltonlab"><img src="docs/tour/peltonlab.jpg" width="260" alt="Pelton wheel designer"></a><br><b>Pelton wheel designer</b><br><sub>Pelton wheel designer…</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#windlab"><img src="docs/tour/windlab.jpg" width="260" alt="Wind turbine designer"></a><br><b>Wind turbine designer</b><br><sub>Wind turbine designer…</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#vehiclelab"><img src="docs/tour/vehiclelab.jpg" width="260" alt="Vehicle designer"></a><br><b>Vehicle designer</b><br><sub>Vehicle designer…</sub></td>
 </tr>
 <tr>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#vehiclelab"><img src="docs/tour/vehiclelab.jpg" width="260" alt="Vehicle designer"></a><br><b>Vehicle designer</b><br><sub>Vehicle designer…</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#walk_in_vehicle"><img src="docs/tour/walk_in_vehicle.jpg" width="260" alt="Step inside"></a><br><b>Step inside</b><br><sub>O</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#tclab"><img src="docs/tour/tclab.jpg" width="260" alt="Tri-clamp designer"></a><br><b>Tri-clamp designer</b><br><sub>Tri-clamp designer…</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#tc_process"><img src="docs/tour/tc_process.jpg" width="260" alt="TC Process Lab"></a><br><b>TC Process Lab</b><br><sub>Process</sub></td>
 </tr>
 <tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#esplab"><img src="docs/tour/esplab.jpg" width="260" alt="ESP board designer"></a><br><b>ESP board designer</b><br><sub>ESP board designer (ESPHome)…</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#earthship"><img src="docs/tour/earthship.jpg" width="260" alt="Earthships and rooms in the ground"></a><br><b>Earthships and rooms in the ground</b><br><sub>Earthship designer…</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#greenhouse"><img src="docs/tour/greenhouse.jpg" width="260" alt="Greenhouses"></a><br><b>Greenhouses</b><br><sub>Greenhouse designer…</sub></td>
+</tr>
+<tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#battery_lab"><img src="docs/tour/battery_lab.jpg" width="260" alt="Battery Lab"></a><br><b>Battery Lab</b><br><sub>Solar batteries</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#controller_lab"><img src="docs/tour/controller_lab.jpg" width="260" alt="Controller Lab"></a><br><b>Controller Lab</b><br><sub>Solar controllers</sub></td>
 </tr>
 </table>
 
@@ -179,29 +189,40 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 <tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#graph_freeform"><img src="docs/tour/graph_freeform.jpg" width="260" alt="The systems graph"></a><br><b>The systems graph</b><br><sub>G</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#graph_tools"><img src="docs/tour/graph_tools.jpg" width="260" alt="Graph tools: Tidy and show-only views"></a><br><b>Graph tools: Tidy and show-only views</b><br><sub>G</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#render_sim"><img src="docs/tour/render_sim.jpg" width="260" alt="Render the simulation ahead"></a><br><b>Render the simulation ahead</b><br><sub>📈</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#render_sim"><img src="docs/tour/render_sim.jpg" width="260" alt="Render the simulation ahead"></a><br><b>Render the simulation ahead</b><br><sub>Render</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#festival_systems"><img src="docs/tour/festival_systems.jpg" width="260" alt="A festival of systems"></a><br><b>A festival of systems</b><br><sub>G</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#graph_ring_3d"><img src="docs/tour/graph_ring_3d.jpg" width="260" alt="The ring in 3D: a cell, or a torus"></a><br><b>The ring in 3D: a cell, or a torus</b><br><sub>G</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#flow_torus"><img src="docs/tour/flow_torus.jpg" width="260" alt="Flows as a torus"></a><br><b>Flows as a torus</b><br><sub>G</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#site_plan"><img src="docs/tour/site_plan.jpg" width="260" alt="Site Plan lens"></a><br><b>Site Plan lens</b><br><sub>G</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#element_lens"><img src="docs/tour/element_lens.jpg" width="260" alt="Where the nitrogen goes"></a><br><b>Where the nitrogen goes</b><br><sub>G</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#flow_lens"><img src="docs/tour/flow_lens.jpg" width="260" alt="Flows: a Sankey that can loop"></a><br><b>Flows: a Sankey that can loop</b><br><sub>G</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#circle_pack"><img src="docs/tour/circle_pack.jpg" width="260" alt="Circles inside circles"></a><br><b>Circles inside circles</b><br><sub>G</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#flow_torus"><img src="docs/tour/flow_torus.jpg" width="260" alt="Flows as a torus"></a><br><b>Flows as a torus</b><br><sub>G</sub></td>
+</tr>
+<tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#process_control"><img src="docs/tour/process_control.jpg" width="260" alt="Process control: valves, loops, alarms"></a><br><b>Process control: valves, loops, alarms</b><br><sub>G</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#site_plan"><img src="docs/tour/site_plan.jpg" width="260" alt="Site Plan lens"></a><br><b>Site Plan lens</b><br><sub>G</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#elevation"><img src="docs/tour/elevation.jpg" width="260" alt="Elevation lens"></a><br><b>Elevation lens</b><br><sub>G</sub></td>
+</tr>
+<tr>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#globe"><img src="docs/tour/globe.jpg" width="260" alt="Globe lens"></a><br><b>Globe lens</b><br><sub>G</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#snowglobe"><img src="docs/tour/snowglobe.jpg" width="260" alt="Full-screen globe"></a><br><b>Full-screen globe</b><br><sub>SoI marker / full globe</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#hydro_lab"><img src="docs/tour/hydro_lab.jpg" width="260" alt="Hydro Lab"></a><br><b>Hydro Lab</b><br><sub>Inspector → Open Hydro Lab</sub></td>
 </tr>
 <tr>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#hydro_lab"><img src="docs/tour/hydro_lab.jpg" width="260" alt="Hydro Lab"></a><br><b>Hydro Lab</b><br><sub>Inspector → Open Hydro Lab</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#site_report"><img src="docs/tour/site_report.jpg" width="260" alt="Site Report"></a><br><b>Site Report</b><br><sub>K</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#bootcamp"><img src="docs/tour/bootcamp.jpg" width="260" alt="Solar Bootcamp"></a><br><b>Solar Bootcamp</b><br><sub>🎓 Bootcamp</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#bootcamp_overcharge"><img src="docs/tour/bootcamp_overcharge.jpg" width="260" alt="Bootcamp 2: Panels Push Too Hard"></a><br><b>Bootcamp 2: Panels Push Too Hard</b><br><sub>🎓 Bootcamp</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#bootcamp_controller"><img src="docs/tour/bootcamp_controller.jpg" width="260" alt="Bootcamp 3: You've Got Power… Some of It"></a><br><b>Bootcamp 3: You've Got Power… Some of It</b><br><sub>🎓 Bootcamp</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#challenges"><img src="docs/tour/challenges.jpg" width="260" alt="Challenges"></a><br><b>Challenges</b><br><sub>🎯</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#conduit_routing"><img src="docs/tour/conduit_routing.jpg" width="260" alt="3D wire and pipe routing"></a><br><b>3D wire and pipe routing</b><br><sub>a device's port (press and drag)</sub></td>
-<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#wind_turbines"><img src="docs/tour/wind_turbines.jpg" width="260" alt="Wind turbines"></a><br><b>Wind turbines</b><br><sub>U</sub></td>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#conduit_routing"><img src="docs/tour/conduit_routing.jpg" width="260" alt="3D pipe and cable routing"></a><br><b>3D pipe and cable routing</b><br><sub>Shift+R</sub></td>
 </tr>
 <tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#wind_turbines"><img src="docs/tour/wind_turbines.jpg" width="260" alt="Wind turbines"></a><br><b>Wind turbines</b><br><sub>U</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#csp_heliostats"><img src="docs/tour/csp_heliostats.jpg" width="260" alt="Concentrated solar: troughs and heliostats"></a><br><b>Concentrated solar: troughs and heliostats</b><br><sub>U</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#home_assistant"><img src="docs/tour/home_assistant.jpg" width="260" alt="Home Assistant live links"></a><br><b>Home Assistant live links</b><br><sub>HA</sub></td>
 </tr>
@@ -219,6 +240,9 @@ A quick look at every mode — full write-ups with how to open each are in **[do
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#effigy_burn"><img src="docs/tour/effigy_burn.jpg" width="260" alt="The burn"></a><br><b>The burn</b><br><sub>Prop editor → Fire</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#starshade_crew"><img src="docs/tour/starshade_crew.jpg" width="260" alt="StarShade: built by the crew"></a><br><b>StarShade: built by the crew</b><br><sub>Rehearse build (prop editor)</sub></td>
 <td align="center" valign="top" width="280"><a href="docs/FEATURES.md#npc_anim_editor"><img src="docs/tour/npc_anim_editor.jpg" width="260" alt="NPC animation editor"></a><br><b>NPC animation editor</b><br><sub>⚙ → NPC → Animation editor…</sub></td>
+</tr>
+<tr>
+<td align="center" valign="top" width="280"><a href="docs/FEATURES.md#community_schedule"><img src="docs/tour/community_schedule.jpg" width="260" alt="Community schedule"></a><br><b>Community schedule</b><br><sub>Community schedule</sub></td>
 </tr>
 </table>
 

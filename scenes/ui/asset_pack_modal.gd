@@ -103,7 +103,7 @@ static func _instance(host: Node) -> AssetPackModal:
 
 func _ready() -> void:
 	_frame = ModalFrame.create("Share", "Pass your worlds, models and settings to a friend as one zip",
-		Vector2(1080, 800), "asset_pack")
+		Vector2(880, 660), "asset_pack")
 	add_child(_frame)
 	_frame.closed.connect(_on_frame_closed)
 	_job = AssetPackJob.new()
@@ -202,7 +202,7 @@ func _rebuild_footer() -> void:
 func _scan_catalog() -> void:
 	var box: VBoxContainer = _boxes[View.EXPORT]
 	_clear(box)
-	box.add_child(_muted("Looking through your worlds, models and settings…"))
+	box.add_child(EmptyState.make("package", "Looking through your worlds, models and settings…"))
 	var pr := ProjectSettings.globalize_path("res://").trim_suffix("/") \
 		if AssetPackFormat.running_from_source() else ""
 	_job.set_meta("kind", "catalog")

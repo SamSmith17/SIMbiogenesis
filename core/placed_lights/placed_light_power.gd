@@ -14,12 +14,26 @@ extends RefCounted
 static func is_lit(main: Node, rec: Dictionary, fields: Dictionary) -> bool:
 	if not bool(rec.get("enabled", true)):
 		return false
+	if host_packed(main, rec):
+		return false
 	if not schedule_on(main, str(fields.get("schedule", "always"))):
 		return false
 	var gid := str(rec.get("graph_item_id", ""))
 	if gid.is_empty():
 		return true
 	return graph_item_on(gid) and ac_available(main)
+
+
+## A model-owned light mounted on a prop that has been collapsed into its
+## shipping crate stays off (and hidden) until the prop is unpacked.
+static func host_packed(main: Node, rec: Dictionary) -> bool:
+	if main == null or not bool(rec.get("model_owned", false)):
+		return false
+	var hid := str(rec.get("host_id", ""))
+	if hid.is_empty():
+		return false
+	var prec := PlacedPropService.get_prop_record(main, hid)
+	return not prec.is_empty() and bool(prec.get("packed", false))
 
 
 static func schedule_on(main: Node, schedule: String) -> bool:

@@ -82,8 +82,12 @@ static func resolve(spec: Dictionary) -> Dictionary:
 	var heater := str(spec.get("heater", HEATER_SOLAR))
 	if not HEATERS.has(heater):
 		heater = HEATER_SOLAR
-	return {"stalls": n, "rows": rows, "style": style, "heater": heater,
-		"color": posmod(int(spec.get("color", 0)), CURTAIN_COLORS.size())}
+	var out := {"stalls": n, "rows": rows, "style": style, "heater": heater,
+		"color": posmod(int(spec.get("color", 0)), CURTAIN_COLORS.size()),
+		"stall_lights": bool(spec.get("stall_lights", true))}
+	if spec.get("model_lights") is Array:
+		out["model_lights"] = (spec["model_lights"] as Array).duplicate(true)
+	return out
 
 
 ## How many stalls stand in row `r` (the first row takes the odd one).

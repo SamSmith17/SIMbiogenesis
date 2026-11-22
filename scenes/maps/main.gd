@@ -944,6 +944,8 @@ var farmbotlab_ui : Control = null
 const FARMBOTLAB_MODAL_SCRIPT := preload( "res://scenes/ui/farmbotlab_modal.gd" )
 var batterylab_ui : Control = null
 const BATTERYLAB_MODAL_SCRIPT := preload( "res://scenes/ui/batterylab_modal.gd" )
+var ctrllab_ui : Control = null
+const CTRLLAB_MODAL_SCRIPT := preload( "res://scenes/ui/ctrllab_modal.gd" )
 const NPC_ANIM_EDITOR_SCRIPT := preload( "res://scenes/ui/npc_anim_editor.gd" )
 const LINKAGE_HARDWARE_SCRIPT := preload( "res://scenes/ui/linkage_hardware_modal.gd" )
 var scad_store_ui : Control = null
@@ -996,6 +998,9 @@ func _ready() -> void :
 	if Engine.is_editor_hint() :
 		_update()
 		return
+	var ul_svc := get_node_or_null( "UILayer" )
+	if ul_svc != null :
+		ServiceLocator.provide( ServiceLocator.UI_LAYER, ul_svc )
 	
 	# Initialize date/time from system clock (only at runtime, not in editor)
 	_init_from_system_time()
@@ -1085,6 +1090,7 @@ func _ready() -> void :
 	_setup_location_picker()
 	_setup_baked_placed_props_ui()
 	_try_apply_pending_resume()
+	call_deferred( "_setup_multi_monitor_on_load" )
 
 
 func _try_apply_pending_resume() -> void :
@@ -1444,6 +1450,13 @@ func _unhandled_input( e : InputEvent ) -> void :
 			prl.call( "open_pallet_rack_builder" )
 		get_viewport().set_input_as_handled()
 		return
+	if InputMap.has_action( "system_graph_toggle" ) and e.is_action_pressed( "system_graph_toggle" ) :
+		var sgv_mm := ServiceLocator.graph()
+		if sgv_mm != null and sgv_mm.has_method( "is_undocked_window" ) and bool( sgv_mm.call( "is_undocked_window" ) ) :
+			sgv_mm.call( "focus_undocked_window" )
+			show_toast( "Focused Systems Graph window (click ↙ Dock on that monitor to bring it back here)", ToastUI.Level.INFO, 2.5 )
+			get_viewport().set_input_as_handled()
+			return
 	if InputMap.has_action( "toggle_window_wall" ) and e.is_action_pressed( "toggle_window_wall" ) :
 		# F11: the Window Wall (multi-monitor viewport). While it is open the
 		# modal blocks this branch and the view's own handler closes on F11.
@@ -2826,7 +2839,13 @@ var _graph_view_was_visible : bool = false
 func _graph_view_visible() -> bool :
 	if _graph_view_node == null or not is_instance_valid( _graph_view_node ) :
 		_graph_view_node = ServiceLocator.graph()
-	return _graph_view_node != null and bool( _graph_view_node.get( "visible" ) )
+	if _graph_view_node == null or not bool( _graph_view_node.get( "visible" ) ) :
+		return false
+	# When SystemGraphView is undocked onto a secondary monitor window, the root
+	# 3D viewport is still live and must keep ticking sun/sky/environment.
+	if _graph_view_node.has_method( "is_undocked_window" ) and bool( _graph_view_node.call( "is_undocked_window" ) ) :
+		return false
+	return true
 
 
 func _graph_soi_preview_active() -> bool :
@@ -4925,9 +4944,50 @@ func festival_mode_active() -> bool :
 		and ( festival_mode.is_active() or festival_mode.is_opening() )
 
 
-# ==================== WINDOW WALL (multi-monitor viewport) ====================
+# ==================== MULTI-MONITOR & WINDOW WALL ====================
 
+var multi_monitor_host : MultiMonitorHost = null
 var window_wall_view : WindowWallView = null
+
+
+func ensure_multi_monitor_host() -> MultiMonitorHost :
+	if multi_monitor_host == null or not is_instance_valid( multi_monitor_host ) :
+		multi_monitor_host = MultiMonitorHost.new()
+		multi_monitor_host.name = "MultiMonitorHost"
+		multi_monitor_host.setup( self )
+		add_child( multi_monitor_host )
+	return multi_monitor_host
+
+
+func open_multi_monitor_windows() -> MultiMonitorHost :
+	var h := ensure_multi_monitor_host()
+	h.open_all_enabled()
+	return h
+
+
+func close_multi_monitor_windows() -> void :
+	if multi_monitor_host != null and is_instance_valid( multi_monitor_host ) :
+		multi_monitor_host.close_all()
+
+
+func _setup_multi_monitor_on_load() -> void :
+	if DisplayServer.get_name() == "headless" :
+		return
+	for a in OS.get_cmdline_user_args() :
+		if a.begins_with( "--capture=" ) or a.begins_with( "--run-script=" ) :
+			return
+	MultiMonitorHost.apply_main_window_prefs( get_tree() )
+	MultiMonitorPrefs.ensure_loaded()
+	if not MultiMonitorPrefs.enabled() or not MultiMonitorPrefs.auto_open_on_world_load() :
+		return
+	var loader := get_node_or_null( "TerrainLoader" )
+	if loader != null and not bool( loader.get( "load_completed" ) ) :
+		await loader.map_load_complete
+	if not is_inside_tree() :
+		return
+	await get_tree().process_frame
+	if is_inside_tree() and MultiMonitorPrefs.enabled() and MultiMonitorPrefs.auto_open_on_world_load() :
+		ensure_multi_monitor_host().open_all_enabled()
 
 
 ## Open (or close) the Window Wall — the world rendered across a row of
@@ -5328,6 +5388,38 @@ func open_batterylab( opts: Dictionary = {} ) -> Control :
 		return null
 	batterylab_ui.call( "open", opts )
 	return batterylab_ui
+
+
+## The Controller Lab (scenes/ui/ctrllab_modal.gd), on its own CanvasLayer
+## above the graph.
+func _setup_ctrllab_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing_layer := ui_layer.get_node_or_null( "CtrlLabLayer" )
+	if existing_layer != null :
+		ctrllab_ui = existing_layer.get_node_or_null( "CtrlLabModal" ) as Control
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "CtrlLabLayer"
+	layer.layer = UITheme.LAYER_MODAL + 1
+	ui_layer.add_child( layer )
+	var ui := Control.new()
+	ui.name = "CtrlLabModal"
+	ui.set_anchors_and_offsets_preset( Control.PRESET_FULL_RECT )
+	ui.set_script( CTRLLAB_MODAL_SCRIPT )
+	layer.add_child( ui )
+	ctrllab_ui = ui
+
+
+## Open the Controller Lab. opts: {spec, preset}.
+func open_ctrllab( opts: Dictionary = {} ) -> Control :
+	if not is_instance_valid( ctrllab_ui ) :
+		_setup_ctrllab_ui()
+	if not is_instance_valid( ctrllab_ui ) :
+		return null
+	ctrllab_ui.call( "open", opts )
+	return ctrllab_ui
 
 
 ## Open the solar concentrator designer. opts: {spec, prop_id}.

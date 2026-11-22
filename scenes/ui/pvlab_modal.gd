@@ -35,6 +35,7 @@ var _active := false
 var _spec: Dictionary = {}
 var _design: Dictionary = {}
 var _bound_prop_id := ""
+var _chain: PowerChainBar = null
 var _undo: Array = []
 var _redo: Array = []
 var _coalesce_key := ""
@@ -70,6 +71,7 @@ var _part_section: Control
 var _modules_btn: Button
 
 # UI
+var _shell: DesignerShell = null
 var _panel: PanelContainer
 var _name_edit: LineEdit
 var _subtitle: Label
@@ -178,6 +180,10 @@ func is_open() -> bool:
 	return _active
 
 
+func shell() -> DesignerShell:
+	return _shell
+
+
 func _activate() -> void:
 	_undo.clear()
 	_redo.clear()
@@ -193,14 +199,88 @@ func _activate() -> void:
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_process(true)
-	CursorController.request_modal(MODAL_NAME, Callable(self, "close"))
-	UiFit.keep_fitted(_panel, WANT)
+	_shell.open()
 	_apply_btn.visible = not _bound_prop_id.is_empty()
 	_place_btn.text = "Place a copy" if not _bound_prop_id.is_empty() else "Place in world"
 	_refresh_list()
+	_refresh_chain()
+	_aim_at_chain_controller()
 	_built_key = ""
 	_rebuild_now()
 	_frame_camera()
+
+
+# ---------------------------------------------------------------------------
+# The power chain (Panels › Controller › Battery)
+# ---------------------------------------------------------------------------
+
+func chain_bar() -> PowerChainBar:
+	return _chain
+
+
+## The graph array this design is (its first MPPT input's group; "" = not
+## placed).
+func _chain_item() -> String:
+	if _bound_prop_id.is_empty():
+		return ""
+	var gv := ServiceLocator.graph()
+	var model: GraphModel = gv.get("model") as GraphModel if gv != null else null
+	if model == null:
+		return ""
+	var tag := PlacedPropService.pvlab_array_tag(_bound_prop_id)
+	for it: Dictionary in model.items:
+		if str((it.get("specs", {}) as Dictionary).get("pvlab_tag", "")) == tag and str(it.get("type", "")) == "compound":
+			return str(it["id"])
+	return ""
+
+
+func _refresh_chain() -> void:
+	if _chain != null:
+		_chain.refresh(_chain_item())
+
+
+## A placed design wired to a controller on the graph aims at that
+## controller's window (the target section shows it, and the hand-typed one
+## is replaced).
+func _aim_at_chain_controller() -> void:
+	var c: Dictionary = _chain.chain().get("controller", {}) if _chain != null else {}
+	if c.is_empty():
+		return
+	var gv := ServiceLocator.graph()
+	var model: GraphModel = gv.get("model") as GraphModel if gv != null else null
+	if model == null:
+		return
+	var t := PowerChain.pv_target(model.get_item(str(c["id"])).get("specs", {}) as Dictionary)
+	var tgt: Dictionary = _spec["target"]
+	var changed := false
+	for k in t:
+		if absf(float(tgt.get(k, 0.0)) - float(t[k])) > 0.01:
+			tgt[k] = t[k]
+			changed = true
+	if changed:
+		_status("Target: %s, the controller it is wired to." % str(c["name"]))
+
+
+## Leave for another lab: apply what was changed here first.
+func _on_chain_hop(kind: String, unit: Dictionary) -> void:
+	var ch := _chain.chain()
+	var main := _main_node()
+	if not _undo.is_empty() and not _bound_prop_id.is_empty():
+		_on_apply()
+	close()
+	PowerChainBar.go(main, kind, unit, ch)
+
+
+func _on_chain_add(what: String) -> void:
+	var gv := ServiceLocator.graph()
+	var model: GraphModel = gv.get("model") as GraphModel if gv != null else null
+	if model == null or what == "panels":
+		return
+	var nid := PowerChain.add_missing(model, _chain.chain(), what)
+	_status(("Added %s to the graph, wired in." % ("a controller" if what == "controller" else "a battery bank")) if nid != "" else "Could not add it.")
+	_refresh_chain()
+	_aim_at_chain_controller()
+	_queue_rebuild()
 
 
 func close() -> void:
@@ -210,7 +290,8 @@ func close() -> void:
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_process(false)
-	CursorController.release_modal(MODAL_NAME)
+	if _shell != null and _shell.is_open():
+		_shell.close()
 
 
 func _process(delta: float) -> void:
@@ -242,26 +323,30 @@ func _input(e: InputEvent) -> void:
 # ---------------------------------------------------------------------------
 
 func _build_ui() -> void:
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.55)
-	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_STOP
-	add_child(dim)
-	_panel = PanelContainer.new()
-	_panel.add_theme_stylebox_override("panel", UITheme.panel_style())
-	add_child(_panel)
-	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	_panel.add_child(root)
-	root.add_child(_build_header())
-	var body := HBoxContainer.new()
-	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body.add_theme_constant_override("separation", UITheme.SPACE_MD)
-	root.add_child(body)
-	body.add_child(_build_left())
-	body.add_child(_build_centre())
-	body.add_child(_build_right())
-	root.add_child(_build_footer())
+	_shell = DesignerShell.create("Solar designer", "sun", {
+		"name_id": MODAL_NAME, "want": WANT, "name_edit": true, "undo": true,
+		"left_label": "Arrays & panels", "left_w": 250.0, "right_w": 425.0})
+	add_child(_shell)
+	_panel = _shell.panel
+	_name_edit = _shell.name_edit
+	_name_edit.placeholder_text = "Array name"
+	_name_edit.text_submitted.connect(func(_t): _on_name_changed())
+	_name_edit.focus_exited.connect(_on_name_changed)
+	_chain = PowerChainBar.create("panels")
+	_chain.follow(_shell)
+	_chain.hop_requested.connect(_on_chain_hop)
+	_chain.add_requested.connect(_on_chain_add)
+	_shell.add_header_widget(_chain)
+	_subtitle = _shell.subtitle
+	_undo_btn = _shell.undo_btn
+	_redo_btn = _shell.redo_btn
+	_shell.undo_requested.connect(_undo_step)
+	_shell.redo_requested.connect(_redo_step)
+	_shell.closed.connect(close)
+	_shell.left.add_child(_build_left())
+	_shell.centre.add_child(_build_centre())
+	_shell.right.add_child(_build_right())
+	_build_footer()
 	_file_dialog = FileDialog.new()
 	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
 	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -271,54 +356,10 @@ func _build_ui() -> void:
 	add_child(_file_dialog)
 
 
-func _build_header() -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	var icon := TextureRect.new()
-	icon.texture = UiIcons.icon("sun", 22)
-	icon.modulate = UITheme.C_AMBER
-	icon.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
-	row.add_child(icon)
-	var title := Label.new()
-	title.text = "Solar designer"
-	title.add_theme_font_size_override("font_size", UITheme.FONT_XL)
-	title.add_theme_color_override("font_color", UITheme.C_TEXT)
-	row.add_child(title)
-	_name_edit = LineEdit.new()
-	_name_edit.custom_minimum_size = Vector2(240, 0)
-	_name_edit.placeholder_text = "Array name"
-	_name_edit.text_submitted.connect(func(_t): _on_name_changed())
-	_name_edit.focus_exited.connect(_on_name_changed)
-	row.add_child(_name_edit)
-	_subtitle = Label.new()
-	_subtitle.add_theme_color_override("font_color", UITheme.C_TEXT_S)
-	_subtitle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_subtitle.clip_text = true
-	_subtitle.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	row.add_child(_subtitle)
-	_undo_btn = IconButton.make("undo-2", "Undo (Ctrl+Z)", _undo_step)
-	row.add_child(_undo_btn)
-	_redo_btn = IconButton.make("redo-2", "Redo (Ctrl+Y)", _redo_step)
-	row.add_child(_redo_btn)
-	row.add_child(IconButton.close(close))
-	return row
-
-
-func _scroll_column(width: float) -> Array:
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(width, 0)
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+func _build_left() -> Control:
 	var box := VBoxContainer.new()
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	scroll.add_child(box)
-	return [scroll, box]
-
-
-func _build_left() -> Control:
-	var col := _scroll_column(250)
-	var box: VBoxContainer = col[1]
 	box.add_child(SectionHeader.make("Start from", "layout-grid"))
 	_search_edit = LineEdit.new()
 	_search_edit.placeholder_text = "Search panels and arrays (maker, model, watts…)"
@@ -358,7 +399,7 @@ func _build_left() -> Control:
 		"Measure it with a tape (mm), count its cells, read the label on the back for Voc, Vmp, Isc " +
 		"and Imp, and put them in the Panel tab's data sheet: the twin then matches it exactly.")
 	how_sec.body.add_child(how)
-	return col[0]
+	return box
 
 
 func _build_centre() -> Control:
@@ -569,8 +610,9 @@ func _build_studio_world() -> void:
 
 
 func _build_right() -> Control:
-	var col := _scroll_column(430)
-	var box: VBoxContainer = col[1]
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", UITheme.SPACE_SM)
 	_cell_group = VBoxContainer.new()
 	box.add_child(_cell_group)
 	_cell_box = _section(_cell_group, "Cells", true)
@@ -632,7 +674,7 @@ func _build_right() -> Control:
 		var gc := DesignerColumn.setup(grp[0], "pvlab", {"open": grp[1], "tiles": false, "finder": false})
 		_group_cols.append(gc)
 	_col = DesignerColumn.setup(box, "pvlab", {"fold": ["Live values", "Bill of materials", "Files"], "tile_cols": 3})
-	return col[0]
+	return box
 
 
 ## One array's picture for the gallery (modules are text rows).
@@ -658,38 +700,13 @@ func _section(parent: Container, title: String, open: bool) -> VBoxContainer:
 	return sec.body
 
 
-func _build_footer() -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", UITheme.SPACE_SM)
-	var hint := Label.new()
-	hint.text = "Drag to orbit · wheel to zoom · Array tab: click a module or any rack part to see it, or paint strings"
-	hint.add_theme_color_override("font_color", UITheme.C_TEXT_M)
-	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(hint)
-	_apply_btn = Button.new()
-	_apply_btn.text = "Apply to placed array"
-	UITheme.style_button(_apply_btn)
-	_apply_btn.pressed.connect(_on_apply)
-	row.add_child(_apply_btn)
-	_place_btn = Button.new()
-	_place_btn.text = "Place in world"
-	UITheme.style_button(_place_btn)
-	_place_btn.add_theme_color_override("font_color", UITheme.C_PRIMARY)
-	_place_btn.pressed.connect(_on_place)
-	row.add_child(_place_btn)
-	var crew_b := Button.new()
-	crew_b.text = "👷 Build with a crew"
-	crew_b.tooltip_text = "Place a packed kit in front of you and hand it to the site's crew: they lay it out and put it up piece by piece"
-	UITheme.style_button(crew_b)
-	crew_b.pressed.connect(_on_crew_build)
-	row.add_child(crew_b)
-	var close_b := Button.new()
-	close_b.text = "Close"
-	UITheme.style_button(close_b)
-	close_b.pressed.connect(close)
-	row.add_child(close_b)
-	return row
+func _build_footer() -> void:
+	_shell.set_hint("Drag to orbit · wheel to zoom · Array tab: click a module or any rack part to see it, or paint strings")
+	_apply_btn = _shell.add_button("Apply to placed array", DesignerShell.SECONDARY, _on_apply)
+	_place_btn = _shell.add_button("Place in world", DesignerShell.PRIMARY, _on_place)
+	_shell.add_button("Build with a crew", DesignerShell.SECONDARY, _on_crew_build,
+		"Place a packed kit in front of you and hand it to the site's crew: they lay it out and put it up piece by piece")
+	_shell.add_button("Close", DesignerShell.SECONDARY, close)
 
 
 # ---------------------------------------------------------------------------
@@ -1560,22 +1577,33 @@ func _refresh_list() -> void:
 		_entries.append(entry)
 	add_head.call("Arrays")
 	for p in PvLabPresets.builtins():
-		add.call(str(p["name"]), str(p.get("blurb", "")), {"kind": "design", "spec": p["spec"], "builtin": true,
+		var array_usd := float(PvLabDesign.solve(p["spec"])["bom"]["cost_usd"])
+		var array_tip := "$%s · %s" % [UiText.thousands(int(round(array_usd))), str(p.get("blurb", ""))]
+		add.call(str(p["name"]), array_tip, {"kind": "design", "spec": p["spec"], "builtin": true,
 			"id": str(p["id"])}, str(p["name"]) + " " + str(p.get("blurb", "")))
 	for d in _library["designs"]:
-		add.call("★ " + str(d["name"]), "", {"kind": "design", "spec": d["spec"], "builtin": false, "id": str(d["id"])},
-			str(d["name"]))
+		var saved_usd := float(PvLabDesign.solve(d["spec"])["bom"]["cost_usd"])
+		add.call("★ " + str(d["name"]), "$%s" % UiText.thousands(int(round(saved_usd))),
+			{"kind": "design", "spec": d["spec"], "builtin": false, "id": str(d["id"])}, str(d["name"]))
 	add_head.call("Real panels (data sheets)")
 	for e in PvLabCatalog.all():
-		add.call(PvLabCatalog.label(e), PvLabCatalog.tooltip(e), {"kind": "module", "catalog": str(e["id"]),
-			"builtin": true, "id": str(e["id"])}, PvLabCatalog.haystack(e))
+		add.call("%s %s" % [str(e["maker"]), str(e["model"])],
+			PvLabCatalog.shop_line(e) + "\n" + PvLabCatalog.tooltip(e),
+			{"kind": "module", "catalog": str(e["id"]), "builtin": true, "id": str(e["id"])},
+			PvLabCatalog.haystack(e))
 	add_head.call("Module types")
 	for m in PvLabPresets.modules():
-		add.call(str(m["name"]), PvLabModule.describe(m["spec"]), {"kind": "module", "spec": m["spec"], "builtin": true,
-			"id": str(m["id"])}, str(m["name"]) + " " + PvLabModule.describe(m["spec"]))
+		var desc := PvLabModule.describe(m["spec"])
+		var type_usd := float(m.get("price_usd", 0.0))
+		var type_tip := ("$%s · %s" % [UiText.thousands(int(round(type_usd))), desc]) if type_usd > 0.0 else desc
+		add.call(str(m["name"]), type_tip, {"kind": "module", "spec": m["spec"], "builtin": true,
+			"id": str(m["id"])}, str(m["name"]) + " " + desc)
 	for m2 in _library["modules"]:
-		add.call("★ " + str(m2["name"]), "", {"kind": "module", "spec": m2["spec"], "builtin": false, "id": str(m2["id"])},
-			str(m2["name"]))
+		var mine_usd := float((m2["spec"] as Dictionary).get("price_usd", 0.0))
+		if mine_usd <= 0.0:
+			mine_usd = float(PvLabModule.electrical(m2["spec"])["wmp"]) * PvLabDesign.MODULE_USD_PER_W
+		add.call("★ " + str(m2["name"]), "$%s" % UiText.thousands(int(round(mine_usd))),
+			{"kind": "module", "spec": m2["spec"], "builtin": false, "id": str(m2["id"])}, str(m2["name"]))
 	if _search_count != null:
 		_search_count.text = "" if q.strip_edges().is_empty() else "%d of %d match" % [int(cnt[0]), int(cnt[1])]
 

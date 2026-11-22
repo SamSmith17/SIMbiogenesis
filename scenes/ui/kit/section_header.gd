@@ -9,12 +9,14 @@ extends HBoxContainer
 ##   parent.add_child(SectionHeader.make("Specs"))
 ##   parent.add_child(SectionHeader.make("Stores", "droplet", "4 tanks"))
 
+var raw_title := ""
 var _label: Label = null
 var _note: Label = null
 
 
 static func make(title: String, icon: String = "", note: String = "") -> SectionHeader:
 	var h := SectionHeader.new()
+	h.raw_title = title
 	h.add_theme_constant_override("separation", 6)
 	h.custom_minimum_size.y = 26.0
 	h.size_flags_horizontal = Control.SIZE_EXPAND_FILL

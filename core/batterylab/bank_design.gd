@@ -171,6 +171,16 @@ static func _solve(b: Dictionary) -> Dictionary:
 			"pos": Vector3(x, y, 0.0), "term_pos": Vector3(x, y, 0.0) + t_pos,
 			"term_neg": Vector3(x, y, 0.0) + t_neg, "out_pos": Vector3(x, y, 0.0) + t_pos,
 			"out_neg": Vector3(x, y, 0.0) + t_neg})
+	# A drag stores bank["nudge"]["pack_k"] in the same millimetres. Cables
+	# are routed from the terminals after this, so they follow the pack.
+	var pack_nudged := false
+	for p in packs:
+		var n := BattLayout.nudge_of(b, str(p["id"]))
+		if n == Vector3.ZERO:
+			continue
+		pack_nudged = true
+		for key in ["pos", "term_pos", "term_neg", "out_pos", "out_neg"]:
+			p[key] = (p[key] as Vector3) + n
 	var span_x := float(cols - 1) * step_x + pw
 	var top_y := y0 + float(levels - 1) * step_y + ph
 	var front_z := pb.end.z
@@ -396,6 +406,9 @@ static func _solve(b: Dictionary) -> Dictionary:
 	for cb3 in cables:
 		if str(cb3["kind"]) != "main":
 			outer = outer.merge(_pts_box(cb3["pts"]))
+	if pack_nudged:
+		for p2 in packs:
+			outer = outer.merge(AABB(pb.position + (p2["pos"] as Vector3), pb.size))
 	var cont_bank := i_string / maxf(max_share, 1e-9)
 	var e := {
 		"v_nom": v_bank, "v_max": float(pe["v_max"]) * float(N), "v_min": float(pe["v_min"]) * float(N),

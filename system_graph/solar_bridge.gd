@@ -393,6 +393,10 @@ func _refresh_controller() -> void:
 			_solar_ui.inverter_overload_duration = float(ctrl_specs["overload_duration_s"])
 		if ctrl_specs.has("overload_lockout_s"):
 			_solar_ui.inverter_lockout_duration = float(ctrl_specs["overload_lockout_s"])
+		if ctrl_specs.has("surge_w"):
+			_solar_ui.inverter_surge_watts = float(ctrl_specs["surge_w"])
+		else:
+			_solar_ui.inverter_surge_watts = 0.0
 
 
 func _refresh_battery() -> void:

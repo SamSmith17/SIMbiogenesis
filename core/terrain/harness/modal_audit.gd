@@ -56,6 +56,8 @@ func run() -> Dictionary:
 		load("res://scenes/ui/earthshiplab_modal.gd").call("open", get_tree())})
 	entries.append({"id": "greenhouselab", "open": func() -> void:
 		load("res://scenes/ui/greenhouselab_modal.gd").call("open", get_tree())})
+	entries.append({"id": "shower_house", "open": func() -> void:
+		load("res://scenes/ui/shower_house_modal.gd").call("open", get_tree())})
 	entries.append({"id": "intermodal_units", "open": func() -> void:
 		load("res://scenes/ui/intermodal_unit_modal.gd").call("open", get_tree())})
 	entries.append({"id": "anim_editor", "open": func() -> void: main.call("open_npc_anim_editor", "")})
@@ -128,12 +130,34 @@ func run() -> Dictionary:
 		var shade := _first_prop(loader, ["starshade"])
 		if not shade.is_empty() and loader.has_method("open_starshade_editor"):
 			entries.append({"id": "starshade_edit", "open": func() -> void: loader.call("open_starshade_editor", shade)})
-	for d in [["peltonlab", "open_peltonlab"], ["windlab", "open_windlab"], ["tclab", "open_tclab"], ["esplab", "open_esplab"], ["csplab", "open_csplab"], ["farmbotlab", "open_farmbotlab"], ["batterylab", "open_batterylab"], ["ha_links", "open_ha_links"],
+	for d in [["peltonlab", "open_peltonlab"], ["windlab", "open_windlab"], ["tclab", "open_tclab"], ["esplab", "open_esplab"], ["csplab", "open_csplab"], ["farmbotlab", "open_farmbotlab"], ["batterylab", "open_batterylab"], ["ctrllab", "open_ctrllab"], ["ha_links", "open_ha_links"],
 			["ha_presets", "open_ha_presets"], ["compare", "open_compare_view"],
 			["linkage_guide", "open_linkage_build_guide"]]:
 		var fn := str(d[1])
 		if main.has_method(fn):
 			entries.append({"id": str(d[0]), "open": func() -> void: main.call(fn)})
+	var ctrl_item := _first_item(gv, "charge_controller")
+	if ctrl_item.is_empty():
+		ctrl_item = _first_item(gv, "hybrid_inverter")
+	if ctrl_item.is_empty() and gv != null and gv.get("model") is GraphModel:
+		for it in (gv.get("model") as GraphModel).items:
+			if str((it as Dictionary).get("type", "")) == "controller":
+				ctrl_item = str((it as Dictionary).get("id", ""))
+				break
+	if not ctrl_item.is_empty() and main.has_method("open_ctrllab"):
+		entries.append({"id": "wiresheet", "open": func() -> void:
+			var cu: Variant = main.call("open_ctrllab", {"graph_item_id": ctrl_item})
+			if cu != null:
+				var bar := (cu as Node).find_child("PowerChainBar", true, false)
+				if bar != null and bar.has_method("_open_sheet"):
+					bar.call("_open_sheet"),
+			"close": func() -> void:
+				var ws := get_tree().root.get_node_or_null("WireSheetLayer/WireSheetModal")
+				if ws != null and ws.has_method("close"):
+					ws.call("close")
+				var cu2: Variant = main.get("ctrllab_ui")
+				if cu2 != null and is_instance_valid(cu2):
+					cu2.call("close")})
 	# The TC Process Lab: the designer in Process mode (its own columns).
 	if main.has_method("open_tclab"):
 		entries.append({"id": "tc_process", "open": func() -> void:

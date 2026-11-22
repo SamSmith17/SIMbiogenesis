@@ -268,7 +268,18 @@ func _update_labels() -> void:
 		var txt := "%s  %.0f°" % [PLANET_TITLES[pname], float(planet_altitudes[pname])]
 		if lbl.text != txt:
 			lbl.text = txt
-		lbl.position = sp + Vector2(10.0, -9.0)
+		var pos := sp + Vector2(10.0, -9.0)
+		var lsize := lbl.get_combined_minimum_size()
+		if lsize.x < 4.0 or lsize.y < 4.0:
+			lsize = Vector2(96.0, 20.0)
+		var safe := Rect2(Vector2(6.0, 6.0), vsize - Vector2(12.0, 12.0))
+		var ui_layer := main_scene.get_node_or_null("UILayer") as CanvasLayer if main_scene != null else null
+		if ui_layer != null and ui_layer.visible:
+			safe = safe.intersection(HudLayout.usable_rect())
+		if not safe.encloses(Rect2(pos, lsize)):
+			lbl.visible = false
+			continue
+		lbl.position = pos
 		lbl.visible = true
 
 func force_update() -> void:

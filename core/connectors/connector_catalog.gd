@@ -392,6 +392,8 @@ static func resolve(id: String, opts: Dictionary = {}) -> Dictionary:
 			var pitch := float(o.get("pitch", 5.08)) if shape == "terminal_block" else 5.4
 			var labels: Array = o.get("labels", [])
 			var b: Vector3 = e["body"]
+			if shape == "terminal_block":
+				b = Vector3(b.x, float(o.get("h", b.y)), float(o.get("d", b.z)))
 			e["body"] = Vector3(pitch * n, b.y, b.z)
 			pins = []
 			for i in n:
@@ -436,5 +438,8 @@ static func resolve(id: String, opts: Dictionary = {}) -> Dictionary:
 			e["body"] = Vector3(r * 2.0 + 4.0, r * 2.0 + 4.0, 13.5 + st * 1.5)
 			pins = [{"id": "lug", "label": str(o.get("polarity", "")), "role": str(o.get("polarity", "")),
 				"pos": Vector3(0, 0, 13.5), "dir": Vector3(0, 1, 0)}]
+	# A single-pin connector takes its polarity as its pin's role hint.
+	if pins.size() == 1 and str(pins[0]["role"]) == "" and str(o.get("polarity", "")) != "":
+		pins[0]["role"] = str(o["polarity"])
 	e["pins"] = pins
 	return e

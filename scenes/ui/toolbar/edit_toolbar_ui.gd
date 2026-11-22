@@ -649,12 +649,21 @@ func _rebuild_options_bar() -> void:
 	# toolbar: nothing on screen says the world is still yours while it is up.
 	# One always-present chip carries it.
 	var hint := PanelContainer.new()
-	hint.add_theme_stylebox_override("panel", UITheme.chip_style(UITheme.C_LAVENDER))
+	hint.add_theme_stylebox_override("panel", UITheme.chip_style(UITheme.C_TEXT_S))
+	hint.tooltip_text = "RMB hold: look around · WASD: move · [ / ]: brush size · Esc: peel selection or close"
+	var hint_row := HBoxContainer.new()
+	hint_row.add_theme_constant_override("separation", 4)
+	hint.add_child(hint_row)
+	var hint_ic := TextureRect.new()
+	hint_ic.texture = UiIcons.icon("circle-help", 13)
+	hint_ic.modulate = UITheme.C_TEXT_S
+	hint_ic.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	hint_row.add_child(hint_ic)
 	var hint_lbl := Label.new()
-	hint_lbl.text = "RMB look · WASD move · [ ] size · Esc close"
+	hint_lbl.text = "RMB look · WASD · [ ] size"
 	hint_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-	hint_lbl.add_theme_color_override("font_color", UITheme.C_LAVENDER.lightened(0.35))
-	hint.add_child(hint_lbl)
+	hint_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
+	hint_row.add_child(hint_lbl)
 	_options_box.add_child(hint)
 	_basin_lbl = Label.new()
 	_basin_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
@@ -670,7 +679,7 @@ func _rebuild_options_bar() -> void:
 	_options_box.add_child(_status)
 	_undo_btn = Button.new()
 	_undo_btn.text = "Undo"
-	_undo_btn.tooltip_text = "Undo the last edit (Ctrl+Z)"
+	UiIcons.apply(_undo_btn, "undo-2", "Undo the last edit (Ctrl+Z)", 14)
 	_undo_btn.focus_mode = Control.FOCUS_NONE
 	UITheme.style_button(_undo_btn)
 	_undo_btn.pressed.connect(_do_undo)
