@@ -1231,6 +1231,20 @@ func _test_site_balance() -> void:
 			_check("site balance: unpriced structures are named", str(rd.get("v", "")).find("1 structure unpriced") >= 0, str(rd.get("v", "")))
 	_check("site balance: three cost rows", cost_rows == 3)
 	_check("site balance: no cost rows without the extra", (SiteBalance.compute(items, {})["cost"] as Dictionary).is_empty())
+	# Food spend (Phase 7): order_food_delivery stamps food_spend_usd on the
+	# store, and the balance sums it into a "Food & supplies" row — with or
+	# without the dashboard's extra.
+	var items_f := items.duplicate()
+	items_f.append({"id": "sup", "type": "resource", "specs": {"name": "Supply Stores",
+		"resource_kind": "packaged_food", "food_spend_usd": 123.45}})
+	var bf := SiteBalance.compute(items_f, {"graph_dc_kw": 0.0})
+	_check("site balance: food spend summed off the stores",
+		absf(float((bf["cost"] as Dictionary).get("food_usd", 0.0)) - 123.45) < 1e-6)
+	var food_row := false
+	for r3 in SiteBalance.rows(bf):
+		if str((r3 as Dictionary).get("k", "")) == "Food & supplies":
+			food_row = true
+	_check("site balance: the Food & supplies row shows", food_row)
 	# SiteCost: a record with no design is unpriced; the sum counts both.
 	var pt := SiteCost.placed_total([{"id": "a", "model_id": "shiftpod"}, {"id": "b", "model_id": "x"}])
 	_check("site cost: records with no bill of materials are unpriced", int(pt["unpriced"]) == 2 and float(pt["usd"]) == 0.0)

@@ -23644,6 +23644,80 @@ func provision_habitat(iid: String, preset: String = "") -> Dictionary:
 	_sim_bulk_update = true
 	_history_suppress = true
 	var col := 0
+## Order a shopping list into a packaged-food store (food/waste realism
+## plan Phase 7): the items land in its ITEM LEDGER (ledger_add_items
+## force-stamps the kcal density), the kg on its level, and the cost on
+## the store's running food spend (SiteBalance's food row). A USER edit on
+## purpose — user_rev moves, undo records it, a rendered future rightly
+## drops. A delivery that would not fit grows the store (shelves, not a
+## sealed tank); the timeline is re-configured to the new capacity and
+## re-held so the flow engine cannot write the old level back.
+## Returns {kg, stock_kg, cost_usd} ({} = refused).
+func order_food_delivery(store_id: String, manifest: Dictionary, cost_usd: float) -> Dictionary:
+	if model == null or _resource_flow == null or manifest.is_empty():
+		return {}
+	var item: Dictionary = model.get_item(store_id)
+	if item.is_empty() or str(item.get("type", "")) != "resource":
+		return {}
+	var h := 0.0
+	var main := _get_scene_main_node()
+	if main != null and main.has_method("get_absolute_hours"):
+		h = float(main.call("get_absolute_hours"))
+	var kg: float = _resource_flow.ledger_add_items(store_id, manifest, h)
+	if kg <= 0.0:
+		return {}
+	# ledger_add_items just re-stamped the specs: read them fresh.
+	var sp: Dictionary = (model.get_item(store_id).get("specs", {}) as Dictionary).duplicate(true)
+	var tl: ResourceTimeline = _resource_flow.get_timeline(store_id) if _resource_flow.has_method("get_timeline") else null
+	var cap := maxf(float(sp.get("capacity_qty", 0.0)), 0.001)
+	var lvl: float = tl.level_at(h) if tl != null else clampf(float(sp.get("level", 0.0)), 0.0, 1.0)
+	var stock := maxf(lvl, 0.0) * cap
+	if stock + kg > cap:
+		cap = stock + kg
+		sp["capacity_qty"] = cap
+		if tl != null:
+			tl.configure(cap)
+	var nl := clampf((stock + kg) / cap, 0.0, 1.0)
+	sp["level"] = nl
+	sp["food_spend_usd"] = float(sp.get("food_spend_usd", 0.0)) + maxf(cost_usd, 0.0)
+	model.update_item(store_id, {"specs": sp})
+	if tl != null:
+		tl.set_current_level(h, nl)
+	_schedule_graph_autosave()
+	return {"kg": kg, "stock_kg": stock + kg, "cost_usd": maxf(cost_usd, 0.0)}
+
+
+var _food_shopping: Node = null
+
+
+## The food shopping panel (Supply Store inspector / the habitat Provision
+## row). `store_id` preselects the store an Order lands in.
+func open_food_shopping(store_id: String = "") -> void:
+	if _food_shopping == null:
+		_food_shopping = (load("res://scenes/ui/food_shopping_panel.gd") as GDScript).new()
+		_food_shopping.name = "FoodShoppingPanel"
+		add_child(_food_shopping)
+	_food_shopping.call("open", self, store_id)
+
+
+## Packaged-food stores an order can land in: [{id, name, stock_kg}] —
+## the shopping panel's store picker.
+func food_order_targets() -> Array:
+	var out: Array = []
+	if model == null:
+		return out
+	for item: Dictionary in model.items_of_type("resource"):
+		var sp: Dictionary = item.get("specs", {})
+		var kind := ResourceKinds.normalize_kind(str(sp.get("resource_kind", sp.get("kind", ""))))
+		if kind != "packaged_food":
+			continue
+		out.append({"id": str(item["id"]),
+			"name": str(sp.get("name", item.get("name", "Supply Store"))),
+			"stock_kg": clampf(float(sp.get("level", 0.0)), 0.0, 1.0)
+				* maxf(float(sp.get("capacity_qty", 0.0)), 0.0)})
+	return out
+
+
 	for i in (specs.get("inputs", []) as Array).size():
 		var inp: Dictionary = (specs["inputs"] as Array)[i]
 		var kind := ResourceKinds.normalize_kind(str(inp.get("kind", "")))

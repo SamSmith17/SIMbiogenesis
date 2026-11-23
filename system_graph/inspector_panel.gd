@@ -591,6 +591,16 @@ func _rebuild_for_item(item: Dictionary) -> void:
 			_section("Specs")
 			_text_field("Name",         specs.get("name", ""),      "specs/name")
 			_build_resource_kind_picker(specs)
+			if ResourceKinds.normalize_kind(str(specs.get("resource_kind",
+					specs.get("kind", "")))) == "packaged_food":
+				var shop_btn := Button.new()
+				shop_btn.text = "Shopping list…"
+				shop_btn.tooltip_text = "Plan and order real products into this store — cost, calories and the packaging waste they will leave"
+				shop_btn.pressed.connect(func() -> void:
+					var gv := _find_owner_graph_view()
+					if gv != null and gv.has_method("open_food_shopping"):
+						gv.call("open_food_shopping", _item_id))
+				_form_vbox.add_child(shop_btn)
 			if ResourceFlowEngine.is_stream_intake(item):
 				_build_stream_intake_section(item, specs)
 			var unlimited := bool(specs.get("unlimited_capacity", false))
@@ -6029,6 +6039,14 @@ func _type_icon(itype: String) -> String:
 ## infrastructure is delivering right now.
 func _build_provision_row(specs: Dictionary) -> void:
 	var n := maxi(int(specs.get("occupants", 1)), 1)
+	var shop := Button.new()
+	shop.text = "Shopping list…"
+	shop.tooltip_text = "Plan a real shopping list for these people — products, cost, calories and the packaging waste it will leave"
+	shop.pressed.connect(func() -> void:
+		var v := _find_owner_graph_view()
+		if v != null and v.has_method("open_food_shopping"):
+			v.call("open_food_shopping"))
+	prow.add_child(shop)
 	var prow := HBoxContainer.new()
 	prow.add_theme_constant_override("separation", 8)
 	var plbl := Label.new()

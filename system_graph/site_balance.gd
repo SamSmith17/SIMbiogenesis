@@ -98,14 +98,22 @@ static func compute(items: Array, solar: Dictionary, extra: Dictionary = {}) -> 
 			"draw_lph": draw, "net_lph": net_l,
 			"hours_to_full": to_full, "hours_to_empty": to_low,
 			"spill_to": str(ps.get("spill_outlet_id", ""))})
+	# Running food spend: order_food_delivery stamps food_spend_usd on the
+	# store it delivered to (food/waste realism plan Phase 7).
+	var food_usd := 0.0
+	for it_v2 in items:
+		if it_v2 is Dictionary:
+			food_usd += maxf(float(((it_v2 as Dictionary).get("specs", {}) as Dictionary)
+				.get("food_spend_usd", 0.0)), 0.0)
 	var cost := {}
-	if not extra.is_empty():
+	if not extra.is_empty() or food_usd > 0.0:
 		cost = {"graph_usd": maxf(float(extra.get("graph_usd", 0.0)), 0.0),
 			"placed_usd": maxf(float(extra.get("placed_usd", 0.0)), 0.0),
 			"placed_priced": int(extra.get("placed_priced", 0)),
 			"placed_unpriced": int(extra.get("placed_unpriced", 0)),
 			"running_usd": maxf(float(extra.get("running_usd", 0.0)), 0.0),
-			"vehicles": int(extra.get("vehicles", 0))}
+			"vehicles": int(extra.get("vehicles", 0)),
+			"food_usd": food_usd}
 		cost["total_usd"] = float(cost["graph_usd"]) + float(cost["placed_usd"])
 	return {"energy": energy, "ponds": ponds, "cost": cost}
 
@@ -180,7 +188,8 @@ static func rows(b: Dictionary) -> Array:
 		elif nl < -1.0:
 			out.append({"t": "kv", "k": "Falling", "v": "%s m³/h" % UiText.num(-nl / 1000.0), "tone": "muted"})
 	var c: Dictionary = b.get("cost", {}) as Dictionary
-	if not c.is_empty() and (float(c.get("total_usd", 0.0)) > 0.5 or int(c.get("placed_unpriced", 0)) > 0):
+	if not c.is_empty() and (float(c.get("total_usd", 0.0)) > 0.5 or int(c.get("placed_unpriced", 0)) > 0
+			or float(c.get("food_usd", 0.0)) > 0.5):
 		out.append({"t": "sub", "text": "Cost"})
 		out.append({"t": "kv", "k": "Graph components", "v": SiteCost.format_usd(float(c.get("graph_usd", 0.0))), "tone": "muted"})
 		var pv := SiteCost.format_usd(float(c.get("placed_usd", 0.0)))
@@ -190,8 +199,10 @@ static func rows(b: Dictionary) -> Array:
 		out.append({"t": "kv", "k": "Site total", "v": SiteCost.format_usd(float(c.get("total_usd", 0.0))), "tone": "ok"})
 		if int(c.get("vehicles", 0)) > 0:
 			out.append({"t": "kv", "k": "Getting here",
-				"v": "%s · %s, trips and fuel" % [SiteCost.format_usd(float(c.get("running_usd", 0.0))),
-					UiText.count(int(c["vehicles"]), "vehicle")], "tone": "muted"})
+				"v": I18n.f("{running_usd} · {vehicles}, trips and fuel", {"running_usd": SiteCost.format_usd(float(c.get("running_usd", 0.0))), "vehicles": UiText.count(int(c["vehicles"]), "vehicle")}), "tone": "muted"})
+		if float(c.get("food_usd", 0.0)) > 0.5:
+			out.append({"t": "kv", "k": "Food & supplies",
+				"v": SiteCost.format_usd(float(c.get("food_usd", 0.0))), "tone": "muted"})
 	return out
 
 

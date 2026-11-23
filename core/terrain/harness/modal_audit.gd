@@ -46,7 +46,8 @@ func run() -> Dictionary:
 	entries.append({"id": "scad_store", "open": func() -> void: main.call("open_scad_store")})
 	# The process (SCADA) windows, all opened from the graph view.
 	for sc in [["scada_tags", "open_tag_browser"], ["scada_logic", "open_logic_editor"], ["scada_alarms", "open_alarm_panel"],
-			["scada_hardware", "open_outputs_panel"], ["scada_trends", "open_trend_window"], ["scada_templates", "open_process_library"]]:
+			["scada_hardware", "open_outputs_panel"], ["scada_trends", "open_trend_window"], ["scada_templates", "open_process_library"],
+			["food_shopping", "open_food_shopping"]]:
 		var fn := str(sc[1])
 		if gv != null and gv.has_method(fn):
 			entries.append({"id": str(sc[0]), "open": func() -> void: gv.call(fn)})
