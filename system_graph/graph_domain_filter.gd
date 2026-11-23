@@ -50,6 +50,10 @@ const KIND_DOMAIN := {
 	"plastic_waste": MATERIALS, "plastic_shred": MATERIALS, "plastic_flake": MATERIALS,
 	"plastic_sheet": MATERIALS, "finished_part": MATERIALS, "mud": MATERIALS,
 	"packaging_waste": MATERIALS, "lumber": MATERIALS, "scrap_metal": MATERIALS, "rubble": MATERIALS,
+	"pet_waste": MATERIALS, "hdpe_waste": MATERIALS, "film_waste": MATERIALS,
+	"mixed_plastic_waste": MATERIALS, "alu_waste": MATERIALS, "steel_waste": MATERIALS,
+	"glass_waste": MATERIALS, "cardboard_waste": MATERIALS, "paper_waste": MATERIALS,
+	"cullet": MATERIALS,
 	"sunlight": AMBIENT, "wind": AMBIENT,
 }
 

@@ -23,7 +23,9 @@ const STATUS_IDLE := "idle"
 const STATUS_EXPORTING := "exporting"
 
 ## Kinds a camp produces that somebody must take away.
-const WASTE_KINDS: Array = ["greywater", "blackwater", "food_waste", "plastic_waste", "packaging_waste"]
+const WASTE_KINDS: Array = ["greywater", "blackwater", "food_waste", "plastic_waste", "packaging_waste",
+	"pet_waste", "hdpe_waste", "film_waste", "mixed_plastic_waste", "alu_waste", "steel_waste",
+	"glass_waste", "cardboard_waste", "paper_waste"]
 
 
 ## {kinds: {kind: row}, open: [kind…], scope: scope_id} where

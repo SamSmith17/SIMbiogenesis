@@ -25,6 +25,11 @@ const EXCEPTIONS := {
 	# Shares the biochar kind with the crop-residue reactor, whose char holds
 	# that feed's ash; char from clean timber has almost none (C, H, O close).
 	"Biochar Kiln (scrap lumber)": "wood char has less ash than the shared kind's make-up",
+	# Shredded card/paper leaves as the game's one biomass kind so compost
+	# and the reactor take it; clean fibre carries almost no N while the
+	# shared biomass kind's protein share says ~1.2 % (and their moistures
+	# differ). Composition tracking (MakeUp.derive_outputs) still conserves.
+	"Cardboard Shredder": "clean fibre shredded into the shared biomass kind's make-up",
 }
 
 const GROUP_MACHINES := "Processors and machines"

@@ -369,6 +369,39 @@ const KINDS := {
 		"src": "PLA ~19 MJ/kg HHV", "est": true},
 	"packaging_waste": {"kg_per_unit": 1.0, "mix": {"cellulose": 0.75, "steel": 0.25},
 		"family": "packaging", "src": "card + tin, est", "est": true},
+	# --- typed packaging waste (food/waste realism pass) ------------------------
+	# What Unpack & Sort v2 and the kitchen sort food packaging into, by
+	# material (plans/FOOD_WASTE_REALISM_PLAN.md Phase 4). plastic_waste /
+	# packaging_waste above stay as the mixed legacy umbrellas. The typed
+	# plastics keep family "plastic" so the PP Shredder's unit op takes them.
+	"pet_waste": {"waste": true, "kg_per_unit": 1.0, "mix": {"pet": 1.0}, "family": "plastic",
+		"lhv_mj_kg": 22.9, "src": "PET LHV ~23 MJ/kg (Themelis et al. 2011)", "est": true},
+	"hdpe_waste": {"waste": true, "kg_per_unit": 1.0, "mix": {"pe": 1.0}, "family": "plastic",
+		"lhv_mj_kg": 43.0, "src": "PE LHV ~43 MJ/kg (Themelis et al. 2011)", "est": true},
+	# Bags, pouches and wrap: mostly PE film with some PP (metallised snack film).
+	"film_waste": {"waste": true, "kg_per_unit": 1.0, "mix": {"pe": 0.92, "pp": 0.08},
+		"family": "plastic", "lhv_mj_kg": 42.0, "src": "LDPE/LLDPE film + PP, est", "est": true},
+	# Tubs, trays and the rest of the rigid non-bottle stream.
+	"mixed_plastic_waste": {"waste": true, "kg_per_unit": 1.0, "mix": {"pp": 0.5, "ps": 0.3,
+		"pvc": 0.1, "pe": 0.1}, "family": "plastic", "lhv_mj_kg": 36.0,
+		"src": "rigid tub/tray stream, est", "est": true},
+	"alu_waste": {"waste": true, "kg_per_unit": 1.0, "mix": {"aluminium": 1.0}, "family": "metal",
+		"src": "beverage cans", "est": true},
+	"steel_waste": {"waste": true, "kg_per_unit": 1.0, "mix": {"steel": 1.0}, "family": "metal",
+		"src": "tinplate food cans", "est": true},
+	"glass_waste": {"waste": true, "kg_per_unit": 1.0, "mix": {"glass": 1.0}, "family": "mineral",
+		"src": "container glass", "est": true},
+	"cullet": {"kg_per_unit": 1.0, "mix": {"glass": 1.0}, "family": "mineral",
+		"src": "crushed container glass", "est": true},
+	# Corrugated board / cartons at ~8 % moisture; furnish split est
+	# (cartons' PE/foil layers ride the film share of the unpack, not here).
+	"cardboard_waste": {"waste": true, "kg_per_unit": 1.0, "mix": {"cellulose": 0.61,
+		"hemicellulose": 0.13, "lignin": 0.09, "bio_ash": 0.01}, "rest": "H2O",
+		"family": "organic", "lhv_mj_kg": 14.1,
+		"src": "corrugated furnish, EPA WARM LHV ~14 MJ/kg, est", "est": true},
+	"paper_waste": {"waste": true, "kg_per_unit": 1.0, "mix": {"cellulose": 0.70,
+		"hemicellulose": 0.12, "lignin": 0.05, "bio_ash": 0.02}, "rest": "H2O",
+		"family": "organic", "lhv_mj_kg": 13.0, "src": "mixed paper, est", "est": true},
 }
 
 ## Kinds that carry energy or accounting, not mass.

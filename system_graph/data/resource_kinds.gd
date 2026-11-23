@@ -76,6 +76,93 @@ const BUILTIN: Dictionary = {
 		"abbrev": "♻",
 		"flow_ref_rate": 12.0,
 	},
+	# --- typed packaging waste (food/waste realism pass) ---------------------
+	# One kind per common packaging material, what Unpack & Sort v2 and the
+	# typed bins carry (PackagingArchetypes names these as `waste_kind`).
+	# plastic_waste / packaging_waste stay as the mixed legacy umbrellas.
+	"pet_waste": {
+		"display": "PET Bottles",
+		"color": Color(0.350, 0.760, 0.880, 1.0),
+		"unit": "kg",
+		"abbrev": "P1",
+		"flow_ref_rate": 5.0,
+		"aliases": ["pet_bottles", "pet"],
+	},
+	"hdpe_waste": {
+		"display": "HDPE Jugs",
+		"color": Color(0.420, 0.620, 0.900, 1.0),
+		"unit": "kg",
+		"abbrev": "P2",
+		"flow_ref_rate": 5.0,
+		"aliases": ["hdpe_jugs", "hdpe"],
+	},
+	"film_waste": {
+		"display": "Plastic Film",
+		"color": Color(0.700, 0.730, 0.820, 1.0),
+		"unit": "kg",
+		"abbrev": "P4",
+		"flow_ref_rate": 5.0,
+		"aliases": ["plastic_film", "plastic_bags"],
+	},
+	"mixed_plastic_waste": {
+		"display": "Mixed Plastic (tubs, trays)",
+		"color": Color(0.560, 0.560, 0.700, 1.0),
+		"unit": "kg",
+		"abbrev": "P7",
+		"flow_ref_rate": 5.0,
+		"aliases": ["plastic_tubs", "rigid_plastic"],
+	},
+	"alu_waste": {
+		"display": "Aluminium Cans",
+		"color": Color(0.780, 0.800, 0.830, 1.0),
+		"unit": "kg",
+		"abbrev": "AL",
+		"flow_ref_rate": 5.0,
+		"aliases": ["aluminum_cans", "aluminium_cans", "alu_cans"],
+	},
+	"steel_waste": {
+		"display": "Steel Cans",
+		"color": Color(0.540, 0.580, 0.620, 1.0),
+		"unit": "kg",
+		"abbrev": "FE",
+		"flow_ref_rate": 5.0,
+		"aliases": ["tin_cans", "steel_cans", "tins"],
+	},
+	"glass_waste": {
+		"display": "Glass",
+		"color": Color(0.480, 0.800, 0.700, 1.0),
+		"unit": "kg",
+		"abbrev": "GL",
+		"flow_ref_rate": 5.0,
+		"aliases": ["glass_bottles", "glass_jars"],
+	},
+	"cullet": {
+		# What the glass crusher makes: clean crushed container glass.
+		# A store for now (filter media / glasscrete are future consumers),
+		# like scrap_metal and rubble.
+		"display": "Cullet (crushed glass)",
+		"color": Color(0.580, 0.860, 0.780, 1.0),
+		"unit": "kg",
+		"abbrev": "CU",
+		"flow_ref_rate": 10.0,
+		"aliases": ["crushed_glass"],
+	},
+	"cardboard_waste": {
+		"display": "Cardboard & Cartons",
+		"color": Color(0.760, 0.620, 0.420, 1.0),
+		"unit": "kg",
+		"abbrev": "CB",
+		"flow_ref_rate": 6.0,
+		"aliases": ["card_waste", "cardboard", "cartons"],
+	},
+	"paper_waste": {
+		"display": "Paper",
+		"color": Color(0.850, 0.820, 0.740, 1.0),
+		"unit": "kg",
+		"abbrev": "PA",
+		"flow_ref_rate": 6.0,
+		"aliases": ["waste_paper"],
+	},
 	"plastic_shred": {
 		"display": "Shredded Plastic",
 		"color": Color(0.392, 0.710, 0.965, 1.0),
@@ -765,8 +852,8 @@ static func mismatch_message(src_kind: String, tgt_kind: String) -> String:
 	if src_kind.is_empty() or tgt_kind.is_empty():
 		return "Resource port missing a type — assign input/output kinds in the inspector"
 	if dimensions_compatible(src_kind, tgt_kind):
-		return "%s does not normally connect to %s (allowed — same unit of measure)" % [a, b]
-	return "%s cannot connect to %s" % [a, b]
+		return I18n.f("{a} does not normally connect to {b} (allowed — same unit of measure)", {"a": a, "b": b})
+	return I18n.f("{a} cannot connect to {b}", {"a": a, "b": b})
 
 
 ## Parse legacy free-text capacity strings like "50 gal" or "100 lb".
@@ -817,6 +904,25 @@ static func infer_kind_from_name(name: String) -> String:
 		return "plastic_flake"
 	if "plastic" in n and "shred" in n:
 		return "plastic_shred"
+	# Typed packaging-waste bins before the generic plastic umbrella.
+	if "pet" in n and "carpet" not in n:
+		return "pet_waste"
+	if "hdpe" in n or "jug" in n:
+		return "hdpe_waste"
+	if "film" in n:
+		return "film_waste"
+	if ("mixed" in n and "plastic" in n) or "tub" in n or "tray" in n:
+		return "mixed_plastic_waste"
+	if "alu" in n:
+		return "alu_waste"
+	if ("steel" in n or "tin" in n) and ("can" in n or "bin" in n):
+		return "steel_waste"
+	if "glass" in n or "cullet" in n:
+		return "glass_waste"
+	if "cardboard" in n or "carton" in n or ("card" in n and "bin" in n):
+		return "cardboard_waste"
+	if "paper" in n:
+		return "paper_waste"
 	if "plastic" in n:
 		return "plastic_waste"
 	if "biochar" in n:
@@ -996,13 +1102,13 @@ static func format_tank_stock(specs: Dictionary) -> String:
 		var lps := float(specs.get("live_in_lps", 0.0))
 		if lps > 1e-4:
 			return "%s %s · %.1f L/s" % [format_qty(cum), unit, lps]
-		return "%s %s out" % [format_qty(cum), unit]
+		return I18n.f("{cum} {unit} out", {"cum": format_qty(cum), "unit": unit})
 	# Pond twin with runaway capacity (legacy 1e12) — don't show scientific junk.
 	var cap_raw := float(specs.get("capacity_qty", 100.0))
 	if bool(specs.get("pond_storage", false)) and not bool(specs.get("unlimited_capacity", false)) \
 			and (is_nan(cap_raw) or cap_raw >= 1.0e10):
 		var level := clampf(float(specs.get("level", 0.0)), 0.0, 1.0)
-		return "level %.0f%% (capacity pending heal)" % [level * 100.0]
+		return I18n.f("level {level}% (capacity pending heal)", {"level": "%.0f" % (level * 100.0)})
 	var stock := tank_stock_qty(specs)
 	var qty := format_qty(stock)
 	if bool(specs.get("allow_negative", false)) \

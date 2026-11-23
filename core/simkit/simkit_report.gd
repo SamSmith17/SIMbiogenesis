@@ -7,7 +7,9 @@ extends RefCounted
 ## Brownwater (a urine-diverting toilet's flush) is waste like blackwater:
 ## before it was listed, a full toilet tank never failed a design.
 const WASTE_KINDS := ["greywater", "blackwater", "brownwater", "food_waste", "packaging_waste",
-	"plastic_waste", "manure", "urine", "brine"]
+	"plastic_waste", "manure", "urine", "brine",
+	"pet_waste", "hdpe_waste", "film_waste", "mixed_plastic_waste", "alu_waste", "steel_waste",
+	"glass_waste", "cardboard_waste", "paper_waste"]
 const SUPPLY_KINDS := ["water", "food", "meal"]
 
 

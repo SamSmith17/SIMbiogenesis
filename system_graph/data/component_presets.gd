@@ -430,6 +430,63 @@ const PROCESSORS: Array = [
 			"outputs": [{"kind": "finished_part", "rate": 12.0, "unit": "units/h"}],
 		},
 	},
+	# --- typed packaging-waste recyclers (food/waste realism pass, Phase 4) ---
+	{
+		# Takes the can stream at scrap metal's own 15/85 alu/steel mix, so
+		# the elements close exactly. Both bins must hold stock (the engine's
+		# all-or-nothing input gate) — which reads as the real thing: you
+		# bale when you have a load, and the bins buffer between unpacks.
+		"type": "processor", "label": "Can Crusher & Baler", "icon": "🥫",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Can Crusher & Baler", "watts": 240.0, "cost": 900.0,
+			"unit_ops": ["can_crushing"],
+			"energy_source": "ac",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"requested_state": "on",
+			"daily_note": "Cans 3 kg/h (alu 0.45 + steel 2.55, scrap metal's own mix) + 240 W → scrap metal 3 kg/h (~0.08 kWh/kg, small-baler class, est).",
+			"inputs": [
+				{"kind": "alu_waste", "rate": 0.45, "unit": "kg/h"},
+				{"kind": "steel_waste", "rate": 2.55, "unit": "kg/h"},
+			],
+			"outputs": [{"kind": "scrap_metal", "rate": 3.0, "unit": "kg/h"}],
+		},
+	},
+	{
+		"type": "processor", "label": "Glass Crusher", "icon": "🫙",
+		"width": 140.0, "height": 130.0,
+		"specs": {
+			"name": "Glass Crusher", "watts": 500.0, "cost": 1200.0,
+			"unit_ops": ["glass_crushing"],
+			"energy_source": "ac",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"requested_state": "on",
+			"daily_note": "Container glass 10 kg/h + 500 W → cullet 10 kg/h (~0.05 kWh/kg, small jaw/hammer crusher class, est). Cullet packs ~5x tighter than whole bottles.",
+			"inputs": [{"kind": "glass_waste", "rate": 10.0, "unit": "kg/h"}],
+			"outputs": [{"kind": "cullet", "rate": 10.0, "unit": "kg/h"}],
+		},
+	},
+	{
+		# Shredded card and paper leave as the game's one `biomass` kind so
+		# the compost bays and the biochar reactor take them unchanged.
+		# PresetBalance.EXCEPTIONS carries the N difference (clean fibre has
+		# almost none; the shared biomass kind's protein says otherwise).
+		"type": "processor", "label": "Cardboard Shredder", "icon": "📦",
+		"width": 150.0, "height": 130.0,
+		"specs": {
+			"name": "Cardboard Shredder", "watts": 300.0, "cost": 650.0,
+			"unit_ops": ["card_shredding"],
+			"energy_source": "ac",
+			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
+			"requested_state": "on",
+			"daily_note": "Cardboard 4 + paper 1 kg/h + 300 W → shredded fibre 5 kg/h as compost feed (~0.06 kWh/kg, garden-shredder class, est).",
+			"inputs": [
+				{"kind": "cardboard_waste", "rate": 4.0, "unit": "kg/h"},
+				{"kind": "paper_waste", "rate": 1.0, "unit": "kg/h"},
+			],
+			"outputs": [{"kind": "biomass", "rate": 5.0, "unit": "kg/h"}],
+		},
+	},
 	{
 		"type": "processor", "label": "Biochar Reactor", "icon": "🔥",
 		"width": 150.0, "height": 140.0,
@@ -1289,6 +1346,100 @@ const RESOURCES: Array = [
 			"name": "Waste Plastic Bin", "resource_kind": "plastic_waste",
 			"capacity": "200 kg", "capacity_qty": 200.0, "capacity_unit": "kg",
 			"level": 0.3, "cost": 40.0,
+		},
+	},
+	# --- typed packaging-waste bins (food/waste realism pass, Phase 4) -------
+	# One bin per material the unpack and the kitchen sort into. Capacities
+	# are a week or two of a small camp's stream; the 3D bin prop (Phase 8)
+	# draws the actual bottles and cans these hold.
+	{
+		"type": "resource", "label": "PET Bin", "icon": "🧴",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "PET Bin", "resource_kind": "pet_waste",
+			"capacity": "40 kg", "capacity_qty": 40.0, "capacity_unit": "kg",
+			"level": 0.0, "cost": 25.0,
+		},
+	},
+	{
+		"type": "resource", "label": "HDPE Bin", "icon": "🧴",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "HDPE Bin", "resource_kind": "hdpe_waste",
+			"capacity": "40 kg", "capacity_qty": 40.0, "capacity_unit": "kg",
+			"level": 0.0, "cost": 25.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Film & Bag Bin", "icon": "🛍",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Film & Bag Bin", "resource_kind": "film_waste",
+			"capacity": "25 kg", "capacity_qty": 25.0, "capacity_unit": "kg",
+			"level": 0.0, "cost": 25.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Mixed Plastic Bin", "icon": "🥡",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Mixed Plastic Bin", "resource_kind": "mixed_plastic_waste",
+			"capacity": "50 kg", "capacity_qty": 50.0, "capacity_unit": "kg",
+			"level": 0.0, "cost": 25.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Aluminium Cans Bin", "icon": "🥫",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Aluminium Cans Bin", "resource_kind": "alu_waste",
+			"capacity": "40 kg", "capacity_qty": 40.0, "capacity_unit": "kg",
+			"level": 0.0, "cost": 25.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Steel Cans Bin", "icon": "🥫",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Steel Cans Bin", "resource_kind": "steel_waste",
+			"capacity": "80 kg", "capacity_qty": 80.0, "capacity_unit": "kg",
+			"level": 0.0, "cost": 25.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Glass Bin", "icon": "🫙",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Glass Bin", "resource_kind": "glass_waste",
+			"capacity": "150 kg", "capacity_qty": 150.0, "capacity_unit": "kg",
+			"level": 0.0, "cost": 30.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Cardboard Bin", "icon": "📦",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Cardboard Bin", "resource_kind": "cardboard_waste",
+			"capacity": "60 kg", "capacity_qty": 60.0, "capacity_unit": "kg",
+			"level": 0.0, "cost": 25.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Paper Bin", "icon": "📄",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Paper Bin", "resource_kind": "paper_waste",
+			"capacity": "40 kg", "capacity_qty": 40.0, "capacity_unit": "kg",
+			"level": 0.0, "cost": 20.0,
+		},
+	},
+	{
+		"type": "resource", "label": "Cullet Store", "icon": "🫙",
+		"width": 90.0, "height": 100.0,
+		"specs": {
+			"name": "Cullet Store", "resource_kind": "cullet",
+			"capacity": "300 kg", "capacity_qty": 300.0, "capacity_unit": "kg",
+			"level": 0.0, "cost": 60.0,
 		},
 	},
 	{
