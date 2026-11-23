@@ -130,7 +130,7 @@ func _load_from_prop() -> void:
 		solar = (rec.get("record_extra", {}) as Dictionary).get("solar", {}) as Dictionary
 	_count_spin.value = int(solar.get("panelCount", StarShadeGraphSeeder.DEFAULT_PANEL_COUNT))
 	_watts_spin.value = float(solar.get("panelWatts", StarShadeGraphSeeder.DEFAULT_PANEL_WATTS))
-	_status.text = "%s on the graph" % UiText.count(int(_count_spin.value), "panel")
+	_status.text = I18n.f("{count_spin} on the graph", {"count_spin": UiText.count(int(_count_spin.value), "panel")})
 
 
 func _on_apply_design() -> void:
@@ -152,7 +152,7 @@ func _on_apply_design() -> void:
 	})
 	if _loader.has_method("rebuild_placed_props"):
 		_loader.call("rebuild_placed_props")
-	_status.text = "Design set to %s" % str((_designs[idx] as Dictionary).get("label", mid))
+	_status.text = I18n.f("Design set to {label}", {"label": str((_designs[idx] as Dictionary).get("label", mid))})
 
 
 func _on_reseed() -> void:
@@ -178,7 +178,7 @@ func _on_reseed() -> void:
 			sgv.call("_sync_solar_ui_from_graph")
 		if sgv.has_method("_schedule_graph_autosave"):
 			sgv.call("_schedule_graph_autosave")
-		_status.text = "Re-seeded the graph: %s × %s" % [UiText.count(n, "panel"), UiText.num(w, "W")]
+		_status.text = I18n.f("Re-seeded the graph: {value} × {w}", {"value": UiText.count(n, "panel"), "w": UiText.num(w, "W")})
 	else:
 		_status.text = "Re-seed failed"
 

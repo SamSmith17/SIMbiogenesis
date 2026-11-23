@@ -401,7 +401,7 @@ func _build_right_column(right: VBoxContainer) -> void:
 		var clr_btn := Button.new()
 		clr_btn.name = "clear_" + slot_id
 		clr_btn.text = "×"
-		clr_btn.tooltip_text = "Remove uploaded %s map" % slot_id
+		clr_btn.tooltip_text = I18n.f("Remove uploaded {slot_id} map", {"slot_id": slot_id})
 		clr_btn.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		UITheme.style_button(clr_btn)
 		clr_btn.pressed.connect(func() -> void: _clear_slot(slot_id))
@@ -486,8 +486,11 @@ func _sync_controls_from_spec() -> void:
 	var spec := ParametricMaterialLibrary.resolved_spec(_selected_id)
 	if _shell != null and _shell.subtitle != null:
 		var live_n := ParametricMaterialLibrary.live_instance_count(_selected_id)
-		_shell.subtitle.text = "%s  ·  %d live surface%s in world" % [
-			str(spec.get("label", _selected_id)), live_n, "" if live_n == 1 else "s"]
+		_shell.subtitle.text = I18n.f("{label}  ·  {live_n} live surface{live_n_2} in world", {
+			"label": str(spec.get("label", _selected_id)),
+			"live_n": "%d" % live_n,
+			"live_n_2": "" if live_n == 1 else "s",
+		})
 
 	_r_rough.set_value(float(spec.get("roughness", 0.5)))
 	_r_rough_c.set_value(float(spec.get("rough_contrast", 0.4)))
@@ -548,8 +551,11 @@ func _refresh_rig_material() -> void:
 			mi.material_override = _rig_mat
 	if _shell != null and _shell.subtitle != null:
 		var live_n := ParametricMaterialLibrary.live_instance_count(_selected_id)
-		_shell.subtitle.text = "%s  ·  %d live surface%s" % [
-			str(spec.get("label", _selected_id)), live_n, "" if live_n == 1 else "s"]
+		_shell.subtitle.text = I18n.f("{label}  ·  {live_n} live surface{live_n_2}", {
+			"label": str(spec.get("label", _selected_id)),
+			"live_n": "%d" % live_n,
+			"live_n_2": "" if live_n == 1 else "s",
+		})
 
 
 func _set_param(key: String, value: Variant) -> void:
@@ -563,7 +569,7 @@ func _set_param(key: String, value: Variant) -> void:
 func _open_upload_dialog(slot: String) -> void:
 	_pending_upload_slot = slot
 	if _file_dialog != null:
-		_file_dialog.title = "Upload %s texture for %s" % [slot.capitalize(), _selected_id]
+		_file_dialog.title = I18n.f("Upload {slot} texture for {selected_id}", {"slot": slot.capitalize(), "selected_id": _selected_id})
 		_file_dialog.popup_centered(Vector2i(860, 560))
 
 

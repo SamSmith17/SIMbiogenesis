@@ -569,9 +569,12 @@ func _refresh_header() -> void:
 		_name_edit.text = str(_spec["name"])
 	var st: Dictionary = _design.get("stats", {})
 	var bom: Dictionary = _design.get("bom", {})
-	_subtitle.text = "%s · %s high · %s floor · %s" % [DomeLabSpec.describe(_spec),
-		DomeLabSpec.fmt_m(float(st.get("height_m", 0.0))), DomeLabSpec.fmt_area(float(st.get("floor_area_m2", 0.0))),
-		DomeLabSpec.fmt_kg(float(bom.get("mass_kg", 0.0)))]
+	_subtitle.text = I18n.f("{spec} · {height_m} high · {floor_area_m2} floor · {mass_kg}", {
+		"spec": DomeLabSpec.describe(_spec),
+		"height_m": DomeLabSpec.fmt_m(float(st.get("height_m", 0.0))),
+		"floor_area_m2": DomeLabSpec.fmt_area(float(st.get("floor_area_m2", 0.0))),
+		"mass_kg": DomeLabSpec.fmt_kg(float(bom.get("mass_kg", 0.0))),
+	})
 
 
 func _on_name_changed() -> void:
@@ -915,7 +918,7 @@ func _build_settings_rows() -> void:
 				var cb := CheckBox.new()
 				cb.name = "zone_%d" % z
 				cb.text = _zone_label(z)
-				cb.tooltip_text = "Rhombus type %d (generators %d apart)" % [z, z]
+				cb.tooltip_text = I18n.f("Rhombus type {z} (generators {z_2} apart)", {"z": "%d" % z, "z_2": "%d" % z})
 				cb.toggled.connect(func(_on): _on_zone_toggled())
 				flow.add_child(cb)
 			_row(_face_box, "Openings in", flow, "Which rhombus types get an opening; none ticked = every face")
@@ -1185,11 +1188,15 @@ func _set_highlight(label: String) -> void:
 func _refresh_bom() -> void:
 	_clear(_bom_box)
 	var bom: Dictionary = _design["bom"]
-	_bom_lbl.text = "%s · %s of %s in %s stock lengths (%.0f %% waste) · %s bolts%s" % [
-		DomeLabSpec.fmt_kg(float(bom["mass_kg"])), DomeLabSpec.fmt_m(float(bom["strut_m"])),
-		str(DomeLabMaterials.strut(str(_spec["strut"]["material"]))["label"]) if (_design["nexorade"] as Dictionary).is_empty() else str((_design["nexorade"] as Dictionary)["slat"]["label"]),
-		str(bom["stock_pieces"]), float(bom["waste_pct"]), str(bom["bolts"]),
-		(" · %s on %s" % [DomeLabSpec.fmt_area(float(bom["panels_m2"])), UiText.count(int(bom["sheets"]), "sheet")]) if float(bom["panels_m2"]) > 0.0 else ""]
+	_bom_lbl.text = I18n.f("{mass_kg} · {strut_m} of {label} in {stock_pieces} stock lengths ({waste_pct} % waste) · {bolts} bolts{panels_m2}", {
+		"mass_kg": DomeLabSpec.fmt_kg(float(bom["mass_kg"])),
+		"strut_m": DomeLabSpec.fmt_m(float(bom["strut_m"])),
+		"label": str(DomeLabMaterials.strut(str(_spec["strut"]["material"]))["label"]) if (_design["nexorade"] as Dictionary).is_empty() else str((_design["nexorade"] as Dictionary)["slat"]["label"]),
+		"stock_pieces": str(bom["stock_pieces"]),
+		"waste_pct": "%.0f" % float(bom["waste_pct"]),
+		"bolts": str(bom["bolts"]),
+		"panels_m2": (" · %s on %s" % [DomeLabSpec.fmt_area(float(bom["panels_m2"])), UiText.count(int(bom["sheets"]), "sheet")]) if float(bom["panels_m2"]) > 0.0 else "",
+	})
 	_bom_box.add_child(_bom_row(["Qty", "Item", "Detail"], true))
 	for r in bom["rows"]:
 		_bom_box.add_child(_bom_row(["%d %s" % [int(r["qty"]), str(r["unit"])], str(r["item"]), str(r["detail"])], false))

@@ -508,7 +508,7 @@ func _add_slider(parent: Control, label: String, mn: float, mx: float, step: flo
 	row.add_child(val)
 	sl.value_changed.connect(func(v: float) -> void:
 		if unit == "m" and step < 0.01:
-			val.text = "%.0f mm" % (v * 1000.0)
+			val.text = I18n.f("{value} mm", {"value": "%.0f" % ((v * 1000.0))})
 		else:
 			var t := ("%.3f" % v) if step < 0.01 else ("%.2f" % v)
 			val.text = t + ((" " + unit) if not unit.is_empty() else "")
@@ -910,7 +910,7 @@ func _update_control_visibility() -> void:
 		bd = mgr.call("bundle_of", _conn_id)
 	_row_lane.visible = on_solver and not bd.is_empty()
 	if not bd.is_empty():
-		_lane_lbl.text = "%d of %d (drag it with the Route tool's Lane)" % [int(bd["lane"]) + 1, int(bd["lanes"])]
+		_lane_lbl.text = I18n.f("{lane} of {lanes} (drag it with the Route tool's Lane)", {"lane": "%d" % (int(bd["lane"]) + 1), "lanes": "%d" % int(bd["lanes"])})
 	_row_roughness.visible = not glow_type
 	_hdr_glow.visible = glow_type
 	_row_glow.visible = glow_type
@@ -1391,7 +1391,7 @@ func _current_style_dict() -> Dictionary:
 func _on_save_type_default() -> void:
 	var type_id := _effective_type_id()
 	if ConduitStylePresets.set_type_defaults(type_id, _current_style_dict()):
-		_status_lbl.text = "✓ Default saved for %s" % ConduitKinds.display_name(type_id)
+		_status_lbl.text = I18n.f("✓ Default saved for {type_id}", {"type_id": ConduitKinds.display_name(type_id)})
 		ConduitStylePresets.reload()
 	else:
 		_status_lbl.text = "Could not save the kind's default"
@@ -1443,4 +1443,4 @@ func _apply_named(preset_id: String) -> void:
 	_update_control_visibility()
 	_refresh_titles()
 	_apply_to_wire()
-	_status_lbl.text = "Loaded “%s” onto the wire" % str(entry.get("label", ""))
+	_status_lbl.text = I18n.f("Loaded “{label}” onto the wire", {"label": str(entry.get("label", ""))})

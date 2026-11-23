@@ -168,7 +168,7 @@ func _refresh_total() -> void:
 	var n := 0
 	for r in _rows:
 		n += int(((r as Dictionary)["people"] as SpinBox).value)
-	_total_lbl.text = "%s · %s in all" % [UiText.count(_rows.size(), "camp"), UiText.count(n, "person", "people")]
+	_total_lbl.text = I18n.f("{rows} · {value} in all", {"rows": UiText.count(_rows.size(), "camp"), "value": UiText.count(n, "person", "people")})
 
 
 func spec() -> Dictionary:

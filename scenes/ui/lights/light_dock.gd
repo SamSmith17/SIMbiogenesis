@@ -419,7 +419,7 @@ func _refresh_preset_picker() -> void:
 	_preset_row.visible = not kind.is_empty()
 	if kind.is_empty():
 		return
-	_preset_label.text = "New %s:" % kind
+	_preset_label.text = I18n.f("New {kind}:", {"kind": kind})
 	_preset_pick.clear()
 	_preset_ids = [""]
 	_preset_pick.add_item("Default %s style" % kind)
@@ -565,8 +565,11 @@ func _rebuild_styles() -> void:
 		# clipped mid-word). The active style reads in the primary colour.
 		var uses := layer.style_usage(str(sid))
 		name_btn.text = str(st.get("name", "Style"))
-		name_btn.tooltip_text = "%s — %s, %s\nClick: select every light using this style\nDouble-click: rename" % [
-			name_btn.text, kind, UiText.count(uses, "light")]
+		name_btn.tooltip_text = I18n.f("{name_btn} — {kind}, {uses}\nClick: select every light using this style\nDouble-click: rename", {
+			"name_btn": name_btn.text,
+			"kind": kind,
+			"uses": UiText.count(uses, "light"),
+		})
 		name_btn.flat = true
 		name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		name_btn.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS

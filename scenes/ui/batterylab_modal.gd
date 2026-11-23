@@ -1695,7 +1695,7 @@ func _refresh_protections() -> void:
 		var kind := str(rw[2])
 		var lbl := Label.new()
 		lbl.text = str(rw[1])
-		lbl.tooltip_text = "%s — opens %s" % [BattBms.WORDS[key], str(BattBms.OPENS[key]) if str(BattBms.OPENS[key]) != "both" else "both switches"]
+		lbl.tooltip_text = I18n.f("{key} — opens {key_2}", {"key": BattBms.WORDS[key], "key_2": str(BattBms.OPENS[key]) if str(BattBms.OPENS[key]) != "both" else "both switches"})
 		lbl.mouse_filter = Control.MOUSE_FILTER_PASS
 		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		lbl.clip_text = true
@@ -1707,7 +1707,7 @@ func _refresh_protections() -> void:
 		if kind == "a":
 			var rl := Label.new()
 			rl.text = "retries"
-			rl.tooltip_text = "Current trips close the switch again after %.0f s (a short after %.0f s)" % [BattBmsLogic.RECOVER_S, BattBmsLogic.SC_RECOVER_S]
+			rl.tooltip_text = I18n.f("Current trips close the switch again after {recover_s} s (a short after {sc_recover_s} s)", {"recover_s": "%.0f" % BattBmsLogic.RECOVER_S, "sc_recover_s": "%.0f" % BattBmsLogic.SC_RECOVER_S})
 			rl.mouse_filter = Control.MOUSE_FILTER_PASS
 			rl.custom_minimum_size = Vector2(74, 0)
 			rl.add_theme_font_size_override("font_size", UITheme.FONT_SM)

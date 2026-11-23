@@ -376,7 +376,7 @@ func _build_program_row(rec: Dictionary) -> Control:
 		var slot: Dictionary = rec["program"][i]
 		var chip := Button.new()
 		chip.text = "%s ×" % FestivalProgram.slot_text(slot)
-		chip.tooltip_text = "draw %.2f — click to remove this set" % float(slot.get("draw", 1.0))
+		chip.tooltip_text = I18n.f("draw {draw} — click to remove this set", {"draw": "%.2f" % (float(slot.get("draw", 1.0)))})
 		chip.add_theme_font_size_override("font_size", 11)
 		var idx := i
 		chip.pressed.connect(func() -> void:

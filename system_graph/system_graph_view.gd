@@ -12696,7 +12696,7 @@ func _refresh_osm_solar_btn() -> void:
 			panels += int((e as Dictionary).get("panel_count", 0))
 	_osm_solar_btn.visible = pending > 0
 	if pending > 0:
-		_osm_solar_btn.text = "☀ Add OSM Solar (%d · %d pv)" % [pending, panels]
+		_osm_solar_btn.text = I18n.f("☀ Add OSM Solar ({pending} · {panels} pv)", {"pending": "%d" % pending, "panels": "%d" % panels})
 
 
 ## Legacy hooks — game save/load live in SaveLoadUI; graph export/import above.
@@ -13839,10 +13839,9 @@ func _update_scope_breadcrumb() -> void:
 				mb.text = "▾"
 				mb.flat = true
 				mb.focus_mode = Control.FOCUS_NONE
-				mb.tooltip_text = "Go to another %s at this level" % (
-					"camp" if GraphSystems.island_kind(owner_item) == GraphSystems.KIND_CAMP
-					else "vehicle" if GraphSystems.island_kind(owner_item) == GraphSystems.KIND_VEHICLE
-					else "group")
+				mb.tooltip_text = I18n.f("Go to another {kind_vehicle} at this level", {
+					"kind_vehicle": ( "camp" if GraphSystems.island_kind(owner_item) == GraphSystems.KIND_CAMP else "vehicle" if GraphSystems.island_kind(owner_item) == GraphSystems.KIND_VEHICLE else "group"),
+				})
 				mb.add_theme_font_size_override("font_size", 12)
 				mb.add_theme_color_override("font_color", C_TEXT_M)
 				var pm := mb.get_popup()
@@ -17294,7 +17293,7 @@ func _on_history_btn_pressed() -> void:
 		"speed_x":    60.0,
 	})
 	if _history_status_lbl != null:
-		_history_status_lbl.text = "Loading last %d h…" % _HISTORY_HOURS_BACK
+		_history_status_lbl.text = I18n.f("Loading last {history_hours_back} h…", {"history_hours_back": "%d" % _HISTORY_HOURS_BACK})
 	_set_view_menu_checked(VIEW_HISTORY, true)
 
 
@@ -17506,7 +17505,7 @@ func _on_history_state_changed(s: int) -> void:
 			_history_player.State.READY:
 				_history_status_lbl.text = "Ready"
 			_history_player.State.PLAYING:
-				_history_status_lbl.text = "Playing %.0f×" % _history_player.get_speed()
+				_history_status_lbl.text = I18n.f("Playing {speed}×", {"speed": "%.0f" % _history_player.get_speed()})
 			_history_player.State.PAUSED:
 				_history_status_lbl.text = "Paused"
 			_history_player.State.STOPPED:
@@ -17515,7 +17514,7 @@ func _on_history_state_changed(s: int) -> void:
 
 func _on_history_loading_progress(loaded: int, total: int) -> void:
 	if _history_status_lbl != null:
-		_history_status_lbl.text = "Loading %d / %d" % [loaded, total]
+		_history_status_lbl.text = I18n.f("Loading {loaded} / {total}", {"loaded": "%d" % loaded, "total": "%d" % total})
 
 
 func _on_history_data_ready(start_t: int, end_t: int) -> void:
@@ -17996,7 +17995,7 @@ func _refresh_telemetry() -> void:
 		if soi_svc != null and soi_svc.has_method("radius_m"):
 			var r: float = soi_svc.radius_m()
 			var km2: float = soi_svc.area_m2() / 1_000_000.0
-			_soi_chip.text = "🌐 SoI %d m · %.2f km²" % [int(round(r)), km2]
+			_soi_chip.text = I18n.f("🌐 SoI {r} m · {km2} km²", {"r": "%d" % int(round(r)), "km2": "%.2f" % km2})
 			_soi_chip.add_theme_color_override("font_color", C_PRIMARY)
 		else:
 			_soi_chip.text = "🌐 SoI · —"
@@ -23358,7 +23357,7 @@ func _refresh_overlay_legend() -> void:
 	var head := HBoxContainer.new()
 	col.add_child(head)
 	var t := Label.new()
-	t.text = "Systems by %s" % str(GraphSystemBoard.OVERLAY_LABELS[mode]).to_lower()
+	t.text = I18n.f("Systems by {mode}", {"mode": str(GraphSystemBoard.OVERLAY_LABELS[mode]).to_lower()})
 	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	t.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	t.add_theme_color_override("font_color", UITheme.C_TEXT)
@@ -23387,7 +23386,7 @@ func _refresh_overlay_legend() -> void:
 		col.add_child(b)
 	if no_data > 0:
 		var nd := Label.new()
-		nd.text = "%s with no data shown grey" % UiText.count(no_data, "system")
+		nd.text = I18n.f("{no_data} with no data shown grey", {"no_data": UiText.count(no_data, "system")})
 		nd.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		nd.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 		col.add_child(nd)
@@ -23415,7 +23414,7 @@ func _refresh_alerts_rail() -> void:
 	if entries.size() > ALERTS_RAIL_MAX:
 		var more := Button.new()
 		more.name = "AlertsMore"
-		more.text = "+%d more on the board" % (entries.size() - ALERTS_RAIL_MAX)
+		more.text = I18n.f("+{alerts_rail_max} more on the board", {"alerts_rail_max": "%d" % ((entries.size() - ALERTS_RAIL_MAX))})
 		UITheme.style_button(more)
 		more.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		more.pressed.connect(func() -> void: open_board_fullscreen("attention"))
@@ -23450,7 +23449,7 @@ func _make_alert_entry(e: Dictionary) -> Control:
 	go.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	var icon := "⛺" if str(e["kind"]) == GraphSystems.KIND_CAMP else "🚐"
 	go.text = "%s %s · %s" % [icon, str(e["name"]), str(e["reason"])]
-	go.tooltip_text = "%s needs attention: %s\nClick to fly there." % [str(e["name"]), str(e["reason"])]
+	go.tooltip_text = I18n.f("{name} needs attention: {reason}\nClick to fly there.", {"name": str(e["name"]), "reason": str(e["reason"])})
 	go.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	go.add_theme_color_override("font_color", UITheme.C_TEXT)
 	go.pressed.connect(board_fly_to.bind(str(e["id"]), false))
@@ -24201,7 +24200,7 @@ func _sync_filter_chip(hidden: int) -> void:
 	_filter_legend.visible = on
 	if not on:
 		return
-	_filter_chip.text = "%s hidden  ✕" % UiText.count(hidden, "node")
+	_filter_chip.text = I18n.f("{hidden} hidden  ✕", {"hidden": UiText.count(hidden, "node")})
 	for d in _filter_pills:
 		var pill: Button = _filter_pills[d]
 		var shown := bool(_domain_shown.get(d, false))

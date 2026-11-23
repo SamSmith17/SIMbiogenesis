@@ -865,12 +865,12 @@ func _update_webcam_feed_label() -> void:
 		else:
 			tr_feed_name_label.text = _get_camera_extension_status()
 	if dialog_current_feed_label != null:
-		dialog_current_feed_label.text = "Current input: %s" % display_name
+		dialog_current_feed_label.text = I18n.f("Current input: {display_name}", {"display_name": display_name})
 	if dialog_help_label != null:
 		if _get_available_camera_feed_count() > 0:
-			dialog_help_label.text = "%s\nSelect a feed above and click Apply Feed." % _get_camera_extension_status()
+			dialog_help_label.text = I18n.f("{camera_extension_status}\nSelect a feed above and click Apply Feed.", {"camera_extension_status": _get_camera_extension_status()})
 		else:
-			dialog_help_label.text = "%s\nStart OBS Virtual Camera, then click Refresh Feed List." % _get_camera_extension_status()
+			dialog_help_label.text = I18n.f("{camera_extension_status}\nStart OBS Virtual Camera, then click Refresh Feed List.", {"camera_extension_status": _get_camera_extension_status()})
 
 
 func _on_webcam_cancel_button_pressed() -> void:
@@ -1143,7 +1143,7 @@ func _update_video_control_labels(ts: float, dt: float) -> void:
 				if d < best_d:
 					best_d = d
 					best_i = i
-			tr_video_speed_label.text = "%s SYNC" % str(TimelineUI.SPEED_STEPS[best_i][0])
+			tr_video_speed_label.text = I18n.f("{best_i} SYNC", {"best_i": str(TimelineUI.SPEED_STEPS[best_i][0])})
 
 
 func _seek_video_to_sim_time() -> void:

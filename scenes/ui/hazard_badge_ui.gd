@@ -68,10 +68,12 @@ func _refresh() -> void:
 	if not forced.is_empty():
 		var remain := _sim_hours_remaining(float(forced.get("to_abs", 0.0)))
 		var icon := HazardCatalog.icon(str(forced.get("id", "")))
-		_lbl.text = "Previewing %s %s · %.2f · %s — click to clear" % [
-			icon, str(forced.get("label", "")),
-			float(forced.get("severity", 0.0)),
-			("ends in %.1f h" % remain) if remain > 0.0 else "ending"]
+		_lbl.text = I18n.f("Previewing {icon} {label} · {severity} · {remain} — click to clear", {
+			"icon": icon,
+			"label": str(forced.get("label", "")),
+			"severity": "%.2f" % (float(forced.get("severity", 0.0))),
+			"remain": ("ends in %.1f h" % remain) if remain > 0.0 else "ending",
+		})
 		_forced_showing = true
 		_chip.visible = true
 		_center_chip()

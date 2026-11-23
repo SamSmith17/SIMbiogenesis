@@ -196,11 +196,14 @@ func _chip(k: String) -> Button:
 	b.add_theme_stylebox_override("hover", UITheme.chip_style(col.lightened(0.2)))
 	b.add_theme_color_override("font_color", UITheme.C_TEXT if here else UITheme.C_TEXT_S)
 	if here:
-		b.tooltip_text = "%s (you are designing this one)" % _chip_text(k, units)
+		b.tooltip_text = I18n.f("{units} (you are designing this one)", {"units": _chip_text(k, units)})
 		b.mouse_default_cursor_shape = Control.CURSOR_ARROW
 		return b
-	b.tooltip_text = "%s\nOpen %s in its lab\n%s" % [_chip_text(k, units), str(WORDS[k]).to_lower(),
-		"\n".join(PackedStringArray(units.map(func(u): return str(u["name"]))))]
+	b.tooltip_text = I18n.f("{units}\nOpen {k} in its lab\n{name}", {
+		"units": _chip_text(k, units),
+		"k": str(WORDS[k]).to_lower(),
+		"name": "\n".join(PackedStringArray(units.map(func(u): return str(u["name"])))),
+	})
 	b.pressed.connect(func() -> void: _on_chip(k, b))
 	return b
 

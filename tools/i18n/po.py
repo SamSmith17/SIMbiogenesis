@@ -10,7 +10,9 @@ An Entry's key is (ctx, msgid). Files are written UTF-8 with LF endings.
 
 from __future__ import annotations
 
+import os
 import re
+import time
 from dataclasses import dataclass, field
 
 
@@ -223,8 +225,20 @@ def write(path: str, cat: Catalog, header_order: list[str] | None = None) -> Non
         else:
             lines += _wrap("msgstr", e.msgstr[0] if e.msgstr else "")
         lines.append("")
-    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+    # Written beside the file and swapped in. On Windows another reader (an
+    # editor, the indexer, antivirus) can hold the .po for a moment and the open
+    # fails with EINVAL / EACCES: retry instead of losing an hour of work.
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(lines))
+    for attempt in range(20):
+        try:
+            os.replace(tmp, path)
+            return
+        except OSError:
+            if attempt == 19:
+                raise
+            time.sleep(0.5)
 
 
 # Placeholders a translation must keep: {name}, %s %d %.1f %5.2f, %%, BBCode tags.

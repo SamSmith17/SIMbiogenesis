@@ -662,39 +662,58 @@ func _populate() -> void:
 	_source_chip.add_theme_color_override("font_color", chip_col)
 
 	# Solar resource.
-	_solar_stat.text = "[b]%.0f[/b] kWh/m²·yr   ·   [b]%.1f[/b] peak-sun-h/day   ·   climatology [b]%.1f[/b] kWh/m²·day (%s)" % [
-		d.solar_annual_kwh_m2, d.solar_peak_sun_hours,
-		d.ghi_climatology_kwh_m2_day, d.ghi_zone_label]
+	_solar_stat.text = I18n.f("[b]{solar_annual_kwh_m2}[/b] kWh/m²·yr   ·   [b]{solar_peak_sun_hours}[/b] peak-sun-h/day   ·   climatology [b]{ghi_climatology_kwh_m2_day}[/b] kWh/m²·day ({ghi_zone})", {
+		"solar_annual_kwh_m2": "%.0f" % d.solar_annual_kwh_m2,
+		"solar_peak_sun_hours": "%.1f" % d.solar_peak_sun_hours,
+		"ghi_climatology_kwh_m2_day": "%.1f" % d.ghi_climatology_kwh_m2_day,
+		"ghi_zone": d.ghi_zone_label,
+	})
 
 	# PV.
 	if d.pv_peak_kw > 0.0:
-		_pv_stat.text = "[b]%.0f[/b] kWh/yr  ·  [b]%.1f[/b] kWp (%s)  ·  capacity factor [b]%.1f%%[/b]  ·  tilt %.0f° az %.0f°" % [
-			d.pv_annual_kwh, d.pv_peak_kw, UiText.count(d.pv_panel_count, "panel"),
-			d.pv_capacity_factor * 100.0, d.pv_panel_tilt_deg, d.pv_panel_azimuth_deg]
+		_pv_stat.text = I18n.f("[b]{pv_annual_kwh}[/b] kWh/yr  ·  [b]{pv_peak_kw}[/b] kWp ({pv_panel_count})  ·  capacity factor [b]{pv_capacity_factor}%[/b]  ·  tilt {pv_panel_tilt_deg}° az {pv_panel_azimuth_deg}°", {
+			"pv_annual_kwh": "%.0f" % d.pv_annual_kwh,
+			"pv_peak_kw": "%.1f" % d.pv_peak_kw,
+			"pv_panel_count": UiText.count(d.pv_panel_count, "panel"),
+			"pv_capacity_factor": "%.1f" % (d.pv_capacity_factor * 100.0),
+			"pv_panel_tilt_deg": "%.0f" % d.pv_panel_tilt_deg,
+			"pv_panel_azimuth_deg": "%.0f" % d.pv_panel_azimuth_deg,
+		})
 	else:
 		_pv_stat.text = "[color=#8090a8]No PV panels in the current graph — add panels to see production potential.[/color]"
 
 	# Wind.
 	if d.wind_turbine_count > 0:
-		_wind_stat.text = "[b]%.0f[/b] kWh/yr  ·  %s, [b]%.1f[/b] kW rated  ·  capacity factor [b]%.1f%%[/b]  ·  mean wind [b]%.1f[/b] m/s" % [
-			d.wind_annual_kwh, UiText.count(d.wind_turbine_count, "turbine"), d.wind_rated_kw,
-			d.wind_capacity_factor * 100.0, d.wind_mean_speed_ms]
+		_wind_stat.text = I18n.f("[b]{wind_annual_kwh}[/b] kWh/yr  ·  {wind_turbine_count}, [b]{wind_rated_kw}[/b] kW rated  ·  capacity factor [b]{wind_capacity_factor}%[/b]  ·  mean wind [b]{wind_mean_speed_ms}[/b] m/s", {
+			"wind_annual_kwh": "%.0f" % d.wind_annual_kwh,
+			"wind_turbine_count": UiText.count(d.wind_turbine_count, "turbine"),
+			"wind_rated_kw": "%.1f" % d.wind_rated_kw,
+			"wind_capacity_factor": "%.1f" % (d.wind_capacity_factor * 100.0),
+			"wind_mean_speed_ms": "%.1f" % d.wind_mean_speed_ms,
+		})
 	else:
-		_wind_stat.text = "[color=#8090a8]No wind turbines in the graph — mean site wind [b]%.1f[/b] m/s. Add a turbine to estimate yield.[/color]" % d.wind_mean_speed_ms
+		_wind_stat.text = I18n.f("[color=#8090a8]No wind turbines in the graph — mean site wind [b]{wind_mean_speed_ms}[/b] m/s. Add a turbine to estimate yield.[/color]", {"wind_mean_speed_ms": "%.1f" % d.wind_mean_speed_ms})
 
 	# Precip.
-	_precip_stat.text = "[b]%.0f[/b] mm/yr  ·  [b]%d[/b] wet days" % [
-		d.precip_annual_mm, d.precip_wet_days_total]
+	_precip_stat.text = I18n.f("[b]{precip_annual_mm}[/b] mm/yr  ·  [b]{precip_wet_days_total}[/b] wet days", {
+		"precip_annual_mm": "%.0f" % d.precip_annual_mm,
+		"precip_wet_days_total": "%d" % d.precip_wet_days_total,
+	})
 
 	# Temp.
-	_temp_stat.text = "mean [b]%.1f[/b]°C  ·  range [b]%.0f[/b]…[b]%.0f[/b]°C" % [
-		d.temp_annual_mean_c, d.temp_annual_min_c, d.temp_annual_max_c]
+	_temp_stat.text = I18n.f("mean [b]{temp_annual_mean_c}[/b]°C  ·  range [b]{temp_annual_min_c}[/b]…[b]{temp_annual_max_c}[/b]°C", {
+		"temp_annual_mean_c": "%.1f" % d.temp_annual_mean_c,
+		"temp_annual_min_c": "%.0f" % d.temp_annual_min_c,
+		"temp_annual_max_c": "%.0f" % d.temp_annual_max_c,
+	})
 
 	# Hydro card visibility.
 	_hydro_card.visible = d.hydro_count > 0
 	if d.hydro_count > 0:
-		_hydro_stat.text = "[b]%.0f[/b] kWh/yr  ·  %s  (precipitation-scaled seasonal flow)" % [
-			d.hydro_annual_kwh, UiText.count(d.hydro_count, "hydro unit")]
+		_hydro_stat.text = I18n.f("[b]{hydro_annual_kwh}[/b] kWh/yr  ·  {hydro_count}  (precipitation-scaled seasonal flow)", {
+			"hydro_annual_kwh": "%.0f" % d.hydro_annual_kwh,
+			"hydro_count": UiText.count(d.hydro_count, "hydro unit"),
+		})
 
 	_footnote_lbl.text = ("Representative year %d for %s. PV uses the graph's global tilt/azimuth "
 		+ "and ignores 3D terrain shading (live-only). Hover any chart for month detail. "
@@ -909,7 +928,7 @@ func _refresh_time_use_card() -> void:
 	var tu: Dictionary = bridge.call("time_use_summary", 7, "") if bridge != null and bridge.has_method("time_use_summary") else {}
 	var muted := UITheme.C_TEXT_M.to_html(false)
 	if int(tu.get("people", 0)) == 0 or float(tu.get("recorded_h", 0.0)) < 1.0:
-		_time_use_stat.text = "[color=#%s]Nothing measured yet: time is counted while the clock runs with people simulated.[/color]" % muted
+		_time_use_stat.text = I18n.f("[color=#{muted}]Nothing measured yet: time is counted while the clock runs with people simulated.[/color]", {"muted": muted})
 		_time_use_bars.visible = false
 		return
 	_time_use_bars.visible = true
@@ -917,12 +936,17 @@ func _refresh_time_use_card() -> void:
 	var v := str(tu["verdict"])
 	var vc := NpcTimeUse.verdict_color(v).to_html(false)
 	var planned := float(tu.get("planned_h_week", 0.0))
-	_time_use_stat.text = "Work this site takes: [b]%s per person a week[/b] [color=#%s](%s)[/color]%s · leisure %s a day · %s over %s\n[color=#%s]Ticks: %s. A reference, not a target.[/color]" % [
-		UiText.duration(float(tu["work_h_week"])), vc, v,
-		(" · the rota plans %s" % UiText.duration(planned)) if planned > 0.0 else "",
-		UiText.duration(float(tu["leisure_h_day"])), UiText.count(int(tu["people"]), "person", "people"),
-		"part of a day so far" if bool(tu.get("partial", false)) else UiText.count(int(tu["days"]), "day"),
-		muted, NpcTimeUse.ATUS_SOURCE]
+	_time_use_stat.text = I18n.f("Work this site takes: [b]{work_h_week} per person a week[/b] [color=#{vc}]({value})[/color]{planned} · leisure {leisure_h_day} a day · {people} over {days}\n[color=#{muted}]Ticks: {atus_source}. A reference, not a target.[/color]", {
+		"work_h_week": UiText.duration(float(tu["work_h_week"])),
+		"vc": vc,
+		"value": v,
+		"planned": (" · the rota plans %s" % UiText.duration(planned)) if planned > 0.0 else "",
+		"leisure_h_day": UiText.duration(float(tu["leisure_h_day"])),
+		"people": UiText.count(int(tu["people"]), "person", "people"),
+		"days": "part of a day so far" if bool(tu.get("partial", false)) else UiText.count(int(tu["days"]), "day"),
+		"muted": muted,
+		"atus_source": NpcTimeUse.ATUS_SOURCE,
+	})
 
 
 ## The year's hourly PV and temperature as carpet plots (CarpetPlot).
@@ -1102,7 +1126,7 @@ func _update_header(main: Node, lat: float, lon: float) -> void:
 	if _header_lbl == null:
 		return
 	var label := _site_label(main)
-	_header_lbl.text = "📊 Site Report — %s" % SitePrivacy.place(label)
+	_header_lbl.text = I18n.f("📊 Site Report — {label}", {"label": SitePrivacy.place(label)})
 	_sub_lbl.text = SitePrivacy.coords(lat, lon)
 
 

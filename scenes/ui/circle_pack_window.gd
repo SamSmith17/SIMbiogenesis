@@ -341,7 +341,7 @@ func _refresh_side() -> void:
 	for k in kids:
 		if shown >= 14:
 			var more := Label.new()
-			more.text = "and %s more" % UiText.count(kids.size() - shown, "other")
+			more.text = I18n.f("and {shown} more", {"shown": UiText.count(kids.size() - shown, "other")})
 			more.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 			_side_kids.add_child(more)
 			break

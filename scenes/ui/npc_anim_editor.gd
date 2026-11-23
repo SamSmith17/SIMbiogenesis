@@ -379,7 +379,7 @@ func _build_sidebar() -> Control:
 		for i in words.size():
 			words[i] = words[i].to_upper() if words[i].length() == 1 else words[i].capitalize()
 		b.text = " ".join(words)
-		b.tooltip_text = "Select the %s joint (%s)" % [b.text.to_lower(), str(name)]
+		b.tooltip_text = I18n.f("Select the {b} joint ({name})", {"b": b.text.to_lower(), "name": str(name)})
 		b.toggle_mode = true
 		b.focus_mode = Control.FOCUS_NONE
 		b.custom_minimum_size = Vector2(88, 26)
@@ -935,7 +935,7 @@ func _refresh_inspector() -> void:
 			(sp as SpinBox).editable = false
 	elif _sel == "body":
 		var b := _figure.get_node("Body") as Node3D
-		_euler_lbl.text = "Body: height (m), pitch, yaw (°) at %.2f s" % _t
+		_euler_lbl.text = I18n.f("Body: height (m), pitch, yaw (°) at {t} s", {"t": "%.2f" % _t})
 		var vals := [b.position.y, rad_to_deg(b.rotation.x), rad_to_deg(b.rotation.y)]
 		for i in 3:
 			(_euler_spins[i] as SpinBox).editable = true
@@ -943,7 +943,7 @@ func _refresh_inspector() -> void:
 			(_euler_spins[i] as SpinBox).value = vals[i]
 	else:
 		var keyed := clip.key_times(_sel).any(func(kt): return absf(float(kt) - _t) <= NpcAnimClip.KEY_TOL_S)
-		_euler_lbl.text = "%s at %.2f s%s" % [_sel, _t, "  ◆ keyed" if keyed else ""]
+		_euler_lbl.text = I18n.f("{sel} at {t} s{keyed}", {"sel": _sel, "t": "%.2f" % _t, "keyed": "  ◆ keyed" if keyed else ""})
 		var ev := _joint_euler(_sel)
 		for i in 3:
 			(_euler_spins[i] as SpinBox).editable = true

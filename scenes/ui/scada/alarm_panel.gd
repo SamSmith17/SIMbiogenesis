@@ -153,7 +153,7 @@ func _dot(priority: String) -> ColorRect:
 	var d := ColorRect.new()
 	d.color = PRI_COLORS.get(priority, UITheme.C_TEXT_M)
 	d.custom_minimum_size = Vector2(10, 22)
-	d.tooltip_text = "%s priority" % str(ScadaAlarms.PRIORITY_WORDS.get(priority, priority))
+	d.tooltip_text = I18n.f("{priority} priority", {"priority": str(ScadaAlarms.PRIORITY_WORDS.get(priority, priority))})
 	d.mouse_filter = Control.MOUSE_FILTER_STOP
 	return d
 
@@ -218,7 +218,7 @@ func _build_active() -> void:
 		row2.add_theme_constant_override("separation", 8)
 		row2.add_child(_dot(str(r.get("priority", "medium"))))
 		var l2 := Label.new()
-		l2.text = "%s  ·  shelved" % str(r.get("name", rid))
+		l2.text = I18n.f("{name}  ·  shelved", {"name": str(r.get("name", rid))})
 		l2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		l2.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 		row2.add_child(l2)

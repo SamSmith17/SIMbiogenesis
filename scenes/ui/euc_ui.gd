@@ -131,7 +131,7 @@ func _update_display() -> void:
 	# Update battery bar
 	battery_bar.value = battery_percent
 	battery_percent_label.text = "%.0f%%" % battery_percent
-	battery_wh_label.text = "%.0f / %.0f Wh" % [battery_wh, battery_capacity]
+	battery_wh_label.text = I18n.f("{battery_wh} / {battery_capacity} Wh", {"battery_wh": "%.0f" % battery_wh, "battery_capacity": "%.0f" % battery_capacity})
 	
 	# Color code battery
 	if battery_percent > 50.0:

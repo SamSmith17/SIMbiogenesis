@@ -820,7 +820,7 @@ func _build_palette() -> void:
 		lb.toggle_mode = true
 		lb.focus_mode = Control.FOCUS_NONE
 		lb.button_pressed = bool(_layers.get(lay, false))
-		lb.tooltip_text = "Show the %s lines in this picture." % str(MimicGraphSource.LAYER_LABELS[lay]).to_lower()
+		lb.tooltip_text = I18n.f("Show the {lay} lines in this picture.", {"lay": str(MimicGraphSource.LAYER_LABELS[lay]).to_lower()})
 		UITheme.style_button(lb)
 		var lay_id := str(lay)
 		lb.toggled.connect(func(on: bool) -> void: set_layer(lay_id, on))
@@ -1292,7 +1292,7 @@ func _fill_checks() -> void:
 		box.add_child(b)
 	if _checks.size() > 8:
 		var more := Label.new()
-		more.text = "and %s more" % UiText.count(_checks.size() - 8, "item")
+		more.text = I18n.f("and {checks} more", {"checks": UiText.count(_checks.size() - 8, "item")})
 		more.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 		box.add_child(more)
 	_checks_panel.reset_size()
@@ -1538,7 +1538,7 @@ func _refresh_armed_bar(hub: Node) -> void:
 	_armed_sig = sig
 	_armed_bar.visible = armed
 	if armed:
-		_armed_lbl.text = "ARMED  ·  %s driving real devices" % UiText.count(n, "output")
+		_armed_lbl.text = I18n.f("ARMED  ·  {value} driving real devices", {"value": UiText.count(n, "output")})
 		_armed_bar.reset_size()
 	# The bars stack: ARMED on top, alarms under it, the picture under both.
 	var bars := (1 if armed else 0) + (1 if _alarm_bar != null and _alarm_bar.visible else 0)

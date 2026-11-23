@@ -175,8 +175,11 @@ func _refresh() -> void:
 		for ch in ["soc_pct", "solar_kw", "load_kw", "net_kw"]:
 			var sl := tl.channel_slice(ch, _day0, t1)
 			_grids[ch] = PatternData.hour_grid(sl["values"], float(sl["base_t"]), float(sl["step"]), _day0, _n_days)
-		_span_lbl.text = "%s to %s · %s recorded" % [_date_label(0), _date_label(_n_days - 1),
-			UiText.count(_n_days, "day")]
+		_span_lbl.text = I18n.f("{date} to {n_days} · {n_days_2} recorded", {
+			"date": _date_label(0),
+			"n_days": _date_label(_n_days - 1),
+			"n_days_2": UiText.count(_n_days, "day"),
+		})
 	# Stores with a recorded fill.
 	_stores.clear()
 	var eng := _engine()

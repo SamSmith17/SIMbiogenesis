@@ -291,7 +291,7 @@ func _on_place() -> void:
 	if bool(res.get("ok", false)):
 		close()
 	else:
-		_status.text = "Could not place: %s" % str(res.get("error", "no world"))
+		_status.text = I18n.f("Could not place: {error}", {"error": str(res.get("error", "no world"))})
 
 
 func _on_apply() -> void:

@@ -77,11 +77,11 @@ func show_summary(s: Dictionary) -> void:
 	var local_name := TerrainImageryPlan.tier_name(_local_tier)
 	var vs := int(s.get("vram_saved", 0))
 	var vl := int(s.get("vram_local", 0))
-	_saved_btn.text = "As saved (%s) · %s GPU" % [saved_name, TerrainImageryPlan.format_bytes(vs)]
+	_saved_btn.text = I18n.f("As saved ({saved_name}) · {vs} GPU", {"saved_name": saved_name, "vs": TerrainImageryPlan.format_bytes(vs)})
 	_saved_btn.tooltip_text = ("Show the imagery this world came with, exactly as it was saved. "
 		+ "Loads from disk, no download.")
 	var better := "sharper" if _local_tier > _saved_tier else "lighter on the GPU"
-	_local_btn.text = "My quality (%s) · %s GPU" % [local_name, TerrainImageryPlan.format_bytes(vl)]
+	_local_btn.text = I18n.f("My quality ({local_name}) · {vl} GPU", {"local_name": local_name, "vl": TerrainImageryPlan.format_bytes(vl)})
 	_local_btn.tooltip_text = ("Download the imagery at this computer's quality (%s, %s). "
 		% [local_name, better] + "Anything that cannot be downloaded uses the saved copy.")
 	_note.text = ("Saved at %s; this computer is set to %s. Downloading needs internet; if it fails, "

@@ -207,7 +207,7 @@ func _rebuild_review() -> void:
 	var head := HBoxContainer.new()
 	_review_box.add_child(head)
 	var title := Label.new()
-	title.text = "Changes waiting for you (%d)" % review.size()
+	title.text = I18n.f("Changes waiting for you ({review})", {"review": "%d" % review.size()})
 	title.add_theme_font_size_override("font_size", UITheme.FONT_MD)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(title)
@@ -221,7 +221,7 @@ func _rebuild_review() -> void:
 		_review_box.add_child(_make_card(review[i] as Dictionary))
 	if review.size() > MAX_CARDS:
 		var more := Label.new()
-		more.text = "… and %s" % UiText.count(review.size() - MAX_CARDS, "more change")
+		more.text = I18n.f("… and {max_cards}", {"max_cards": UiText.count(review.size() - MAX_CARDS, "more change")})
 		more.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 		_review_box.add_child(more)
 	if review.size() > 1:
@@ -260,7 +260,7 @@ func _make_card(e: Dictionary) -> Control:
 		v.add_child(l)
 	if lines.size() > 3:
 		var more := Label.new()
-		more.text = "• … and %s" % UiText.count(lines.size() - 3, "more")
+		more.text = I18n.f("• … and {lines}", {"lines": UiText.count(lines.size() - 3, "more")})
 		more.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 		v.add_child(more)
 	var row := HBoxContainer.new()

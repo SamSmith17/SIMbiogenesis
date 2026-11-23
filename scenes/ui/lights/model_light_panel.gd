@@ -375,7 +375,9 @@ func _update_string_bar() -> void:
 	_string_bar.visible = _tool == "string"
 	if _finish_btn != null:
 		_finish_btn.disabled = _string_pts.size() < 2
-		_finish_btn.text = "Finish (%d)" % _string_pts.size() if not _string_pts.is_empty() else "Finish string"
+		_finish_btn.text = I18n.f("Finish ({string_pts})", {
+			"string_pts": "%d" % _string_pts.size(),
+		}) if not _string_pts.is_empty() else "Finish string"
 	if _undo_pin_btn != null:
 		_undo_pin_btn.disabled = _string_pts.is_empty()
 	if _hint_lbl != null:
@@ -385,7 +387,7 @@ func _update_string_bar() -> void:
 			"spot":
 				_hint_lbl.text = "Click a surface on the 3D model to place an aimed spot light."
 			"string":
-				_hint_lbl.text = "Click points on the 3D model to pin a string (%d placed) · Finish or double-click ends it." % _string_pts.size()
+				_hint_lbl.text = I18n.f("Click points on the 3D model to pin a string ({string_pts} placed) · Finish or double-click ends it.", {"string_pts": "%d" % _string_pts.size()})
 			_:
 				_hint_lbl.text = "Attached lights move with the prop and stay editable with J in the world."
 

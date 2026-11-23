@@ -2126,7 +2126,7 @@ func _update_flow_chip() -> void:
 		return
 	var q := site_outflow_lps()
 	var qs := ("%.2f m³/s" % (q / 1000.0)) if q >= 1000.0 else ("%.0f L/s" % q)
-	_flow_chip.text = "  Flow view · site outflow %s · rain %.1f mm/h  " % [qs, _last_rain]
+	_flow_chip.text = I18n.f("  Flow view · site outflow {qs} · rain {rain} mm/h  ", {"qs": qs, "rain": "%.1f" % _last_rain})
 
 
 func _terrain_node() -> Node3D:

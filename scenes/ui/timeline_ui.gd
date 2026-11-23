@@ -2051,7 +2051,7 @@ func _refresh_deploy_chip(sd : SiteDeployDirector) -> void:
 	if _deploy_chip.text != txt:
 		_deploy_chip.text = txt
 	_deploy_chip.add_theme_color_override("font_color", UITheme.C_OK if active else UITheme.C_TEXT)
-	_deploy_chip.tooltip_text = "Site deployment schedule — set a time on the timeline when the crews build every structure and camp, or pack it all up.\n%s" % str(st.get("line", ""))
+	_deploy_chip.tooltip_text = I18n.f("Site deployment schedule — set a time on the timeline when the crews build every structure and camp, or pack it all up.\n{line}", {"line": str(st.get("line", ""))})
 
 
 ## The chip's menu: schedule at the playhead, the events (jump / remove),
@@ -2153,8 +2153,10 @@ func _confirm_instant(sd : SiteDeployDirector, action : String) -> void:
 		add_child(_deploy_confirm)
 	for c in _deploy_confirm.confirmed.get_connections():
 		_deploy_confirm.confirmed.disconnect(c["callable"])
-	_deploy_confirm.dialog_text = "%s now, with no crew — %s swap at once.\nThe crews' work in flight is cancelled." % [
-		SiteDeploySchedule.action_label(action), UiText.count(n, "structure or camp", "structures and camps")]
+	_deploy_confirm.dialog_text = I18n.f("{action} now, with no crew — {value} swap at once.\nThe crews' work in flight is cancelled.", {
+		"action": SiteDeploySchedule.action_label(action),
+		"value": UiText.count(n, "structure or camp", "structures and camps"),
+	})
 	_deploy_confirm.ok_button_text = SiteDeploySchedule.action_label(action)
 	_deploy_confirm.confirmed.connect(func() -> void:
 		sd.apply_instant(action)
@@ -3432,7 +3434,7 @@ func _on_linkagelab_file_selected(path: String) -> void:
 		push_warning("TimelineUI: bundle import failed: %s" % str(result.get("error", "unknown")))
 		return
 	if _render_progress_lbl != null:
-		_render_progress_lbl.text = "LinkageLab import: %s" % str(result.get("model_id", "ok"))
+		_render_progress_lbl.text = I18n.f("LinkageLab import: {model_id}", {"model_id": str(result.get("model_id", "ok"))})
 	var ui_layer := get_parent()
 	if ui_layer != null:
 		var props_ui := ui_layer.get_node_or_null("PlacedPropsUI")
@@ -3639,8 +3641,11 @@ func _update_clim_progress_dialog() -> void:
 			"warmup":
 				_clim_progress_lbl.text = "Warming up the renderer…"
 			_:
-				_clim_progress_lbl.text = "Frame %s / %s (%d%%)" % [
-					UiText.thousands(done), UiText.thousands(total), int(round(prog * 100.0))]
+				_clim_progress_lbl.text = I18n.f("Frame {done} / {total} ({prog}%)", {
+					"done": UiText.thousands(done),
+					"total": UiText.thousands(total),
+					"prog": "%d" % (int(round(prog * 100.0))),
+				})
 		if not _clim_progress_dialog.visible:
 			_clim_progress_dialog.popup_centered()
 		return
@@ -4796,8 +4801,11 @@ func _update_challenge_chip(def: Variant = null, elapsed_h: float = -1.0) -> voi
 	if short.length() > 10:
 		short = short.substr(0, 9) + "…"
 	_challenge_chip.text = "%s %.0f/%.0fh" % [short, elapsed_h, dur]
-	_challenge_chip.tooltip_text = "%s — %.0f / %.0f h elapsed · click for missions" % [
-			title, elapsed_h, dur]
+	_challenge_chip.tooltip_text = I18n.f("{title} — {elapsed_h} / {dur} h elapsed · click for missions", {
+		"title": title,
+		"elapsed_h": "%.0f" % elapsed_h,
+		"dur": "%.0f" % dur,
+	})
 	_style_challenge_chip(UITheme.C_AMBER)
 
 

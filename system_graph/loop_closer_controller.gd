@@ -282,7 +282,7 @@ func _show_chip() -> void:
 		h.add_child(_button("Dismiss", "loopcloser_dismiss", "Hide it; Close loops… still lists it (Esc)", func() -> void: dismiss()))
 		gc.add_child(_chip)
 	_chip_lbl.text = str(_sugg.get("text", ""))
-	_btn_other.text = "Other options (%d of %d)" % [int(_sugg["index"]) + 1, int(_sugg["count"])]
+	_btn_other.text = I18n.f("Other options ({index} of {count})", {"index": "%d" % (int(_sugg["index"]) + 1), "count": "%d" % int(_sugg["count"])})
 	_btn_other.disabled = int(_sugg["count"]) < 2
 	_chip.reset_size()
 	_chip.visible = true

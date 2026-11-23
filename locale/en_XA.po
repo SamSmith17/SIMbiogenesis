@@ -69,6 +69,11 @@ msgid "D"
 msgstr "[!Đ ~!]"
 
 # machine: pseudo
+msgid "Preview  ·  {t}  ·  {vid_s} / {total_s} of video{paused}"
+msgstr ""
+"[!Ƥŕéṽîéŵ  ·  {t}  ·  {vid_s} / {total_s} öƒ ṽîđéö{paused} ~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Drag to scrub the video (← / → step a second)"
 msgstr "[!Đŕàĝ ţö šçŕûƀ ţĥé ṽîđéö (← / → šţéƥ à šéçöñđ) ~~~~~~~~~~~~!]"
 
@@ -105,8 +110,8 @@ msgid "Penstock outlet"
 msgstr "[!Ƥéñšţöçķ öûţĺéţ ~~~~~~!]"
 
 # machine: pseudo
-msgid "Nozzle inlet (1/4u2033 NPT barb)"
-msgstr "[!Ñöžžĺé îñĺéţ (1/4û2033 ÑƤŢ ƀàŕƀ) ~~~~~~~~!]"
+msgid "Nozzle inlet (1/4″ NPT barb)"
+msgstr "[!Ñöžžĺé îñĺéţ (1/4″ ÑƤŢ ƀàŕƀ) ~~~~~~~!]"
 
 # machine: pseudo
 msgid "Housing bottom (tailwater)"
@@ -117,8 +122,8 @@ msgid "DC +"
 msgstr "[!ĐÇ + ~!]"
 
 # machine: pseudo
-msgid "DC u2212"
-msgstr "[!ĐÇ û2212 ~!]"
+msgid "DC −"
+msgstr "[!ĐÇ − ~!]"
 
 # machine: pseudo
 msgid "Penstock inlet"
@@ -129,8 +134,14 @@ msgid "Tailrace outlet"
 msgstr "[!Ţàîĺŕàçé öûţĺéţ ~~~~~~!]"
 
 # machine: pseudo
-msgid "DC −"
-msgstr "[!ĐÇ − ~!]"
+msgid ""
+"Surge closing the valve over {close_s} s: +{dh} m (instant stop would be +{instant} m; 2L/a = {a} s)"
+msgstr ""
+"[!Šûŕĝé çĺöšîñĝ ţĥé ṽàĺṽé öṽéŕ {close_s} š: +{dh} ɱ (îñšţàñţ šţöƥ ŵöûĺđ ƀé +{instant} ɱ; 2Ĺ/à = {a} š) ~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Surge on an instant stop +{dh} m (wave {a} m/s)"
+msgstr "[!Šûŕĝé öñ àñ îñšţàñţ šţöƥ +{dh} ɱ (ŵàṽé {a} ɱ/š) ~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Receiver"
@@ -579,6 +590,17 @@ msgstr "[!Ɓàţţéŕý ~~~!]"
 # machine: pseudo
 msgid "AC load"
 msgstr "[!ÀÇ ĺöàđ ~~!]"
+
+# machine: pseudo
+msgid ""
+"The reading ramps {k} per hour for each % of output (it never settles by itself)."
+msgstr ""
+"[!Ţĥé ŕéàđîñĝ ŕàɱƥš {k} ƥéŕ ĥöûŕ ƒöŕ éàçĥ % öƒ öûţƥûţ (îţ ñéṽéŕ šéţţĺéš ƀý îţšéĺƒ). ~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Each % of output moves the reading {k}, settling in about {tau}."
+msgstr ""
+"[!Éàçĥ % öƒ öûţƥûţ ɱöṽéš ţĥé ŕéàđîñĝ {k}, šéţţĺîñĝ îñ àƀöûţ {tau}. ~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "C"
@@ -1148,6 +1170,10 @@ msgid "My feature"
 msgstr "[!Ṁý ƒéàţûŕé ~~~~!]"
 
 # machine: pseudo
+msgid "  Flow view · site outflow {qs} · rain {rain} mm/h  "
+msgstr "[!  Ƒĺöŵ ṽîéŵ · šîţé öûţƒĺöŵ {qs} · ŕàîñ {rain} ɱɱ/ĥ   ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "PVC pipe"
 msgstr "[!ƤṼÇ ƥîƥé ~~~!]"
 
@@ -1204,6 +1230,22 @@ msgid "Nacelle, yaw bearing, tail"
 msgstr "[!Ñàçéĺĺé, ýàŵ ƀéàŕîñĝ, ţàîĺ ~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Regenerate burned ({burned})"
+msgstr "[!Ŕéĝéñéŕàţé ƀûŕñéđ ({burned}) ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Restored {value} burned mesh(es)"
+msgstr "[!Ŕéšţöŕéđ {value} ƀûŕñéđ ɱéšĥ(éš) ~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Pressure: {pressure_pct}%"
+msgstr "[!Ƥŕéššûŕé: {pressure_pct}% ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Pressure: LOW ({pressure_pct}%)"
+msgstr "[!Ƥŕéššûŕé: ĹÖŴ ({pressure_pct}%) ~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "CRISIS ALERT"
 msgstr "[!ÇŔÎŠÎŠ ÀĹÉŔŢ ~~~~!]"
 
@@ -1220,6 +1262,20 @@ msgid "Pressure: 100%"
 msgstr "[!Ƥŕéššûŕé: 100% ~~~!]"
 
 # machine: pseudo
+msgid ""
+"{name} · {progress} %\n"
+"{layers}{t} · {value} mm/s {what}\n"
+"{speed_factor} left"
+msgstr ""
+"[!{name} · {progress} %\n"
+"{layers}{t} · {value} ɱɱ/š {what}\n"
+"{speed_factor} ĺéƒţ ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{job_name} · done"
+msgstr "[!{job_name} · đöñé ~~~~!]"
+
+# machine: pseudo
 msgid "Flames"
 msgstr "[!Ƒĺàɱéš ~~!]"
 
@@ -1228,12 +1284,26 @@ msgid "Sparks"
 msgstr "[!Šƥàŕķš ~~!]"
 
 # machine: pseudo
+msgid "max fill = basin rim ({y} m)"
+msgstr "[!ɱàẋ ƒîĺĺ = ƀàšîñ ŕîɱ ({y} ɱ) ~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"max fill +{above} m above the basin rim ({y} m) · capacity +{extra_l} kL"
+msgstr ""
+"[!ɱàẋ ƒîĺĺ +{above} ɱ àƀöṽé ţĥé ƀàšîñ ŕîɱ ({y} ɱ) · çàƥàçîţý +{extra_l} ķĹ ~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "LIFT TOO HIGH — the column lets go"
 msgstr "[!ĹÎƑŢ ŢÖÖ ĤÎĜĤ — ţĥé çöĺûɱñ ĺéţš ĝö ~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "BROKEN — sucking air"
 msgstr "[!ƁŔÖĶÉÑ — šûçķîñĝ àîŕ ~~~~~~!]"
+
+# machine: pseudo
+msgid "PRIMED · {q} · no power"
+msgstr "[!ƤŔÎṀÉĐ · {q} · ñö ƥöŵéŕ ~~~~~~!]"
 
 # machine: pseudo
 msgid "Aim at the ground or a matching port, then release"
@@ -1257,6 +1327,10 @@ msgstr "[!Çàñ'ţ ƥĺàçé àñ îñţàķé ĥéŕé ~~~~~~~~!]"
 msgid "Drag from the TURBINE's penstock port to move the intake"
 msgstr ""
 "[!Đŕàĝ ƒŕöɱ ţĥé ŢÛŔƁÎÑÉ'š ƥéñšţöçķ ƥöŕţ ţö ɱöṽé ţĥé îñţàķé ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Brightness: {brightness}%"
+msgstr "[!Ɓŕîĝĥţñéšš: {brightness}% ~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Color"
@@ -1337,6 +1411,16 @@ msgid "Save the automation first, then A/B it."
 msgstr "[!Šàṽé ţĥé àûţöɱàţîöñ ƒîŕšţ, ţĥéñ À/Ɓ îţ. ~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "SIMbiogenesis — {lbl} · {v_short}"
+msgstr "[!ŠÎṀƀîöĝéñéšîš — {lbl} · {v_short} ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"SIMbiogenesis — {lbl} · {v_short}  (Drag to monitor, click ⛶ Fullscreen or press F11)"
+msgstr ""
+"[!ŠÎṀƀîöĝéñéšîš — {lbl} · {v_short}  (Đŕàĝ ţö ɱöñîţöŕ, çĺîçķ ⛶ Ƒûĺĺšçŕééñ öŕ ƥŕéšš Ƒ11) ~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Switch what view or dashboard is displayed on this monitor."
 msgstr ""
 "[!Šŵîţçĥ ŵĥàţ ṽîéŵ öŕ đàšĥƀöàŕđ îš đîšƥĺàýéđ öñ ţĥîš ɱöñîţöŕ. ~~~~~~~~~~~~~~~~~~~~!]"
@@ -1368,8 +1452,24 @@ msgid "Close this monitor window."
 msgstr "[!Çĺöšé ţĥîš ɱöñîţöŕ ŵîñđöŵ. ~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Screen {idx}"
+msgstr "[!Šçŕééñ {idx} ~~~~!]"
+
+# machine: pseudo
+msgid "Today: {daily_kwh} kWh"
+msgstr "[!Ţöđàý: {daily_kwh} ķŴĥ ~~~~~~!]"
+
+# machine: pseudo
+msgid "Bank capacity: {cap_kwh} kWh"
+msgstr "[!Ɓàñķ çàƥàçîţý: {cap_kwh} ķŴĥ ~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Active AC + DC consumers"
 msgstr "[!Àçţîṽé ÀÇ + ĐÇ çöñšûɱéŕš ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Local sim time {hh}:{mm}  ·  Updated live"
+msgstr "[!Ĺöçàĺ šîɱ ţîɱé {hh}:{mm}  ·  Ûƥđàţéđ ĺîṽé ~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "☀ Site Energy & Inverter Telemetry"
@@ -1428,8 +1528,22 @@ msgstr ""
 "[!Ñö ƒéšţîṽàĺ çàɱƥš ýéţ — Šéţ ûƥ ţĥé ĝàţĥéŕîñĝ, öŕ ƥàîñţ à çàɱƥ àñđ ĝîṽé îţ ƥéöƥĺé. ~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"{rows} · {people} · the whole gathering, per day: {water} water in, {food} food, {grey} greywater and {black} blackwater out."
+msgstr ""
+"[!{rows} · {people} · ţĥé ŵĥöĺé ĝàţĥéŕîñĝ, ƥéŕ đàý: {water} ŵàţéŕ îñ, {food} ƒööđ, {grey} ĝŕéýŵàţéŕ àñđ {black} ƀĺàçķŵàţéŕ öûţ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{names} · Look"
+msgstr "[!{names} · Ĺööķ ~~~~!]"
+
+# machine: pseudo
 msgid "Fly the view to this vehicle"
 msgstr "[!Ƒĺý ţĥé ṽîéŵ ţö ţĥîš ṽéĥîçĺé ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Getting here: {usd} in trips and fuel"
+msgstr "[!Ĝéţţîñĝ ĥéŕé: {usd} îñ ţŕîƥš àñđ ƒûéĺ ~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Both legs of each vehicle's trip, plus fuel bought on site"
@@ -1559,6 +1673,10 @@ msgstr ""
 # machine: pseudo
 msgid "Camp name"
 msgstr "[!Çàɱƥ ñàɱé ~~~!]"
+
+# machine: pseudo
+msgid "{rows} · {value} in all"
+msgstr "[!{rows} · {value} îñ àĺĺ ~~~~~~!]"
 
 # machine: pseudo
 msgid "Set up the gathering"
@@ -1755,12 +1873,20 @@ msgstr ""
 "[!Çàŕŕý éṽéŕý ƒéšţîṽàĺ çàɱƥ, ŕöàđ, žöñé àñđ šééđéđ šƥàçé šö ţĥé ƒéšţîṽàĺ îš çéñţŕéđ öñ ţĥé ĺöçàţîöñ ɱàŕķéŕ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{people} in {camps}{tiers} · {venues}"
+msgstr "[!{people} îñ {camps}{tiers} · {venues} ~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Tagged space"
 msgstr "[!Ţàĝĝéđ šƥàçé ~~~~!]"
 
 # machine: pseudo
 msgid "Placed prop"
 msgstr "[!Ƥĺàçéđ ƥŕöƥ ~~~~!]"
+
+# machine: pseudo
+msgid "✦ {total}  ·  {now} {label} now"
+msgstr "[!✦ {total}  ·  {now} {label} ñöŵ ~~~~~~!]"
 
 # machine: pseudo
 msgid "Edit the site"
@@ -1879,6 +2005,11 @@ msgid "Nothing queued."
 msgstr "[!Ñöţĥîñĝ ǫûéûéđ. ~~~~~!]"
 
 # machine: pseudo
+msgid "{left} h left · {w} of {mn} people{who_line}{is_empty}"
+msgstr ""
+"[!{left} ĥ ĺéƒţ · {w} öƒ {mn} ƥéöƥĺé{who_line}{is_empty} ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "done"
 msgstr "[!đöñé ~~!]"
 
@@ -1889,6 +2020,15 @@ msgstr "[!ĥöĺđ ~~!]"
 # machine: pseudo
 msgid "waiting"
 msgstr "[!ŵàîţîñĝ ~~~!]"
+
+# machine: pseudo
+msgid "Priority: {pv} (click to cycle). Lower sorts first."
+msgstr ""
+"[!Ƥŕîöŕîţý: {pv} (çĺîçķ ţö çýçĺé). Ĺöŵéŕ šöŕţš ƒîŕšţ. ~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Priority: {pv} — {badge}"
+msgstr "[!Ƥŕîöŕîţý: {pv} — {badge} ~~~~~~!]"
 
 # machine: pseudo
 msgid "Look at this job"
@@ -1949,12 +2089,20 @@ msgid "Never included"
 msgstr "[!Ñéṽéŕ îñçĺûđéđ ~~~~~!]"
 
 # machine: pseudo
+msgid "Map data · {size}"
+msgstr "[!Ṁàƥ đàţà · {size} ~~~~!]"
+
+# machine: pseudo
 msgid "Drop a .simpack.zip onto this window, or"
 msgstr "[!Đŕöƥ à .šîɱƥàçķ.žîƥ öñţö ţĥîš ŵîñđöŵ, öŕ ~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Choose pack…"
 msgstr "[!Çĥööšé ƥàçķ… ~~~~!]"
+
+# machine: pseudo
+msgid "From {is_empty} · {substr} · {bytes}"
+msgstr "[!Ƒŕöɱ {is_empty} · {substr} · {bytes} ~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Each arrives as a new world; yours are never touched"
@@ -1973,6 +2121,10 @@ msgstr "[!Ŕéšţàŕţ ţĥé ĝàɱé ƒîŕšţ šö ţĥé ñéŵ àŕţ î
 msgid "The new art is imported. Restart the game to load it."
 msgstr ""
 "[!Ţĥé ñéŵ àŕţ îš îɱƥöŕţéđ. Ŕéšţàŕţ ţĥé ĝàɱé ţö ĺöàđ îţ. ~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{done} of {total} · {label}"
+msgstr "[!{done} öƒ {total} · {label} ~~~~~~!]"
 
 # machine: pseudo
 msgid "Enable / disable this automation"
@@ -1995,6 +2147,14 @@ msgstr "[!Ƥûšĥ ţö Ĥöɱé Àššîšţàñţ... ~~~~~~~~!]"
 msgid "Export this rule to HA (requires HA entity under Advanced)"
 msgstr ""
 "[!Éẋƥöŕţ ţĥîš ŕûĺé ţö ĤÀ (ŕéǫûîŕéš ĤÀ éñţîţý ûñđéŕ Àđṽàñçéđ) ~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "ID: {auto_id}"
+msgstr "[!ÎĐ: {auto_id} ~~~!]"
+
+# machine: pseudo
+msgid "Add {kind}"
+msgstr "[!Àđđ {kind} ~~~!]"
 
 # machine: pseudo
 msgid "(none)"
@@ -2133,6 +2293,11 @@ msgstr ""
 "[!Šéţ ţĥîš ƀàñķ đöŵñ îñ ţĥé ŵöŕĺđ: îţ ĵöîñš ţĥé ĝŕàƥĥ àš öñé ƀàţţéŕý ŵîţĥ îţš ƁṀŠ ĺîɱîţš ~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "A distributor box has its own bars (rated {dist_rating_a} A)"
+msgstr ""
+"[!À đîšţŕîƀûţöŕ ƀöẋ ĥàš îţš öŵñ ƀàŕš (ŕàţéđ {dist_rating_a} À) ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "The copper bars' size: sized for the current, or your own"
 msgstr ""
 "[!Ţĥé çöƥƥéŕ ƀàŕš' šîžé: šîžéđ ƒöŕ ţĥé çûŕŕéñţ, öŕ ýöûŕ öŵñ ~~~~~~~~~~~~~~~~~~!]"
@@ -2141,6 +2306,12 @@ msgstr ""
 msgid "Bars laid together on each pole: more carry more current"
 msgstr ""
 "[!Ɓàŕš ĺàîđ ţöĝéţĥéŕ öñ éàçĥ ƥöĺé: ɱöŕé çàŕŕý ɱöŕé çûŕŕéñţ ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{n} × {v_nom} V in series = {v_nom_2} V · {m} strings × {ah} Ah = {ah_2} Ah · {wh} kWh ({usable_wh} usable) · {cont_discharge_a} A continuous ({m_2} strings share {min_share}–{max_share} %) · fault current {i_sc} A · {amps} · {mass_kg} kg · ${cost_usd} (estimate)"
+msgstr ""
+"[!{n} × {v_nom} Ṽ îñ šéŕîéš = {v_nom_2} Ṽ · {m} šţŕîñĝš × {ah} Àĥ = {ah_2} Àĥ · {wh} ķŴĥ ({usable_wh} ûšàƀĺé) · {cont_discharge_a} À çöñţîñûöûš ({m_2} šţŕîñĝš šĥàŕé {min_share}–{max_share} %) · ƒàûĺţ çûŕŕéñţ {i_sc} À · {amps} · {mass_kg} ķĝ · ${cost_usd} (éšţîɱàţé) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Amps"
@@ -2227,8 +2398,18 @@ msgid "trip · release · delay"
 msgstr "[!ţŕîƥ · ŕéĺéàšé · đéĺàý ~~~~~~!]"
 
 # machine: pseudo
+msgid "{key} — opens {key_2}"
+msgstr "[!{key} — öƥéñš {key_2} ~~~~!]"
+
+# machine: pseudo
 msgid "retries"
 msgstr "[!ŕéţŕîéš ~~~!]"
+
+# machine: pseudo
+msgid ""
+"Current trips close the switch again after {recover_s} s (a short after {sc_recover_s} s)"
+msgstr ""
+"[!Çûŕŕéñţ ţŕîƥš çĺöšé ţĥé šŵîţçĥ àĝàîñ àƒţéŕ {recover_s} š (à šĥöŕţ àƒţéŕ {sc_recover_s} š) ~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Back to the BMS's own settings"
@@ -2400,6 +2581,11 @@ msgstr ""
 # machine: pseudo
 msgid "Nothing tripped."
 msgstr "[!Ñöţĥîñĝ ţŕîƥƥéđ. ~~~~~~!]"
+
+# machine: pseudo
+msgid "Charge: {soc} % true · {soc_est} % counted by the BMS"
+msgstr ""
+"[!Çĥàŕĝé: {soc} % ţŕûé · {soc_est} % cöûñţéđ ƀý ţĥé ƁṀŠ ~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "No BMS"
@@ -2592,6 +2778,10 @@ msgid "Capacity"
 msgstr "[!Çàƥàçîţý ~~~!]"
 
 # machine: pseudo
+msgid "Roof: {shape} ({src})"
+msgstr "[!Ŕööƒ: {shape} ({src}) ~~~~~!]"
+
+# machine: pseudo
 msgid "None (procedural)"
 msgstr "[!Ñöñé (ƥŕöçéđûŕàĺ) ~~~~~~!]"
 
@@ -2654,6 +2844,11 @@ msgstr "[!Ĺöàđîñĝ ƥĥöţö îñđéẋ … ~~~~~~~!]"
 # machine: pseudo
 msgid "No street photos within 150 m of this building."
 msgstr "[!Ñö šţŕééţ ƥĥöţöš ŵîţĥîñ 150 ɱ öƒ ţĥîš ƀûîĺđîñĝ. ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{near} nearby — click: wall color, right-click: roof color"
+msgstr ""
+"[!{near} ñéàŕƀý — çĺîçķ: ŵàĺĺ çöĺöŕ, ŕîĝĥţ-çĺîçķ: ŕööƒ çöĺöŕ ~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Open"
@@ -2803,6 +2998,15 @@ msgstr ""
 "[!Öñé ĺàýöûţ šö ƒàŕ, šö éṽéŕý çàɱƥ öƒ ţĥîš šţýĺé îš ĺàîđ öûţ àĺîķé.  ~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Layout limit reached ({max_variants}) — delete one first"
+msgstr ""
+"[!Ĺàýöûţ ĺîɱîţ ŕéàçĥéđ ({max_variants}) — đéĺéţé öñé ƒîŕšţ ~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{label}  ·  {sz} × {sz_2} × {sz_3} m  ·  {tris} tris"
+msgstr "[!{label}  ·  {sz} × {sz_2} × {sz_3} ɱ  ·  {tris} ţŕîš ~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Aligned"
 msgstr "[!Àĺîĝñéđ ~~~!]"
 
@@ -2825,12 +3029,36 @@ msgid "Remove this model from every camp style"
 msgstr "[!Ŕéɱöṽé ţĥîš ɱöđéĺ ƒŕöɱ éṽéŕý çàɱƥ šţýĺé ~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Could not import {file}"
+msgstr "[!Çöûĺđ ñöţ îɱƥöŕţ {file} ~~~~~~~!]"
+
+# machine: pseudo
 msgid "Imported model"
 msgstr "[!Îɱƥöŕţéđ ɱöđéĺ ~~~~~!]"
 
 # machine: pseudo
+msgid "{label} has no mesh that can be instanced as camp geometry"
+msgstr ""
+"[!{label} ĥàš ñö ɱéšĥ ţĥàţ çàñ ƀé îñšţàñçéđ àš çàɱƥ ĝéöɱéţŕý ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Model limit reached ({max_models}) — remove one first"
+msgstr ""
+"[!Ṁöđéĺ ĺîɱîţ ŕéàçĥéđ ({max_models}) — ŕéɱöṽé öñé ƒîŕšţ ~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{structures} in {households} on {area_m2} ha  ·  plot {cell_u} × {cell_v} m  ·  ~{tris_per_ha} tris/ha up close"
+msgstr ""
+"[!{structures} îñ {households} öñ {area_m2} ĥà  ·  ƥĺöţ {cell_u} × {cell_v} ɱ  ·  ~{tris_per_ha} ţŕîš/ĥà ûƥ çĺöšé ~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Pick a mission for this location."
 msgstr "[!Ƥîçķ à ɱîššîöñ ƒöŕ ţĥîš ĺöçàţîöñ. ~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Running: {title} — {elapsed} / {dur} h"
+msgstr "[!Ŕûññîñĝ: {title} — {elapsed} / {dur} ĥ ~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "🎯  Challenges"
@@ -2883,6 +3111,10 @@ msgstr "[!Ûƥ à ĺéṽéĺ (ŕîĝĥţ-çĺîçķ, Ɓàçķšƥàçé) ~~~~~~
 # machine: pseudo
 msgid "Nothing to show"
 msgstr "[!Ñöţĥîñĝ ţö šĥöŵ ~~~~~!]"
+
+# machine: pseudo
+msgid "and {shown} more"
+msgstr "[!àñđ {shown} ɱöŕé ~~~~~!]"
 
 # machine: pseudo
 msgid "Nothing further inside"
@@ -3084,6 +3316,10 @@ msgstr ""
 "[!1 çàɱéŕà ķéýƒŕàɱé: ţĥé šĥöţ îš ĺöçķéđ öñ ţĥàţ ṽîéŵ. ~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{value}, {inside} inside this range: {how}."
+msgstr "[!{value}, {inside} îñšîđé ţĥîš ŕàñĝé: {how}. ~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Folder for the video"
 msgstr "[!Ƒöĺđéŕ ƒöŕ ţĥé ṽîđéö ~~~~~~~!]"
 
@@ -3124,6 +3360,10 @@ msgstr "[!Ƒîéĺđ öƒ ṽîéŵ ~~~~!]"
 # machine: pseudo
 msgid "Path"
 msgstr "[!Ƥàţĥ ~~!]"
+
+# machine: pseudo
+msgid "Keyframe {sel} of {value} · {t}"
+msgstr "[!Ķéýƒŕàɱé {sel} öƒ {value} · {t} ~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Keyframes put back as they were when the editor opened."
@@ -3170,8 +3410,18 @@ msgid "  ·  dismissed"
 msgstr "[!  ·  đîšɱîššéđ ~~~~!]"
 
 # machine: pseudo
+msgid ""
+"{hours} person-hours of recurring work this week, {per} per person. One-off jobs, machine steps and builds stay on the open board."
+msgstr ""
+"[!{hours} ƥéŕšöñ-ĥöûŕš öƒ ŕéçûŕŕîñĝ ŵöŕķ ţĥîš ŵééķ, {per} ƥéŕ ƥéŕšöñ. Öñé-öƒƒ ĵöƀš, ɱàçĥîñé šţéƥš àñđ ƀûîĺđš šţàý öñ ţĥé öƥéñ ƀöàŕđ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "No simulated people here yet."
 msgstr "[!Ñö šîɱûĺàţéđ ƥéöƥĺé ĥéŕé ýéţ. ~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "planned {d} · worked {d_2}"
+msgstr "[!ƥĺàññéđ {d} · ŵöŕķéđ {d_2} ~~~~~~!]"
 
 # machine: pseudo
 msgid "How they spend their days"
@@ -3180,6 +3430,14 @@ msgstr "[!Ĥöŵ ţĥéý šƥéñđ ţĥéîŕ đàýš ~~~~~~~~!]"
 # machine: pseudo
 msgid "Nothing measured yet: run the clock for a while."
 msgstr "[!Ñöţĥîñĝ ɱéàšûŕéđ ýéţ: ŕûñ ţĥé çĺöçķ ƒöŕ à ŵĥîĺé. ~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Ticks: {atus_source}. A reference, not a target."
+msgstr "[!Ţîçķš: {atus_source}. À ŕéƒéŕéñçé, ñöţ à ţàŕĝéţ. ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Wrote {files} ({events}) to {dir}."
+msgstr "[!Ŵŕöţé {files} ({events}) ţö {dir}. ~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Open the habitat's inspector on the graph → Routines & chores."
@@ -3295,8 +3553,29 @@ msgid "Move to the clock"
 msgstr "[!Ṁöṽé ţö ţĥé çĺöçķ ~~~~~~!]"
 
 # machine: pseudo
+msgid "Moved {label} to now."
+msgstr "[!Ṁöṽéđ {label} ţö ñöŵ. ~~~~~~!]"
+
+# machine: pseudo
 msgid "Remove"
 msgstr "[!Ŕéɱöṽé ~~!]"
+
+# machine: pseudo
+msgid "Removed {label}."
+msgstr "[!Ŕéɱöṽéđ {label}. ~~~~~!]"
+
+# machine: pseudo
+msgid "Moved {label} to {a}."
+msgstr "[!Ṁöṽéđ {label} ţö {a}. ~~~~~!]"
+
+# machine: pseudo
+msgid "{label} follows something else and cannot be moved here."
+msgstr ""
+"[!{label} ƒöĺĺöŵš šöɱéţĥîñĝ éĺšé àñđ çàññöţ ƀé ɱöṽéđ ĥéŕé. ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Clock moved to {abs_h}."
+msgstr "[!Çĺöçķ ɱöṽéđ ţö {abs_h}. ~~~~~~!]"
 
 # machine: pseudo
 msgid "Work they like"
@@ -3344,6 +3623,12 @@ msgid "No camp is simulated here yet."
 msgstr "[!Ñö çàɱƥ îš šîɱûĺàţéđ ĥéŕé ýéţ. ~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"LMB pin · RMB undo · Enter commit · Esc cancel · drag focused cord/lights to hang"
+msgstr ""
+"[!ĹṀƁ ƥîñ · ŔṀƁ ûñđö · Éñţéŕ çöɱɱîţ · Éšç çàñçéĺ · đŕàĝ ƒöçûšéđ çöŕđ/ĺîĝĥţš ţö ĥàñĝ ~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Route 3D Conduit"
 msgstr "[!Ŕöûţé 3Đ Çöñđûîţ ~~~~~!]"
 
@@ -3367,6 +3652,12 @@ msgstr ""
 "[!Đŕàĝ ţĥé ƥîñ · Šĥîƒţ ĺöçķš ţö àñ àẋîš · ŕéĺéàšé çöɱɱîţš · đöûƀĺé-çĺîçķ à ƥîñ ŕéɱöṽéš îţ · Éšç çàñçéĺ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"LMB drops a pin ({waypoint_count}) · RMB undoes · Enter commits · Esc cancels{aim_valid}"
+msgstr ""
+"[!ĹṀƁ đŕöƥš à ƥîñ ({waypoint_count}) · ŔṀƁ ûñđöéš · Éñţéŕ çöɱɱîţš · Éšç çàñçéĺš{aim_valid} ~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Hang / Reroute Conduit"
 msgstr "[!Ĥàñĝ / Ŕéŕöûţé Çöñđûîţ ~~~~~~~!]"
 
@@ -3375,12 +3666,6 @@ msgid ""
 "Drag pin to move · release commits · double-click pin removes · Esc cancel"
 msgstr ""
 "[!Đŕàĝ ƥîñ ţö ɱöṽé · ŕéĺéàšé çöɱɱîţš · đöûƀĺé-çĺîçķ ƥîñ ŕéɱöṽéš · Éšç çàñçéĺ ~~~~~~~~~~~~~~~~~~~~~~~!]"
-
-# machine: pseudo
-msgid ""
-"LMB pin · RMB undo · Enter commit · Esc cancel · drag focused cord/lights to hang"
-msgstr ""
-"[!ĹṀƁ ƥîñ · ŔṀƁ ûñđö · Éñţéŕ çöɱɱîţ · Éšç çàñçéĺ · đŕàĝ ƒöçûšéđ çöŕđ/ĺîĝĥţš ţö ĥàñĝ ~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Reverted to how the wire was"
@@ -3400,8 +3685,16 @@ msgid "Changes apply to the wire as you make them"
 msgstr "[!Çĥàñĝéš àƥƥĺý ţö ţĥé ŵîŕé àš ýöû ɱàķé ţĥéɱ ~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "✓ Default saved for {type_id}"
+msgstr "[!✓ Đéƒàûĺţ šàṽéđ ƒöŕ {type_id} ~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Could not save the kind's default"
 msgstr "[!Çöûĺđ ñöţ šàṽé ţĥé ķîñđ'š đéƒàûĺţ ~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Loaded “{label}” onto the wire"
+msgstr "[!Ĺöàđéđ “{label}” öñţö ţĥé ŵîŕé ~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Conduit"
@@ -3582,8 +3875,17 @@ msgid "Load selected preset"
 msgstr "[!Ĺöàđ šéĺéçţéđ ƥŕéšéţ ~~~~~~~!]"
 
 # machine: pseudo
+msgid "{value} mm"
+msgstr "[!{value} ɱɱ ~~~!]"
+
+# machine: pseudo
 msgid "Updating the wire…"
 msgstr "[!Ûƥđàţîñĝ ţĥé ŵîŕé… ~~~~~~!]"
+
+# machine: pseudo
+msgid "{lane} of {lanes} (drag it with the Route tool's Lane)"
+msgstr ""
+"[!{lane} öƒ {lanes} (đŕàĝ îţ ŵîţĥ ţĥé Ŕöûţé ţööĺ'š Ĺàñé) ~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "✓ On the wire"
@@ -3603,12 +3905,24 @@ msgid "No 2D ports to bind"
 msgstr "[!Ñö 2Đ ƥöŕţš ţö ƀîñđ ~~~~~~!]"
 
 # machine: pseudo
+msgid "Bound “{label}” to mesh"
+msgstr "[!Ɓöûñđ “{label}” ţö ɱéšĥ ~~~~~~!]"
+
+# machine: pseudo
 msgid "Select a bound 2D port first"
 msgstr "[!Šéĺéçţ à ƀöûñđ 2Đ ƥöŕţ ƒîŕšţ ~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "That port has no 3D bind"
 msgstr "[!Ţĥàţ ƥöŕţ ĥàš ñö 3Đ ƀîñđ ~~~~~~~!]"
+
+# machine: pseudo
+msgid "Cleared 3D bind for “{selected_handle_id}”"
+msgstr "[!Çĺéàŕéđ 3Đ ƀîñđ ƒöŕ “{selected_handle_id}” ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Saved {ports}"
+msgstr "[!Šàṽéđ {ports} ~~~~!]"
 
 # machine: pseudo
 msgid "Graph ports"
@@ -3629,6 +3943,11 @@ msgstr "[!Ƒöŕĝéţ ŵĥéŕé ţĥé šéĺéçţéđ ƥöŕţ šîţš öñ
 # machine: pseudo
 msgid "Suggest places"
 msgstr "[!Šûĝĝéšţ ƥĺàçéš ~~~~~!]"
+
+# machine: pseudo
+msgid "Aim the selected socket along the model's {axis_name}"
+msgstr ""
+"[!Àîɱ ţĥé šéĺéçţéđ šöçķéţ àĺöñĝ ţĥé ɱöđéĺ'š {axis_name} ~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Flip"
@@ -3702,6 +4021,10 @@ msgstr ""
 "[!Ƥöîñţš îñţö ţĥé ɱöđéĺ: ţĥé ŕûñ ŵîĺĺ ĺéàṽé ƒûŕţĥéŕ öûţ. Àîɱ îţ öûţ (öŕ Ƒĺîƥ). ~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Out {axis_words} · {m} m straight before it bends"
+msgstr "[!Öûţ {axis_words} · {m} ɱ šţŕàîĝĥţ ƀéƒöŕé îţ ƀéñđš ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Bind the port to the model first"
 msgstr "[!Ɓîñđ ţĥé ƥöŕţ ţö ţĥé ɱöđéĺ ƒîŕšţ ~~~~~~~~~~!]"
 
@@ -3712,6 +4035,10 @@ msgstr "[!Ƒîţţîñĝ šéţ ~~~~!]"
 # machine: pseudo
 msgid "Every port already has a place"
 msgstr "[!Éṽéŕý ƥöŕţ àĺŕéàđý ĥàš à ƥĺàçé ~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{todo} placed: check them, then Save"
+msgstr "[!{todo} ƥĺàçéđ: çĥéçķ ţĥéɱ, ţĥéñ Šàṽé ~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Select a bound port first"
@@ -3726,8 +4053,16 @@ msgid "No graph connections to update"
 msgstr "[!Ñö ĝŕàƥĥ çöññéçţîöñš ţö ûƥđàţé ~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Updated {value}"
+msgstr "[!Ûƥđàţéđ {value} ~~~~~!]"
+
+# machine: pseudo
 msgid "Drop on the 3D preview to place"
 msgstr "[!Đŕöƥ öñ ţĥé 3Đ ƥŕéṽîéŵ ţö ƥĺàçé ~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Could not load model '{model_id}'"
+msgstr "[!Çöûĺđ ñöţ ĺöàđ ɱöđéĺ '{model_id}' ~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Nothing to fix."
@@ -3751,6 +4086,10 @@ msgid "Night — stowed"
 msgstr "[!Ñîĝĥţ — šţöŵéđ ~~~~!]"
 
 # machine: pseudo
+msgid "{hour} · DNI {dni} W/m² · {thermal_kw}"
+msgstr "[!{hour} · ĐÑÎ {dni} Ŵ/ɱ² · {thermal_kw} ~~~~~~~~~!]"
+
+# machine: pseudo
 msgid ""
 "A concentrator only uses the direct beam; a flat solar panel would also take the diffuse sky."
 msgstr ""
@@ -3765,6 +4104,17 @@ msgid "Tracing the year…"
 msgstr "[!Ţŕàçîñĝ ţĥé ýéàŕ… ~~~~~~!]"
 
 # machine: pseudo
+msgid "At {site_name}, from {covered}. Run it to see the heat month by month."
+msgstr ""
+"[!Àţ {site_name}, ƒŕöɱ {covered}. Ŕûñ îţ ţö šéé ţĥé ĥéàţ ɱöñţĥ ƀý ɱöñţĥ. ~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{annual_kwh} of heat a year · {run_hours} h running · direct beam {annual_dni} kWh/m² vs global {annual_ghi} kWh/m² (direct is {direct_share} of the light on the ground) · capacity factor {annual_kwh_2}"
+msgstr ""
+"[!{annual_kwh} öƒ ĥéàţ à ýéàŕ · {run_hours} ĥ ŕûññîñĝ · đîŕéçţ ƀéàɱ {annual_dni} ķŴĥ/ɱ² ṽš ĝĺöƀàĺ {annual_ghi} ķŴĥ/ɱ² (đîŕéçţ îš {direct_share} öƒ ţĥé ĺîĝĥţ öñ ţĥé ĝŕöûñđ) · çàƥàçîţý ƒàçţöŕ {annual_kwh_2} ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Stopped."
 msgstr "[!Šţöƥƥéđ. ~~~!]"
 
@@ -3775,6 +4125,17 @@ msgstr "[!Ţîçķ àţ ĺéàšţ öñé ñûɱƀéŕ ţö ṽàŕý. ~~~~~~~~~
 # machine: pseudo
 msgid "Stop"
 msgstr "[!Šţöƥ ~~!]"
+
+# machine: pseudo
+msgid ""
+"Better: {start} → {best} after {evals} designs. {changed}. Ctrl+Z puts it back."
+msgstr ""
+"[!Ɓéţţéŕ: {start} → {best} àƒţéŕ {evals} đéšîĝñš. {changed}. Çţŕĺ+Ž ƥûţš îţ ƀàçķ. ~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Nothing better within these ranges ({evals} designs tried)."
+msgstr ""
+"[!Ñöţĥîñĝ ƀéţţéŕ ŵîţĥîñ ţĥéšé ŕàñĝéš ({evals} đéšîĝñš ţŕîéđ). ~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Placing needs a world with the systems graph."
@@ -3791,6 +4152,10 @@ msgstr "[!Çöûĺđñ'ţ ŵŕîţé ţĥé ţéɱƥĺàţé. ~~~~~~~~~!]"
 # machine: pseudo
 msgid "Play the day"
 msgstr "[!Ƥĺàý ţĥé đàý ~~~~!]"
+
+# machine: pseudo
+msgid "Searching… {evals} designs tried, best {best}"
+msgstr "[!Šéàŕçĥîñĝ… {evals} đéšîĝñš ţŕîéđ, ƀéšţ {best} ~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Save design"
@@ -3930,6 +4295,12 @@ msgstr ""
 
 # machine: pseudo
 msgid ""
+"[color=#fff299]━[/color] sunlight in   {lands}   [color=#ff4033]━[/color] misses   [color=#8c8c99]━[/color] shaded or blocked   [color=#f24dd9]━[/color] off the end   [color=#ffe066]●[/color] the sun"
+msgstr ""
+"[![color=#fff299]━[/color] šûñĺîĝĥţ îñ   {lands}   [color=#ff4033]━[/color] ɱîššéš   [color=#8c8c99]━[/color] šĥàđéđ öŕ ƀĺöçķéđ   [color=#f24dd9]━[/color] öƒƒ ţĥé éñđ   [color=#ffe066]●[/color] ţĥé šûñ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
 "Nothing on this concentrator moves (a fixed or level optic): there is nothing to drive."
 msgstr ""
 "[!Ñöţĥîñĝ öñ ţĥîš çöñçéñţŕàţöŕ ɱöṽéš (à ƒîẋéđ öŕ ĺéṽéĺ öƥţîç): ţĥéŕé îš ñöţĥîñĝ ţö đŕîṽé. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
@@ -3971,6 +4342,12 @@ msgid ""
 "Multiplies the angle (e.g. steps per degree, or mm of actuator stroke per degree)"
 msgstr ""
 "[!Ṁûĺţîƥĺîéš ţĥé àñĝĺé (é.ĝ. šţéƥš ƥéŕ đéĝŕéé, öŕ ɱɱ öƒ àçţûàţöŕ šţŕöķé ƥéŕ đéĝŕéé) ~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Copied: input_number helpers for {chans} drives and an example automation."
+msgstr ""
+"[!Çöƥîéđ: îñƥûţ_ñûɱƀéŕ ĥéĺƥéŕš ƒöŕ {chans} đŕîṽéš àñđ àñ éẋàɱƥĺé àûţöɱàţîöñ. ~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Send to Home Assistant"
@@ -4088,6 +4465,10 @@ msgid "Apply"
 msgstr "[!Àƥƥĺý ~~!]"
 
 # machine: pseudo
+msgid "{fname}  ·  {value}  ·  {linked} linked  ▸"
+msgstr "[!{fname}  ·  {value}  ·  {linked} ĺîñķéđ  ▸ ~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Loading…"
 msgstr "[!Ĺöàđîñĝ… ~~~!]"
 
@@ -4100,12 +4481,20 @@ msgid "Loading CSV…"
 msgstr "[!Ĺöàđîñĝ ÇŠṼ… ~~~~!]"
 
 # machine: pseudo
+msgid "Playing {speed}×"
+msgstr "[!Ƥĺàýîñĝ {speed}× ~~~~~!]"
+
+# machine: pseudo
 msgid "Paused"
 msgstr "[!Ƥàûšéđ ~~!]"
 
 # machine: pseudo
 msgid "Stopped"
 msgstr "[!Šţöƥƥéđ ~~~!]"
+
+# machine: pseudo
+msgid "Loading CSV… {pct}%"
+msgstr "[!Ĺöàđîñĝ ÇŠṼ… {pct}% ~~~~~!]"
 
 # machine: pseudo
 msgid "(no file selected)"
@@ -4141,6 +4530,10 @@ msgstr "[!Çöûĺđ ñöţ ŵŕîţé ţĥé ŵîŕîñĝ šĥééţ. ~~~~~~~~~
 # machine: pseudo
 msgid "No ports yet: Add port, then click the unit."
 msgstr "[!Ñö ƥöŕţš ýéţ: Àđđ ƥöŕţ, ţĥéñ çĺîçķ ţĥé ûñîţ. ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{connector} on the {face}"
+msgstr "[!{connector} öñ ţĥé {face} ~~~~~~~!]"
 
 # machine: pseudo
 msgid "Every check passes."
@@ -4285,6 +4678,10 @@ msgid "Port removed."
 msgstr "[!Ƥöŕţ ŕéɱöṽéđ. ~~~~!]"
 
 # machine: pseudo
+msgid "Click a face of the unit to put the {id} there."
+msgstr "[!Çĺîçķ à ƒàçé öƒ ţĥé ûñîţ ţö ƥûţ ţĥé {id} ţĥéŕé. ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Port moved."
 msgstr "[!Ƥöŕţ ɱöṽéđ. ~~~~!]"
 
@@ -4307,6 +4704,12 @@ msgstr "[!Šàṽé ţĥé ƀŕîéƒ àš Ṁàŕķđöŵñ àñđ ĴŠÖÑ. ~~
 # machine: pseudo
 msgid "No parts"
 msgstr "[!Ñö ƥàŕţš ~~~!]"
+
+# machine: pseudo
+msgid ""
+"{mass_kg} · {strut_m} of {label} in {stock_pieces} stock lengths ({waste_pct} % waste) · {bolts} bolts{panels_m2}"
+msgstr ""
+"[!{mass_kg} · {strut_m} öƒ {label} îñ {stock_pieces} šţöçķ ĺéñĝţĥš ({waste_pct} % ŵàšţé) · {bolts} ƀöĺţš{panels_m2} ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Built-in designs stay."
@@ -4399,6 +4802,11 @@ msgstr "[!Ƥàŕţš (çĺîçķ ţö ĥîĝĥĺîĝĥţ) ~~~~~~~~!]"
 # machine: pseudo
 msgid "Fabrication files"
 msgstr "[!Ƒàƀŕîçàţîöñ ƒîĺéš ~~~~~~!]"
+
+# machine: pseudo
+msgid "{spec} · {height_m} high · {floor_area_m2} floor · {mass_kg}"
+msgstr ""
+"[!{spec} · {height_m} ĥîĝĥ · {floor_area_m2} ƒĺööŕ · {mass_kg} ~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Base solid"
@@ -4753,6 +5161,10 @@ msgid "Corner roundness"
 msgstr "[!Çöŕñéŕ ŕöûñđñéšš ~~~~~~!]"
 
 # machine: pseudo
+msgid "Rhombus type {z} (generators {z_2} apart)"
+msgstr "[!Ŕĥöɱƀûš ţýƥé {z} (ĝéñéŕàţöŕš {z_2} àƥàŕţ) ~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Openings in"
 msgstr "[!Öƥéñîñĝš îñ ~~~~!]"
 
@@ -4918,6 +5330,22 @@ msgid "Beds"
 msgstr "[!Ɓéđš ~~!]"
 
 # machine: pseudo
+msgid "Glazing at {glazing_deg} for latitude {lat}."
+msgstr "[!Ĝĺàžîñĝ àţ {glazing_deg} ƒöŕ ĺàţîţûđé {lat}. ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Panels at {pv_tilt} for latitude {lat}."
+msgstr "[!Ƥàñéĺš àţ {pv_tilt} ƒöŕ ĺàţîţûđé {lat}. ~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Saved {name}."
+msgstr "[!Šàṽéđ {name}. ~~~~!]"
+
+# machine: pseudo
+msgid "Could not place: {error}"
+msgstr "[!Çöûĺđ ñöţ ƥĺàçé: {error} ~~~~~~~!]"
+
+# machine: pseudo
 msgid "Applied to the placed Earthship."
 msgstr "[!Àƥƥĺîéđ ţö ţĥé ƥĺàçéđ Éàŕţĥšĥîƥ. ~~~~~~~~~~~!]"
 
@@ -5023,9 +5451,24 @@ msgstr ""
 "[!Çöññéçţ Ĥöɱé Àššîšţàñţ ƒîŕšţ (Šéţţîñĝš → Ĥöɱé Àššîšţàñţ). ~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Found {m} of {want} entities in Home Assistant{want_2}."
+msgstr ""
+"[!Ƒöûñđ {m} öƒ {want} éñţîţîéš îñ Ĥöɱé Àššîšţàñţ{want_2}. ~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "None of this board's entities are in Home Assistant yet."
 msgstr ""
 "[!Ñöñé öƒ ţĥîš ƀöàŕđ'š éñţîţîéš àŕé îñ Ĥöɱé Àššîšţàñţ ýéţ. ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Fetching {eid}…"
+msgstr "[!Ƒéţçĥîñĝ {eid}… ~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Compared {done} over the {selected} (the twin's ideal reading: the weather data at the board's spot, through this design's filters)."
+msgstr ""
+"[!Çöɱƥàŕéđ {done} öṽéŕ ţĥé {selected} (ţĥé ţŵîñ'š îđéàĺ ŕéàđîñĝ: ţĥé ŵéàţĥéŕ đàţà àţ ţĥé ƀöàŕđ'š šƥöţ, ţĥŕöûĝĥ ţĥîš đéšîĝñ'š ƒîĺţéŕš). ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -5041,6 +5484,18 @@ msgstr "[!Ñöţ öñ ţĥé ŕéàĺ ƀöàŕđ ~~~~~~~!]"
 msgid "Not enough readings from the real board over this span."
 msgstr ""
 "[!Ñöţ éñöûĝĥ ŕéàđîñĝš ƒŕöɱ ţĥé ŕéàĺ ƀöàŕđ öṽéŕ ţĥîš šƥàñ. ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Real − twin: {bias} {u} · typical gap {rmse} {u_2} · r {r} · {coverage} — {verdict}"
+msgstr ""
+"[!Ŕéàĺ − ţŵîñ: {bias} {u} · ţýƥîçàĺ ĝàƥ {rmse} {u_2} · ŕ {r} · {coverage} — {verdict} ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Calibration written into the YAML ({what}). Flash the board, then compare again."
+msgstr ""
+"[!Çàĺîƀŕàţîöñ ŵŕîţţéñ îñţö ţĥé ÝÀṀĹ ({what}). Ƒĺàšĥ ţĥé ƀöàŕđ, ţĥéñ çöɱƥàŕé àĝàîñ. ~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Board"
@@ -5087,6 +5542,16 @@ msgstr "[!ŵĥàţ ţĥé ƀöàŕđ ŵîĺĺ ŕéƥöŕţ ~~~~~~~~~!]"
 # machine: pseudo
 msgid "Parts list"
 msgstr "[!Ƥàŕţš ĺîšţ ~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{label} — {p}\n"
+"{desc} · {supply}\n"
+"Click to add it to the board."
+msgstr ""
+"[!{label} — {p}\n"
+"{desc} · {supply}\n"
+"Çĺîçķ ţö àđđ îţ ţö ţĥé ƀöàŕđ. ~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Nothing yet: click a part above."
@@ -5144,6 +5609,10 @@ msgid "Give its pins back to the tool"
 msgstr "[!Ĝîṽé îţš ƥîñš ƀàçķ ţö ţĥé ţööĺ ~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Remove {label}"
+msgstr "[!Ŕéɱöṽé {label} ~~~~!]"
+
+# machine: pseudo
 msgid "Nothing is wired here. Drag a part's pin onto it to wire it yourself."
 msgstr ""
 "[!Ñöţĥîñĝ îš ŵîŕéđ ĥéŕé. Đŕàĝ à ƥàŕţ'š ƥîñ öñţö îţ ţö ŵîŕé îţ ýöûŕšéĺƒ. ~~~~~~~~~~~~~~~~~~~~~!]"
@@ -5162,6 +5631,14 @@ msgstr "[!Šéĺéçţ îţ ~~~!]"
 
 # machine: pseudo
 msgid ""
+"3.3 V rail: {ma_3v3} of {reg_ma} mA (board + 3.3 V parts)\n"
+"5 V in: {ma_5v} mA total{usb_ma}"
+msgstr ""
+"[!3.3 Ṽ ŕàîĺ: {ma_3v3} öƒ {reg_ma} ɱÀ (ƀöàŕđ + 3.3 Ṽ ƥàŕţš)\n"
+"5 Ṽ îñ: {ma_5v} ɱÀ ţöţàĺ{usb_ma} ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
 "The twin reads the world at the site, now: the weather, sunlight and air quality where you stand, with each part's own accuracy and noise."
 msgstr ""
 "[!Ţĥé ţŵîñ ŕéàđš ţĥé ŵöŕĺđ àţ ţĥé šîţé, ñöŵ: ţĥé ŵéàţĥéŕ, šûñĺîĝĥţ àñđ àîŕ ǫûàĺîţý ŵĥéŕé ýöû šţàñđ, ŵîţĥ éàçĥ ƥàŕţ'š öŵñ àççûŕàçý àñđ ñöîšé. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
@@ -5169,6 +5646,10 @@ msgstr ""
 # machine: pseudo
 msgid "fuel"
 msgstr "[!ƒûéĺ ~~!]"
+
+# machine: pseudo
+msgid "{battery_wh} / {battery_capacity} Wh"
+msgstr "[!{battery_wh} / {battery_capacity} Ŵĥ ~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid " EUC STATUS"
@@ -5213,6 +5694,14 @@ msgstr "[!1000 / 1000 Ŵĥ ~!]"
 # machine: pseudo
 msgid "Discard them all"
 msgstr "[!Đîšçàŕđ ţĥéɱ àĺĺ ~~~~~~!]"
+
+# machine: pseudo
+msgid "From AI tools ({value})"
+msgstr "[!Ƒŕöɱ ÀÎ ţööĺš ({value}) ~~~~~~!]"
+
+# machine: pseudo
+msgid "Click again to delete “{t}”"
+msgstr "[!Çĺîçķ àĝàîñ ţö đéĺéţé “{t}” ~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Compare sim with reality"
@@ -5271,6 +5760,11 @@ msgid "The span must end after it starts."
 msgstr "[!Ţĥé šƥàñ ɱûšţ éñđ àƒţéŕ îţ šţàŕţš. ~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{duration}, simulated every {step}. Times are this site's clock."
+msgstr ""
+"[!{duration}, šîɱûĺàţéđ éṽéŕý {step}. Ţîɱéš àŕé ţĥîš šîţé'š çĺöçķ. ~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "A"
 msgstr "[!À ~!]"
 
@@ -5304,6 +5798,16 @@ msgstr "[!Ɓ − À; ţĥé ƀéţţéŕ šîđé îš ɱàŕķéđ ~~~~~~~~~!]"
 # machine: pseudo
 msgid "Scores"
 msgstr "[!Šçöŕéš ~~!]"
+
+# machine: pseudo
+msgid "{forks} in this world"
+msgstr "[!{forks} îñ ţĥîš ŵöŕĺđ ~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Editing fork: {fork_name} — your world is set aside and the clock is held."
+msgstr ""
+"[!Éđîţîñĝ ƒöŕķ: {fork_name} — ýöûŕ ŵöŕĺđ îš šéţ àšîđé àñđ ţĥé çĺöçķ îš ĥéĺđ. ~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Discard changes"
@@ -5395,8 +5899,29 @@ msgid "Parked over the tool bay."
 msgstr "[!Ƥàŕķéđ öṽéŕ ţĥé ţööĺ ƀàý. ~~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"{label} · {hh}:{hh_2}:{ts} · {act} · {tool} · {axes} · {t} of {dur_s}{arms}"
+msgstr ""
+"[!{label} · {hh}:{hh_2}:{ts} · {act} · {tool} · {axes} · {t} öƒ {dur_s}{arms} ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{sheets} of {sheet} · {utilization}% used\n"
+"Cut length {cut_ft} ft in {passes} · about {cut_min} on the router\n"
+"About {mass_kg} kg ({mass_kg_2} lb)"
+msgstr ""
+"[!{sheets} öƒ {sheet} · {utilization}% ûšéđ\n"
+"Çûţ ĺéñĝţĥ {cut_ft} ƒţ îñ {passes} · àƀöûţ {cut_min} öñ ţĥé ŕöûţéŕ\n"
+"Àƀöûţ {mass_kg} ķĝ ({mass_kg_2} ĺƀ) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Everything slots together and fits the sheets."
 msgstr "[!Éṽéŕýţĥîñĝ šĺöţš ţöĝéţĥéŕ àñđ ƒîţš ţĥé šĥééţš. ~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{label} {name} · {units} · {notches}, {holes} · sheet {sheet}"
+msgstr ""
+"[!{label} {name} · {units} · {notches}, {holes} · šĥééţ {sheet} ~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Saved design"
@@ -5703,9 +6228,21 @@ msgstr "[!Ɓéđ ~!]"
 
 # machine: pseudo
 msgid ""
+"${usd} · {kg} kg · {extrusion_m} m of extrusion in {pieces} · {motors} · {label}"
+msgstr ""
+"[!${usd} · {kg} ķĝ · {extrusion_m} ɱ öƒ éẋţŕûšîöñ îñ {pieces} · {motors} · {label} ~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
 "A = X + Z and B = X − Z: the belts share X and Z, so a vertical move is as fast as a horizontal one and there is no lead screw to wobble. Y is the bed."
 msgstr ""
 "[!À = Ẋ + Ž àñđ Ɓ = Ẋ − Ž: ţĥé ƀéĺţš šĥàŕé Ẋ àñđ Ž, šö à ṽéŕţîçàĺ ɱöṽé îš àš ƒàšţ àš à ĥöŕîžöñţàĺ öñé àñđ ţĥéŕé îš ñö ĺéàđ šçŕéŵ ţö ŵöƀƀĺé. Ý îš ţĥé ƀéđ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Each tower carriage sits at z + √(L² − d²), d its horizontal distance to the tool: all three move for every move, and the farther the tool from a tower the lower that carriage. Arms {arm_mm} mm, delta radius {delta_radius_mm} mm, reach {reach_mm} mm from the centre at {delta_min_arm_deg}° minimum arm angle."
+msgstr ""
+"[!Éàçĥ ţöŵéŕ çàŕŕîàĝé šîţš àţ ž + √(Ĺ² − đ²), đ îţš ĥöŕîžöñţàĺ đîšţàñçé ţö ţĥé ţööĺ: àĺĺ ţĥŕéé ɱöṽé ƒöŕ éṽéŕý ɱöṽé, àñđ ţĥé ƒàŕţĥéŕ ţĥé ţööĺ ƒŕöɱ à ţöŵéŕ ţĥé ĺöŵéŕ ţĥàţ çàŕŕîàĝé. Àŕɱš {arm_mm} ɱɱ, đéĺţà ŕàđîûš {delta_radius_mm} ɱɱ, ŕéàçĥ {reach_mm} ɱɱ ƒŕöɱ ţĥé çéñţŕé àţ {delta_min_arm_deg}° ɱîñîɱûɱ àŕɱ àñĝĺé. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -5724,6 +6261,22 @@ msgid ""
 "One motor per axis. The head moves in X along the beam and in Y with the beam on the top rails; only the bed moves in Z, dropping a layer at a time."
 msgstr ""
 "[!Öñé ɱöţöŕ ƥéŕ àẋîš. Ţĥé ĥéàđ ɱöṽéš îñ Ẋ àĺöñĝ ţĥé ƀéàɱ àñđ îñ Ý ŵîţĥ ţĥé ƀéàɱ öñ ţĥé ţöƥ ŕàîĺš; öñĺý ţĥé ƀéđ ɱöṽéš îñ Ž, đŕöƥƥîñĝ à ĺàýéŕ àţ à ţîɱé. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "No motion in this program: {error}"
+msgstr "[!Ñö ɱöţîöñ îñ ţĥîš ƥŕöĝŕàɱ: {error} ~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{gcode_name} · {sim_t} of {total} · move {i} of {n} (line {line})\n"
+"X {pos}  Y {y}  Z {z} mm · {extruding} {value} mm/s (asked {feed}) · {layers}\n"
+"{motor_lines}\n"
+"{accel_limited_share} · peak {peak_step_hz} steps/s on {motors} · {material}"
+msgstr ""
+"[!{gcode_name} · {sim_t} öƒ {total} · ɱöṽé {i} öƒ {n} (ĺîñé {line})\n"
+"Ẋ {pos}  Ý {y}  Ž {z} ɱɱ · {extruding} {value} ɱɱ/š (àšķéđ {feed}) · {layers}\n"
+"{motor_lines}\n"
+"{accel_limited_share} · ƥéàķ {peak_step_hz} šţéƥš/š öñ {motors} · {material} ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Place the machine first, then send it a program."
@@ -5915,6 +6468,11 @@ msgid "Files"
 msgstr "[!Ƒîĺéš ~~!]"
 
 # machine: pseudo
+msgid "{spec} · {volume_l} L · {mass_kg} kg · ${usd} · {watts} W"
+msgstr ""
+"[!{spec} · {volume_l} Ĺ · {mass_kg} ķĝ · ${usd} · {watts} Ŵ ~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid " mm"
 msgstr "[! ɱɱ ~!]"
 
@@ -6035,10 +6593,28 @@ msgid "Show collisions"
 msgstr "[!Šĥöŵ çöĺĺîšîöñš ~~~~~~!]"
 
 # machine: pseudo
+msgid "{mid} · moved {dv} mm{mirrored}"
+msgstr "[!{mid} · ɱöṽéđ {dv} ɱɱ{mirrored} ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Place: {tool_params} — click where it fastens"
+msgstr "[!Ƥĺàçé: {tool_params} — çĺîçķ ŵĥéŕé îţ ƒàšţéñš ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Place: {tool_params} — nothing it fastens to under the pointer"
+msgstr ""
+"[!Ƥĺàçé: {tool_params} — ñöţĥîñĝ îţ ƒàšţéñš ţö ûñđéŕ ţĥé ƥöîñţéŕ ~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid ""
 "Click a module in the view to pick it, drag it to move it as one, double-click to open it."
 msgstr ""
 "[!Çĺîçķ à ɱöđûĺé îñ ţĥé ṽîéŵ ţö ƥîçķ îţ, đŕàĝ îţ ţö ɱöṽé îţ àš öñé, đöûƀĺé-çĺîçķ ţö öƥéñ îţ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Inside the {ctx}: click a part or sub-module; Esc steps back out."
+msgstr ""
+"[!Îñšîđé ţĥé {ctx}: çĺîçķ à ƥàŕţ öŕ šûƀ-ɱöđûĺé; Éšç šţéƥš ƀàçķ öûţ. ~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Part"
@@ -6075,12 +6651,27 @@ msgstr ""
 "[!Ĥéîĝĥţ: ƒöĺĺöŵš ţĥé ƀéĺţ'š ƥĺàñé (šƥàçéŕ šţàçķ šéţ ƒöŕ ýöû) ~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Mirrored with the {tw}"
+msgstr "[!Ṁîŕŕöŕéđ ŵîţĥ ţĥé {tw} ~~~~~~~!]"
+
+# machine: pseudo
 msgid "Unlink"
 msgstr "[!Ûñĺîñķ ~~!]"
 
 # machine: pseudo
 msgid "Edit this side on its own from now on"
 msgstr "[!Éđîţ ţĥîš šîđé öñ îţš öŵñ ƒŕöɱ ñöŵ öñ ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{ref} — click, then click where it fastens. R turns it, Shift keeps the tool, Esc stops."
+msgstr ""
+"[!{ref} — çĺîçķ, ţĥéñ çĺîçķ ŵĥéŕé îţ ƒàšţéñš. Ŕ ţûŕñš îţ, Šĥîƒţ ķééƥš ţĥé ţööĺ, Éšç šţöƥš. ~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Mirrored with the {tm}: moves follow on the other side."
+msgstr ""
+"[!Ṁîŕŕöŕéđ ŵîţĥ ţĥé {tm}: ɱöṽéš ƒöĺĺöŵ öñ ţĥé öţĥéŕ šîđé. ~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Pick this sub-module"
@@ -6093,6 +6684,10 @@ msgstr "[!Ƥîçķ ţĥîš ƥàŕţ ~~~~~!]"
 # machine: pseudo
 msgid "Double-click: pick its parts one by one"
 msgstr "[!Đöûƀĺé-çĺîçķ: ƥîçķ îţš ƥàŕţš öñé ƀý öñé ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Del: every part in it{is_empty}"
+msgstr "[!Đéĺ: éṽéŕý ƥàŕţ îñ îţ{is_empty} ~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Entering world…"
@@ -6109,6 +6704,18 @@ msgstr "[!Đéšçéñđîñĝ ƒŕöɱ öŕƀîţ… ~~~~~~~~!]"
 # machine: pseudo
 msgid "Preparing the solar zones…"
 msgstr "[!Ƥŕéƥàŕîñĝ ţĥé šöĺàŕ žöñéš… ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Zone {zid} ({labels}) — {zid_2}\n"
+"Click to inspect this Solar Energy Zone and its reference cities."
+msgstr ""
+"[!Žöñé {zid} ({labels}) — {zid_2}\n"
+"Çĺîçķ ţö îñšƥéçţ ţĥîš Šöĺàŕ Éñéŕĝý Žöñé àñđ îţš ŕéƒéŕéñçé çîţîéš. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Worlds ({all_worlds})"
+msgstr "[!Ŵöŕĺđš ({all_worlds}) ~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -6152,8 +6759,24 @@ msgid "Sunlight on the Moon"
 msgstr "[!Šûñĺîĝĥţ öñ ţĥé Ṁööñ ~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"The Moon, {moon_distance_km} km away · drag to turn · wheel to zoom · click a point"
+msgstr ""
+"[!Ţĥé Ṁööñ, {moon_distance_km} ķɱ àŵàý · đŕàĝ ţö ţûŕñ · ŵĥééĺ ţö žööɱ · çĺîçķ à ƥöîñţ ~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "On the Moon"
 msgstr "[!Öñ ţĥé Ṁööñ ~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Selenographic; the prime meridian faces the Earth. {name}, {lit} % lit, {age_days} days old, {jd} km from Earth."
+msgstr ""
+"[!Šéĺéñöĝŕàƥĥîç; ţĥé ƥŕîɱé ɱéŕîđîàñ ƒàçéš ţĥé Éàŕţĥ. {name}, {lit} % ĺîţ, {age_days} đàýš öĺđ, {jd} ķɱ ƒŕöɱ Éàŕţĥ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{w} W/m² of sunlight here · Sun {elev}"
+msgstr "[!{w} Ŵ/ɱ² öƒ šûñĺîĝĥţ ĥéŕé · Šûñ {elev} ~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "A lunar day is 29.5 Earth days: the sunlight map turns once a month."
@@ -6174,13 +6797,25 @@ msgstr ""
 "[!Ɓûîĺţ-îñ ɱàƥ šçéñé — šţàŕţš éɱƥţý öŕ ŵîţĥ à šţàŕţéŕ šýšţéɱ. ~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "World name (default: {display_name})"
+msgstr "[!Ŵöŕĺđ ñàɱé (đéƒàûĺţ: {display_name}) ~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Click a city below or anywhere on the globe to pick a site."
 msgstr ""
 "[!Çĺîçķ à çîţý ƀéĺöŵ öŕ àñýŵĥéŕé öñ ţĥé ĝĺöƀé ţö ƥîçķ à šîţé. ~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{zd} kWh/m²/day band"
+msgstr "[!{zd} ķŴĥ/ɱ²/đàý ƀàñđ ~~~~~~!]"
+
+# machine: pseudo
 msgid "Solar data unavailable"
 msgstr "[!Šöĺàŕ đàţà ûñàṽàîĺàƀĺé ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{label}{is_empty} · {g} kWh/m²/day of sun"
+msgstr "[!{label}{is_empty} · {g} ķŴĥ/ɱ²/đàý öƒ šûñ ~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Sister:"
@@ -6191,8 +6826,47 @@ msgid "Peers:"
 msgstr "[!Ƥééŕš: ~~!]"
 
 # machine: pseudo
+msgid ""
+"{nm}, {ctry} ({cg} kWh/m²/d){is_sister}\n"
+"Click to fly the globe there."
+msgstr ""
+"[!{nm}, {ctry} ({cg} ķŴĥ/ɱ²/đ){is_sister}\n"
+"Çĺîçķ ţö ƒĺý ţĥé ĝĺöƀé ţĥéŕé. ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Solar atlas: asking…"
 msgstr "[!Šöĺàŕ àţĺàš: àšķîñĝ… ~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"The Moon · {moon_distance_km} km · {name}, {lit} % lit — click to go there"
+msgstr ""
+"[!Ţĥé Ṁööñ · {moon_distance_km} ķɱ · {name}, {lit} % ĺîţ — çĺîçķ ţö ĝö ţĥéŕé ~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "The Earth · {moon_distance_km} km — click to go back"
+msgstr ""
+"[!Ţĥé Éàŕţĥ · {moon_distance_km} ķɱ — çĺîçķ ţö ĝö ƀàçķ ~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Altitude {alt_text}"
+msgstr "[!Àĺţîţûđé {alt_text} ~~~~~~!]"
+
+# machine: pseudo
+msgid "{lon}{ztxt}{lon_2} · altitude {alt_text}"
+msgstr "[!{lon}{ztxt}{lon_2} · àĺţîţûđé {alt_text} ~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Could not create the world (error {err})."
+msgstr "[!Çöûĺđ ñöţ çŕéàţé ţĥé ŵöŕĺđ (éŕŕöŕ {err}). ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Could not open that world (error {err0})."
+msgstr "[!Çöûĺđ ñöţ öƥéñ ţĥàţ ŵöŕĺđ (éŕŕöŕ {err0}). ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Could not open that world (error {err})."
+msgstr "[!Çöûĺđ ñöţ öƥéñ ţĥàţ ŵöŕĺđ (éŕŕöŕ {err}). ~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Flying in…"
@@ -6262,6 +6936,10 @@ msgstr "[!Ýöûŕ ŵöŕĺđš ~~~~!]"
 # machine: pseudo
 msgid "Built-in maps:"
 msgstr "[!Ɓûîĺţ-îñ ɱàƥš: ~~~~!]"
+
+# machine: pseudo
+msgid "Start a new world on {display_name}"
+msgstr "[!Šţàŕţ à ñéŵ ŵöŕĺđ öñ {display_name} ~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "World name"
@@ -6378,6 +7056,14 @@ msgstr ""
 "[!Ƥĺàý ţĥé ýéàŕ: 1 ĥöûŕ, 1 đàý, ţĥéñ 7 đàýš ƥéŕ šéçöñđ. Çĺîçķ àĝàîñ ţö ƥàûšé (Šƥàçé). ~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"Moon\n"
+"{jd} km · {name} {lit} %"
+msgstr ""
+"[!Ṁööñ\n"
+"{jd} ķɱ · {name} {lit} % ~~~~~~!]"
+
+# machine: pseudo
 msgid "Applied to the placed greenhouse."
 msgstr "[!Àƥƥĺîéđ ţö ţĥé ƥĺàçéđ ĝŕééñĥöûšé. ~~~~~~~~~~~!]"
 
@@ -6389,6 +7075,20 @@ msgstr "[!Ŕûñ ţĥé ýéàŕ ~~~~!]"
 msgid "Step this design through a year of weather at the site, hour by hour"
 msgstr ""
 "[!Šţéƥ ţĥîš đéšîĝñ ţĥŕöûĝĥ à ýéàŕ öƒ ŵéàţĥéŕ àţ ţĥé šîţé, ĥöûŕ ƀý ĥöûŕ ~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Running a year at {where}…"
+msgstr "[!Ŕûññîñĝ à ýéàŕ àţ {where}… ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Running a year… {progress}"
+msgstr "[!Ŕûññîñĝ à ýéàŕ… {progress} ~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"A year at {where}, {src}. Coldest hour inside {coldest_in} °C (outside {coldest_out} °C), hottest {hottest_in} °C."
+msgstr ""
+"[!À ýéàŕ àţ {where}, {src}. Çöĺđéšţ ĥöûŕ îñšîđé {coldest_in} °Ç (öûţšîđé {coldest_out} °Ç), ĥöţţéšţ {hottest_in} °Ç. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "The year"
@@ -6566,6 +7266,18 @@ msgid "Loading your entities…"
 msgstr "[!Ĺöàđîñĝ ýöûŕ éñţîţîéš… ~~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"{name}\n"
+"{eid}\n"
+"now: {val}\n"
+"Click to add it as a timeline track."
+msgstr ""
+"[!{name}\n"
+"{eid}\n"
+"ñöŵ: {val}\n"
+"Çĺîçķ ţö àđđ îţ àš à ţîɱéĺîñé ţŕàçķ. ~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Search by name or entity id…"
 msgstr "[!Šéàŕçĥ ƀý ñàɱé öŕ éñţîţý îđ… ~~~~~~~~~!]"
 
@@ -6604,6 +7316,10 @@ msgstr ""
 "[!Öƒƒ ķééƥš ţĥé ĺîñķ ƀûţ šţöƥš îţ đŕîṽîñĝ öŕ ŕéçöŕđîñĝ. ~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Unit: {tunit} → {tunit_2}"
+msgstr "[!Ûñîţ: {tunit} → {tunit_2} ~~~~~~!]"
+
+# machine: pseudo
 msgid "Multiply the reading (after the unit conversion). 1 = as is."
 msgstr ""
 "[!Ṁûĺţîƥĺý ţĥé ŕéàđîñĝ (àƒţéŕ ţĥé ûñîţ çöñṽéŕšîöñ). 1 = àš îš. ~~~~~~~~~~~~~~~~~~!]"
@@ -6630,6 +7346,18 @@ msgstr "[!Ĺöàđîñĝ ţĥé éñţîţý ĺîšţ… ~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
+"{name}\n"
+"{eid}\n"
+"state: {val}{device_class}\n"
+"Click to link it to: {label}"
+msgstr ""
+"[!{name}\n"
+"{eid}\n"
+"šţàţé: {val}{device_class}\n"
+"Çĺîçķ ţö ĺîñķ îţ ţö: {label} ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
 "Link a Home Assistant sensor to any value the simulation tracks. Linked values follow your real system at 1× (Live) and are recorded for comparison at any speed."
 msgstr ""
 "[!Ĺîñķ à Ĥöɱé Àššîšţàñţ šéñšöŕ ţö àñý ṽàĺûé ţĥé šîɱûĺàţîöñ ţŕàçķš. Ĺîñķéđ ṽàĺûéš ƒöĺĺöŵ ýöûŕ ŕéàĺ šýšţéɱ àţ 1× (Ĺîṽé) àñđ àŕé ŕéçöŕđéđ ƒöŕ çöɱƥàŕîšöñ àţ àñý šƥééđ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
@@ -6653,6 +7381,10 @@ msgstr "[!Ĺîñķéđ öñĺý ~~~~!]"
 # machine: pseudo
 msgid "Don't link a node"
 msgstr "[!Đöñ'ţ ĺîñķ à ñöđé ~~~~~!]"
+
+# machine: pseudo
+msgid "Make {plan}"
+msgstr "[!Ṁàķé {plan} ~~~!]"
 
 # machine: pseudo
 msgid "Device presets"
@@ -6748,6 +7480,14 @@ msgid "Sure?"
 msgstr "[!Šûŕé? ~~!]"
 
 # machine: pseudo
+msgid "Will connect to {url}"
+msgstr "[!Ŵîĺĺ çöññéçţ ţö {url} ~~~~~~!]"
+
+# machine: pseudo
+msgid "Token looks right ({t} characters)."
+msgstr "[!Ţöķéñ ĺööķš ŕîĝĥţ ({t} çĥàŕàçţéŕš). ~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Home Assistant instance"
 msgstr "[!Ĥöɱé Àššîšţàñţ îñšţàñçé ~~~~~~~~!]"
 
@@ -6755,6 +7495,11 @@ msgstr "[!Ĥöɱé Àššîšţàñţ îñšţàñçé ~~~~~~~~!]"
 msgid "Saved Home Assistant instances. Each keeps its own address and token."
 msgstr ""
 "[!Šàṽéđ Ĥöɱé Àššîšţàñţ îñšţàñçéš. Éàçĥ ķééƥš îţš öŵñ àđđŕéšš àñđ ţöķéñ. ~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Previewing {icon} {label} · {severity} · {remain} — click to clear"
+msgstr ""
+"[!Ƥŕéṽîéŵîñĝ {icon} {label} · {severity} · {remain} — çĺîçķ ţö çĺéàŕ ~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "HEALTH"
@@ -6803,8 +7548,16 @@ msgid "Tips"
 msgstr "[!Ţîƥš ~~!]"
 
 # machine: pseudo
+msgid "Show {title}"
+msgstr "[!Šĥöŵ {title} ~~~~!]"
+
+# machine: pseudo
 msgid "almost done"
 msgstr "[!àĺɱöšţ đöñé ~~~~!]"
+
+# machine: pseudo
+msgid "about {eta_s} left"
+msgstr "[!àƀöûţ {eta_s} ĺéƒţ ~~~~~!]"
 
 # machine: pseudo
 msgid "Rendering simulation"
@@ -6823,6 +7576,10 @@ msgid ""
 "Siphon elevation — the pond's surface, the dip tube, the runner in its pipe, the draft · drag to orbit · wheel to zoom"
 msgstr ""
 "[!Šîƥĥöñ éĺéṽàţîöñ — ţĥé ƥöñđ'š šûŕƒàçé, ţĥé đîƥ ţûƀé, ţĥé ŕûññéŕ îñ îţš ƥîƥé, ţĥé đŕàƒţ · đŕàĝ ţö öŕƀîţ · ŵĥééĺ ţö žööɱ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{ride_text} / Charge {vehicle_name}"
+msgstr "[!{ride_text} / Çĥàŕĝé {vehicle_name} ~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "[O]"
@@ -6937,6 +7694,18 @@ msgid "The empty unit itself, as cargo"
 msgstr "[!Ţĥé éɱƥţý ûñîţ îţšéĺƒ, àš çàŕĝö ~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Saved {label_or_default}."
+msgstr "[!Šàṽéđ {label_or_default}. ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Saved {label_or_default} to your units."
+msgstr "[!Šàṽéđ {label_or_default} ţö ýöûŕ ûñîţš. ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Deleted {name_edit}."
+msgstr "[!Đéĺéţéđ {name_edit}. ~~~~~~!]"
+
+# machine: pseudo
 msgid "Process recipes"
 msgstr "[!Ƥŕöçéšš ŕéçîƥéš ~~~~~~!]"
 
@@ -6947,6 +7716,11 @@ msgstr "[!ŵĥàţ ţĥé ɱàçĥîñéš ŕûñ ~~~~~~~!]"
 # machine: pseudo
 msgid "🔨 Assemble & place"
 msgstr "[!🔨 Àššéɱƀĺé & ƥĺàçé ~~~~~!]"
+
+# machine: pseudo
+msgid "👷 ~{total_s} person-h · crew up to {max_crew} · {phases}"
+msgstr ""
+"[!👷 ~{total_s} ƥéŕšöñ-ĥ · çŕéŵ ûƥ ţö {max_crew} · {phases} ~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "👷 Assemble with crew…"
@@ -6996,6 +7770,20 @@ msgid "Open the wiring diagram of this chain"
 msgstr "[!Öƥéñ ţĥé ŵîŕîñĝ đîàĝŕàɱ öƒ ţĥîš çĥàîñ ~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{units} (you are designing this one)"
+msgstr "[!{units} (ýöû àŕé đéšîĝñîñĝ ţĥîš öñé) ~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{units}\n"
+"Open {k} in its lab\n"
+"{name}"
+msgstr ""
+"[!{units}\n"
+"Öƥéñ {k} îñ îţš ĺàƀ\n"
+"{name} ~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Not on the graph yet: place it to join a solar chain"
 msgstr ""
 "[!Ñöţ öñ ţĥé ĝŕàƥĥ ýéţ: ƥĺàçé îţ ţö ĵöîñ à šöĺàŕ çĥàîñ ~~~~~~~~~~~~~~~~!]"
@@ -7009,8 +7797,20 @@ msgid "Open every section"
 msgstr "[!Öƥéñ éṽéŕý šéçţîöñ ~~~~~~!]"
 
 # machine: pseudo
+msgid "No setting matches “{query}”."
+msgstr "[!Ñö šéţţîñĝ ɱàţçĥéš “{query}”. ~~~~~~~~!]"
+
+# machine: pseudo
 msgid "TERRAIN IMAGERY"
 msgstr "[!ŢÉŔŔÀÎÑ ÎṀÀĜÉŔÝ ~~~~~~!]"
+
+# machine: pseudo
+msgid "As saved ({saved_name}) · {vs} GPU"
+msgstr "[!Àš šàṽéđ ({saved_name}) · {vs} ĜƤÛ ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "My quality ({local_name}) · {vl} GPU"
+msgstr "[!Ṁý ǫûàĺîţý ({local_name}) · {vl} ĜƤÛ ~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Light limit reached"
@@ -7109,6 +7909,10 @@ msgstr ""
 "[!Çĺîçķ à šûŕƒàçé: šéĺéçţéđ šƥöţš ţûŕñ ţö ƒàçé îţ; šéĺéçţéđ ɱöṽéŕš çéñţŕé ţĥéîŕ šŵééƥ öñ îţ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "New {kind}:"
+msgstr "[!Ñéŵ {kind}: ~~~!]"
+
+# machine: pseudo
 msgid "Redone"
 msgstr "[!Ŕéđöñé ~~!]"
 
@@ -7119,6 +7923,16 @@ msgstr "[!Ûñđöñé ~~!]"
 # machine: pseudo
 msgid "Place a light to start a style."
 msgstr "[!Ƥĺàçé à ĺîĝĥţ ţö šţàŕţ à šţýĺé. ~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{name_btn} — {kind}, {uses}\n"
+"Click: select every light using this style\n"
+"Double-click: rename"
+msgstr ""
+"[!{name_btn} — {kind}, {uses}\n"
+"Çĺîçķ: šéĺéçţ éṽéŕý ĺîĝĥţ ûšîñĝ ţĥîš šţýĺé\n"
+"Đöûƀĺé-çĺîçķ: ŕéñàɱé ~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Rename style"
@@ -7228,6 +8042,10 @@ msgid "Show bulb"
 msgstr "[!Šĥöŵ ƀûĺƀ ~~~!]"
 
 # machine: pseudo
+msgid "Finish ({string_pts})"
+msgstr "[!Ƒîñîšĥ ({string_pts}) ~~~~~~!]"
+
+# machine: pseudo
 msgid "Click any surface on the 3D model to place an omni light (RMB orbits)."
 msgstr ""
 "[!Çĺîçķ àñý šûŕƒàçé öñ ţĥé 3Đ ɱöđéĺ ţö ƥĺàçé àñ öɱñî ĺîĝĥţ (ŔṀƁ öŕƀîţš). ~~~~~~~~~~~~~~~~~~~~~!]"
@@ -7236,6 +8054,12 @@ msgstr ""
 msgid "Click a surface on the 3D model to place an aimed spot light."
 msgstr ""
 "[!Çĺîçķ à šûŕƒàçé öñ ţĥé 3Đ ɱöđéĺ ţö ƥĺàçé àñ àîɱéđ šƥöţ ĺîĝĥţ. ~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Click points on the 3D model to pin a string ({string_pts} placed) · Finish or double-click ends it."
+msgstr ""
+"[!Çĺîçķ ƥöîñţš öñ ţĥé 3Đ ɱöđéĺ ţö ƥîñ à šţŕîñĝ ({string_pts} ƥĺàçéđ) · Ƒîñîšĥ öŕ đöûƀĺé-çĺîçķ éñđš îţ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -7260,6 +8084,10 @@ msgstr ""
 # machine: pseudo
 msgid "Frame the model"
 msgstr "[!Ƒŕàɱé ţĥé ɱöđéĺ ~~~~~!]"
+
+# machine: pseudo
+msgid "Saved {ids} onto the prop."
+msgstr "[!Šàṽéđ {ids} öñţö ţĥé ƥŕöƥ. ~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Build guide"
@@ -7288,6 +8116,10 @@ msgid "Write the whole guide as a JSON file"
 msgstr "[!Ŵŕîţé ţĥé ŵĥöĺé ĝûîđé àš à ĴŠÖÑ ƒîĺé ~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "📦 Folded: {spec} · {mass_kg}"
+msgstr "[!📦 Ƒöĺđéđ: {spec} · {mass_kg} ~~~~~~!]"
+
+# machine: pseudo
 msgid "Bill of Materials"
 msgstr "[!Ɓîĺĺ öƒ Ṁàţéŕîàĺš ~~~~~~!]"
 
@@ -7314,6 +8146,16 @@ msgstr "[!Çöṽéŕîñĝš & Çûţ Ƒîĺéš ~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
+"Per structure — the design holds {copies}, so cut every piece {copies_2} times."
+msgstr ""
+"[!Ƥéŕ šţŕûçţûŕé — ţĥé đéšîĝñ ĥöĺđš {copies}, šö çûţ éṽéŕý ƥîéçé {copies_2} ţîɱéš. ~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Wrote {dir}"
+msgstr "[!Ŵŕöţé {dir} ~~~!]"
+
+# machine: pseudo
+msgid ""
 "One full-scale SVG per wall, table and the floor deck (1 unit = 1 inch), a pattern per fabric band, and the tarp layout."
 msgstr ""
 "[!Öñé ƒûĺĺ-šçàĺé ŠṼĜ ƥéŕ ŵàĺĺ, ţàƀĺé àñđ ţĥé ƒĺööŕ đéçķ (1 ûñîţ = 1 îñçĥ), à ƥàţţéŕñ ƥéŕ ƒàƀŕîç ƀàñđ, àñđ ţĥé ţàŕƥ ĺàýöûţ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
@@ -7331,8 +8173,18 @@ msgid "Assembly Sequence"
 msgstr "[!Àššéɱƀĺý Šéǫûéñçé ~~~~~~!]"
 
 # machine: pseudo
+msgid "{label}  ({per_module_pieces} per module)"
+msgstr "[!{label}  ({per_module_pieces} ƥéŕ ɱöđûĺé) ~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Build Sequence"
 msgstr "[!Ɓûîĺđ Šéǫûéñçé ~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{steps} ({reps} shown — identical repeats folded){generated}. Play them in the Lab's Steps dock."
+msgstr ""
+"[!{steps} ({reps} šĥöŵñ — îđéñţîçàĺ ŕéƥéàţš ƒöĺđéđ){generated}. Ƥĺàý ţĥéɱ îñ ţĥé Ĺàƀ'š Šţéƥš đöçķ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Crew Plan"
@@ -7359,6 +8211,14 @@ msgid "Delete this part"
 msgstr "[!Đéĺéţé ţĥîš ƥàŕţ ~~~~~~!]"
 
 # machine: pseudo
+msgid "{label} · across {crossoffset}\""
+msgstr "[!{label} · àçŕöšš {crossoffset}\" ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{label} · offset {posassembled}\"{suffix}"
+msgstr "[!{label} · öƒƒšéţ {posassembled}\"{suffix} ~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "The bracket anchors this joint — it cannot be deleted."
 msgstr ""
 "[!Ţĥé ƀŕàçķéţ àñçĥöŕš ţĥîš ĵöîñţ — îţ çàññöţ ƀé đéĺéţéđ. ~~~~~~~~~~~~~~~~~!]"
@@ -7366,6 +8226,10 @@ msgstr ""
 # machine: pseudo
 msgid "Hardware detail"
 msgstr "[!Ĥàŕđŵàŕé đéţàîĺ ~~~~~~!]"
+
+# machine: pseudo
+msgid "Edit the {id} stack"
+msgstr "[!Éđîţ ţĥé {id} šţàçķ ~~~~~~!]"
 
 # machine: pseudo
 msgid "In structure"
@@ -7422,6 +8286,18 @@ msgstr "[!— ƥŕéšéţ — ~~!]"
 # machine: pseudo
 msgid "Assembly & spacing"
 msgstr "[!Àššéɱƀĺý & šƥàçîñĝ ~~~~~~!]"
+
+# machine: pseudo
+msgid "{axis} axis"
+msgstr "[!{axis} àẋîš ~~~!]"
+
+# machine: pseudo
+msgid "+ Add part to {axis}"
+msgstr "[!+ Àđđ ƥàŕţ ţö {axis} ~~~~~!]"
+
+# machine: pseudo
+msgid "{type} · {permodule}/module · ${cost}"
+msgstr "[!{type} · {permodule}/ɱöđûĺé · ${cost} ~~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -7528,6 +8404,10 @@ msgstr "[!Ĺîƒţ (îñ) ~~!]"
 # machine: pseudo
 msgid "Opacity"
 msgstr "[!Öƥàçîţý ~~~!]"
+
+# machine: pseudo
+msgid "Span {value}"
+msgstr "[!Šƥàñ {value} ~~~~!]"
 
 # machine: pseudo
 msgid "Lower band"
@@ -7706,6 +8586,18 @@ msgstr "[!Ĺöàđ ~~!]"
 # machine: pseudo
 msgid "No population running — load a map first."
 msgstr "[!Ñö ƥöƥûĺàţîöñ ŕûññîñĝ — ĺöàđ à ɱàƥ ƒîŕšţ. ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Couldn't place the kit crate — {error}"
+msgstr "[!Çöûĺđñ'ţ ƥĺàçé ţĥé ķîţ çŕàţé — {error} ~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "The crew can't take it — {error}."
+msgstr "[!Ţĥé çŕéŵ çàñ'ţ ţàķé îţ — {error}. ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Animating — {anim_direction}"
+msgstr "[!Àñîɱàţîñĝ — {anim_direction} ~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Idle"
@@ -7902,8 +8794,18 @@ msgid "Off — a single structure."
 msgstr "[!Öƒƒ — à šîñĝĺé šţŕûçţûŕé. ~~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"{visible_count} drawn ({slots} planned, slots 0–{slots_2}) · ring radius {radius} · pattern across {max_rad}"
+msgstr ""
+"[!{visible_count} đŕàŵñ ({slots} ƥĺàññéđ, šĺöţš 0–{slots_2}) · ŕîñĝ ŕàđîûš {radius} · ƥàţţéŕñ àçŕöšš {max_rad} ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "No steps"
 msgstr "[!Ñö šţéƥš ~~~!]"
+
+# machine: pseudo
+msgid "Step {value} / {steps}{rep} — {title}"
+msgstr "[!Šţéƥ {value} / {steps}{rep} — {title} ~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Build steps"
@@ -7949,6 +8851,10 @@ msgstr "[!Đûŕàţîöñ ~~~!]"
 # machine: pseudo
 msgid "Delete this step"
 msgstr "[!Đéĺéţé ţĥîš šţéƥ ~~~~~~!]"
+
+# machine: pseudo
+msgid "{steps} · {steps_2} shown · {secs} s{dirty}"
+msgstr "[!{steps} · {steps_2} šĥöŵñ · {secs} š{dirty} ~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "StarShade queued — create or start a map to place it."
@@ -8027,6 +8933,10 @@ msgid "Could not copy that world."
 msgstr "[!Çöûĺđ ñöţ çöƥý ţĥàţ ŵöŕĺđ. ~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Copied — “{copy}” is an independent world."
+msgstr "[!Çöƥîéđ — “{copy}” îš àñ îñđéƥéñđéñţ ŵöŕĺđ. ~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "No worlds yet."
 msgstr "[!Ñö ŵöŕĺđš ýéţ. ~~~~!]"
 
@@ -8050,6 +8960,10 @@ msgstr "[!Šĥöŵ ɱé àŕöûñđ ~~~~~!]"
 msgid "Pick a place on the map, search an address, or enter coordinates."
 msgstr ""
 "[!Ƥîçķ à ƥĺàçé öñ ţĥé ɱàƥ, šéàŕçĥ àñ àđđŕéšš, öŕ éñţéŕ çööŕđîñàţéš. ~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "World name (default: {label})"
+msgstr "[!Ŵöŕĺđ ñàɱé (đéƒàûĺţ: {label}) ~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -8181,6 +9095,34 @@ msgid "Where the node is now (its home in brackets)"
 msgstr "[!Ŵĥéŕé ţĥé ñöđé îš ñöŵ (îţš ĥöɱé îñ ƀŕàçķéţš) ~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Set {which}"
+msgstr "[!Šéţ {which} ~~~!]"
+
+# machine: pseudo
+msgid "Capture the current jog pose as the soft {which}"
+msgstr "[!Çàƥţûŕé ţĥé çûŕŕéñţ ĵöĝ ƥöšé àš ţĥé šöƒţ {which} ~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{along}  (home {spinbox})"
+msgstr "[!{along}  (ĥöɱé {spinbox}) ~~~~~~!]"
+
+# machine: pseudo
+msgid "{key} min ← {along}"
+msgstr "[!{key} ɱîñ ← {along} ~~~~!]"
+
+# machine: pseudo
+msgid "{key} max ← {along}"
+msgstr "[!{key} ɱàẋ ← {along} ~~~~!]"
+
+# machine: pseudo
+msgid "{key} home ← {along}"
+msgstr "[!{key} ĥöɱé ← {along} ~~~~~!]"
+
+# machine: pseudo
+msgid "Auto-detected {found}"
+msgstr "[!Àûţö-đéţéçţéđ {found} ~~~~~~~!]"
+
+# machine: pseudo
 msgid "Saved. Applied to placed machines of this model."
 msgstr "[!Šàṽéđ. Àƥƥĺîéđ ţö ƥĺàçéđ ɱàçĥîñéš öƒ ţĥîš ɱöđéĺ. ~~~~~~~~~~~~~~~~!]"
 
@@ -8191,6 +9133,14 @@ msgstr "[!ţĥé ñöđé ţĥàţ çûţš öŕ ƥŕîñţš ~~~~~~~~~!]"
 # machine: pseudo
 msgid "Mars College Credits: 0"
 msgstr "[!Ṁàŕš Çöĺĺéĝé Çŕéđîţš: 0 ~~~~~~~!]"
+
+# machine: pseudo
+msgid "Another {credits_per_fire} Mars College Credits!"
+msgstr "[!Àñöţĥéŕ {credits_per_fire} Ṁàŕš Çöĺĺéĝé Çŕéđîţš! ~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Mars College Credits: {total_credits}"
+msgstr "[!Ṁàŕš Çöĺĺéĝé Çŕéđîţš: {total_credits} ~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Filter materials…"
@@ -8285,8 +9235,24 @@ msgid "Upload…"
 msgstr "[!Ûƥĺöàđ… ~~!]"
 
 # machine: pseudo
+msgid "Remove uploaded {slot_id} map"
+msgstr "[!Ŕéɱöṽé ûƥĺöàđéđ {slot_id} ɱàƥ ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{label}  ·  {live_n} live surface{live_n_2} in world"
+msgstr "[!{label}  ·  {live_n} ĺîṽé šûŕƒàçé{live_n_2} îñ ŵöŕĺđ ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Derived from albedo"
 msgstr "[!Đéŕîṽéđ ƒŕöɱ àĺƀéđö ~~~~~~~!]"
+
+# machine: pseudo
+msgid "{label}  ·  {live_n} live surface{live_n_2}"
+msgstr "[!{label}  ·  {live_n} ĺîṽé šûŕƒàçé{live_n_2} ~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Upload {slot} texture for {selected_id}"
+msgstr "[!Ûƥĺöàđ {slot} ţéẋţûŕé ƒöŕ {selected_id} ~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -8335,6 +9301,10 @@ msgid "Data corrections"
 msgstr "[!Đàţà çöŕŕéçţîöñš ~~~~~~!]"
 
 # machine: pseudo
+msgid "Saved per map → {file}  ·  valley index {tpi_m} m"
+msgstr "[!Šàṽéđ ƥéŕ ɱàƥ → {file}  ·  ṽàĺĺéý îñđéẋ {tpi_m} ɱ ~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "— saved looks —"
 msgstr "[!— šàṽéđ ĺööķš — ~~~~!]"
 
@@ -8354,6 +9324,10 @@ msgstr "[!Çöûñţ ~~!]"
 msgid "How many nights this rule fires over the loaded weather year."
 msgstr ""
 "[!Ĥöŵ ɱàñý ñîĝĥţš ţĥîš ŕûĺé ƒîŕéš öṽéŕ ţĥé ĺöàđéđ ŵéàţĥéŕ ýéàŕ. ~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{key} bound — blank = no limit"
+msgstr "[!{key} ƀöûñđ — ƀĺàñķ = ñö ĺîɱîţ ~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -8403,12 +9377,32 @@ msgstr ""
 "[![color=#ef4444]Ṁîçŕöçĺîɱàţé šéŕṽîçé ñöţ ĺöàđéđ.[/color] ~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Saved {user_path} — choose a copy location…"
+msgstr "[!Šàṽéđ {user_path} — çĥööšé à çöƥý ĺöçàţîöñ… ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Save GRBL…"
 msgstr "[!Šàṽé ĜŔƁĹ… ~~~!]"
 
 # machine: pseudo
+msgid "Could not save {path}"
+msgstr "[!Çöûĺđ ñöţ šàṽé {path} ~~~~~~!]"
+
+# machine: pseudo
+msgid "GRBL exported → {path}"
+msgstr "[!ĜŔƁĹ éẋƥöŕţéđ → {path} ~~~~~~!]"
+
+# machine: pseudo
 msgid "Select a closed room first"
 msgstr "[!Šéĺéçţ à çĺöšéđ ŕööɱ ƒîŕšţ ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Doorway added (lintel {lintel_mm} mm)"
+msgstr "[!Đööŕŵàý àđđéđ (ĺîñţéĺ {lintel_mm} ɱɱ) ~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Cleared {value} doorway{value_2}"
+msgstr "[!Çĺéàŕéđ {value} đööŕŵàý{value_2} ~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "No graph view — cannot place"
@@ -8580,6 +9574,12 @@ msgid "Meshing…"
 msgstr "[!Ṁéšĥîñĝ… ~~~!]"
 
 # machine: pseudo
+msgid ""
+"{island_count} · gap {shell_gap_mm} mm · {layer_count} · {fill_name} · {path_length_mm} m · ~{volume_mm3} L · {est_time_hr}"
+msgstr ""
+"[!{island_count} · ĝàƥ {shell_gap_mm} ɱɱ · {layer_count} · {fill_name} · {path_length_mm} ɱ · ~{volume_mm3} Ĺ · {est_time_hr} ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Solid-layer preview ready — print, export, or place"
 msgstr ""
 "[!Šöĺîđ-ĺàýéŕ ƥŕéṽîéŵ ŕéàđý — ƥŕîñţ, éẋƥöŕţ, öŕ ƥĺàçé ~~~~~~~~~~~~~~~~!]"
@@ -8688,6 +9688,14 @@ msgid "Monitor nickname"
 msgstr "[!Ṁöñîţöŕ ñîçķñàɱé ~~~~~~!]"
 
 # machine: pseudo
+msgid "● Open ({is_monitor_fullscreen})"
+msgstr "[!● Öƥéñ ({is_monitor_fullscreen}) ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Saved → Screen {matched_scr}{is_fullscreen}"
+msgstr "[!Šàṽéđ → Šçŕééñ {matched_scr}{is_fullscreen} ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Unplaced — launches draggable"
 msgstr "[!Ûñƥĺàçéđ — ĺàûñçĥéš đŕàĝĝàƀĺé ~~~~~~~~~~!]"
 
@@ -8709,10 +9717,22 @@ msgstr ""
 "[!Ƥîñš ţĥé ţöƥ ŵîñđöŵ çöñţŕöĺ ƀàŕ àñđ éñĺàŕĝéš ƀûţţöñš ƒöŕ ƒîñĝéŕ ţàƥš. ~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Changes waiting for you ({review})"
+msgstr "[!Çĥàñĝéš ŵàîţîñĝ ƒöŕ ýöû ({review}) ~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid ""
 "Alt+Y accept · Alt+N decline the oldest · Esc frees the cursor to click"
 msgstr ""
 "[!Àĺţ+Ý àççéƥţ · Àĺţ+Ñ đéçĺîñé ţĥé öĺđéšţ · Éšç ƒŕééš ţĥé çûŕšöŕ ţö çĺîçķ ~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "… and {max_cards}"
+msgstr "[!… àñđ {max_cards} ~~~~!]"
+
+# machine: pseudo
+msgid "• … and {lines}"
+msgstr "[!• … àñđ {lines} ~~~!]"
 
 # machine: pseudo
 msgid "Accept this player's changes from now on without asking"
@@ -8726,6 +9746,11 @@ msgstr "[!Ṁéššàĝé… (Éñţéŕ šéñđ · Éšç çàñçéĺ) ~~~~~~
 # machine: pseudo
 msgid "No community imported yet."
 msgstr "[!Ñö çöɱɱûñîţý îɱƥöŕţéđ ýéţ. ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Loaded {name} — edit and re-create to publish an update."
+msgstr ""
+"[!Ĺöàđéđ {name} — éđîţ àñđ ŕé-çŕéàţé ţö ƥûƀĺîšĥ àñ ûƥđàţé. ~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Discord sign-in unavailable in this build"
@@ -8776,6 +9801,10 @@ msgid "Security settings applied"
 msgstr "[!Šéçûŕîţý šéţţîñĝš àƥƥĺîéđ ~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Minted friend key (copied): {key}"
+msgstr "[!Ṁîñţéđ ƒŕîéñđ ķéý (çöƥîéđ): {key} ~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Join code refreshed — share the new code"
 msgstr "[!Ĵöîñ çöđé ŕéƒŕéšĥéđ — šĥàŕé ţĥé ñéŵ çöđé ~~~~~~~~~~~~~!]"
 
@@ -8802,6 +9831,12 @@ msgstr "[!Öƥéñéđ Đîšçöŕđ îñṽîţé ~~~~~~~~!]"
 # machine: pseudo
 msgid "Multiplayer (private beta)"
 msgstr "[!Ṁûĺţîƥĺàýéŕ (ƥŕîṽàţé ƀéţà) ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Private beta · max {max_peers} players. Join codes expire. Optional password + trusted keys. Enter to chat; Discord for voice."
+msgstr ""
+"[!Ƥŕîṽàţé ƀéţà · ɱàẋ {max_peers} ƥĺàýéŕš. Ĵöîñ çöđéš éẋƥîŕé. Öƥţîöñàĺ ƥàššŵöŕđ + ţŕûšţéđ ķéýš. Éñţéŕ ţö çĥàţ; Đîšçöŕđ ƒöŕ ṽöîçé. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Manual"
@@ -9120,8 +10155,26 @@ msgid "Incoming design offers"
 msgstr "[!Îñçöɱîñĝ đéšîĝñ öƒƒéŕš ~~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"Expires in ~{hrs}h · password {has_host_password} · trusted {require_trusted}"
+msgstr ""
+"[!Éẋƥîŕéš îñ ~{hrs}ĥ · ƥàššŵöŕđ {has_host_password} · ţŕûšţéđ {require_trusted} ~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Hosting · {host_address}:{host_port} · {status}"
+msgstr "[!Ĥöšţîñĝ · {host_address}:{host_port} · {status} ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Connected · {status}"
+msgstr "[!Çöññéçţéđ · {status} ~~~~~~!]"
+
+# machine: pseudo
 msgid "Loading host map / connecting…"
 msgstr "[!Ĺöàđîñĝ ĥöšţ ɱàƥ / çöññéçţîñĝ… ~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Ghost preview active · {ghost_prop_count}"
+msgstr "[!Ĝĥöšţ ƥŕéṽîéŵ àçţîṽé · {ghost_prop_count} ~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -9130,8 +10183,24 @@ msgstr ""
 "[!Ţĥé ĥöšţ'š ŵöŕĺđ îš ţĥé šĥàŕéđ öñé. Ĝûéšţš' éđîţš šĥöŵ öñ ţĥéîŕ šçŕééñ šţŕàîĝĥţ àŵàý àñđ ŵàîţ ƒöŕ ýöûŕ àñšŵéŕ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"Accepted {accepted_count} · declined {rejected_count} · waiting {review}. Waiting changes show as ghosts in the world; Alt+Y / Alt+N take the oldest."
+msgstr ""
+"[!Àççéƥţéđ {accepted_count} · đéçĺîñéđ {rejected_count} · ŵàîţîñĝ {review}. Ŵàîţîñĝ çĥàñĝéš šĥöŵ àš ĝĥöšţš îñ ţĥé ŵöŕĺđ; Àĺţ+Ý / Àĺţ+Ñ ţàķé ţĥé öĺđéšţ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"The host decides. Your waiting changes: {my_pending} · accepted {accepted_count} · declined {rejected_count}."
+msgstr ""
+"[!Ţĥé ĥöšţ đéçîđéš. Ýöûŕ ŵàîţîñĝ çĥàñĝéš: {my_pending} · àççéƥţéđ {accepted_count} · đéçĺîñéđ {rejected_count}. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Paste the SMBC1: code your server owner shared"
 msgstr "[!Ƥàšţé ţĥé ŠṀƁÇ1: çöđé ýöûŕ šéŕṽéŕ öŵñéŕ šĥàŕéđ ~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Imported {name}{warns}"
+msgstr "[!Îɱƥöŕţéđ {name}{warns} ~~~~~~~!]"
 
 # machine: pseudo
 msgid "No session message yet — press Play together once to create it"
@@ -9165,6 +10234,25 @@ msgid ""
 "The host's session code is stale — ask them to press Play together again"
 msgstr ""
 "[!Ţĥé ĥöšţ'š šéššîöñ çöđé îš šţàĺé — àšķ ţĥéɱ ţö ƥŕéšš Ƥĺàý ţöĝéţĥéŕ àĝàîñ ~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{name}'s session needs a Discord sign-in — sign in above, then Play together"
+msgstr ""
+"[!{name}'š šéššîöñ ñééđš à Đîšçöŕđ šîĝñ-îñ — šîĝñ îñ àƀöṽé, ţĥéñ Ƥĺàý ţöĝéţĥéŕ ~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Joining {name}…"
+msgstr "[!Ĵöîñîñĝ {name}… ~~~~!]"
+
+# machine: pseudo
+msgid "Discord membership {require_discord}"
+msgstr "[!Đîšçöŕđ ɱéɱƀéŕšĥîƥ {require_discord} ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Copied to clipboard — paste it in your Discord server.{warns}"
+msgstr ""
+"[!Çöƥîéđ ţö çĺîƥƀöàŕđ — ƥàšţé îţ îñ ýöûŕ Đîšçöŕđ šéŕṽéŕ.{warns} ~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "NPC animation editor"
@@ -9215,6 +10303,10 @@ msgid "Joints"
 msgstr "[!Ĵöîñţš ~~!]"
 
 # machine: pseudo
+msgid "Select the {b} joint ({name})"
+msgstr "[!Šéĺéçţ ţĥé {b} ĵöîñţ ({name}) ~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Onion skin"
 msgstr "[!Öñîöñ šķîñ ~~~~!]"
 
@@ -9231,8 +10323,30 @@ msgid "Select a joint (click a limb or a button above)."
 msgstr "[!Šéĺéçţ à ĵöîñţ (çĺîçķ à ĺîɱƀ öŕ à ƀûţţöñ àƀöṽé). ~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Body: height (m), pitch, yaw (°) at {t} s"
+msgstr "[!Ɓöđý: ĥéîĝĥţ (ɱ), ƥîţçĥ, ýàŵ (°) àţ {t} š ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{sel} at {t} s{keyed}"
+msgstr "[!{sel} àţ {t} š{keyed} ~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{left} h of {chore_hours} h left · {workers} of {min_w} people{max_workers}"
+msgstr ""
+"[!{left} ĥ öƒ {chore_hours} ĥ ĺéƒţ · {workers} öƒ {min_w} ƥéöƥĺé{max_workers} ~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "paused"
 msgstr "[!ƥàûšéđ ~~!]"
+
+# machine: pseudo
+msgid "Too {weather} to work outside right now"
+msgstr "[!Ţöö {weather} ţö ŵöŕķ öûţšîđé ŕîĝĥţ ñöŵ ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "At {x}, {z}"
+msgstr "[!Àţ {x}, {z} ~~!]"
 
 # machine: pseudo
 msgid "At a placed object"
@@ -9245,6 +10359,18 @@ msgstr "[!Àţ à ţàĝĝéđ šƥàçé ~~~~~~!]"
 # machine: pseudo
 msgid "No place set — done wherever the worker stands"
 msgstr "[!Ñö ƥĺàçé šéţ — đöñé ŵĥéŕéṽéŕ ţĥé ŵöŕķéŕ šţàñđš ~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Covering{is_empty}"
+msgstr "[!Çöṽéŕîñĝ{is_empty} ~~~~~~!]"
+
+# machine: pseudo
+msgid "anyone (was {orphaned} — left)"
+msgstr "[!àñýöñé (ŵàš {orphaned} — ĺéƒţ) ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{orphaned} was assigned but left the settlement"
+msgstr "[!{orphaned} ŵàš àššîĝñéđ ƀûţ ĺéƒţ ţĥé šéţţĺéɱéñţ ~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "anyone"
@@ -9293,6 +10419,14 @@ msgstr "[!ţö ~!]"
 # machine: pseudo
 msgid "Remove this block"
 msgstr "[!Ŕéɱöṽé ţĥîš ƀĺöçķ ~~~~~~!]"
+
+# machine: pseudo
+msgid "Minutes past midnight (currently {key})"
+msgstr "[!Ṁîñûţéš ƥàšţ ɱîđñîĝĥţ (çûŕŕéñţĺý {key}) ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Minutes past midnight (currently {format_hour})"
+msgstr "[!Ṁîñûţéš ƥàšţ ɱîđñîĝĥţ (çûŕŕéñţĺý {format_hour}) ~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Applied"
@@ -9443,6 +10577,27 @@ msgid "Anyone free"
 msgstr "[!Àñýöñé ƒŕéé ~~~~!]"
 
 # machine: pseudo
+msgid "Routines & Chores — {count} of {initial_count} present · {morale}"
+msgstr ""
+"[!Ŕöûţîñéš & Çĥöŕéš — {count} öƒ {initial_count} ƥŕéšéñţ · {morale} ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Walking today: {walk_m} m/person · {walk_kcal} kcal · {walk_overhead}% of the day — {walk}"
+msgstr ""
+"[!Ŵàĺķîñĝ ţöđàý: {walk_m} ɱ/ƥéŕšöñ · {walk_kcal} ķçàĺ · {walk_overhead}% öƒ ţĥé đàý — {walk} ~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{w} °C · {w_2} m/s wind · {w_3} mm/h rain — {w_4}"
+msgstr "[!{w} °Ç · {w_2} ɱ/š ŵîñđ · {w_3} ɱɱ/ĥ ŕàîñ — {w_4} ~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"This camp is simulated as a crowd right now: {value}, none up close. Look at the camp from nearby (or watch it) to see each person."
+msgstr ""
+"[!Ţĥîš çàɱƥ îš šîɱûĺàţéđ àš à çŕöŵđ ŕîĝĥţ ñöŵ: {value}, ñöñé ûƥ çĺöšé. Ĺööķ àţ ţĥé çàɱƥ ƒŕöɱ ñéàŕƀý (öŕ ŵàţçĥ îţ) ţö šéé éàçĥ ƥéŕšöñ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Hours, skills and on-call — open in the Work Planner"
 msgstr ""
 "[!Ĥöûŕš, šķîĺĺš àñđ öñ-çàĺĺ — öƥéñ îñ ţĥé Ŵöŕķ Ƥĺàññéŕ ~~~~~~~~~~~~~~~~!]"
@@ -9452,12 +10607,26 @@ msgid "Rename"
 msgstr "[!Ŕéñàɱé ~~!]"
 
 # machine: pseudo
+msgid "Rename {display_name}"
+msgstr "[!Ŕéñàɱé {display_name} ~~~~~~~!]"
+
+# machine: pseudo
+msgid "{display_name}'s bed"
+msgstr "[!{display_name}'š ƀéđ ~~~~~~!]"
+
+# machine: pseudo
 msgid "Assign"
 msgstr "[!Àššîĝñ ~~!]"
 
 # machine: pseudo
 msgid "Any free spot"
 msgstr "[!Àñý ƒŕéé šƥöţ ~~~~!]"
+
+# machine: pseudo
+msgid ""
+"sleep {sleep_h} h · needs {need_h} h · chores {chore_h} h · free {free_h} h{over_h}"
+msgstr ""
+"[!šĺééƥ {sleep_h} ĥ · ñééđš {need_h} ĥ · çĥöŕéš {chore_h} ĥ · ƒŕéé {free_h} ĥ{over_h} ~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Site rules:"
@@ -9497,6 +10666,10 @@ msgstr ""
 # machine: pseudo
 msgid "Unapplied changes"
 msgstr "[!Ûñàƥƥĺîéđ çĥàñĝéš ~~~~~~!]"
+
+# machine: pseudo
+msgid "{pri_name} priority · {chore}{held}{is_empty}"
+msgstr "[!{pri_name} ƥŕîöŕîţý · {chore}{held}{is_empty} ~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -9790,6 +10963,10 @@ msgid "This side up"
 msgstr "[!Ţĥîš šîđé ûƥ ~~~~!]"
 
 # machine: pseudo
+msgid "Load into {vid}"
+msgstr "[!Ĺöàđ îñţö {vid} ~~~~!]"
+
+# machine: pseudo
 msgid "Needs a generated location map (no TerrainLoader here)"
 msgstr ""
 "[!Ñééđš à ĝéñéŕàţéđ ĺöçàţîöñ ɱàƥ (ñö ŢéŕŕàîñĹöàđéŕ ĥéŕé) ~~~~~~~~~~~~~~~~~~!]"
@@ -9811,9 +10988,51 @@ msgstr ""
 "[!À çöñţàîñéŕ ŵîţĥ ţĥé ķîţ'š çŕàţéš àŕŕîṽéš 14 ɱ àĥéàđ öƒ ýöû; ţĥé çŕéŵ ûñĺöàđš îţ ~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"{label} — unloading over 20 m\n"
+"4 people: {strategy}, about {eta_s} s\n"
+"12 people: {strategy_2}, about {eta_s_2} s"
+msgstr ""
+"[!{label} — ûñĺöàđîñĝ öṽéŕ 20 ɱ\n"
+"4 ƥéöƥĺé: {strategy}, àƀöûţ {eta_s} š\n"
+"12 ƥéöƥĺé: {strategy_2}, àƀöûţ {eta_s_2} š ~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{type} at {at_ft} along the {face} face  (snaps to 6\" • drag round a corner to change face)"
+msgstr ""
+"[!{type} àţ {at_ft} àĺöñĝ ţĥé {face} ƒàçé  (šñàƥš ţö 6\" • đŕàĝ ŕöûñđ à çöŕñéŕ ţö çĥàñĝé ƒàçé) ~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Deck height: {h}  (snaps to 1\" on release)"
+msgstr "[!Đéçķ ĥéîĝĥţ: {h}  (šñàƥš ţö 1\" öñ ŕéĺéàšé) ~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Beam offset: {dy}\"  (snaps to 1\" on release)"
+msgstr "[!Ɓéàɱ öƒƒšéţ: {dy}\"  (šñàƥš ţö 1\" öñ ŕéĺéàšé) ~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Deck depth: {depth_ft} ft"
+msgstr "[!Đéçķ đéƥţĥ: {depth_ft} ƒţ ~~~~~~~!]"
+
+# machine: pseudo
 msgid "Step tool: click a cell to drop steps  (Esc to exit)"
 msgstr ""
 "[!Šţéƥ ţööĺ: çĺîçķ à çéĺĺ ţö đŕöƥ šţéƥš  (Éšç ţö éẋîţ) ~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{tool}: {tool_prompt}  (Shift-click to place several • Esc to stop)"
+msgstr ""
+"[!{tool}: {tool_prompt}  (Šĥîƒţ-çĺîçķ ţö ƥĺàçé šéṽéŕàĺ • Éšç ţö šţöƥ) ~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Selected: {spec}  (drag to move • Del remove • Ctrl+D duplicate)"
+msgstr ""
+"[!Šéĺéçţéđ: {spec}  (đŕàĝ ţö ɱöṽé • Đéĺ ŕéɱöṽé • Çţŕĺ+Đ đûƥĺîçàţé) ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Selected: {what}  ({tips})"
+msgstr "[!Šéĺéçţéđ: {what}  ({tips}) ~~~~~~!]"
 
 # machine: pseudo
 msgid "In this design"
@@ -9849,10 +11068,40 @@ msgid "Preset name"
 msgstr "[!Ƥŕéšéţ ñàɱé ~~~~!]"
 
 # machine: pseudo
+msgid "Show {value}"
+msgstr "[!Šĥöŵ {value} ~~~~!]"
+
+# machine: pseudo
 msgid ""
 "Six is the fewest who can build a rack: two holding each of two frames, two seating the beams."
 msgstr ""
 "[!Šîẋ îš ţĥé ƒéŵéšţ ŵĥö çàñ ƀûîĺđ à ŕàçķ: ţŵö ĥöĺđîñĝ éàçĥ öƒ ţŵö ƒŕàɱéš, ţŵö šéàţîñĝ ţĥé ƀéàɱš. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"This crew can't finish it: {blocked} can't start (too few hands to hold the frames while the beams go on)."
+msgstr ""
+"[!Ţĥîš çŕéŵ çàñ'ţ ƒîñîšĥ îţ: {blocked} çàñ'ţ šţàŕţ (ţöö ƒéŵ ĥàñđš ţö ĥöĺđ ţĥé ƒŕàɱéš ŵĥîĺé ţĥé ƀéàɱš ĝö öñ). ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{crew}: about {makespan}, {jobs}. The longest chain of steps alone takes {tl}."
+msgstr ""
+"[!{crew}: àƀöûţ {makespan}, {jobs}. Ţĥé ĺöñĝéšţ çĥàîñ öƒ šţéƥš àĺöñé ţàķéš {tl}. ~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{type} on the {face} face, {span}  (drag onto another face to move it there)"
+msgstr ""
+"[!{type} öñ ţĥé {face} ƒàçé, {span}  (đŕàĝ öñţö àñöţĥéŕ ƒàçé ţö ɱöṽé îţ ţĥéŕé) ~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{type} at bay {b}"
+msgstr "[!{type} àţ ƀàý {b} ~~~~!]"
+
+# machine: pseudo
+msgid "{type} at bay {b}, column {c}"
+msgstr "[!{type} àţ ƀàý {b}, çöĺûɱñ {c} ~~~~~~~!]"
 
 # machine: pseudo
 msgid "Drag onto another bay to move it there  (Alt-drag raises or lowers)"
@@ -9860,8 +11109,29 @@ msgstr ""
 "[!Đŕàĝ öñţö àñöţĥéŕ ƀàý ţö ɱöṽé îţ ţĥéŕé  (Àĺţ-đŕàĝ ŕàîšéš öŕ ĺöŵéŕš) ~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"Move to bay {dlt}, column {y}  (release to drop; what is there swaps in)"
+msgstr ""
+"[!Ṁöṽé ţö ƀàý {dlt}, çöĺûɱñ {y}  (ŕéĺéàšé ţö đŕöƥ; ŵĥàţ îš ţĥéŕé šŵàƥš îñ) ~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Swap bay {src} with bay {j}  (release to swap their coverings)"
+msgstr ""
+"[!Šŵàƥ ƀàý {src} ŵîţĥ ƀàý {j}  (ŕéĺéàšé ţö šŵàƥ ţĥéîŕ çöṽéŕîñĝš) ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Drag onto another bay of the slope to swap them"
 msgstr "[!Đŕàĝ öñţö àñöţĥéŕ ƀàý öƒ ţĥé šĺöƥé ţö šŵàƥ ţĥéɱ ~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Rack {value}: {shared} meet another rack's  (Alt: no snap)"
+msgstr ""
+"[!Ŕàçķ {value}: {shared} ɱééţ àñöţĥéŕ ŕàçķ'š  (Àĺţ: ñö šñàƥ) ~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Rack {value}: not touching another rack  (Alt: no snap)"
+msgstr ""
+"[!Ŕàçķ {value}: ñöţ ţöûçĥîñĝ àñöţĥéŕ ŕàçķ  (Àĺţ: ñö šñàƥ) ~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Rack system"
@@ -9992,10 +11262,19 @@ msgid "Build it with a crew"
 msgstr "[!Ɓûîĺđ îţ ŵîţĥ à çŕéŵ ~~~~~~!]"
 
 # machine: pseudo
+msgid "Rack {mh} — click to edit it, drag to move it (Alt: no snap)"
+msgstr ""
+"[!Ŕàçķ {mh} — çĺîçķ ţö éđîţ îţ, đŕàĝ ţö ɱöṽé îţ (Àĺţ: ñö šñàƥ) ~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid ""
 "Nothing recorded yet: let the clock run, or render ahead with 📈 Render."
 msgstr ""
 "[!Ñöţĥîñĝ ŕéçöŕđéđ ýéţ: ĺéţ ţĥé çĺöçķ ŕûñ, öŕ ŕéñđéŕ àĥéàđ ŵîţĥ 📈 Ŕéñđéŕ. ~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{date} to {n_days} · {n_days_2} recorded"
+msgstr "[!{date} ţö {n_days} · {n_days_2} ŕéçöŕđéđ ~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Net power"
@@ -10034,6 +11313,10 @@ msgstr "[!Ţŵö šţöŕéš àĝàîñšţ éàçĥ öţĥéŕ ~~~~~~~~~~!]"
 # machine: pseudo
 msgid "Battery charge against"
 msgstr "[!Ɓàţţéŕý çĥàŕĝé àĝàîñšţ ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "·  {now} now  ·  {close}{today} today"
+msgstr "[!·  {now} ñöŵ  ·  {close}{today} ţöđàý ~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -10129,6 +11412,20 @@ msgstr ""
 "[!Öƥéñéđ ƒŕöɱ ţĥé Ĥýđŕö Ĺàƀ, ţĥé šîţé îš ţĥàţ ţûŕƀîñé'š ĥéàđ, ƥîƥé àñđ ŵàţéŕ. ~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{spec} · {rpm} rpm · {p_elec_w}"
+msgstr "[!{spec} · {rpm} ŕƥɱ · {p_elec_w} ~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Designing the wheel of {name} — its head ({gross_head_m} m), penstock and water are the site."
+msgstr ""
+"[!Đéšîĝñîñĝ ţĥé ŵĥééĺ öƒ {name} — îţš ĥéàđ ({gross_head_m} ɱ), ƥéñšţöçķ àñđ ŵàţéŕ àŕé ţĥé šîţé. ~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "About ${cost} and {kg}, built from stock parts."
+msgstr "[!Àƀöûţ ${cost} àñđ {kg}, ƀûîĺţ ƒŕöɱ šţöçķ ƥàŕţš. ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "As exported"
 msgstr "[!Àš éẋƥöŕţéđ ~~~~!]"
 
@@ -10143,9 +11440,27 @@ msgstr ""
 "[!ŠķéţçĥÛƥ ĥàš ñö ĝĺöšš đàţà, šö îţš ĝĺŢƑ éẋƥöŕţéŕš îñṽéñţ îţ (éṽéŕýţĥîñĝ šéɱî-ĝĺöššý). Àûţö ŕéƥĺàçéš îţ ŵîţĥ ŕéàĺ-ŵöŕĺđ ŕöûĝĥñéšš ƀý ɱàţéŕîàĺ ñàɱé. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Contains {current_scene} · {packed}{est}"
+msgstr "[!Çöñţàîñš {current_scene} · {packed}{est} ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Packs to {packed} · {packed_2}{est}"
+msgstr "[!Ƥàçķš ţö {packed} · {packed_2}{est} ~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Drag the arrows to move, the rings to turn. Shift snaps. Esc closes."
 msgstr ""
 "[!Đŕàĝ ţĥé àŕŕöŵš ţö ɱöṽé, ţĥé ŕîñĝš ţö ţûŕñ. Šĥîƒţ šñàƥš. Éšç çĺöšéš. ~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Auto estimate: {preroll_h} pre-roll · {climb_h} to collapse · {bonfire_h} bonfire · {ember_h} embers ({mass_kg} of fuel)"
+msgstr ""
+"[!Àûţö éšţîɱàţé: {preroll_h} ƥŕé-ŕöĺĺ · {climb_h} ţö çöĺĺàƥšé · {bonfire_h} ƀöñƒîŕé · {ember_h} éɱƀéŕš ({mass_kg} öƒ ƒûéĺ) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Not burning. {dictionary}"
+msgstr "[!Ñöţ ƀûŕñîñĝ. {dictionary} ~~~~~~~~!]"
 
 # machine: pseudo
 msgid "No crisis manager on this map"
@@ -10184,6 +11499,10 @@ msgstr "[!Ţĥîš ɱàƥ çàññöţ đûƥĺîçàţé ƥŕöƥš ~~~~~~~~~~~
 # machine: pseudo
 msgid "Copied. This is the copy."
 msgstr "[!Çöƥîéđ. Ţĥîš îš ţĥé çöƥý. ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Made of {materials}{est}{c}"
+msgstr "[!Ṁàđé öƒ {materials}{est}{c} ~~~~~~~~!]"
 
 # machine: pseudo
 msgid "What it is made of is not known."
@@ -10362,6 +11681,11 @@ msgid "No other rack feeds this rack's controller"
 msgstr "[!Ñö öţĥéŕ ŕàçķ ƒééđš ţĥîš ŕàçķ'š çöñţŕöĺĺéŕ ~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{count} · faces {azimuth_deg}° (compass) at {tilt_deg}°{bound}"
+msgstr ""
+"[!{count} · ƒàçéš {azimuth_deg}° (çöɱƥàšš) àţ {tilt_deg}°{bound} ~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Fire"
 msgstr "[!Ƒîŕé ~~!]"
 
@@ -10379,6 +11703,10 @@ msgid ""
 "Light it at a set date and time. A flag appears on the timeline; scrub the clock across it to watch the structure burn, and back to un-burn it."
 msgstr ""
 "[!Ĺîĝĥţ îţ àţ à šéţ đàţé àñđ ţîɱé. À ƒĺàĝ àƥƥéàŕš öñ ţĥé ţîɱéĺîñé; šçŕûƀ ţĥé çĺöçķ àçŕöšš îţ ţö ŵàţçĥ ţĥé šţŕûçţûŕé ƀûŕñ, àñđ ƀàçķ ţö ûñ-ƀûŕñ îţ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Prop id {prop_id}"
+msgstr "[!Ƥŕöƥ îđ {prop_id} ~~~~~!]"
 
 # machine: pseudo
 msgid "Placed Props"
@@ -10450,9 +11778,32 @@ msgid "The hillside that drains into this pond"
 msgstr "[!Ţĥé ĥîĺĺšîđé ţĥàţ đŕàîñš îñţö ţĥîš ƥöñđ ~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Terrain volume ≈ {terrain_cap} (Auto)"
+msgstr "[!Ţéŕŕàîñ ṽöĺûɱé ≈ {terrain_cap} (Àûţö) ~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Basin rim {basin_rim} m — at the rim (inflow spills there)"
+msgstr ""
+"[!Ɓàšîñ ŕîɱ {basin_rim} ɱ — àţ ţĥé ŕîɱ (îñƒĺöŵ šƥîĺĺš ţĥéŕé) ~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Upstream ~{ha} ha ({cell_count}){has_ws}"
+msgstr "[!Ûƥšţŕéàɱ ~{ha} ĥà ({cell_count}){has_ws} ~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "A watershed catchment is on the graph — Preview refreshes the outline"
 msgstr ""
 "[!À ŵàţéŕšĥéđ çàţçĥɱéñţ îš öñ ţĥé ĝŕàƥĥ — Ƥŕéṽîéŵ ŕéƒŕéšĥéš ţĥé öûţĺîñé ~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Upstream ~{area_m2} ha ({cell_count}) — a teal outline on the ground and in the Elevation and Site Plan lenses"
+msgstr ""
+"[!Ûƥšţŕéàɱ ~{area_m2} ĥà ({cell_count}) — à ţéàĺ öûţĺîñé öñ ţĥé ĝŕöûñđ àñđ îñ ţĥé Éĺéṽàţîöñ àñđ Šîţé Ƥĺàñ ĺéñšéš ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "The watershed could not be traced: {reason}"
+msgstr "[!Ţĥé ŵàţéŕšĥéđ çöûĺđ ñöţ ƀé ţŕàçéđ: {reason} ~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -10467,6 +11818,29 @@ msgstr "[!Ŵàţéŕ ĺéṽéĺ ~~~~!]"
 # machine: pseudo
 msgid "Max fill level"
 msgstr "[!Ṁàẋ ƒîĺĺ ĺéṽéĺ ~~~~~!]"
+
+# machine: pseudo
+msgid "{source_name} · {lines} · {dialect} dialect · run as written"
+msgstr ""
+"[!{source_name} · {lines} · {dialect} đîàĺéçţ · ŕûñ àš ŵŕîţţéñ ~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{layers} · {moves} · {sz} × {y} × {z} mm{fits}\n"
+"{mat} of material · {total_s} at 1×{speed_factor}{warn}"
+msgstr ""
+"[!{layers} · {moves} · {sz} × {y} × {z} ɱɱ{fits}\n"
+"{mat} öƒ ɱàţéŕîàĺ · {total_s} àţ 1×{speed_factor}{warn} ~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{source_name} · {sim_t} of {total} · move {i} of {n}\n"
+"X {pos}  Y {y}  Z {z} mm · {what} {value} mm/s (asked {feed}){layers}\n"
+"{max_feed_hit_share} % of moves hit the feed cap, {accel_limited_share} % never reach it (too short for the acceleration)"
+msgstr ""
+"[!{source_name} · {sim_t} öƒ {total} · ɱöṽé {i} öƒ {n}\n"
+"Ẋ {pos}  Ý {y}  Ž {z} ɱɱ · {what} {value} ɱɱ/š (àšķéđ {feed}){layers}\n"
+"{max_feed_hit_share} % öƒ ɱöṽéš ĥîţ ţĥé ƒééđ çàƥ, {accel_limited_share} % ñéṽéŕ ŕéàçĥ îţ (ţöö šĥöŕţ ƒöŕ ţĥé àççéĺéŕàţîöñ) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Load an STL or a G-code file first."
@@ -10485,6 +11859,16 @@ msgstr "[!Ñöţĥîñĝ ţö éẋƥöŕţ ýéţ. ~~~~~~~!]"
 msgid "Load an STL to slice it, or a G-code file to run it as written."
 msgstr ""
 "[!Ĺöàđ àñ ŠŢĹ ţö šĺîçé îţ, öŕ à Ĝ-çöđé ƒîĺé ţö ŕûñ îţ àš ŵŕîţţéñ. ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{display_name} — print setup"
+msgstr "[!{display_name} — ƥŕîñţ šéţûƥ ~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Bed {work_x_mm} × {work_y_mm} × {work_z_mm} mm · max {max_feed_mm_s} mm/s · {accel_mm_s2} mm/s² · jerk {junction_mm_s} mm/s"
+msgstr ""
+"[!Ɓéđ {work_x_mm} × {work_y_mm} × {work_z_mm} ɱɱ · ɱàẋ {max_feed_mm_s} ɱɱ/š · {accel_mm_s2} ɱɱ/š² · ĵéŕķ {junction_mm_s} ɱɱ/š ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Printer — print setup"
@@ -10624,8 +12008,25 @@ msgid "Mud Building Designer unavailable."
 msgstr "[!Ṁûđ Ɓûîĺđîñĝ Đéšîĝñéŕ ûñàṽàîĺàƀĺé. ~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Could not read {file}."
+msgstr "[!Çöûĺđ ñöţ ŕéàđ {file}. ~~~~~~!]"
+
+# machine: pseudo
 msgid "Slicing…"
 msgstr "[!Šĺîçîñĝ… ~~~!]"
+
+# machine: pseudo
+msgid "Slicing {source_name}…"
+msgstr "[!Šĺîçîñĝ {source_name}… ~~~~~~~!]"
+
+# machine: pseudo
+msgid "Slicing {source_name}… {slice_progress} %"
+msgstr "[!Šĺîçîñĝ {source_name}… {slice_progress} % ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{source_name} · {triangles} · sliced and planned in {ms}"
+msgstr ""
+"[!{source_name} · {triangles} · šĺîçéđ àñđ ƥĺàññéđ îñ {ms} ~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Inputs"
@@ -10707,6 +12108,10 @@ msgstr "[!Ŕéɱöṽé ţĥîš šţéƥ ~~~~~~!]"
 # machine: pseudo
 msgid "Give the recipe a name first"
 msgstr "[!Ĝîṽé ţĥé ŕéçîƥé à ñàɱé ƒîŕšţ ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Saved {label}"
+msgstr "[!Šàṽéđ {label} ~~~~!]"
 
 # machine: pseudo
 msgid "A built-in or unsaved recipe cannot be deleted"
@@ -10882,6 +12287,10 @@ msgid "PAUSED"
 msgstr "[!ƤÀÛŠÉĐ ~~!]"
 
 # machine: pseudo
+msgid "{best_i} SYNC"
+msgstr "[!{best_i} ŠÝÑÇ ~~~~!]"
+
+# machine: pseudo
 msgid "Projection mapping · sim camera | live feed"
 msgstr "[!Ƥŕöĵéçţîöñ ɱàƥƥîñĝ · šîɱ çàɱéŕà | ĺîṽé ƒééđ ~~~~~~~~~~~~~~!]"
 
@@ -10892,6 +12301,32 @@ msgstr "[!Ñöñé (ĺéàṽé ûñçöñƒîĝûŕéđ) ~~~~~~~~!]"
 # machine: pseudo
 msgid "Click LIVE panel or INPUT to choose camera"
 msgstr "[!Çĺîçķ ĹÎṼÉ ƥàñéĺ öŕ ÎÑƤÛŢ ţö çĥööšé çàɱéŕà ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Current input: {display_name}"
+msgstr "[!Çûŕŕéñţ îñƥûţ: {display_name} ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{camera_extension_status}\n"
+"Select a feed above and click Apply Feed."
+msgstr ""
+"[!{camera_extension_status}\n"
+"Šéĺéçţ à ƒééđ àƀöṽé àñđ çĺîçķ Àƥƥĺý Ƒééđ. ~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{camera_extension_status}\n"
+"Start OBS Virtual Camera, then click Refresh Feed List."
+msgstr ""
+"[!{camera_extension_status}\n"
+"Šţàŕţ ÖƁŠ Ṽîŕţûàĺ Çàɱéŕà, ţĥéñ çĺîçķ Ŕéƒŕéšĥ Ƒééđ Ĺîšţ. ~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{sizes} · {has_saved}. Drag the corners onto the surface. Tab next quad · F8 reset · Enter save · Esc done."
+msgstr ""
+"[!{sizes} · {has_saved}. Đŕàĝ ţĥé çöŕñéŕš öñţö ţĥé šûŕƒàçé. Ţàƀ ñéẋţ ǫûàđ · Ƒ8 ŕéšéţ · Éñţéŕ šàṽé · Éšç đöñé. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Set the type to Folding / portable for leaves, hinges and kickstands."
@@ -10924,12 +12359,37 @@ msgid "From the library"
 msgstr "[!Ƒŕöɱ ţĥé ĺîƀŕàŕý ~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"Input {gi}: {series}S × {parallel}P · STC {wmp} W, Voc {voc} V, Isc {isc} A · at {g} W/m², {t} °C: {p} W at {v} V, {i} A{shade_test}"
+msgstr ""
+"[!Îñƥûţ {gi}: {series}Š × {parallel}Ƥ · ŠŢÇ {wmp} Ŵ, Ṽöç {voc} Ṽ, Îšç {isc} À · àţ {g} Ŵ/ɱ², {t} °Ç: {p} Ŵ àţ {v} Ṽ, {i} À{shade_test} ~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{name} · {chart_g} W/m², {chart_t} °C · MPP {p} W at {mpp} V, {y} A"
+msgstr ""
+"[!{name} · {chart_g} Ŵ/ɱ², {chart_t} °Ç · ṀƤƤ {p} Ŵ àţ {mpp} Ṽ, {y} À ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Input 1 · {chart_g} W/m², {chart_t} °C · MPP {p} W at {mpp} V, {y} A"
+msgstr ""
+"[!Îñƥûţ 1 · {chart_g} Ŵ/ɱ², {chart_t} °Ç · ṀƤƤ {p} Ŵ àţ {mpp} Ṽ, {y} À ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{mass_kg} · about ${cost_usd} · {stock} stock lengths"
+msgstr ""
+"[!{mass_kg} · àƀöûţ ${cost_usd} · {stock} šţöçķ ĺéñĝţĥš ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Show every one in the view"
 msgstr "[!Šĥöŵ éṽéŕý öñé îñ ţĥé ṽîéŵ ~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Built-in entries stay."
 msgstr "[!Ɓûîĺţ-îñ éñţŕîéš šţàý. ~~~~~~~!]"
+
+# machine: pseudo
+msgid "Light all {value}"
+msgstr "[!Ĺîĝĥţ àĺĺ {value} ~~~~~!]"
 
 # machine: pseudo
 msgid "Show every one like it in the view"
@@ -11071,6 +12531,10 @@ msgstr ""
 "[!Ĺöàđ ÇṀÎƤ6 ƥŕöĵéçţîöñ đàţà ƒîŕšţ (öƥéñš àûţöɱàţîçàĺĺý öñ ƒîŕšţ ṽîšîţ). ~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Computing… {done}/{total}"
+msgstr "[!Çöɱƥûţîñĝ… {done}/{total} ~~~~~~~!]"
+
+# machine: pseudo
 msgid "Recompute Scenario"
 msgstr "[!Ŕéçöɱƥûţé Šçéñàŕîö ~~~~~~~!]"
 
@@ -11087,8 +12551,16 @@ msgid "Regenerate Weather"
 msgstr "[!Ŕéĝéñéŕàţé Ŵéàţĥéŕ ~~~~~~~!]"
 
 # machine: pseudo
+msgid "Loading training {loaded}/{total}…"
+msgstr "[!Ĺöàđîñĝ ţŕàîñîñĝ {loaded}/{total}… ~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Training model…"
 msgstr "[!Ţŕàîñîñĝ ɱöđéĺ… ~~~~~!]"
+
+# machine: pseudo
+msgid "Training fetch failed: {reason}"
+msgstr "[!Ţŕàîñîñĝ ƒéţçĥ ƒàîĺéđ: {reason} ~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Climate Record Book"
@@ -11141,6 +12613,18 @@ msgid ""
 "Temperature records: 1940-present · NWS alerts: 1986-present (IEM) · Global anomaly: NASA GISTEMP v4"
 msgstr ""
 "[!Ţéɱƥéŕàţûŕé ŕéçöŕđš: 1940-ƥŕéšéñţ · ÑŴŠ àĺéŕţš: 1986-ƥŕéšéñţ (ÎÉṀ) · Ĝĺöƀàĺ àñöɱàĺý: ÑÀŠÀ ĜÎŠŢÉṀƤ ṽ4 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "🌡 Climate Record Book — {loc}"
+msgstr "[!🌡 Çĺîɱàţé Ŕéçöŕđ Ɓööķ — {loc} ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Overwrite slot {idx}?"
+msgstr "[!Öṽéŕŵŕîţé šĺöţ {idx}? ~~~~~~!]"
+
+# machine: pseudo
+msgid "Delete save in slot {idx}? This cannot be undone."
+msgstr "[!Đéĺéţé šàṽé îñ šĺöţ {idx}? Ţĥîš çàññöţ ƀé ûñđöñé. ~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Delete save?"
@@ -11219,12 +12703,20 @@ msgid "Open the alarms"
 msgstr "[!Öƥéñ ţĥé àĺàŕɱš ~~~~~!]"
 
 # machine: pseudo
+msgid "{priority} priority"
+msgstr "[!{priority} ƥŕîöŕîţý ~~~~~~!]"
+
+# machine: pseudo
 msgid ""
 "No alarm rules yet.\n"
 "A rule watches one tag: a tank nearly full, a pump that tripped, a battery running low."
 msgstr ""
 "[!Ñö àĺàŕɱ ŕûĺéš ýéţ.\n"
 "À ŕûĺé ŵàţçĥéš öñé ţàĝ: à ţàñķ ñéàŕĺý ƒûĺĺ, à ƥûɱƥ ţĥàţ ţŕîƥƥéđ, à ƀàţţéŕý ŕûññîñĝ ĺöŵ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{name}  ·  shelved"
+msgstr "[!{name}  ·  šĥéĺṽéđ ~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -11467,8 +12959,22 @@ msgid "Start again after the last step"
 msgstr "[!Šţàŕţ àĝàîñ àƒţéŕ ţĥé ĺàšţ šţéƥ ~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"{text}\n"
+"Suggested (an estimate): gain {kp} % per unit, integral time {ti_min} min{reverse}."
+msgstr ""
+"[!{text}\n"
+"Šûĝĝéšţéđ (àñ éšţîɱàţé): ĝàîñ {kp} % ƥéŕ ûñîţ, îñţéĝŕàĺ ţîɱé {ti_min} ɱîñ{reverse}. ~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Use these gains"
 msgstr "[!Ûšé ţĥéšé ĝàîñš ~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Copied {automations} automation(s) and {scripts} script(s) as YAML. Saved to {path}"
+msgstr ""
+"[!Çöƥîéđ {automations} àûţöɱàţîöñ(š) àñđ {scripts} šçŕîƥţ(š) àš ÝÀṀĹ. Šàṽéđ ţö {path} ~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "A switch takes 1 (on / open) or 0; a control valve its opening in %."
@@ -11665,6 +13171,18 @@ msgid "Search by name, node or unit…"
 msgstr "[!Šéàŕçĥ ƀý ñàɱé, ñöđé öŕ ûñîţ… ~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Showing the last {span_h}"
+msgstr "[!Šĥöŵîñĝ ţĥé ĺàšţ {span_h} ~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{id}\n"
+"Click: show this pen's scale on the left axis."
+msgstr ""
+"[!{id}\n"
+"Çĺîçķ: šĥöŵ ţĥîš ƥéñ'š šçàĺé öñ ţĥé ĺéƒţ àẋîš. ~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Remove this pen"
 msgstr "[!Ŕéɱöṽé ţĥîš ƥéñ ~~~~~!]"
 
@@ -11677,6 +13195,14 @@ msgstr ""
 # machine: pseudo
 msgid "Trends"
 msgstr "[!Ţŕéñđš ~~!]"
+
+# machine: pseudo
+msgid "Pick a tag to draw (up to {max_pens})."
+msgstr "[!Ƥîçķ à ţàĝ ţö đŕàŵ (ûƥ ţö {max_pens}). ~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Put a {label} on the graph."
+msgstr "[!Ƥûţ à {label} öñ ţĥé ĝŕàƥĥ. ~~~~~~~~!]"
 
 # machine: pseudo
 msgid "No machine yet"
@@ -11903,6 +13429,10 @@ msgstr ""
 "[!Ŕîĝĥţ-đŕàĝ ƥàñš · ŵĥééĺ žööɱš àţ ţĥé çûŕšöŕ (Çţŕĺ = ƒîñé) · Ƒ ƒŕàɱéš ţĥé ţûŕƀîñé, Ĥöɱé ţĥé ŵĥöĺé ŕûñ · ĥéàđîñĝ ĺöçķéđ ţö šöûŕçé→öûţĺéţ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Hydro Lab — {name}"
+msgstr "[!Ĥýđŕö Ĺàƀ — {name} ~~~~~!]"
+
+# machine: pseudo
 msgid "Place the turbine on the map first (Site Plan / 3D)."
 msgstr ""
 "[!Ƥĺàçé ţĥé ţûŕƀîñé öñ ţĥé ɱàƥ ƒîŕšţ (Šîţé Ƥĺàñ / 3Đ). ~~~~~~~~~~~~~~~!]"
@@ -11949,9 +13479,17 @@ msgid "Couldn't route the penstock."
 msgstr "[!Çöûĺđñ'ţ ŕöûţé ţĥé ƥéñšţöçķ. ~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{label} tapped {rise_m} m above the turbine."
+msgstr "[!{label} ţàƥƥéđ {rise_m} ɱ àƀöṽé ţĥé ţûŕƀîñé. ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Not routed — physics uses the typed length/head above."
 msgstr ""
 "[!Ñöţ ŕöûţéđ — ƥĥýšîçš ûšéš ţĥé ţýƥéđ ĺéñĝţĥ/ĥéàđ àƀöṽé. ~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Routed: {pipe} (measuring run…)"
+msgstr "[!Ŕöûţéđ: {pipe} (ɱéàšûŕîñĝ ŕûñ…) ~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "— (no seasonal supply: bind a stream intake)"
@@ -11965,6 +13503,12 @@ msgstr "[!ñ/à (ñö ñöžžĺé) ~~~~!]"
 msgid "No flow yet — route the penstock to a source above the turbine."
 msgstr ""
 "[!Ñö ƒĺöŵ ýéţ — ŕöûţé ţĥé ƥéñšţöçķ ţö à šöûŕçé àƀöṽé ţĥé ţûŕƀîñé. ~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Seasonal runoff ≈ {wet_m3} m³ in {wet_i} (wettest) · {dry_m3} m³ in {dry_i} (driest)"
+msgstr ""
+"[!Šéàšöñàĺ ŕûñöƒƒ ≈ {wet_m3} ɱ³ îñ {wet_i} (ŵéţţéšţ) · {dry_m3} ɱ³ îñ {dry_i} (đŕîéšţ) ~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "FLOWING"
@@ -12022,14 +13566,45 @@ msgid "n/a (no nameplate)"
 msgstr "[!ñ/à (ñö ñàɱéƥĺàţé) ~~~~~!]"
 
 # machine: pseudo
+msgid "{annual_kwh} kWh/yr"
+msgstr "[!{annual_kwh} ķŴĥ/ýŕ ~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Representative-year estimate from the intake's SEASONAL supply ({lo}–{hi} L/s over the year), not today's flow."
+msgstr ""
+"[!Ŕéƥŕéšéñţàţîṽé-ýéàŕ éšţîɱàţé ƒŕöɱ ţĥé îñţàķé'š ŠÉÀŠÖÑÀĹ šûƥƥĺý ({lo}–{hi} Ĺ/š öṽéŕ ţĥé ýéàŕ), ñöţ ţöđàý'š ƒĺöŵ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid ""
 "Representative-year estimate at continuous flow (Q capped by pipe + design flow); seasonal precipitation weights the monthly flow."
 msgstr ""
 "[!Ŕéƥŕéšéñţàţîṽé-ýéàŕ éšţîɱàţé àţ çöñţîñûöûš ƒĺöŵ (Ǫ çàƥƥéđ ƀý ƥîƥé + đéšîĝñ ƒĺöŵ); šéàšöñàĺ ƥŕéçîƥîţàţîöñ ŵéîĝĥţš ţĥé ɱöñţĥĺý ƒĺöŵ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Fit the {value} mm nozzle"
+msgstr "[!Ƒîţ ţĥé {value} ɱɱ ñöžžĺé ~~~~~~~~!]"
+
+# machine: pseudo
 msgid "No head yet — raise the pond or lower the turbine."
 msgstr "[!Ñö ĥéàđ ýéţ — ŕàîšé ţĥé ƥöñđ öŕ ĺöŵéŕ ţĥé ţûŕƀîñé. ~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Pond: FULL at its max fill level ({rim_m} m) — any inflow spills over. Raise the max fill level (Ctrl-aim the pond surface in 3D and drag it up, or Pond settings) so the pond can reach a crest above the rim; or lower the turbine, extend the dip tube, or prime with a pump."
+msgstr ""
+"[!Ƥöñđ: ƑÛĹĹ àţ îţš ɱàẋ ƒîĺĺ ĺéṽéĺ ({rim_m} ɱ) — àñý îñƒĺöŵ šƥîĺĺš öṽéŕ. Ŕàîšé ţĥé ɱàẋ ƒîĺĺ ĺéṽéĺ (Çţŕĺ-àîɱ ţĥé ƥöñđ šûŕƒàçé îñ 3Đ àñđ đŕàĝ îţ ûƥ, öŕ Ƥöñđ šéţţîñĝš) šö ţĥé ƥöñđ çàñ ŕéàçĥ à çŕéšţ àƀöṽé ţĥé ŕîɱ; öŕ ĺöŵéŕ ţĥé ţûŕƀîñé, éẋţéñđ ţĥé đîƥ ţûƀé, öŕ ƥŕîɱé ŵîţĥ à ƥûɱƥ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Pond: the siphon draws {draw} L/s{rate}. Turn on the test inflow, or fill the pond to the prime level."
+msgstr ""
+"[!Ƥöñđ: ţĥé šîƥĥöñ đŕàŵš {draw} Ĺ/š{rate}. Ţûŕñ öñ ţĥé ţéšţ îñƒĺöŵ, öŕ ƒîĺĺ ţĥé ƥöñđ ţö ţĥé ƥŕîɱé ĺéṽéĺ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Pond: inflow {fill} − siphon draw {draw} = net {net} L/s{rate}"
+msgstr ""
+"[!Ƥöñđ: îñƒĺöŵ {fill} − šîƥĥöñ đŕàŵ {draw} = ñéţ {net} Ĺ/š{rate} ~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Test stream flow at intake (L/s)"
@@ -12252,6 +13827,15 @@ msgid "Put this job on the board as a project"
 msgstr "[!Ƥûţ ţĥîš ĵöƀ öñ ţĥé ƀöàŕđ àš à ƥŕöĵéçţ ~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{pname}, packed"
+msgstr "[!{pname}, ƥàçķéđ ~~~~!]"
+
+# machine: pseudo
+msgid "Stands at {x} m east, {z} m south of the map's middle"
+msgstr ""
+"[!Šţàñđš àţ {x} ɱ éàšţ, {z} ɱ šöûţĥ öƒ ţĥé ɱàƥ'š ɱîđđĺé ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "👷 Rebuild…"
 msgstr "[!👷 Ŕéƀûîĺđ… ~~~!]"
 
@@ -12279,6 +13863,18 @@ msgid ""
 "Removes the remaining phases. Completed work keeps its effects; a cancelled ASSEMBLY refunds its parts and clears the ghost."
 msgstr ""
 "[!Ŕéɱöṽéš ţĥé ŕéɱàîñîñĝ ƥĥàšéš. Çöɱƥĺéţéđ ŵöŕķ ķééƥš îţš éƒƒéçţš; à çàñçéĺĺéđ ÀŠŠÉṀƁĹÝ ŕéƒûñđš îţš ƥàŕţš àñđ çĺéàŕš ţĥé ĝĥöšţ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{workers}/{min_w} ppl — waiting"
+msgstr "[!{workers}/{min_w} ƥƥĺ — ŵàîţîñĝ ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{workers} ppl"
+msgstr "[!{workers} ƥƥĺ ~~~~!]"
+
+# machine: pseudo
+msgid "needs {min_w} ppl"
+msgstr "[!ñééđš {min_w} ƥƥĺ ~~~~~!]"
 
 # machine: pseudo
 msgid "What-if (planned makespan — the sim will stretch it):"
@@ -12314,10 +13910,34 @@ msgstr ""
 "[!Šîɱûĺàţéđ (ŕéàĺ çŕéŵ — ñééđš, ɱöŕàĺé, ŵéàţĥéŕ, ŵîñđöŵš): ~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Fastest: {best} ({best_h} h) — as it stands, the job never finishes"
+msgstr ""
+"[!Ƒàšţéšţ: {best} ({best_h} ĥ) — àš îţ šţàñđš, ţĥé ĵöƀ ñéṽéŕ ƒîñîšĥéš ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Fastest: {best} — {saving_h} h saved over how it stands"
+msgstr ""
+"[!Ƒàšţéšţ: {best} — {saving_h} ĥ šàṽéđ öṽéŕ ĥöŵ îţ šţàñđš ~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Nothing beats how it stands ({baseline_h} h)"
+msgstr "[!Ñöţĥîñĝ ƀéàţš ĥöŵ îţ šţàñđš ({baseline_h} ĥ) ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid ""
 "Fresh crew from the current hour · today's weather held · straight-line routes, no terrain · 15-minute resolution."
 msgstr ""
 "[!Ƒŕéšĥ çŕéŵ ƒŕöɱ ţĥé çûŕŕéñţ ĥöûŕ · ţöđàý'š ŵéàţĥéŕ ĥéĺđ · šţŕàîĝĥţ-ĺîñé ŕöûţéš, ñö ţéŕŕàîñ · 15-ɱîñûţé ŕéšöĺûţîöñ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Nothing packable on this site yet — add components to the graph or place 3D props."
+msgstr ""
+"[!Ñöţĥîñĝ ƥàçķàƀĺé öñ ţĥîš šîţé ýéţ — àđđ çöɱƥöñéñţš ţö ţĥé ĝŕàƥĥ öŕ ƥĺàçé 3Đ ƥŕöƥš. ~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "📊 Site Report — {label}"
+msgstr "[!📊 Šîţé Ŕéƥöŕţ — {label} ~~~~~~!]"
 
 # machine: pseudo
 msgid "📊 Site Report"
@@ -12404,19 +14024,69 @@ msgstr "[!Ƒéţçĥîñĝ ŵéàţĥéŕ ƒöŕ ţĥîš šîţé… ~~~~~~~~~~
 
 # machine: pseudo
 msgid ""
+"[b]{solar_annual_kwh_m2}[/b] kWh/m²·yr   ·   [b]{solar_peak_sun_hours}[/b] peak-sun-h/day   ·   climatology [b]{ghi_climatology_kwh_m2_day}[/b] kWh/m²·day ({ghi_zone})"
+msgstr ""
+"[![b]{solar_annual_kwh_m2}[/b] ķŴĥ/ɱ²·ýŕ   ·   [b]{solar_peak_sun_hours}[/b] ƥéàķ-šûñ-ĥ/đàý   ·   çĺîɱàţöĺöĝý [b]{ghi_climatology_kwh_m2_day}[/b] ķŴĥ/ɱ²·đàý ({ghi_zone}) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"[b]{pv_annual_kwh}[/b] kWh/yr  ·  [b]{pv_peak_kw}[/b] kWp ({pv_panel_count})  ·  capacity factor [b]{pv_capacity_factor}%[/b]  ·  tilt {pv_panel_tilt_deg}° az {pv_panel_azimuth_deg}°"
+msgstr ""
+"[![b]{pv_annual_kwh}[/b] ķŴĥ/ýŕ  ·  [b]{pv_peak_kw}[/b] ķŴƥ ({pv_panel_count})  ·  çàƥàçîţý ƒàçţöŕ [b]{pv_capacity_factor}%[/b]  ·  ţîĺţ {pv_panel_tilt_deg}° àž {pv_panel_azimuth_deg}° ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
 "[color=#8090a8]No PV panels in the current graph — add panels to see production potential.[/color]"
 msgstr ""
 "[![color=#8090a8]Ñö ƤṼ ƥàñéĺš îñ ţĥé çûŕŕéñţ ĝŕàƥĥ — àđđ ƥàñéĺš ţö šéé ƥŕöđûçţîöñ ƥöţéñţîàĺ.[/color] ~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
-msgid "Recompute to see the year hour by hour."
-msgstr "[!Ŕéçöɱƥûţé ţö šéé ţĥé ýéàŕ ĥöûŕ ƀý ĥöûŕ. ~~~~~~~~~~~~!]"
+msgid ""
+"[b]{wind_annual_kwh}[/b] kWh/yr  ·  {wind_turbine_count}, [b]{wind_rated_kw}[/b] kW rated  ·  capacity factor [b]{wind_capacity_factor}%[/b]  ·  mean wind [b]{wind_mean_speed_ms}[/b] m/s"
+msgstr ""
+"[![b]{wind_annual_kwh}[/b] ķŴĥ/ýŕ  ·  {wind_turbine_count}, [b]{wind_rated_kw}[/b] ķŴ ŕàţéđ  ·  çàƥàçîţý ƒàçţöŕ [b]{wind_capacity_factor}%[/b]  ·  ɱéàñ ŵîñđ [b]{wind_mean_speed_ms}[/b] ɱ/š ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
-"Nothing packable on this site yet — add components to the graph or place 3D props."
+"[color=#8090a8]No wind turbines in the graph — mean site wind [b]{wind_mean_speed_ms}[/b] m/s. Add a turbine to estimate yield.[/color]"
 msgstr ""
-"[!Ñöţĥîñĝ ƥàçķàƀĺé öñ ţĥîš šîţé ýéţ — àđđ çöɱƥöñéñţš ţö ţĥé ĝŕàƥĥ öŕ ƥĺàçé 3Đ ƥŕöƥš. ~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+"[![color=#8090a8]Ñö ŵîñđ ţûŕƀîñéš îñ ţĥé ĝŕàƥĥ — ɱéàñ šîţé ŵîñđ [b]{wind_mean_speed_ms}[/b] ɱ/š. Àđđ à ţûŕƀîñé ţö éšţîɱàţé ýîéĺđ.[/color] ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"[b]{precip_annual_mm}[/b] mm/yr  ·  [b]{precip_wet_days_total}[/b] wet days"
+msgstr ""
+"[![b]{precip_annual_mm}[/b] ɱɱ/ýŕ  ·  [b]{precip_wet_days_total}[/b] ŵéţ đàýš ~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"mean [b]{temp_annual_mean_c}[/b]°C  ·  range [b]{temp_annual_min_c}[/b]…[b]{temp_annual_max_c}[/b]°C"
+msgstr ""
+"[!ɱéàñ [b]{temp_annual_mean_c}[/b]°Ç  ·  ŕàñĝé [b]{temp_annual_min_c}[/b]…[b]{temp_annual_max_c}[/b]°Ç ~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"[b]{hydro_annual_kwh}[/b] kWh/yr  ·  {hydro_count}  (precipitation-scaled seasonal flow)"
+msgstr ""
+"[![b]{hydro_annual_kwh}[/b] ķŴĥ/ýŕ  ·  {hydro_count}  (ƥŕéçîƥîţàţîöñ-šçàĺéđ šéàšöñàĺ ƒĺöŵ) ~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"[color=#{muted}]Nothing measured yet: time is counted while the clock runs with people simulated.[/color]"
+msgstr ""
+"[![color=#{muted}]Ñöţĥîñĝ ɱéàšûŕéđ ýéţ: ţîɱé îš çöûñţéđ ŵĥîĺé ţĥé çĺöçķ ŕûñš ŵîţĥ ƥéöƥĺé šîɱûĺàţéđ.[/color] ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Work this site takes: [b]{work_h_week} per person a week[/b] [color=#{vc}]({value})[/color]{planned} · leisure {leisure_h_day} a day · {people} over {days}\n"
+"[color=#{muted}]Ticks: {atus_source}. A reference, not a target.[/color]"
+msgstr ""
+"[!Ŵöŕķ ţĥîš šîţé ţàķéš: [b]{work_h_week} ƥéŕ ƥéŕšöñ à ŵééķ[/b] [color=#{vc}]({value})[/color]{planned} · ĺéîšûŕé {leisure_h_day} à đàý · {people} öṽéŕ {days}\n"
+"[color=#{muted}]Ţîçķš: {atus_source}. À ŕéƒéŕéñçé, ñöţ à ţàŕĝéţ.[/color] ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Recompute to see the year hour by hour."
+msgstr "[!Ŕéçöɱƥûţé ţö šéé ţĥé ýéàŕ ĥöûŕ ƀý ĥöûŕ. ~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -12436,6 +14106,14 @@ msgstr "[!Öƥéñ Šñöŵĝĺöƀé (ŕéçöɱɱéñđéđ) ~~~~~~~~~~!]"
 # machine: pseudo
 msgid "Reset to map centre"
 msgstr "[!Ŕéšéţ ţö ɱàƥ çéñţŕé ~~~~~~!]"
+
+# machine: pseudo
+msgid "Radius: {r} m"
+msgstr "[!Ŕàđîûš: {r} ɱ ~~~!]"
+
+# machine: pseudo
+msgid "Area: {km2} km²"
+msgstr "[!Àŕéà: {km2} ķɱ² ~~~~!]"
 
 # machine: pseudo
 msgid "Sphere of Influence — Settings"
@@ -12482,12 +14160,37 @@ msgid "Exit Snowglobe"
 msgstr "[!Éẋîţ Šñöŵĝĺöƀé ~~~~~!]"
 
 # machine: pseudo
+msgid "Area  {km2} km²"
+msgstr "[!Àŕéà  {km2} ķɱ² ~~~~!]"
+
+# machine: pseudo
+msgid "Wind PBI  {kinetic} MW · {wind_ms} m/s"
+msgstr "[!Ŵîñđ ƤƁÎ  {kinetic} ṀŴ · {wind_ms} ɱ/š ~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Wind PBI  {kinetic} kW · {wind_ms} m/s"
+msgstr "[!Ŵîñđ ƤƁÎ  {kinetic} ķŴ · {wind_ms} ɱ/š ~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "📡 Disable Live Mode"
 msgstr "[!📡 Đîšàƀĺé Ĺîṽé Ṁöđé ~~~~~~!]"
 
 # machine: pseudo
+msgid "{battery_kwh_stored} / {battery_capacity_kwh} kWh stored"
+msgstr ""
+"[!{battery_kwh_stored} / {battery_capacity_kwh} ķŴĥ šţöŕéđ ~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "⚡ Power · CSV playback {csv_indicators}"
+msgstr "[!⚡ Ƥöŵéŕ · ÇŠṼ ƥĺàýƀàçķ {csv_indicators} ~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "⚡ Power · CSV playback"
 msgstr "[!⚡ Ƥöŵéŕ · ÇŠṼ ƥĺàýƀàçķ ~~~~~~!]"
+
+# machine: pseudo
+msgid "⚡ Power · Live {ha_indicators}"
+msgstr "[!⚡ Ƥöŵéŕ · Ĺîṽé {ha_indicators} ~~~~~~~~!]"
 
 # machine: pseudo
 msgid "⚡ Power · Live"
@@ -12500,6 +14203,42 @@ msgstr "[!⚡ Ƥöŵéŕ · Šîɱûĺàţîñĝ àĥéàđ ~~~~~~~~!]"
 # machine: pseudo
 msgid "⚡ Power Scoreboard"
 msgstr "[!⚡ Ƥöŵéŕ Šçöŕéƀöàŕđ ~~~~~~!]"
+
+# machine: pseudo
+msgid "⚡ Power · Home Assistant {ha_indicators}"
+msgstr "[!⚡ Ƥöŵéŕ · Ĥöɱé Àššîšţàñţ {ha_indicators} ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Shed{load_linked}"
+msgstr "[!Šĥéđ{load_linked} ~~~~~~!]"
+
+# machine: pseudo
+msgid "{shown_kw}  peak {load_peak_show_w}{load_linked}"
+msgstr "[!{shown_kw}  ƥéàķ {load_peak_show_w}{load_linked} ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Full {weather_icon}"
+msgstr "[!Ƒûĺĺ {weather_icon} ~~~~~~!]"
+
+# machine: pseudo
+msgid "Full — solar throttled {weather_icon}"
+msgstr "[!Ƒûĺĺ — šöĺàŕ ţĥŕöţţĺéđ {weather_icon} ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Low battery {weather_icon}"
+msgstr "[!Ĺöŵ ƀàţţéŕý {weather_icon} ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Charging {weather_icon}"
+msgstr "[!Çĥàŕĝîñĝ {weather_icon} ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Discharging {weather_icon}"
+msgstr "[!Đîšçĥàŕĝîñĝ {weather_icon} ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Idle {weather_icon}"
+msgstr "[!Îđĺé {weather_icon} ~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -12518,6 +14257,16 @@ msgid "Waiting for the sun"
 msgstr "[!Ŵàîţîñĝ ƒöŕ ţĥé šûñ ~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"{gen} kWh generated − {daily_load_consumed_kwh} kWh consumed since midnight"
+msgstr ""
+"[!{gen} ķŴĥ ĝéñéŕàţéđ − {daily_load_consumed_kwh} ķŴĥ çöñšûɱéđ šîñçé ɱîđñîĝĥţ ~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{kwh} kWh since midnight"
+msgstr "[!{kwh} ķŴĥ šîñçé ɱîđñîĝĥţ ~~~~~~~~!]"
+
+# machine: pseudo
 msgid "SOLAR & LOAD (24h) 📂"
 msgstr "[!ŠÖĹÀŔ & ĹÖÀĐ (24ĥ) 📂 ~~~~!]"
 
@@ -12526,12 +14275,44 @@ msgid "SOLAR OUTPUT (24h) 📡"
 msgstr "[!ŠÖĹÀŔ ÖÛŢƤÛŢ (24ĥ) 📡 ~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"🔗 Historical data from: {history_source}\n"
+"Click to change energy sensor"
+msgstr ""
+"[!🔗 Ĥîšţöŕîçàĺ đàţà ƒŕöɱ: {history_source}\n"
+"Çĺîçķ ţö çĥàñĝé éñéŕĝý šéñšöŕ ~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "SOLAR OUTPUT (24h) ⏳"
 msgstr "[!ŠÖĹÀŔ ÖÛŢƤÛŢ (24ĥ) ⏳ ~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"🔗 Loading history from: {history_source}\n"
+"Click to change energy sensor"
+msgstr ""
+"[!🔗 Ĺöàđîñĝ ĥîšţöŕý ƒŕöɱ: {history_source}\n"
+"Çĺîçķ ţö çĥàñĝé éñéŕĝý šéñšöŕ ~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "SOLAR OUTPUT (24h)"
 msgstr "[!ŠÖĹÀŔ ÖÛŢƤÛŢ (24ĥ) ~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"🔗 Energy sensor: {ha_solar_energy_entity}\n"
+"Click to change"
+msgstr ""
+"[!🔗 Éñéŕĝý šéñšöŕ: {ha_solar_energy_entity}\n"
+"Çĺîçķ ţö çĥàñĝé ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Using power sensor for history: {ha_solar_entity}\n"
+"Click to link dedicated energy sensor"
+msgstr ""
+"[!Ûšîñĝ ƥöŵéŕ šéñšöŕ ƒöŕ ĥîšţöŕý: {ha_solar_entity}\n"
+"Çĺîçķ ţö ĺîñķ đéđîçàţéđ éñéŕĝý šéñšöŕ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -12540,6 +14321,14 @@ msgid ""
 msgstr ""
 "[!Çĺîçķ ţö ĺîñķ ĤÀ šöĺàŕ éñéŕĝý šéñšöŕ ƒöŕ ĥîšţöŕîçàĺ đàţà\n"
 "(öŕ ûšéš ĺîñķéđ ƥöŵéŕ šéñšöŕ àûţöɱàţîçàĺĺý) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Peak: {peak} kW (solar/load)"
+msgstr "[!Ƥéàķ: {peak} ķŴ (šöĺàŕ/ĺöàđ) ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Peak: {peak} kW"
+msgstr "[!Ƥéàķ: {peak} ķŴ ~~~~!]"
 
 # machine: pseudo
 msgid "Click to collapse or expand the power panel"
@@ -12690,6 +14479,10 @@ msgstr ""
 "[!Ĥöŵ šţŕöñĝĺý ţĥîš ṽéñûé ƥûĺĺš ƥéöƥĺé ŵĥéñ îţ îš öƥéñ (0–1) ~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "draw {draw} — click to remove this set"
+msgstr "[!đŕàŵ {draw} — çĺîçķ ţö ŕéɱöṽé ţĥîš šéţ ~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Set starts (hour)"
 msgstr "[!Šéţ šţàŕţš (ĥöûŕ) ~~~~~!]"
 
@@ -12714,6 +14507,14 @@ msgid "Add this time window to the venue's programme"
 msgstr "[!Àđđ ţĥîš ţîɱé ŵîñđöŵ ţö ţĥé ṽéñûé'š ƥŕöĝŕàɱɱé ~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{count_spin} on the graph"
+msgstr "[!{count_spin} öñ ţĥé ĝŕàƥĥ ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Design set to {label}"
+msgstr "[!Đéšîĝñ šéţ ţö {label} ~~~~~~!]"
+
+# machine: pseudo
 msgid "No main scene"
 msgstr "[!Ñö ɱàîñ šçéñé ~~~~!]"
 
@@ -12724,6 +14525,10 @@ msgstr "[!Šýšţéɱ ĝŕàƥĥ ñöţ ƒöûñđ ~~~~~~~~!]"
 # machine: pseudo
 msgid "Graph model missing"
 msgstr "[!Ĝŕàƥĥ ɱöđéĺ ɱîššîñĝ ~~~~~~~!]"
+
+# machine: pseudo
+msgid "Re-seeded the graph: {value} × {w}"
+msgstr "[!Ŕé-šééđéđ ţĥé ĝŕàƥĥ: {value} × {w} ~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Re-seed failed"
@@ -12902,6 +14707,10 @@ msgid "Ring over the top"
 msgstr "[!Ŕîñĝ öṽéŕ ţĥé ţöƥ ~~~~~~!]"
 
 # machine: pseudo
+msgid "{kind} Ø{od_mm} × {h_mm} at {z_mm}"
+msgstr "[!{kind} Ø{od_mm} × {h_mm} àţ {z_mm} ~~~~~~~!]"
+
+# machine: pseudo
 msgid "Nozzles"
 msgstr "[!Ñöžžĺéš ~~~!]"
 
@@ -12939,8 +14748,30 @@ msgid "Remove nozzle"
 msgstr "[!Ŕéɱöṽé ñöžžĺé ~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"{parts} · {clamps} · {open_ports} open\n"
+"{bb} × {y} × {z} mm · {mass_kg} kg · holds {volume_l} L"
+msgstr ""
+"[!{parts} · {clamps} · {open_ports} öƥéñ\n"
+"{bb} × {y} × {z} ɱɱ · {mass_kg} ķĝ · ĥöĺđš {volume_l} Ĺ ~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Clamp size"
 msgstr "[!Çĺàɱƥ šîžé ~~~~!]"
+
+# machine: pseudo
+msgid "{size} tube ({od} mm OD, {flange} mm clamp face)"
+msgstr "[!{size} ţûƀé ({od} ɱɱ ÖĐ, {flange} ɱɱ çĺàɱƥ ƒàçé) ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{designation}\n"
+"{why}\n"
+"Shift-click the sandbox to place several."
+msgstr ""
+"[!{designation}\n"
+"{why}\n"
+"Šĥîƒţ-çĺîçķ ţĥé šàñđƀöẋ ţö ƥĺàçé šéṽéŕàĺ. ~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -12974,6 +14805,27 @@ msgid "Summary"
 msgstr "[!Šûɱɱàŕý ~~~!]"
 
 # machine: pseudo
+msgid "Nozzle {nid} · {angle_deg}° · {r_mm}"
+msgstr "[!Ñöžžĺé {nid} · {angle_deg}° · {r_mm} ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{label} · {designation} · drag to move"
+msgstr "[!{label} · {designation} · đŕàĝ ţö ɱöṽé ~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Open end {id} · click to pick it, then a part to join there"
+msgstr ""
+"[!Öƥéñ éñđ {id} · çĺîçķ ţö ƥîçķ îţ, ţĥéñ à ƥàŕţ ţö ĵöîñ ţĥéŕé ~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{size} clamp joint · roll {roll_deg}°"
+msgstr "[!{size} çĺàɱƥ ĵöîñţ · ŕöĺĺ {roll_deg}° ~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Molecules in {name_cv} · {cv_t} °C"
+msgstr "[!Ṁöĺéçûĺéš îñ {name_cv} · {cv_t} °Ç ~~~~~~~~!]"
+
+# machine: pseudo
 msgid "1 · Before"
 msgstr "[!1 · Ɓéƒöŕé ~~!]"
 
@@ -12993,6 +14845,18 @@ msgstr "[!Ŵöŕķîñĝ öûţ ţĥé ŵĥöĺé ƀàţçĥ ƒîŕšţ… ~~~~~
 msgid "A placed reactor's node runs a fixed guess until you use a run here."
 msgstr ""
 "[!À ƥĺàçéđ ŕéàçţöŕ'š ñöđé ŕûñš à ƒîẋéđ ĝûéšš ûñţîĺ ýöû ûšé à ŕûñ ĥéŕé. ~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Batch {batch_h} h at {watts}: {feed_kg} kg in → {char_kg} kg char, {gas_nm3} m³ gas at {gas_lhv_mj_nm3} MJ/m³, {vinegar_l} L wood vinegar, {tar_kg} kg tar. {where}{is_empty}"
+msgstr ""
+"[!Ɓàţçĥ {batch_h} ĥ àţ {watts}: {feed_kg} ķĝ îñ → {char_kg} ķĝ çĥàŕ, {gas_nm3} ɱ³ ĝàš àţ {gas_lhv_mj_nm3} ṀĴ/ɱ³, {vinegar_l} Ĺ ŵööđ ṽîñéĝàŕ, {tar_kg} ķĝ ţàŕ. {where}{is_empty} ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Copied, and saved as {file}. Paste it into Home Assistant's automations.yaml once the board is added."
+msgstr ""
+"[!Çöƥîéđ, àñđ šàṽéđ àš {file}. Ƥàšţé îţ îñţö Ĥöɱé Àššîšţàñţ'š àûţöɱàţîöñš.ýàɱĺ öñçé ţĥé ƀöàŕđ îš àđđéđ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Run the process on the lab's clock (Space)"
@@ -13070,6 +14934,10 @@ msgstr "[!Ĝàš ~!]"
 # machine: pseudo
 msgid "Wall"
 msgstr "[!Ŵàĺĺ ~~!]"
+
+# machine: pseudo
+msgid "Running the batch… {end} %"
+msgstr "[!Ŕûññîñĝ ţĥé ƀàţçĥ… {end} % ~~~~~~~!]"
 
 # machine: pseudo
 msgid "Process"
@@ -13214,6 +15082,14 @@ msgid "by hand, from this moment"
 msgstr "[!ƀý ĥàñđ, ƒŕöɱ ţĥîš ɱöɱéñţ ~~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"{key}\n"
+"Flipping it changes the run from this moment on."
+msgstr ""
+"[!{key}\n"
+"Ƒĺîƥƥîñĝ îţ çĥàñĝéš ţĥé ŕûñ ƒŕöɱ ţĥîš ɱöɱéñţ öñ. ~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Sensors"
 msgstr "[!Šéñšöŕš ~~~!]"
 
@@ -13287,6 +15163,10 @@ msgstr ""
 "[!Ţĥé ŕûĺéš àš àûţöɱàţîöñš.ýàɱĺ. Ţĥéý ñàɱé ţĥé ƀöàŕđ'š éñţîţîéš, šö ţĥéý ŕûñ àš ţĥéý àŕé öñçé ţĥé ƀöàŕđ îš ƒĺàšĥéđ àñđ àđđéđ ţö Ĥöɱé Àššîšţàñţ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "On the controller board ({note})"
+msgstr "[!Öñ ţĥé çöñţŕöĺĺéŕ ƀöàŕđ ({note}) ~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Flooded"
 msgstr "[!Ƒĺööđéđ ~~~!]"
 
@@ -13321,6 +15201,10 @@ msgstr "[!Ñöŵ ~!]"
 # machine: pseudo
 msgid "What this step grows"
 msgstr "[!Ŵĥàţ ţĥîš šţéƥ ĝŕöŵš ~~~~~~~!]"
+
+# machine: pseudo
+msgid "Step {step_sel} · {own}"
+msgstr "[!Šţéƥ {step_sel} · {own} ~~~~~~!]"
 
 # machine: pseudo
 msgid "Really delete?"
@@ -13366,6 +15250,19 @@ msgstr "[!Ŕàţé ɱ/š ~~!]"
 # machine: pseudo
 msgid "Flood pits"
 msgstr "[!Ƒĺööđ ƥîţš ~~~~!]"
+
+# machine: pseudo
+msgid "Ground {gy} m · edited {d} m"
+msgstr "[!Ĝŕöûñđ {gy} ɱ · éđîţéđ {d} ɱ ~~~~~~~!]"
+
+# machine: pseudo
+msgid "Ground {gy} m"
+msgstr "[!Ĝŕöûñđ {gy} ɱ ~~~~!]"
+
+# machine: pseudo
+msgid "Lvl {level_m} / spill {spill_m} m · {stock_l} L ({fill_frac}%){rate}"
+msgstr ""
+"[!Ĺṽĺ {level_m} / šƥîĺĺ {spill_m} ɱ · {stock_l} Ĺ ({fill_frac}%){rate} ~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Starting …"
@@ -13703,6 +15600,10 @@ msgid "Remove this pin"
 msgstr "[!Ŕéɱöṽé ţĥîš ƥîñ ~~~~~!]"
 
 # machine: pseudo
+msgid "Offset: {ee} m E, {nn} m N"
+msgstr "[!Öƒƒšéţ: {ee} ɱ É, {nn} ɱ Ñ ~~~~~~!]"
+
+# machine: pseudo
 msgid "Advanced terrain size"
 msgstr "[!Àđṽàñçéđ ţéŕŕàîñ šîžé ~~~~~~~~!]"
 
@@ -13724,6 +15625,12 @@ msgstr ""
 # machine: pseudo
 msgid "Hi-res DEM/imagery"
 msgstr "[!Ĥî-ŕéš ĐÉṀ/îɱàĝéŕý ~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Width of the hi-res elevation + imagery patch in the middle, edge to edge. The sharpest imagery layers stay inside it. 1 m USGS lidar (US sites, key required) needs {usgs1m_max_side_m} or less."
+msgstr ""
+"[!Ŵîđţĥ öƒ ţĥé ĥî-ŕéš éĺéṽàţîöñ + îɱàĝéŕý ƥàţçĥ îñ ţĥé ɱîđđĺé, éđĝé ţö éđĝé. Ţĥé šĥàŕƥéšţ îɱàĝéŕý ĺàýéŕš šţàý îñšîđé îţ. 1 ɱ ÛŠĜŠ ĺîđàŕ (ÛŠ šîţéš, ķéý ŕéǫûîŕéđ) ñééđš {usgs1m_max_side_m} öŕ ĺéšš. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -13755,6 +15662,10 @@ msgid ""
 "Small enough to attempt 1 m USGS lidar, using your OpenTopography key from Settings -> Keys. That dataset needs an ACADEMIC-tier key though -- an ordinary key falls back to 10 m (see below)."
 msgstr ""
 "[!Šɱàĺĺ éñöûĝĥ ţö àţţéɱƥţ 1 ɱ ÛŠĜŠ ĺîđàŕ, ûšîñĝ ýöûŕ ÖƥéñŢöƥöĝŕàƥĥý ķéý ƒŕöɱ Šéţţîñĝš -> Ķéýš. Ţĥàţ đàţàšéţ ñééđš àñ ÀÇÀĐÉṀÎÇ-ţîéŕ ķéý ţĥöûĝĥ -- àñ öŕđîñàŕý ķéý ƒàĺĺš ƀàçķ ţö 10 ɱ (šéé ƀéĺöŵ). ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Over {cap} -- the hi-res patch uses the 10 m DEM"
+msgstr "[!Öṽéŕ {cap} -- ţĥé ĥî-ŕéš ƥàţçĥ ûšéš ţĥé 10 ɱ ĐÉṀ ~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "📡 Live Mode (sync with real time)"
@@ -13918,6 +15829,10 @@ msgstr "[!{risk} · {line} · ñöţ ýéţ šîɱûĺàţéđ ~~~~~~~~~!]"
 # machine: pseudo
 msgid "Now: no weather data for this site yet."
 msgstr "[!Ñöŵ: ñö ŵéàţĥéŕ đàţà ƒöŕ ţĥîš šîţé ýéţ. ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Now: wind {mph} mph, {rain} → {verdict}{ground}"
+msgstr "[!Ñöŵ: ŵîñđ {mph} ɱƥĥ, {rain} → {verdict}{ground} ~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "API Keys  (optional — improve data accuracy)"
@@ -15195,6 +17110,12 @@ msgstr "[!Ñöŵ: ñö ƥéöƥĺé šîɱûĺàţéđ öñ ţĥîš ɱàƥ. ~~~
 
 # machine: pseudo
 msgid ""
+"Now: {heroes} (budget {budget}) · {over} · {crowd} light crowd{light_crowd} · {frames_per_second} fps"
+msgstr ""
+"[!Ñöŵ: {heroes} (ƀûđĝéţ {budget}) · {over} · {crowd} ĺîĝĥţ çŕöŵđ{light_crowd} · {frames_per_second} ƒƥš ~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
 "Turn a number up and watch the frame rate here (or F3). The full simulation and the full figures cost CPU; the crowd figures and their reach cost GPU. 0 / far left = Auto."
 msgstr ""
 "[!Ţûŕñ à ñûɱƀéŕ ûƥ àñđ ŵàţçĥ ţĥé ƒŕàɱé ŕàţé ĥéŕé (öŕ Ƒ3). Ţĥé ƒûĺĺ šîɱûĺàţîöñ àñđ ţĥé ƒûĺĺ ƒîĝûŕéš çöšţ ÇƤÛ; ţĥé çŕöŵđ ƒîĝûŕéš àñđ ţĥéîŕ ŕéàçĥ çöšţ ĜƤÛ. 0 / ƒàŕ ĺéƒţ = Àûţö. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
@@ -15719,6 +17640,14 @@ msgid "Cancel this burn"
 msgstr "[!Çàñçéĺ ţĥîš ƀûŕñ ~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"Site deployment schedule — set a time on the timeline when the crews build every structure and camp, or pack it all up.\n"
+"{line}"
+msgstr ""
+"[!Šîţé đéƥĺöýɱéñţ šçĥéđûĺé — šéţ à ţîɱé öñ ţĥé ţîɱéĺîñé ŵĥéñ ţĥé çŕéŵš ƀûîĺđ éṽéŕý šţŕûçţûŕé àñđ çàɱƥ, öŕ ƥàçķ îţ àĺĺ ûƥ.\n"
+"{line} ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Site deployment needs a loaded world with a systems graph."
 msgstr ""
 "[!Šîţé đéƥĺöýɱéñţ ñééđš à ĺöàđéđ ŵöŕĺđ ŵîţĥ à šýšţéɱš ĝŕàƥĥ. ~~~~~~~~~~~~~~~~~~~!]"
@@ -15754,6 +17683,14 @@ msgstr "[!Çĺéàŕ ţĥé šçĥéđûĺé ~~~~~~!]"
 # machine: pseudo
 msgid "Site deployment"
 msgstr "[!Šîţé đéƥĺöýɱéñţ ~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{action} now, with no crew — {value} swap at once.\n"
+"The crews' work in flight is cancelled."
+msgstr ""
+"[!{action} ñöŵ, ŵîţĥ ñö çŕéŵ — {value} šŵàƥ àţ öñçé.\n"
+"Ţĥé çŕéŵš' ŵöŕķ îñ ƒĺîĝĥţ îš çàñçéĺĺéđ. ~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Deployment schedule cleared."
@@ -15844,6 +17781,10 @@ msgid "Import datastream CSV"
 msgstr "[!Îɱƥöŕţ đàţàšţŕéàɱ ÇŠṼ ~~~~~~~~!]"
 
 # machine: pseudo
+msgid "LinkageLab import: {model_id}"
+msgstr "[!ĹîñķàĝéĹàƀ îɱƥöŕţ: {model_id} ~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Editable design detected"
 msgstr "[!Éđîţàƀĺé đéšîĝñ đéţéçţéđ ~~~~~~~~~!]"
 
@@ -15890,6 +17831,10 @@ msgstr "[!Ƒîñîšĥîñĝ ţĥé ṀƤ4 (ƒƒɱƥéĝ)… ~~~~~~~~!]"
 # machine: pseudo
 msgid "Warming up the renderer…"
 msgstr "[!Ŵàŕɱîñĝ ûƥ ţĥé ŕéñđéŕéŕ… ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Frame {done} / {total} ({prog}%)"
+msgstr "[!Ƒŕàɱé {done} / {total} ({prog}%) ~~~~~~~!]"
 
 # machine: pseudo
 msgid "Load video: no projection canvas on this map."
@@ -15962,6 +17907,11 @@ msgid "Challenges — click to pick a mission"
 msgstr "[!Çĥàĺĺéñĝéš — çĺîçķ ţö ƥîçķ à ɱîššîöñ ~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{title} — {elapsed_h} / {dur} h elapsed · click for missions"
+msgstr ""
+"[!{title} — {elapsed_h} / {dur} ĥ éĺàƥšéđ · çĺîçķ ƒöŕ ɱîššîöñš ~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "NWS ALERT"
 msgstr "[!ÑŴŠ ÀĹÉŔŢ ~~~!]"
 
@@ -15970,8 +17920,16 @@ msgid "National Weather Service Watch/Warning/Advisory"
 msgstr "[!Ñàţîöñàĺ Ŵéàţĥéŕ Šéŕṽîçé Ŵàţçĥ/Ŵàŕñîñĝ/Àđṽîšöŕý ~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{title} · +{value} more"
+msgstr "[!{title} · +{value} ɱöŕé ~~~~~~!]"
+
+# machine: pseudo
 msgid "Click to open"
 msgstr "[!Çĺîçķ ţö öƥéñ ~~~~!]"
+
+# machine: pseudo
+msgid "+{value} UP"
+msgstr "[!+{value} ÛƤ ~~~!]"
 
 # machine: pseudo
 msgid "Bag"
@@ -16112,12 +18070,20 @@ msgid "Delete this road / zone (Del)"
 msgstr "[!Đéĺéţé ţĥîš ŕöàđ / žöñé (Đéĺ) ~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Zone offers / camp needs: {fid}"
+msgstr "[!Žöñé öƒƒéŕš / çàɱƥ ñééđš: {fid} ~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Cut now"
 msgstr "[!Çûţ ñöŵ ~~!]"
 
 # machine: pseudo
 msgid "— pick a camp —"
 msgstr "[!— ƥîçķ à çàɱƥ — ~~~~!]"
+
+# machine: pseudo
+msgid "{title} tools"
+msgstr "[!{title} ţööĺš ~~~~!]"
 
 # machine: pseudo
 msgid "Tools"
@@ -16138,12 +18104,16 @@ msgid "Close the toolbar (Esc)"
 msgstr "[!Çĺöšé ţĥé ţööĺƀàŕ (Éšç) ~~~~~~~!]"
 
 # machine: pseudo
-msgid "Back into its bundle"
-msgstr "[!Ɓàçķ îñţö îţš ƀûñđĺé ~~~~~~~!]"
+msgid "Lane {lane} of {lanes}"
+msgstr "[!Ĺàñé {lane} öƒ {lanes} ~~~~~~!]"
 
 # machine: pseudo
 msgid "Click a run to change its kind, size and look."
 msgstr "[!Çĺîçķ à ŕûñ ţö çĥàñĝé îţš ķîñđ, šîžé àñđ ĺööķ. ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Back into its bundle"
+msgstr "[!Ɓàçķ îñţö îţš ƀûñđĺé ~~~~~~~!]"
 
 # machine: pseudo
 msgid "Back in its bundle"
@@ -16248,6 +18218,11 @@ msgid ""
 "Drag a run up or down: the height it prefers. Snaps to floor, knee, bench and head height."
 msgstr ""
 "[!Đŕàĝ à ŕûñ ûƥ öŕ đöŵñ: ţĥé ĥéîĝĥţ îţ ƥŕéƒéŕš. Šñàƥš ţö ƒĺööŕ, ķñéé, ƀéñçĥ àñđ ĥéàđ ĥéîĝĥţ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{conduit_style} · {length_m} · bends {bend_radius_m} mm"
+msgstr ""
+"[!{conduit_style} · {length_m} · ƀéñđš {bend_radius_m} ɱɱ ~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Style…"
@@ -16462,6 +18437,30 @@ msgid "Re-carving every channel…"
 msgstr "[!Ŕé-çàŕṽîñĝ éṽéŕý çĥàññéĺ… ~~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"Major radius {r}, minor radius {r_2}, centre {hc} up · ground cut {ground_deg} below the equator · throat Ø {throat_r_m}"
+msgstr ""
+"[!Ṁàĵöŕ ŕàđîûš {r}, ɱîñöŕ ŕàđîûš {r_2}, çéñţŕé {hc} ûƥ · ĝŕöûñđ çûţ {ground_deg} ƀéĺöŵ ţĥé éǫûàţöŕ · ţĥŕöàţ Ø {throat_r_m} ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{sectors} sectors · pieces {units} × {units_2} · {sheets} sheets · folds {fold}"
+msgstr ""
+"[!{sectors} šéçţöŕš · ƥîéçéš {units} × {units_2} · {sheets} šĥééţš · ƒöĺđš {fold} ~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{count} panels · {total_w} kW · {series}S × {parallel}P · string Voc {string_voc} V, Vmp {string_vmp} V"
+msgstr ""
+"[!{count} ƥàñéĺš · {total_w} ķŴ · {series}Š × {parallel}Ƥ · šţŕîñĝ Ṽöç {string_voc} Ṽ, Ṽɱƥ {string_vmp} Ṽ ~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{mass_kg} · {tube_m} of tube in {stock_pieces} stock lengths ({waste_pct} % waste) · {fittings} fittings{sheets}{panels}"
+msgstr ""
+"[!{mass_kg} · {tube_m} öƒ ţûƀé îñ {stock_pieces} šţöçķ ĺéñĝţĥš ({waste_pct} % ŵàšţé) · {fittings} ƒîţţîñĝš{sheets}{panels} ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Section"
 msgstr "[!Šéçţîöñ ~~~!]"
 
@@ -16494,6 +18493,11 @@ msgstr "[!Ɓŕàçîñĝ àñđ ţéñšîöñ ĺîñéš ~~~~~~~~~!]"
 # machine: pseudo
 msgid "Origami canopy"
 msgstr "[!Öŕîĝàɱî çàñöƥý ~~~~~!]"
+
+# machine: pseudo
+msgid "{spec} · {height_m} high · {floor_area_m2} floor · {count} · {mass_kg}"
+msgstr ""
+"[!{spec} · {height_m} ĥîĝĥ · {floor_area_m2} ƒĺööŕ · {count} · {mass_kg} ~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "e.g. 17, 19"
@@ -16529,6 +18533,10 @@ msgid ""
 "Tension lines are wire rope with a turnbuckle and an eye clamp at each end; braces are straight tube on swivel clamps."
 msgstr ""
 "[!Ţéñšîöñ ĺîñéš àŕé ŵîŕé ŕöƥé ŵîţĥ à ţûŕñƀûçķĺé àñđ àñ éýé çĺàɱƥ àţ éàçĥ éñđ; ƀŕàçéš àŕé šţŕàîĝĥţ ţûƀé öñ šŵîṽéĺ çĺàɱƥš. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Bracing {value}"
+msgstr "[!Ɓŕàçîñĝ {value} ~~~~~!]"
 
 # machine: pseudo
 msgid "Remove this bracing"
@@ -16572,6 +18580,10 @@ msgstr "[!Ŕé-ŕéàđ ţĥîš ĺéṽéĺ'š ƀŕîéƒîñĝ ~~~~~~~~~~!]"
 msgid "Leave the bootcamp — your real graph comes back untouched"
 msgstr ""
 "[!Ĺéàṽé ţĥé ƀööţçàɱƥ — ýöûŕ ŕéàĺ ĝŕàƥĥ çöɱéš ƀàçķ ûñţöûçĥéđ ~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "🎓  Level {index} — {title}"
+msgstr "[!🎓  Ĺéṽéĺ {index} — {title} ~~~~~~!]"
 
 # machine: pseudo
 msgid "🎓  New here? Learn solar from the battery up"
@@ -16710,6 +18722,10 @@ msgstr ""
 "[!Ṽéĝéţàţîöñ ƥàîñţ ñééđš à ĺöçàţîöñ ɱàƥ (ƥŕéšš Ṽ ŵĥéñ ŢéŕŕàîñĹöàđéŕ îš ƥŕéšéñţ). ~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Opened Tune look ({species_hint})"
+msgstr "[!Öƥéñéđ Ţûñé ĺööķ ({species_hint}) ~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Tune look needs a location map."
 msgstr "[!Ţûñé ĺööķ ñééđš à ĺöçàţîöñ ɱàƥ. ~~~~~~~~~~!]"
 
@@ -16722,8 +18738,16 @@ msgid "No scene to place into"
 msgstr "[!Ñö šçéñé ţö ƥĺàçé îñţö ~~~~~~~!]"
 
 # machine: pseudo
+msgid "Could not start placement: {error}"
+msgstr "[!Çöûĺđ ñöţ šţàŕţ ƥĺàçéɱéñţ: {error} ~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "System graph missing from scene"
 msgstr "[!Šýšţéɱ ĝŕàƥĥ ɱîššîñĝ ƒŕöɱ šçéñé ~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Spawned {label} on the graph"
+msgstr "[!Šƥàŵñéđ {label} öñ ţĥé ĝŕàƥĥ ~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Could not spawn graph preset"
@@ -16738,6 +18762,10 @@ msgid ""
 "Nothing placed — area may be excluded, too steep, or the tree budget is spent"
 msgstr ""
 "[!Ñöţĥîñĝ ƥĺàçéđ — àŕéà ɱàý ƀé éẋçĺûđéđ, ţöö šţééƥ, öŕ ţĥé ţŕéé ƀûđĝéţ îš šƥéñţ ~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Planted {placed} (cleared {removed})"
+msgstr "[!Ƥĺàñţéđ {placed} (çĺéàŕéđ {removed}) ~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Cleared"
@@ -16875,6 +18903,10 @@ msgid "— presets —"
 msgstr "[!— ƥŕéšéţš — ~~~!]"
 
 # machine: pseudo
+msgid "Saved {species} default"
+msgstr "[!Šàṽéđ {species} đéƒàûĺţ ~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Type a name first…"
 msgstr "[!Ţýƥé à ñàɱé ƒîŕšţ… ~~~~~~!]"
 
@@ -16897,6 +18929,21 @@ msgstr "[!Šţàñđ àĝé ~~~!]"
 # machine: pseudo
 msgid "OSM → tree type"
 msgstr "[!ÖŠṀ → ţŕéé ţýƥé ~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Preview: {n_trees} and {n_under} on {area_ha} ha (≈ {area_ha_2} trees / ha)"
+msgstr ""
+"[!Ƥŕéṽîéŵ: {n_trees} àñđ {n_under} öñ {area_ha} ĥà (≈ {area_ha_2} ţŕééš / ĥà) ~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Apply to map ({pending})"
+msgstr "[!Àƥƥĺý ţö ɱàƥ ({pending}) ~~~~~~~!]"
+
+# machine: pseudo
+msgid "{pending} slider{pending_2} changed since the last apply"
+msgstr ""
+"[!{pending} šĺîđéŕ{pending_2} çĥàñĝéđ šîñçé ţĥé ĺàšţ àƥƥĺý ~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Map matches this preview"
@@ -16943,6 +18990,18 @@ msgstr "[!Ĝîṽé ƀàçķ ţö šƥéçîéš ~~~~~~~!]"
 msgid "Remove this tree's own look so it follows its species again"
 msgstr ""
 "[!Ŕéɱöṽé ţĥîš ţŕéé'š öŵñ ĺööķ šö îţ ƒöĺĺöŵš îţš šƥéçîéš àĝàîñ ~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "One {label} · {src} · {height_m} m tall{is_empty}"
+msgstr "[!Öñé {label} · {src} · {height_m} ɱ ţàĺĺ{is_empty} ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "All {label} in this world ({thousands})"
+msgstr "[!Àĺĺ {label} îñ ţĥîš ŵöŕĺđ ({thousands}) ~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "All {label} in every world (species default)"
+msgstr "[!Àĺĺ {label} îñ éṽéŕý ŵöŕĺđ (šƥéçîéš đéƒàûĺţ) ~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "The plant family, or the mixed woodland the Mix brush paints"
@@ -17047,8 +19106,30 @@ msgid "+ Add a tree…"
 msgstr "[!+ Àđđ à ţŕéé… ~~~!]"
 
 # machine: pseudo
+msgid "{iid} · click to select, drag to move, R turns it"
+msgstr "[!{iid} · çĺîçķ ţö šéĺéçţ, đŕàĝ ţö ɱöṽé, Ŕ ţûŕñš îţ ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{e} on the {face} · click to select, drag to move"
+msgstr "[!{e} öñ ţĥé {face} · çĺîçķ ţö šéĺéçţ, đŕàĝ ţö ɱöṽé ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "The {face}"
+msgstr "[!Ţĥé {face} ~~~!]"
+
+# machine: pseudo
+msgid "{value} on it. Click one in the preview to edit it."
+msgstr ""
+"[!{value} öñ îţ. Çĺîçķ öñé îñ ţĥé ƥŕéṽîéŵ ţö éđîţ îţ. ~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Remove it (Del or Backspace)"
 msgstr "[!Ŕéɱöṽé îţ (Đéĺ öŕ Ɓàçķšƥàçé) ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{value} inside. With the skin off, click one to edit it."
+msgstr ""
+"[!{value} îñšîđé. Ŵîţĥ ţĥé šķîñ öƒƒ, çĺîçķ öñé ţö éđîţ îţ. ~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Along"
@@ -17064,8 +19145,24 @@ msgstr ""
 "[!Ţýƥé ĥöŵ ƒàŕ îţ đŕîṽéš öñé ŵàý ţö šéé ŵĥàţ ĝéţţîñĝ îţ ţĥéŕé çöšţš. ~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "There and back: {mi}, {kwh} kWh, ${cost}. Range {range_km}."
+msgstr ""
+"[!Ţĥéŕé àñđ ƀàçķ: {mi}, {kwh} ķŴĥ, ${cost}. Ŕàñĝé {range_km}. ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "There and back: {mi}, {litres}, ${cost}. Range {range_km} a tank."
+msgstr ""
+"[!Ţĥéŕé àñđ ƀàçķ: {mi}, {litres}, ${cost}. Ŕàñĝé {range_km} à ţàñķ. ~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Towed: its fuel is the tow vehicle's."
 msgstr "[!Ţöŵéđ: îţš ƒûéĺ îš ţĥé ţöŵ ṽéĥîçĺé'š. ~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Your vehicles already have a design called \"{nm}\". Replace it with this one?"
+msgstr ""
+"[!Ýöûŕ ṽéĥîçĺéš àĺŕéàđý ĥàṽé à đéšîĝñ çàĺĺéđ \"{nm}\". Ŕéƥĺàçé îţ ŵîţĥ ţĥîš öñé? ~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "None (parametric)"
@@ -17103,6 +19200,11 @@ msgstr ""
 # machine: pseudo
 msgid "By vehicle type"
 msgstr "[!Ɓý ṽéĥîçĺé ţýƥé ~~~~~!]"
+
+# machine: pseudo
+msgid "Start over from the built-in {label} (Ctrl+Z undoes)"
+msgstr ""
+"[!Šţàŕţ öṽéŕ ƒŕöɱ ţĥé ƀûîĺţ-îñ {label} (Çţŕĺ+Ž ûñđöéš) ~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Hide the body's skin and look at the inside"
@@ -17303,9 +19405,25 @@ msgstr ""
 
 # machine: pseudo
 msgid ""
+"{tip}\n"
+"Shift-click to place several · Esc stops"
+msgstr ""
+"[!{tip}\n"
+"Šĥîƒţ-çĺîçķ ţö ƥĺàçé šéṽéŕàĺ · Éšç šţöƥš ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
 "Arm a piece, then click the floor (the skin comes off). Drag to move, R turns it. Everything needs a 50 cm way in from a door."
 msgstr ""
 "[!Àŕɱ à ƥîéçé, ţĥéñ çĺîçķ ţĥé ƒĺööŕ (ţĥé šķîñ çöɱéš öƒƒ). Đŕàĝ ţö ɱöṽé, Ŕ ţûŕñš îţ. Éṽéŕýţĥîñĝ ñééđš à 50 çɱ ŵàý îñ ƒŕöɱ à đööŕ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{tip}\n"
+"Shift-click to place several · R turns it · Esc stops"
+msgstr ""
+"[!{tip}\n"
+"Šĥîƒţ-çĺîçķ ţö ƥĺàçé šéṽéŕàĺ · Ŕ ţûŕñš îţ · Éšç šţöƥš ~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Your vehicle's model"
@@ -17340,6 +19458,10 @@ msgstr "[!Ţûŕñ îţ ŕöûñđ ~~~~!]"
 # machine: pseudo
 msgid "Add a model…"
 msgstr "[!Àđđ à ɱöđéĺ… ~~~~!]"
+
+# machine: pseudo
+msgid "Copy a .glb / .gltf into {model_dir} and use it"
+msgstr "[!Çöƥý à .ĝĺƀ / .ĝĺţƒ îñţö {model_dir} àñđ ûšé îţ ~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "The trip to site"
@@ -17383,6 +19505,18 @@ msgid "Active weather source"
 msgstr "[!Àçţîṽé ŵéàţĥéŕ šöûŕçé ~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{rain_mmh}mm"
+msgstr "[!{rain_mmh}ɱɱ ~~~~!]"
+
+# machine: pseudo
+msgid "{rain_24h}mm"
+msgstr "[!{rain_24h}ɱɱ ~~~!]"
+
+# machine: pseudo
+msgid "{rpm} rpm · λ {lam} · {p_elec}"
+msgstr "[!{rpm} ŕƥɱ · λ {lam} · {p_elec} ~~~~~~!]"
+
+# machine: pseudo
 msgid ""
 "A rotor clamped to the generator turns it 1 : 1 — set Mount to its own shaft and bearings to gear it."
 msgstr ""
@@ -17414,6 +19548,10 @@ msgstr ""
 # machine: pseudo
 msgid "Could not write the part."
 msgstr "[!Çöûĺđ ñöţ ŵŕîţé ţĥé ƥàŕţ. ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Sheet {idx} of {sheets} — {sheet}, {label}{sheets_2}"
+msgstr "[!Šĥééţ {idx} öƒ {sheets} — {sheet}, {label}{sheets_2} ~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Turbines"
@@ -17513,6 +19651,21 @@ msgstr ""
 "[!Ţàķé ţĥé ɱéàñ ŵîñđ ƒŕöɱ ţĥé ŵöŕĺđ'š ŵéàţĥéŕ đàţà (à ýéàŕ àţ 10 ɱ) ~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{spec} · {p_elec} at {design_wind_ms} m/s · {aep_kwh} a year"
+msgstr ""
+"[!{spec} · {p_elec} àţ {design_wind_ms} ɱ/š · {aep_kwh} à ýéàŕ ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Designing {name} on the graph — Apply writes this design's power curve onto it."
+msgstr ""
+"[!Đéšîĝñîñĝ {name} öñ ţĥé ĝŕàƥĥ — Àƥƥĺý ŵŕîţéš ţĥîš đéšîĝñ'š ƥöŵéŕ çûŕṽé öñţö îţ. ~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "About ${cost} and {kg}."
+msgstr "[!Àƀöûţ ${cost} àñđ {kg}. ~~~~~~!]"
+
+# machine: pseudo
 msgid "Blade, printed solid (small rotors)"
 msgstr "[!Ɓĺàđé, ƥŕîñţéđ šöĺîđ (šɱàĺĺ ŕöţöŕš) ~~~~~~~~~~~!]"
 
@@ -17600,6 +19753,10 @@ msgid "Open a world first; F11 there opens the view."
 msgstr "[!Öƥéñ à ŵöŕĺđ ƒîŕšţ; Ƒ11 ţĥéŕé öƥéñš ţĥé ṽîéŵ. ~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Slot {value}"
+msgstr "[!Šĺöţ {value} ~~~~!]"
+
+# machine: pseudo
 msgid "Portrait"
 msgstr "[!Ƥöŕţŕàîţ ~~~!]"
 
@@ -17609,9 +19766,19 @@ msgstr "[!Šçŕééñ ~~!]"
 
 # machine: pseudo
 msgid ""
+"Row spans {span} m; whole wall covers {wall_fov}° horizontally; per monitor {per}."
+msgstr ""
+"[!Ŕöŵ šƥàñš {span} ɱ; ŵĥöĺé ŵàĺĺ çöṽéŕš {wall_fov}° ĥöŕîžöñţàĺĺý; ƥéŕ ɱöñîţöŕ {per}. ~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
 "No viewpoint saved for this map — the view will open where the player stands."
 msgstr ""
 "[!Ñö ṽîéŵƥöîñţ šàṽéđ ƒöŕ ţĥîš ɱàƥ — ţĥé ṽîéŵ ŵîĺĺ öƥéñ ŵĥéŕé ţĥé ƥĺàýéŕ šţàñđš. ~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Saved: {describe}{is_empty}"
+msgstr "[!Šàṽéđ: {describe}{is_empty} ~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Window wall"
@@ -17652,6 +19819,10 @@ msgstr "[!Ñöţĥîñĝ ţö éẋƥöŕţ. ~~~~~~!]"
 # machine: pseudo
 msgid "Could not write the SVG."
 msgstr "[!Çöûĺđ ñöţ ŵŕîţé ţĥé ŠṼĜ. ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Wrote {path}"
+msgstr "[!Ŵŕöţé {path} ~~~~!]"
 
 # machine: pseudo
 msgid "Wiring diagram"
@@ -17695,6 +19866,11 @@ msgid "Nobody is on the roster."
 msgstr "[!Ñöƀöđý îš öñ ţĥé ŕöšţéŕ. ~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{label} · {chore_hours} h · crew {crew} · {start_h}–{end_h} · {drec}"
+msgstr ""
+"[!{label} · {chore_hours} ĥ · çŕéŵ {crew} · {start_h}–{end_h} · {drec} ~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Edit this duty in the form below"
 msgstr "[!Éđîţ ţĥîš đûţý îñ ţĥé ƒöŕɱ ƀéĺöŵ ~~~~~~~~~~!]"
 
@@ -17705,6 +19881,11 @@ msgstr "[!Ŕéɱöṽé ţĥîš đûţý (îţš ƒûţûŕé šĺöţš ĝö �
 # machine: pseudo
 msgid "Not on the rota this day"
 msgstr "[!Ñöţ öñ ţĥé ŕöţà ţĥîš đàý ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{aid} did not show inside the hold — {covered} stepped in"
+msgstr ""
+"[!{aid} đîđ ñöţ šĥöŵ îñšîđé ţĥé ĥöĺđ — {covered} šţéƥƥéđ îñ ~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Done — a finished slot cannot be traded"
@@ -17721,8 +19902,20 @@ msgid "Click, then click another name to trade shifts"
 msgstr "[!Çĺîçķ, ţĥéñ çĺîçķ àñöţĥéŕ ñàɱé ţö ţŕàđé šĥîƒţš ~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Swap refused — {refusal}."
+msgstr "[!Šŵàƥ ŕéƒûšéđ — {refusal}. ~~~~~~~!]"
+
+# machine: pseudo
 msgid "Rename this role"
 msgstr "[!Ŕéñàɱé ţĥîš ŕöĺé ~~~~~~!]"
+
+# machine: pseudo
+msgid "{members} member{members_2} ▾"
+msgstr "[!{members} ɱéɱƀéŕ{members_2} ▾ ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{mem} member{mem_2} ▾"
+msgstr "[!{mem} ɱéɱƀéŕ{mem_2} ▾ ~~~~~!]"
 
 # machine: pseudo
 msgid "Only people with this skill respond"
@@ -17852,6 +20045,10 @@ msgid "Back to the full roster (Routines & chores)"
 msgstr "[!Ɓàçķ ţö ţĥé ƒûĺĺ ŕöšţéŕ (Ŕöûţîñéš & çĥöŕéš) ~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Work Planner — {value}"
+msgstr "[!Ŵöŕķ Ƥĺàññéŕ — {value} ~~~~~~!]"
+
+# machine: pseudo
 msgid "Seed common chores"
 msgstr "[!Šééđ çöɱɱöñ çĥöŕéš ~~~~~~!]"
 
@@ -17868,6 +20065,11 @@ msgstr "[!＋ Àđđ à çĥöŕé… ~~~~!]"
 # machine: pseudo
 msgid "New chores are authored in Routines & chores"
 msgstr "[!Ñéŵ çĥöŕéš àŕé àûţĥöŕéđ îñ Ŕöûţîñéš & çĥöŕéš ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Active: {workflow_id}  step {step_index}  [{status}]"
+msgstr ""
+"[!Àçţîṽé: {workflow_id}  šţéƥ {step_index}  [{status}] ~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "No active workflow"
@@ -17931,8 +20133,16 @@ msgstr ""
 "[!Çĺöšé ţĥé öƥéñ đîàĺöĝ àñđ ţŕý àĝàîñ — à ṽîšîƀĺé éɱƀéđđéđ ŵîñđöŵ ƀĺöçķš ñàţîṽé ŵîñđöŵš ~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "SIMbiogenesis — window {slot}"
+msgstr "[!ŠÎṀƀîöĝéñéšîš — ŵîñđöŵ {slot} ~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "another mode"
 msgstr "[!àñöţĥéŕ ɱöđé ~~~~!]"
+
+# machine: pseudo
+msgid "Screen {k}"
+msgstr "[!Šçŕééñ {k} ~~~!]"
 
 # machine: pseudo
 msgid "Window wall is off — enable it in Settings → Multi-Monitor"
@@ -17940,13 +20150,52 @@ msgstr ""
 "[!Ŵîñđöŵ ŵàĺĺ îš öƒƒ — éñàƀĺé îţ îñ Šéţţîñĝš → Ṁûĺţî-Ṁöñîţöŕ ~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Solar Array · {value} panels"
+msgstr "[!Šöĺàŕ Àŕŕàý · {value} ƥàñéĺš ~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Place it here"
 msgstr "[!Ƥĺàçé îţ ĥéŕé ~~~~!]"
+
+# machine: pseudo
+msgid "Keep scrolling out to leave {title}  {dots}"
+msgstr "[!Ķééƥ šçŕöĺĺîñĝ öûţ ţö ĺéàṽé {title}  {dots} ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Groundwater · {y} m below the water table"
+msgstr "[!Ĝŕöûñđŵàţéŕ · {y} ɱ ƀéĺöŵ ţĥé ŵàţéŕ ţàƀĺé ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{key} · {depth} down · water table {water_y} m below"
+msgstr ""
+"[!{key} · {depth} đöŵñ · ŵàţéŕ ţàƀĺé {water_y} ɱ ƀéĺöŵ ~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Site stores only. Camps and vehicles ({islands}) keep their own: open one to see its tanks."
+msgstr ""
+"[!Šîţé šţöŕéš öñĺý. Çàɱƥš àñđ ṽéĥîçĺéš ({islands}) ķééƥ ţĥéîŕ öŵñ: öƥéñ öñé ţö šéé îţš ţàñķš. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "No settlement yet — enable Population on a habitat"
 msgstr ""
 "[!Ñö šéţţĺéɱéñţ ýéţ — éñàƀĺé Ƥöƥûĺàţîöñ öñ à ĥàƀîţàţ ~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "👥 {count} people · {morale_avg}"
+msgstr "[!👥 {count} ƥéöƥĺé · {morale_avg} ~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"🔧 Work: {work_h_week} per person a week ({value}){planned} · leisure {leisure_h_day} a day"
+msgstr ""
+"[!🔧 Ŵöŕķ: {work_h_week} ƥéŕ ƥéŕšöñ à ŵééķ ({value}){planned} · ĺéîšûŕé {leisure_h_day} à đàý ~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Measured over the last {days} while the clock ran. Up to {sustainable_h_week} a week (the ATUS adult's paid work and housework) is sustainable, past {overloaded_h_week} overloaded. The Community schedule's Balance tab has the whole day."
+msgstr ""
+"[!Ṁéàšûŕéđ öṽéŕ ţĥé ĺàšţ {days} ŵĥîĺé ţĥé çĺöçķ ŕàñ. Ûƥ ţö {sustainable_h_week} à ŵééķ (ţĥé ÀŢÛŠ àđûĺţ'š ƥàîđ ŵöŕķ àñđ ĥöûšéŵöŕķ) îš šûšţàîñàƀĺé, ƥàšţ {overloaded_h_week} öṽéŕĺöàđéđ. Ţĥé Çöɱɱûñîţý šçĥéđûĺé'š Ɓàĺàñçé ţàƀ ĥàš ţĥé ŵĥöĺé đàý. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Whole festival"
@@ -17961,8 +20210,20 @@ msgid "Stores"
 msgstr "[!Šţöŕéš ~~!]"
 
 # machine: pseudo
+msgid "Add {text}"
+msgstr "[!Àđđ {text} ~~~!]"
+
+# machine: pseudo
 msgid "Worst first"
 msgstr "[!Ŵöŕšţ ƒîŕšţ ~~~~!]"
+
+# machine: pseudo
+msgid "All {worst} on the board"
+msgstr "[!Àĺĺ {worst} öñ ţĥé ƀöàŕđ ~~~~~~~!]"
+
+# machine: pseudo
+msgid "🏠 Your system: {soc} % · {pv_kw} kW solar  ›"
+msgstr "[!🏠 Ýöûŕ šýšţéɱ: {soc} % · {pv_kw} ķŴ šöĺàŕ  › ~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "⚡ LIVE POWER"
@@ -18043,6 +20304,32 @@ msgid "Battery —"
 msgstr "[!Ɓàţţéŕý — ~~~!]"
 
 # machine: pseudo
+msgid "{solar_kw} kW"
+msgstr "[!{solar_kw} ķŴ ~~~~!]"
+
+# machine: pseudo
+msgid "{aux_kw} kW"
+msgstr "[!{aux_kw} ķŴ ~~~!]"
+
+# machine: pseudo
+msgid "{load_kw} kW"
+msgstr "[!{load_kw} ķŴ ~~~!]"
+
+# machine: pseudo
+msgid "{net_kw} kW"
+msgstr "[!{net_kw} ķŴ ~~~!]"
+
+# machine: pseudo
+msgid "{stored} / {cap} kWh"
+msgstr "[!{stored} / {cap} ķŴĥ ~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"Driest week: {mm} mm of rain. Closure and battery hours are the score. Jump back returns to where you were."
+msgstr ""
+"[!Đŕîéšţ ŵééķ: {mm} ɱɱ öƒ ŕàîñ. Çĺöšûŕé àñđ ƀàţţéŕý ĥöûŕš àŕé ţĥé šçöŕé. Ĵûɱƥ ƀàçķ ŕéţûŕñš ţö ŵĥéŕé ýöû ŵéŕé. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Bootcamp sandbox"
 msgstr "[!Ɓööţçàɱƥ šàñđƀöẋ ~~~~~~!]"
 
@@ -18057,6 +20344,10 @@ msgstr "[!Çöɱƥöñéñţ ~~~~!]"
 # machine: pseudo
 msgid "What is wrong"
 msgstr "[!Ŵĥàţ îš ŵŕöñĝ ~~~~!]"
+
+# machine: pseudo
+msgid "+{row_limit} more (filter to narrow the list)"
+msgstr "[!+{row_limit} ɱöŕé (ƒîĺţéŕ ţö ñàŕŕöŵ ţĥé ĺîšţ) ~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Flows · torus"
@@ -18165,6 +20456,10 @@ msgstr ""
 "[!Çĺàššîç đŕàŵš ţĥé öĺđ ţĥîñ ŵîŕéš; ţöûçĥ àñý ķñöƀ ţö šţàŕţ ƒŕöɱ Šàñķéý. ~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "{preset}, {sp} changed (amber rows)"
+msgstr "[!{preset}, {sp} çĥàñĝéđ (àɱƀéŕ ŕöŵš) ~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Flow style"
 msgstr "[!Ƒĺöŵ šţýĺé ~~~~!]"
 
@@ -18247,6 +20542,10 @@ msgid "Nothing to fix on this drawing."
 msgstr "[!Ñöţĥîñĝ ţö ƒîẋ öñ ţĥîš đŕàŵîñĝ. ~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "and {checks} more"
+msgstr "[!àñđ {checks} ɱöŕé ~~~~~!]"
+
+# machine: pseudo
 msgid "Acknowledge all"
 msgstr "[!Àçķñöŵĺéđĝé àĺĺ ~~~~~~!]"
 
@@ -18261,6 +20560,10 @@ msgstr "[!Đîšàŕɱ ~~!]"
 # machine: pseudo
 msgid "Hardware…"
 msgstr "[!Ĥàŕđŵàŕé… ~~~!]"
+
+# machine: pseudo
+msgid "ARMED  ·  {value} driving real devices"
+msgstr "[!ÀŔṀÉĐ  ·  {value} đŕîṽîñĝ ŕéàĺ đéṽîçéš ~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "The last screen stays."
@@ -18307,6 +20610,10 @@ msgstr "[!Ɓéñđ ɱöṽéđ: ţĥé ŕûñ îš ŕöûţéđ ţĥŕöûĝĥ �
 msgid "That bend is the router's own: drag it to make it a bend point"
 msgstr ""
 "[!Ţĥàţ ƀéñđ îš ţĥé ŕöûţéŕ'š öŵñ: đŕàĝ îţ ţö ɱàķé îţ à ƀéñđ ƥöîñţ ~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Show the {lay} lines in this picture."
+msgstr "[!Šĥöŵ ţĥé {lay} ĺîñéš îñ ţĥîš ƥîçţûŕé. ~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "As built"
@@ -18419,8 +20726,16 @@ msgid "Percolation channels (flowing)"
 msgstr "[!Ƥéŕçöĺàţîöñ çĥàññéĺš (ƒĺöŵîñĝ) ~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "depths drawn ×{k} for legibility"
+msgstr "[!đéƥţĥš đŕàŵñ ×{k} ƒöŕ ĺéĝîƀîĺîţý ~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Soil profile of the cutaway — click to collapse"
 msgstr "[!Šöîĺ ƥŕöƒîĺé öƒ ţĥé çûţàŵàý — çĺîçķ ţö çöĺĺàƥšé ~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{people} ppl"
+msgstr "[!{people} ƥƥĺ ~~~~!]"
 
 # machine: pseudo
 msgid "Ctrl+F to search"
@@ -18488,6 +20803,10 @@ msgstr "[!Ŕéšéţ çöññéçţöŕ ~~~~~~!]"
 # machine: pseudo
 msgid "Overload"
 msgstr "[!Öṽéŕĺöàđ ~~~!]"
+
+# machine: pseudo
+msgid "{ratio}× rating"
+msgstr "[!{ratio}× ŕàţîñĝ ~~~~!]"
 
 # machine: pseudo
 msgid "Simulate losses"
@@ -18609,8 +20928,20 @@ msgstr ""
 "[!À ƥĺàçéĥöĺđéŕ ƒöŕ à ɱàçĥîñé ñöƀöđý ĥàš ƀûîĺţ ýéţ: îţ ţàķéš ŵĥàţ çöɱéš îñ, đéĺîṽéŕš ŵĥàţ îţ îš àšķéđ àš ƒàŕ àš ţĥé éĺéɱéñţš àĺĺöŵ, àñđ ɱéàšûŕéš îţ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid ""
+"Show machines that would close the {kind} loop here, as ghosts on the graph (Tab accepts, Esc dismisses)."
+msgstr ""
+"[!Šĥöŵ ɱàçĥîñéš ţĥàţ ŵöûĺđ çĺöšé ţĥé {kind} ĺööƥ ĥéŕé, àš ĝĥöšţš öñ ţĥé ĝŕàƥĥ (Ţàƀ àççéƥţš, Éšç đîšɱîššéš). ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "What can separate this?"
 msgstr "[!Ŵĥàţ çàñ šéƥàŕàţé ţĥîš? ~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"The machines and kinds of process that pull water, nitrogen, phosphorus, potassium or carbon out of {kind}."
+msgstr ""
+"[!Ţĥé ɱàçĥîñéš àñđ ķîñđš öƒ ƥŕöçéšš ţĥàţ ƥûĺĺ ŵàţéŕ, ñîţŕöĝéñ, ƥĥöšƥĥöŕûš, ƥöţàššîûɱ öŕ çàŕƀöñ öûţ öƒ {kind}. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Site Plan (meters)"
@@ -18631,6 +20962,10 @@ msgstr ""
 # machine: pseudo
 msgid "Reset size to type default"
 msgstr "[!Ŕéšéţ šîžé ţö ţýƥé đéƒàûĺţ ~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Restore {def_w} × {def_h} for this node type"
+msgstr "[!Ŕéšţöŕé {def_w} × {def_h} ƒöŕ ţĥîš ñöđé ţýƥé ~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid ""
@@ -18715,6 +21050,11 @@ msgstr "[!Öƥéñ Îñṽéñţöŕý… ~~~~~!]"
 # machine: pseudo
 msgid "Live Extrusion"
 msgstr "[!Ĺîṽé Éẋţŕûšîöñ ~~~~~!]"
+
+# machine: pseudo
+msgid "{extruded_length_m} m ({extrude_fill_fraction}% of cut)"
+msgstr ""
+"[!{extruded_length_m} ɱ ({extrude_fill_fraction}% öƒ çûţ) ~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Population Simulation"
@@ -18848,6 +21188,10 @@ msgstr ""
 "[!Ñö ƀéàɱ ƒééđšţöçķ ýéţ — çûţ ƀéàɱš öñ ţĥé ƤƤ Ɓéàɱ Éẋţŕûđéŕ (öŕ ĺöàđ ƀéàɱš ĺàƀéĺéđ “Ŕéçýçĺéđ Ƥĺàšţîç Ɓéàɱ”). ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "↩ Reclaim {bs_n} as beam stock"
+msgstr "[!↩ Ŕéçĺàîɱ {bs_n} àš ƀéàɱ šţöçķ ~~~~~~~~!]"
+
+# machine: pseudo
 msgid ""
 "If these came from the beam extruder (not the trash printer), convert them back to CNC feedstock."
 msgstr ""
@@ -18884,22 +21228,22 @@ msgstr ""
 "[!Ûƥđàţé ţĥîš çöɱƥöñéñţ'š ĺîƀŕàŕý ƥŕéšéţ ŵîţĥ ţĥé çûŕŕéñţ šéţţîñĝš, àñđ àƥƥĺý ţĥéɱ ţö éṽéŕý öţĥéŕ îñšţàñçé öñ ţĥé çàñṽàš. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
-msgid "Process Recipe"
-msgstr "[!Ƥŕöçéšš Ŕéçîƥé ~~~~~!]"
-
-# machine: pseudo
 msgid ""
 "Sunlight factor is 3D site shade (1.0 = unshaded). Place the panel on the Site Plan to enable per-node shading."
 msgstr ""
 "[!Šûñĺîĝĥţ ƒàçţöŕ îš 3Đ šîţé šĥàđé (1.0 = ûñšĥàđéđ). Ƥĺàçé ţĥé ƥàñéĺ öñ ţĥé Šîţé Ƥĺàñ ţö éñàƀĺé ƥéŕ-ñöđé šĥàđîñĝ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
-msgid "(none — continuous)"
-msgstr "[!(ñöñé — çöñţîñûöûš) ~~~~~~!]"
+msgid "Process Recipe"
+msgstr "[!Ƥŕöçéšš Ŕéçîƥé ~~~~~!]"
 
 # machine: pseudo
 msgid "Cost"
 msgstr "[!Çöšţ ~~!]"
+
+# machine: pseudo
+msgid "(none — continuous)"
+msgstr "[!(ñöñé — çöñţîñûöûš) ~~~~~~!]"
 
 # machine: pseudo
 msgid "Legacy batch cycle"
@@ -18908,6 +21252,10 @@ msgstr "[!Ĺéĝàçý ƀàţçĥ çýçĺé ~~~~~~!]"
 # machine: pseudo
 msgid "Site / Area"
 msgstr "[!Šîţé / Àŕéà ~~~!]"
+
+# machine: pseudo
+msgid "Waiting: {recipe_waiting}"
+msgstr "[!Ŵàîţîñĝ: {recipe_waiting} ~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Start recipe"
@@ -19125,8 +21473,16 @@ msgstr ""
 "[!Ĺîñķ à šéñšöŕ ţö àñý öƒ ţĥéšé ṽàĺûéš. Àţ 1× (Ĺîṽé) ţĥé ñöđé ƒöĺĺöŵš îţ; àţ àñý šƥééđ ţĥé ŕéàđîñĝ îš ŕéçöŕđéđ šö ýöû çàñ çöɱƥàŕé îţ ŵîţĥ ţĥé šîɱûĺàţîöñ. ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Linked to {eid}. Click to change or unlink."
+msgstr "[!Ĺîñķéđ ţö {eid}. Çĺîçķ ţö çĥàñĝé öŕ ûñĺîñķ. ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Link a sensor…"
 msgstr "[!Ĺîñķ à šéñšöŕ… ~~~~!]"
+
+# machine: pseudo
+msgid "Pick a Home Assistant entity for {label}."
+msgstr "[!Ƥîçķ à Ĥöɱé Àššîšţàñţ éñţîţý ƒöŕ {label}. ~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Circuit Switch Controls"
@@ -19228,6 +21584,22 @@ msgstr "[!■  Šţöƥ çàĺîƀŕàţîöñ ~~~~~~!]"
 # machine: pseudo
 msgid "Recording..."
 msgstr "[!Ŕéçöŕđîñĝ... ~~~~!]"
+
+# machine: pseudo
+msgid "Time remaining: {remaining_s}   ({samples})"
+msgstr "[!Ţîɱé ŕéɱàîñîñĝ: {remaining_s}   ({samples}) ~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Live: {current_w} W"
+msgstr "[!Ĺîṽé: {current_w} Ŵ ~~~~~!]"
+
+# machine: pseudo
+msgid "Average: {avg_w} W"
+msgstr "[!Àṽéŕàĝé: {avg_w} Ŵ ~~~~~!]"
+
+# machine: pseudo
+msgid "Peak: {peak_w} W"
+msgstr "[!Ƥéàķ: {peak_w} Ŵ ~~~~!]"
 
 # machine: pseudo
 msgid "Calibration complete."
@@ -19415,6 +21787,12 @@ msgid "Provision"
 msgstr "[!Ƥŕöṽîšîöñ ~~~~!]"
 
 # machine: pseudo
+msgid ""
+"How many days of water, food and firewood to stock (and waste tanks to size) for {value} people"
+msgstr ""
+"[!Ĥöŵ ɱàñý đàýš öƒ ŵàţéŕ, ƒööđ àñđ ƒîŕéŵööđ ţö šţöçķ (àñđ ŵàšţé ţàñķš ţö šîžé) ƒöŕ {value} ƥéöƥĺé ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Stock up"
 msgstr "[!Šţöçķ ûƥ ~~~!]"
 
@@ -19587,6 +21965,15 @@ msgid "Place the 3D model in the world"
 msgstr "[!Ƥĺàçé ţĥé 3Đ ɱöđéĺ îñ ţĥé ŵöŕĺđ ~~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Packs to: {packed} · {packed_2}{source}"
+msgstr "[!Ƥàçķš ţö: {packed} · {packed_2}{source} ~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "🌍  In the world, not on the graph ({total})  {world_open}"
+msgstr ""
+"[!🌍  Îñ ţĥé ŵöŕĺđ, ñöţ öñ ţĥé ĝŕàƥĥ ({total})  {world_open} ~~~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Add all"
 msgstr "[!Àđđ àĺĺ ~~!]"
 
@@ -19613,6 +22000,10 @@ msgstr "[!Đîšɱîššéđ. Çĺöšé ĺööƥš… šţîĺĺ ĺîšţš î�
 # machine: pseudo
 msgid "Experiments need a world. Load one first."
 msgstr "[!Éẋƥéŕîɱéñţš ñééđ à ŵöŕĺđ. Ĺöàđ öñé ƒîŕšţ. ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "Other options ({index} of {count})"
+msgstr "[!Öţĥéŕ öƥţîöñš ({index} öƒ {count}) ~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Could not write the brief."
@@ -19674,6 +22065,10 @@ msgid "Import graph"
 msgstr "[!Îɱƥöŕţ ĝŕàƥĥ ~~~~!]"
 
 # machine: pseudo
+msgid "☀ Add OSM Solar ({pending} · {panels} pv)"
+msgstr "[!☀ Àđđ ÖŠṀ Šöĺàŕ ({pending} · {panels} ƥṽ) ~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "Solar Array"
 msgstr "[!Šöĺàŕ Àŕŕàý ~~~~!]"
 
@@ -19710,6 +22105,10 @@ msgid "Explode compound"
 msgstr "[!Éẋƥĺöđé çöɱƥöûñđ ~~~~~~!]"
 
 # machine: pseudo
+msgid "Go to another {kind_vehicle} at this level"
+msgstr "[!Ĝö ţö àñöţĥéŕ {kind_vehicle} àţ ţĥîš ĺéṽéĺ ~~~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "📊  System Review"
 msgstr "[!📊  Šýšţéɱ Ŕéṽîéŵ ~~~~~!]"
 
@@ -19722,8 +22121,20 @@ msgid "⌨  Keyboard & Mouse Shortcuts"
 msgstr "[!⌨  Ķéýƀöàŕđ & Ṁöûšé Šĥöŕţçûţš ~~~~~~~~~!]"
 
 # machine: pseudo
+msgid "Loading last {history_hours_back} h…"
+msgstr "[!Ĺöàđîñĝ ĺàšţ {history_hours_back} ĥ… ~~~~~~~~~~~!]"
+
+# machine: pseudo
 msgid "HA HISTORY PLAYBACK"
 msgstr "[!ĤÀ ĤÎŠŢÖŔÝ ƤĹÀÝƁÀÇĶ ~~~~~~~!]"
+
+# machine: pseudo
+msgid "Loading {loaded} / {total}"
+msgstr "[!Ĺöàđîñĝ {loaded} / {total} ~~~~~~~!]"
+
+# machine: pseudo
+msgid "🌐 SoI {r} m · {km2} km²"
+msgstr "[!🌐 ŠöÎ {r} ɱ · {km2} ķɱ² ~~~~!]"
 
 # machine: pseudo
 msgid "🌐 SoI · —"
@@ -19742,8 +22153,28 @@ msgid "Make Array"
 msgstr "[!Ṁàķé Àŕŕàý ~~~~!]"
 
 # machine: pseudo
+msgid "Systems by {mode}"
+msgstr "[!Šýšţéɱš ƀý {mode} ~~~~~!]"
+
+# machine: pseudo
 msgid "Stop colouring systems"
 msgstr "[!Šţöƥ çöĺöûŕîñĝ šýšţéɱš ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{no_data} with no data shown grey"
+msgstr "[!{no_data} ŵîţĥ ñö đàţà šĥöŵñ ĝŕéý ~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid "+{alerts_rail_max} more on the board"
+msgstr "[!+{alerts_rail_max} ɱöŕé öñ ţĥé ƀöàŕđ ~~~~~~~~~~~!]"
+
+# machine: pseudo
+msgid ""
+"{name} needs attention: {reason}\n"
+"Click to fly there."
+msgstr ""
+"[!{name} ñééđš àţţéñţîöñ: {reason}\n"
+"Çĺîçķ ţö ƒĺý ţĥéŕé. ~~~~~~~~~~~~~~~~!]"
 
 # machine: pseudo
 msgid "Dismiss (it comes back if it gets worse)"
@@ -19766,6 +22197,10 @@ msgstr "[!Ĝöţ îţ ~~!]"
 # machine: pseudo
 msgid "Show everything again"
 msgstr "[!Šĥöŵ éṽéŕýţĥîñĝ àĝàîñ ~~~~~~~~!]"
+
+# machine: pseudo
+msgid "{hidden} hidden  ✕"
+msgstr "[!{hidden} ĥîđđéñ  ✕ ~~~~~!]"
 
 # machine: pseudo
 msgid "⚡ Review"

@@ -199,7 +199,7 @@ func _build_ui() -> void:
 	title_row.add_child(close_btn)
 
 	var hint := Label.new()
-	hint.text = "Private beta · max %d players. Join codes expire. Optional password + trusted keys. Enter to chat; Discord for voice." % MultiplayerSession.MAX_PEERS
+	hint.text = I18n.f("Private beta · max {max_peers} players. Join codes expire. Optional password + trusted keys. Enter to chat; Discord for voice.", {"max_peers": "%d" % MultiplayerSession.MAX_PEERS})
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	hint.add_theme_font_size_override("font_size", UITheme.FONT_SM)
@@ -740,11 +740,11 @@ func _sync_from_session() -> void:
 		if MultiplayerSession.is_host() and exp > 0:
 			var left := exp - int(Time.get_unix_time_from_system())
 			var hrs := maxi(0, left) / 3600.0
-			_exp_lbl.text = "Expires in ~%.1fh · password %s · trusted %s" % [
-				hrs,
-				"ON" if MultiplayerSession.has_host_password() else "off",
-				"ON" if MultiplayerSession.require_trusted else "off",
-			]
+			_exp_lbl.text = I18n.f("Expires in ~{hrs}h · password {has_host_password} · trusted {require_trusted}", {
+				"hrs": "%.1f" % hrs,
+				"has_host_password": "ON" if MultiplayerSession.has_host_password() else "off",
+				"require_trusted": "ON" if MultiplayerSession.require_trusted else "off",
+			})
 		else:
 			_exp_lbl.text = ""
 	_refresh_discord_auth()
@@ -765,21 +765,22 @@ func _sync_from_session() -> void:
 	_copy_btn.disabled = MultiplayerSession.join_code.is_empty()
 	_port_spin.editable = not active
 	if active and MultiplayerSession.is_host():
-		_status_lbl.text = "Hosting · %s:%d · %s" % [
-			MultiplayerSession.host_address,
-			MultiplayerSession.host_port,
-			MultiplayerSession.status_label(),
-		]
+		_status_lbl.text = I18n.f("Hosting · {host_address}:{host_port} · {status}", {
+			"host_address": MultiplayerSession.host_address,
+			"host_port": "%d" % MultiplayerSession.host_port,
+			"status": MultiplayerSession.status_label(),
+		})
 	elif active:
-		_status_lbl.text = "Connected · %s" % MultiplayerSession.status_label()
+		_status_lbl.text = I18n.f("Connected · {status}", {"status": MultiplayerSession.status_label()})
 	elif MultiplayerSession.is_joining():
 		_status_lbl.text = "Loading host map / connecting…"
 	_share_btn.disabled = not active
 	_live_sync_btn.disabled = not active
 	_live_sync_btn.set_pressed_no_signal(MultiplayerSession.is_live_design_sync())
 	if MultiplayerSession.design != null and not str(MultiplayerSession.design.get("active_offer_id")).is_empty():
-		_preview_lbl.text = "Ghost preview active · %s" % UiText.count(int(
-			MultiplayerSession.design.get("ghost_prop_count")), "prop ghost")
+		_preview_lbl.text = I18n.f("Ghost preview active · {ghost_prop_count}", {
+			"ghost_prop_count": UiText.count(int( MultiplayerSession.design.get("ghost_prop_count")), "prop ghost"),
+		})
 		_preview_lbl.add_theme_color_override("font_color", UITheme.C_PRIMARY)
 	else:
 		_preview_lbl.text = "No ghost preview"
@@ -805,12 +806,17 @@ func _refresh_policy() -> void:
 	if not MultiplayerSession.is_active():
 		_policy_lbl.text = "The host's world is the shared one. Guests' edits show on their screen straight away and wait for your answer."
 	elif host:
-		_policy_lbl.text = "Accepted %d · declined %d · waiting %d. Waiting changes show as ghosts in the world; Alt+Y / Alt+N take the oldest." % [
-			int(d.get("accepted_count")), int(d.get("rejected_count")), (d.get("review") as Array).size()]
+		_policy_lbl.text = I18n.f("Accepted {accepted_count} · declined {rejected_count} · waiting {review}. Waiting changes show as ghosts in the world; Alt+Y / Alt+N take the oldest.", {
+			"accepted_count": "%d" % int(d.get("accepted_count")),
+			"rejected_count": "%d" % int(d.get("rejected_count")),
+			"review": "%d" % ((d.get("review") as Array).size()),
+		})
 	else:
-		_policy_lbl.text = "The host decides. Your waiting changes: %d · accepted %d · declined %d." % [
-			(d.get("my_pending") as Dictionary).size(), int(d.get("accepted_count")),
-			int(d.get("rejected_count"))]
+		_policy_lbl.text = I18n.f("The host decides. Your waiting changes: {my_pending} · accepted {accepted_count} · declined {rejected_count}.", {
+			"my_pending": "%d" % ((d.get("my_pending") as Dictionary).size()),
+			"accepted_count": "%d" % int(d.get("accepted_count")),
+			"rejected_count": "%d" % int(d.get("rejected_count")),
+		})
 
 
 func _discord_identity() -> Node:
@@ -842,8 +848,7 @@ func _on_import_community() -> void:
 	_community_edit.text = ""
 	var name := str(community.get("name", "your community"))
 	var warns: PackedStringArray = SimCommunity.warnings(community)
-	_status_lbl.text = "Imported %s%s" % [name,
-		"" if warns.is_empty() else " · " + str(warns[0])]
+	_status_lbl.text = I18n.f("Imported {name}{warns}", {"name": name, "warns": "" if warns.is_empty() else " · " + str(warns[0])})
 	_sync_from_session()
 
 
@@ -938,12 +943,14 @@ func _on_election_result(won: bool, record: Dictionary) -> void:
 	# Prompt for sign-in BEFORE connecting rather than letting the peer connect
 	# and be kicked with a confusing message.
 	if not MultiplayerSession.can_satisfy_discord(decoded):
-		_status_lbl.text = "%s's session needs a Discord sign-in — sign in above, then Play together" % \
-			str(host.get("name", "That"))
+		_status_lbl.text = I18n.f("{name}'s session needs a Discord sign-in — sign in above, then Play together", {
+			"name": str(host.get("name", "That")),
+		})
 		return
 	var res2: Dictionary = MultiplayerSession.join_decoded(decoded)
-	_status_lbl.text = "Joining %s…" % str(host.get("name", "the session")) \
-		if bool(res2.get("ok", false)) else str(res2.get("error", "Could not join"))
+	_status_lbl.text = I18n.f("Joining {name}…", {
+		"name": str(host.get("name", "the session")),
+	}) if bool(res2.get("ok", false)) else str(res2.get("error", "Could not join"))
 	_sync_from_session()
 
 
@@ -955,8 +962,9 @@ func _on_discord_requirement_toggled(_pressed: bool) -> void:
 		return
 	MultiplayerSession.set_discord_requirement(community,
 		_require_discord.button_pressed, _allow_offline_discord.button_pressed)
-	_status_lbl.text = "Discord membership %s" % (
-		"required to join" if MultiplayerSession.require_discord else "not required")
+	_status_lbl.text = I18n.f("Discord membership {require_discord}", {
+		"require_discord": ( "required to join" if MultiplayerSession.require_discord else "not required"),
+	})
 	_sync_from_session()
 
 
@@ -987,8 +995,9 @@ func _on_build_community() -> void:
 	SimCommunity.set_active(community)
 	_apply_community(community)
 	var warns: PackedStringArray = SimCommunity.warnings(community)
-	_builder_lbl.text = "Copied to clipboard — paste it in your Discord server.%s" % (
-		"" if warns.is_empty() else "\n" + "\n".join(warns))
+	_builder_lbl.text = I18n.f("Copied to clipboard — paste it in your Discord server.{warns}", {
+		"warns": ( "" if warns.is_empty() else "\n" + "\n".join(warns)),
+	})
 	_builder_lbl.add_theme_color_override("font_color",
 		UITheme.C_WARN if not warns.is_empty() else UITheme.C_OK)
 	_sync_from_session()
@@ -1004,8 +1013,9 @@ func _on_load_community_into_builder() -> void:
 		if value is Array:
 			value = ", ".join(PackedStringArray(value))
 		(_builder_fields[key] as LineEdit).text = str(value)
-	_builder_lbl.text = "Loaded %s — edit and re-create to publish an update." % \
-		str(community.get("name", "your community"))
+	_builder_lbl.text = I18n.f("Loaded {name} — edit and re-create to publish an update.", {
+		"name": str(community.get("name", "your community")),
+	})
 	_builder_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 
 
@@ -1236,7 +1246,7 @@ func _on_mint_key() -> void:
 		_trusted_edit.text = "\n".join(MultiplayerSession.trusted_keys)
 	if _require_trusted != null:
 		_require_trusted.set_pressed_no_signal(true)
-	_status_lbl.text = "Minted friend key (copied): %s" % key
+	_status_lbl.text = I18n.f("Minted friend key (copied): {key}", {"key": key})
 	_sync_from_session()
 
 

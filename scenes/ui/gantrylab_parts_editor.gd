@@ -89,7 +89,7 @@ func build_palette(box: VBoxContainer) -> void:
 			var b := Button.new()
 			b.text = _short(ref)
 			b.toggle_mode = true
-			b.tooltip_text = "%s — click, then click where it fastens. R turns it, Shift keeps the tool, Esc stops." % GantryLabCatalog.label_of(ref, GantryLabCatalog.params_of(ref, {}))
+			b.tooltip_text = I18n.f("{ref} — click, then click where it fastens. R turns it, Shift keeps the tool, Esc stops.", {"ref": GantryLabCatalog.label_of(ref, GantryLabCatalog.params_of(ref, {}))})
 			b.custom_minimum_size = Vector2(0, 24)
 			UITheme.style_button(b)
 			b.add_theme_font_size_override("font_size", UITheme.FONT_XS)
@@ -477,7 +477,7 @@ func _drag_module(pos: Vector2, step: float) -> void:
 	var dv: Vector3 = out.get("delta", Vector3.ZERO)
 	var mods := GantryLabAssembly.modules_of(res)
 	var mirrored := mods.has(mid) and not str(mods[mid].get("twin", "")).is_empty()
-	m._hover_lbl.text = "%s · moved %.1f mm%s" % [_mod_label(mid), dv.length() * 1000.0, " (and its mirror)" if mirrored else ""]
+	m._hover_lbl.text = I18n.f("{mid} · moved {dv} mm{mirrored}", {"mid": _mod_label(mid), "dv": "%.1f" % (dv.length() * 1000.0), "mirrored": " (and its mirror)" if mirrored else ""})
 
 
 # ---------------------------------------------------------------------------
@@ -569,7 +569,7 @@ func _on_palette(ref: String) -> void:
 		(_palette_btns[r] as Button).button_pressed = (str(r) == ref)
 	_refresh_marks()
 	refresh_card()
-	m._hover_lbl.text = "Place: %s — click where it fastens" % GantryLabCatalog.label_of(ref, tool_params)
+	m._hover_lbl.text = I18n.f("Place: {tool_params} — click where it fastens", {"tool_params": GantryLabCatalog.label_of(ref, tool_params)})
 
 
 func _disarm() -> void:
@@ -592,7 +592,7 @@ func _update_ghost(pos: Vector2, step: float) -> void:
 	mach.clear_marks("ghost")
 	mach.clear_marks("target")
 	if cand.is_empty():
-		m._hover_lbl.text = "Place: %s — nothing it fastens to under the pointer" % GantryLabCatalog.label_of(tool_ref, tool_params)
+		m._hover_lbl.text = I18n.f("Place: {tool_params} — nothing it fastens to under the pointer", {"tool_params": GantryLabCatalog.label_of(tool_ref, tool_params)})
 		return
 	var w: Transform3D = cand["world"]
 	var beams: Array = []
@@ -765,7 +765,7 @@ func refresh_card() -> void:
 		elif ctx.is_empty():
 			hint.text = "Click a module in the view to pick it, drag it to move it as one, double-click to open it."
 		else:
-			hint.text = "Inside the %s: click a part or sub-module; Esc steps back out." % _mod_label(ctx).to_lower()
+			hint.text = I18n.f("Inside the {ctx}: click a part or sub-module; Esc steps back out.", {"ctx": _mod_label(ctx).to_lower()})
 		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		hint.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		hint.add_theme_color_override("font_color", UITheme.C_TEXT_S)
@@ -857,7 +857,7 @@ func refresh_card() -> void:
 	var tw := str(p.get("twin", ""))
 	var mrow := HBoxContainer.new()
 	var ml := Label.new()
-	ml.text = "Mirrored with the %s" % _target_name(tw).to_lower() if not tw.is_empty() else "Not mirrored"
+	ml.text = I18n.f("Mirrored with the {tw}", {"tw": _target_name(tw).to_lower()}) if not tw.is_empty() else "Not mirrored"
 	ml.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	ml.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	ml.add_theme_color_override("font_color", UITheme.C_TEXT_S)
@@ -946,7 +946,7 @@ func _module_card() -> void:
 	var tm := str(md.get("twin", ""))
 	if not tm.is_empty():
 		var tl := Label.new()
-		tl.text = "Mirrored with the %s: moves follow on the other side." % _mod_label(tm).to_lower()
+		tl.text = I18n.f("Mirrored with the {tm}: moves follow on the other side.", {"tm": _mod_label(tm).to_lower()})
 		tl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		tl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		tl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
@@ -993,7 +993,7 @@ func _module_card() -> void:
 	btns.add_child(ob)
 	var db := Button.new()
 	db.text = "Delete"
-	db.tooltip_text = "Del: every part in it%s" % (" and in its mirror" if not tm.is_empty() else "")
+	db.tooltip_text = I18n.f("Del: every part in it{is_empty}", {"is_empty": (" and in its mirror" if not tm.is_empty() else "")})
 	UITheme.style_button(db)
 	db.pressed.connect(_delete_selected)
 	btns.add_child(db)

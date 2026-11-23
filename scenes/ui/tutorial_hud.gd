@@ -35,7 +35,7 @@ func _ready() -> void:
 
 func show_level(index: int, title: String, objective: String,
 		is_run_level: bool = false) -> void:
-	_title_lbl.text = "🎓  Level %d — %s" % [index, title]
+	_title_lbl.text = I18n.f("🎓  Level {index} — {title}", {"index": "%d" % index, "title": title})
 	_objective_lbl.text = objective
 	_progress_lbl.text = ""
 	_run_btn.visible = is_run_level

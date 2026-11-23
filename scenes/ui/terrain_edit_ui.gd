@@ -456,9 +456,9 @@ func _update_height_readout() -> void:
 	if _loader.has_method("terrain_edit_delta_at"):
 		d = float(_loader.call("terrain_edit_delta_at", p.x, p.z))
 	if absf(d) >= 0.05:
-		_height_lbl.text = "Ground %.1f m · edited %+.1f m" % [gy, d]
+		_height_lbl.text = I18n.f("Ground {gy} m · edited {d} m", {"gy": "%.1f" % gy, "d": "%+.1f" % d})
 	else:
-		_height_lbl.text = "Ground %.1f m" % gy
+		_height_lbl.text = I18n.f("Ground {gy} m", {"gy": "%.1f" % gy})
 
 
 # ---------------------------------------------------------------------------
@@ -878,13 +878,13 @@ func _update_basin_label() -> void:
 	var rate_txt := ""
 	if _water_modulating and absf(_last_fill_rate_lps) > 0.5:
 		rate_txt = " · %.0f L/s" % _last_fill_rate_lps
-	_basin_lbl.text = "Lvl %.2f / spill %.2f m · %.0f L (%.0f%%)%s" % [
-		float(_basin_cache.get("level_m", 0.0)),
-		float(_basin_cache.get("spill_m", 0.0)),
-		float(_basin_cache.get("stock_l", 0.0)),
-		float(_basin_cache.get("fill_frac", 0.0)) * 100.0,
-		rate_txt,
-	]
+	_basin_lbl.text = I18n.f("Lvl {level_m} / spill {spill_m} m · {stock_l} L ({fill_frac}%){rate}", {
+		"level_m": "%.2f" % (float(_basin_cache.get("level_m", 0.0))),
+		"spill_m": "%.2f" % (float(_basin_cache.get("spill_m", 0.0))),
+		"stock_l": "%.0f" % (float(_basin_cache.get("stock_l", 0.0))),
+		"fill_frac": "%.0f" % (float(_basin_cache.get("fill_frac", 0.0)) * 100.0),
+		"rate": rate_txt,
+	})
 
 
 ## One-shot gravity flood of the locked selection. The loader half

@@ -440,8 +440,11 @@ func _sync_fields() -> void:
 	var k := keys.key(_sel)
 	var p: Vector3 = ClimelapseKeyframes.key_transform(k).origin
 	_syncing = true
-	_time_lbl.text = "Keyframe %d of %d · %s" % [_sel + 1, keys.size(),
-		ClimelapsePathView.time_label(_clock(), float(k.get("t", 0.0)))]
+	_time_lbl.text = I18n.f("Keyframe {sel} of {value} · {t}", {
+		"sel": "%d" % (_sel + 1),
+		"value": "%d" % keys.size(),
+		"t": ClimelapsePathView.time_label(_clock(), float(k.get("t", 0.0))),
+	})
 	_pan_spin.value = ClimelapseKeyframes.heading_deg(float(k.get("yaw", 0.0)))
 	_tilt_spin.value = rad_to_deg(float(k.get("pitch", 0.0)))
 	_fov_spin.value = float(k.get("fov", 75.0))

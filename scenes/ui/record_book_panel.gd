@@ -205,7 +205,7 @@ func _connect_signals() -> void:
 			_training_loaded_count = loaded
 			_training_total_count = total
 			if _gen_weather_btn != null and _weather_gen_waiting_training:
-				_gen_weather_btn.text = "Loading training %d/%d…" % [loaded, total]
+				_gen_weather_btn.text = I18n.f("Loading training {loaded}/{total}…", {"loaded": "%d" % loaded, "total": "%d" % total})
 			_update_progress())
 	if WeatherService.has_signal("generation_training_started"):
 		WeatherService.connect("generation_training_started", func():
@@ -218,7 +218,7 @@ func _connect_signals() -> void:
 			_weather_gen_waiting_training = false
 			_weather_gen_active = false
 			if _status_lbl != null:
-				_status_lbl.text = "Training fetch failed: %s" % reason
+				_status_lbl.text = I18n.f("Training fetch failed: {reason}", {"reason": reason})
 			_update_gen_weather_button())
 
 
@@ -977,7 +977,7 @@ func _update_header() -> void:
 		loc_str = "%s  (%s)" % [stn, SitePrivacy.coords(lat, lon)]
 	else:
 		loc_str = SitePrivacy.coords(lat, lon)
-	_header_lbl.text = "🌡 Climate Record Book — %s" % loc_str
+	_header_lbl.text = I18n.f("🌡 Climate Record Book — {loc}", {"loc": loc_str})
 
 
 func _update_progress() -> void:
@@ -1062,7 +1062,7 @@ func _update_compute_button_state() -> void:
 		for yr in _proj_yearbook_cache.keys():
 			if int(yr) > cur_year:
 				done += 1
-		_compute_btn.text = "Computing… %d/%d" % [done, total]
+		_compute_btn.text = I18n.f("Computing… {done}/{total}", {"done": "%d" % done, "total": "%d" % total})
 		return
 	if _proj_cache_fully_built(cur_year):
 		_compute_btn.text = "Recompute Scenario"

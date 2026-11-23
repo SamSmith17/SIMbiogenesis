@@ -313,9 +313,10 @@ func _add_summary() -> void:
 	var spec := LinkageStructureBuilder.packed_spec_for(params)
 	if not spec.is_empty():
 		var ship := Label.new()
-		ship.text = "📦 Folded: %s · %s" % [
-			PackedSpec.format_dims_short(spec),
-			LinkageBom.fmt_mass(float(spec.get("mass_kg", 0.0)))]
+		ship.text = I18n.f("📦 Folded: {spec} · {mass_kg}", {
+			"spec": PackedSpec.format_dims_short(spec),
+			"mass_kg": LinkageBom.fmt_mass(float(spec.get("mass_kg", 0.0))),
+		})
 		ship.add_theme_color_override("font_color", C_TEXT_S)
 		ship.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		box.add_child(ship)
@@ -543,7 +544,7 @@ func _add_coverings_card() -> void:
 	var copies := int((_bom.get("copies", {}) as Dictionary).get("total", 1))
 	if copies > 1:
 		var note := Label.new()
-		note.text = "Per structure — the design holds %d, so cut every piece %d times." % [copies, copies]
+		note.text = I18n.f("Per structure — the design holds {copies}, so cut every piece {copies_2} times.", {"copies": "%d" % copies, "copies_2": "%d" % copies})
 		note.add_theme_color_override("font_color", C_TEXT_M)
 		note.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		box.add_child(note)
@@ -582,7 +583,7 @@ func _add_coverings_card() -> void:
 	status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var export_btn := _bar_btn("📐 Export cut files (SVG)", func() -> void:
 		var dir := export_cut_files()
-		status.text = "Wrote %s" % ProjectSettings.globalize_path(dir) if not dir.is_empty() else "Nothing to export.")
+		status.text = I18n.f("Wrote {dir}", {"dir": ProjectSettings.globalize_path(dir)}) if not dir.is_empty() else "Nothing to export.")
 	export_btn.tooltip_text = "One full-scale SVG per wall, table and the floor deck (1 unit = 1 inch), a pattern per fabric band, and the tarp layout."
 	row.add_child(export_btn)
 	var open_btn := _bar_btn("Open folder", func() -> void:
@@ -684,8 +685,10 @@ func _add_assembly_card() -> void:
 	for entry in steps:
 		var e := entry as Dictionary
 		var head := Label.new()
-		head.text = "%s  (%s per module)" % [str(e["label"]),
-			UiText.count(int(e["per_module_pieces"]), "piece")]
+		head.text = I18n.f("{label}  ({per_module_pieces} per module)", {
+			"label": str(e["label"]),
+			"per_module_pieces": UiText.count(int(e["per_module_pieces"]), "piece"),
+		})
 		head.add_theme_color_override("font_color", C_TEXT)
 		head.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		box.add_child(head)
@@ -715,8 +718,11 @@ func _add_sequence_card() -> void:
 	var box := _card("Build Sequence")
 	var reps := LinkageBuildSteps.representative_steps(steps)
 	var intro := Label.new()
-	intro.text = "%s (%d shown — identical repeats folded)%s. Play them in the Lab's Steps dock." % [
-		UiText.count(steps.size(), "step"), reps.size(), " · generated from the design" if generated else " · saved with the design"]
+	intro.text = I18n.f("{steps} ({reps} shown — identical repeats folded){generated}. Play them in the Lab's Steps dock.", {
+		"steps": UiText.count(steps.size(), "step"),
+		"reps": "%d" % reps.size(),
+		"generated": " · generated from the design" if generated else " · saved with the design",
+	})
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	intro.add_theme_color_override("font_color", C_TEXT_M)
 	intro.add_theme_font_size_override("font_size", UITheme.FONT_XS)

@@ -478,10 +478,10 @@ func _refresh_power() -> void:
 		+ float(su.get("current_graph_dc_kw") if su.get("current_graph_dc_kw") != null else 0.0)
 	var net_kw := solar_kw + aux_kw - load_kw
 
-	_solar_lbl.text = "%.2f kW" % solar_kw
-	_aux_lbl.text = "%.2f kW" % aux_kw
-	_load_lbl.text = "%.2f kW" % load_kw
-	_net_lbl.text = "%+.2f kW" % net_kw
+	_solar_lbl.text = I18n.f("{solar_kw} kW", {"solar_kw": "%.2f" % solar_kw})
+	_aux_lbl.text = I18n.f("{aux_kw} kW", {"aux_kw": "%.2f" % aux_kw})
+	_load_lbl.text = I18n.f("{load_kw} kW", {"load_kw": "%.2f" % load_kw})
+	_net_lbl.text = I18n.f("{net_kw} kW", {"net_kw": "%+.2f" % net_kw})
 	_net_lbl.add_theme_color_override("font_color",
 			UITheme.C_GREEN if net_kw >= 0.0 else UITheme.C_WARN)
 
@@ -499,7 +499,7 @@ func _refresh_power() -> void:
 
 	_bat_bar.value = clampf(pct, 0.0, 100.0)
 	_bat_pct_lbl.text = "%.0f%%" % pct
-	_bat_kwh_lbl.text = "%.2f / %.1f kWh" % [stored, cap]
+	_bat_kwh_lbl.text = I18n.f("{stored} / {cap} kWh", {"stored": "%.2f" % stored, "cap": "%.1f" % cap})
 
 	var status := "IDLE"
 	if su.has_method("is_ac_output_enabled") and not bool(su.call("is_ac_output_enabled")):
@@ -555,7 +555,7 @@ func _on_driest_week() -> void:
 	main.set("day", int(week.get("day", 1)))
 	main.set("day_time", float(week.get("hour", 8.0)))
 	if _week_note != null:
-		_week_note.text = "Driest week: %.1f mm of rain. Closure and battery hours are the score. Jump back returns to where you were." % float(week.get("mm", 0.0))
+		_week_note.text = I18n.f("Driest week: {mm} mm of rain. Closure and battery hours are the score. Jump back returns to where you were.", {"mm": "%.1f" % (float(week.get("mm", 0.0)))})
 
 
 func _on_week_jump_back() -> void:
@@ -1038,7 +1038,7 @@ func _add_island_stores_note(islands: int) -> void:
 	if islands <= 0:
 		return
 	var note := Label.new()
-	note.text = "Site stores only. Camps and vehicles (%d) keep their own: open one to see its tanks." % islands
+	note.text = I18n.f("Site stores only. Camps and vehicles ({islands}) keep their own: open one to see its tanks.", {"islands": "%d" % islands})
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	note.add_theme_color_override("font_color", UITheme.C_TEXT_M)
@@ -1158,8 +1158,10 @@ func _refresh_settlement() -> void:
 
 	var morale_avg := float(summary.get("morale_avg", 0.0))
 	var head := Label.new()
-	head.text = "👥 %d people · %s" % [int(summary.get("count", 0)),
-			NpcMorale.label(morale_avg)]
+	head.text = I18n.f("👥 {count} people · {morale_avg}", {
+		"count": "%d" % (int(summary.get("count", 0))),
+		"morale_avg": NpcMorale.label(morale_avg),
+	})
 	head.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	head.add_theme_color_override("font_color", NpcMorale.color(morale_avg))
 	_settlement_vbox.add_child(head)
@@ -1169,15 +1171,19 @@ func _refresh_settlement() -> void:
 		var wl := Label.new()
 		wl.name = "work_per_person"
 		var planned := float(_tu.get("planned_h_week", 0.0))
-		wl.text = "🔧 Work: %s per person a week (%s)%s · leisure %s a day" % [
-			UiText.duration(float(_tu["work_h_week"])), v,
-			(" · rota plans %s" % UiText.duration(planned)) if planned > 0.0 else "",
-			UiText.duration(float(_tu.get("leisure_h_day", 0.0)))]
+		wl.text = I18n.f("🔧 Work: {work_h_week} per person a week ({value}){planned} · leisure {leisure_h_day} a day", {
+			"work_h_week": UiText.duration(float(_tu["work_h_week"])),
+			"value": v,
+			"planned": (" · rota plans %s" % UiText.duration(planned)) if planned > 0.0 else "",
+			"leisure_h_day": UiText.duration(float(_tu.get("leisure_h_day", 0.0))),
+		})
 		if bool(_tu.get("partial", false)):
 			wl.text += " · part of a day so far"
-		wl.tooltip_text = "Measured over the last %s while the clock ran. Up to %s a week (the ATUS adult's paid work and housework) is sustainable, past %s overloaded. The Community schedule's Balance tab has the whole day." % [
-			UiText.count(int(_tu.get("days", 0)), "day"), UiText.duration(NpcTimeUse.SUSTAINABLE_H_WEEK),
-			UiText.duration(NpcTimeUse.OVERLOADED_H_WEEK)]
+		wl.tooltip_text = I18n.f("Measured over the last {days} while the clock ran. Up to {sustainable_h_week} a week (the ATUS adult's paid work and housework) is sustainable, past {overloaded_h_week} overloaded. The Community schedule's Balance tab has the whole day.", {
+			"days": UiText.count(int(_tu.get("days", 0)), "day"),
+			"sustainable_h_week": UiText.duration(NpcTimeUse.SUSTAINABLE_H_WEEK),
+			"overloaded_h_week": UiText.duration(NpcTimeUse.OVERLOADED_H_WEEK),
+		})
 		wl.mouse_filter = Control.MOUSE_FILTER_PASS
 		wl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		wl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
@@ -1561,7 +1567,7 @@ func _refresh_system_card(r: Dictionary) -> void:
 			if not opts.is_empty():
 				var opt: Dictionary = opts[0]
 				var add_btn := Button.new()
-				add_btn.text = "Add %s" % str(opt["text"])
+				add_btn.text = I18n.f("Add {text}", {"text": str(opt["text"])})
 				add_btn.focus_mode = Control.FOCUS_NONE
 				add_btn.tooltip_text = str(idea.get("text", ""))
 				var cid := str(r.get("id", ""))
@@ -1652,7 +1658,7 @@ func _refresh_festival_card(rows: Array) -> void:
 			_festival_vbox.add_child(b)
 		if worst.size() > 5:
 			var more := Button.new()
-			more.text = "All %d on the board" % worst.size()
+			more.text = I18n.f("All {worst} on the board", {"worst": "%d" % worst.size()})
 			UITheme.style_button(more)
 			more.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 			more.pressed.connect(func() -> void:
@@ -1664,7 +1670,7 @@ func _refresh_festival_card(rows: Array) -> void:
 		own.flat = true
 		own.focus_mode = Control.FOCUS_NONE
 		own.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		own.text = "🏠 Your system: %d %% · %.2f kW solar  ›" % [int(round(float(site["soc"]) * 100.0)), float(site["pv_kw"])]
+		own.text = I18n.f("🏠 Your system: {soc} % · {pv_kw} kW solar  ›", {"soc": "%d" % (int(round(float(site["soc"]) * 100.0))), "pv_kw": "%.2f" % float(site["pv_kw"])})
 		own.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		own.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 		own.pressed.connect(set_tab.bind(TAB_SITE))

@@ -54,7 +54,7 @@ func _build(fork_name: String) -> void:
 	ic.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
 	row.add_child(ic)
 	_label = Label.new()
-	_label.text = "Editing fork: %s — your world is set aside and the clock is held." % fork_name
+	_label.text = I18n.f("Editing fork: {fork_name} — your world is set aside and the clock is held.", {"fork_name": fork_name})
 	_label.add_theme_font_override("font", UITheme.font("semibold"))
 	_label.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	_label.add_theme_color_override("font_color", UITheme.C_AMBER)

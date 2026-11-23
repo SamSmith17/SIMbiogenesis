@@ -301,7 +301,7 @@ func _export() -> void:
 		_info.text = "Could not write the SVG."
 		return
 	f.store_string(WireSheet.svg(_lay))
-	_info.text = "Wrote %s" % path
+	_info.text = I18n.f("Wrote {path}", {"path": path})
 
 
 func _model() -> GraphModel:

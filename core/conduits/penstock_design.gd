@@ -213,10 +213,14 @@ static func checks(d: Dictionary) -> Array:
 		var text := ""
 		if not is_nan(close_s) and close_s > 0.0 and not is_nan(run_m) and run_m > 0.0:
 			dh = surge_head_closure_m(v, a, run_m, close_s)
-			text = "Surge closing the valve over %.0f s: +%.1f m (instant stop would be +%.0f m; 2L/a = %.1f s)" % [
-				close_s, dh, instant, critical_time_s(run_m, a)]
+			text = I18n.f("Surge closing the valve over {close_s} s: +{dh} m (instant stop would be +{instant} m; 2L/a = {a} s)", {
+				"close_s": "%.0f" % close_s,
+				"dh": "%.1f" % dh,
+				"instant": "%.0f" % instant,
+				"a": "%.1f" % (critical_time_s(run_m, a)),
+			})
 		else:
-			text = "Surge on an instant stop +%.0f m (wave %.0f m/s)" % [dh, a]
+			text = I18n.f("Surge on an instant stop +{dh} m (wave {a} m/s)", {"dh": "%.0f" % dh, "a": "%.0f" % a})
 		var lvl4 := "info"
 		if not (is_nan(gross) or is_nan(rating_m)):
 			var total := gross + dh

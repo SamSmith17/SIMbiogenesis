@@ -390,8 +390,10 @@ func _refresh_range_note() -> void:
 		_range_note.add_theme_color_override("font_color", UITheme.C_WARN)
 		return
 	var step := CalibrationExperiment.step_for(s[1] - s[0])
-	_range_note.text = "%s, simulated every %s. Times are this site's clock." % [
-		UiText.duration(s[1] - s[0]), UiText.duration(step)]
+	_range_note.text = I18n.f("{duration}, simulated every {step}. Times are this site's clock.", {
+		"duration": UiText.duration(s[1] - s[0]),
+		"step": UiText.duration(step),
+	})
 	_range_note.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 
 
@@ -977,7 +979,7 @@ func _refresh_fork_buttons() -> void:
 		bt.disabled = t.is_empty()
 		bt.tooltip_text = "" if not t.is_empty() else "Pick a fork in A or B — this world itself is edited in the graph as usual"
 	_delete_armed = false
-	_forks_note.text = "%s in this world" % UiText.count(_store.forks.size(), "fork")
+	_forks_note.text = I18n.f("{forks} in this world", {"forks": UiText.count(_store.forks.size(), "fork")})
 	_rename_row.visible = false
 
 
@@ -1057,7 +1059,7 @@ func _refresh_inbox_button() -> void:
 	if _inbox_btn == null:
 		return
 	var n := _Inbox.count()
-	_inbox_btn.text = "From AI tools (%d)" % n if n > 0 else "From AI tools"
+	_inbox_btn.text = I18n.f("From AI tools ({value})", {"value": "%d" % n}) if n > 0 else "From AI tools"
 
 
 func _on_new_fork() -> void:
@@ -1102,7 +1104,7 @@ func _on_delete_fork() -> void:
 		return
 	if not _delete_armed:
 		_delete_armed = true
-		_delete_btn.text = "Click again to delete “%s”" % _variant_name(t)
+		_delete_btn.text = I18n.f("Click again to delete “{t}”", {"t": _variant_name(t)})
 		return
 	_store.remove(t)
 	_save_store()

@@ -130,7 +130,7 @@ func _row(o: Dictionary, target: String) -> Control:
 		var b := Button.new()
 		b.text = "Place"
 		b.name = "place_" + str(o["label"]).to_snake_case()
-		b.tooltip_text = "Put a %s on the graph." % str(o["label"])
+		b.tooltip_text = I18n.f("Put a {label} on the graph.", {"label": str(o["label"])})
 		UITheme.style_button(b)
 		b.pressed.connect(func() -> void:
 			if _view != null and is_instance_valid(_view) and bool(_view.call("place_preset_by_label", str(o["label"]))):

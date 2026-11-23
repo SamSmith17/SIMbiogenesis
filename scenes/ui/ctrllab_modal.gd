@@ -849,7 +849,7 @@ func _set_tool(id: String) -> void:
 	if id != "":
 		select_port("")
 		_shell.set_mode("Placing %s · click the unit · Esc to stop" % ConnectorCatalog.label(id))
-		_info_lbl.text = "Click a face of the unit to put the %s there." % ConnectorCatalog.label(id)
+		_info_lbl.text = I18n.f("Click a face of the unit to put the {id} there.", {"id": ConnectorCatalog.label(id)})
 		_make_ghost(id)
 	else:
 		_shell.set_mode("")
@@ -1419,7 +1419,7 @@ func _sync_port_list() -> void:
 		b.name = "port_" + str(p["id"])
 		var lab := str(p["label"]) if str(p["label"]) != "" else ConnectorCatalog.label(str(p["connector"]))
 		b.text = "%s  ·  %s" % [lab, _port_job(p)]
-		b.tooltip_text = "%s on the %s" % [ConnectorCatalog.label(str(p["connector"])), str(p["face"])]
+		b.tooltip_text = I18n.f("{connector} on the {face}", {"connector": ConnectorCatalog.label(str(p["connector"])), "face": str(p["face"])})
 		b.toggle_mode = true
 		b.button_pressed = str(p["id"]) == _selected
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT

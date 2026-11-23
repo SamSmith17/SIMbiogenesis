@@ -98,14 +98,25 @@ def wanted(s: str) -> bool:
     return True
 
 
+_GD_U = re.compile(r"\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{6})")
+
+
+def gd_unescape(s: str) -> str:
+    r"""A GDScript string literal's text as the game sees it: \uXXXX / \UXXXXXX
+    decoded (else the msgid holds "u2033" and never matches at runtime), then the
+    ordinary backslash escapes."""
+    s = _GD_U.sub(lambda m: chr(int(m.group(1) or m.group(2), 16)), s)
+    return po.unescape(s)
+
+
 class Pot:
     def __init__(self) -> None:
         self.entries: dict[tuple[str, str], po.Entry] = {}
 
     def add(self, msg: str, ctx: str, ref: str, note: str = "", plural: str = "", budget: str = "") -> None:
-        msg = po.unescape(msg)
-        ctx = po.unescape(ctx)
-        plural = po.unescape(plural)
+        msg = gd_unescape(msg)
+        ctx = gd_unescape(ctx)
+        plural = gd_unescape(plural)
         if not wanted(msg):
             return
         key = (ctx, msg)

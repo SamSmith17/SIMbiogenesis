@@ -551,7 +551,7 @@ func _refresh() -> void:
 			how = "the camera reaches each at its moment on the timeline"
 			if inside < n:
 				how += "; outside this range it holds the nearest one"
-		_cam_note.text = "%s, %d inside this range: %s." % [UiText.count(n, "camera keyframe"), inside, how]
+		_cam_note.text = I18n.f("{value}, {inside} inside this range: {how}.", {"value": UiText.count(n, "camera keyframe"), "inside": "%d" % inside, "how": how})
 	_smooth_chk.disabled = n < 3
 	var ana := int(o["analemma"]) > 0
 	var sky_bits: Array = []

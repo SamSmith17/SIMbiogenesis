@@ -101,7 +101,7 @@ func set_progress(frac: float, eta_s: float) -> void:
 	elif eta_s < 1.5:
 		_eta.text = "almost done"
 	else:
-		_eta.text = "about %s left" % UiText.duration(eta_s / 3600.0)
+		_eta.text = I18n.f("about {eta_s} left", {"eta_s": UiText.duration(eta_s / 3600.0)})
 
 
 ## The render finished or was cancelled: the card goes; the timeline's green

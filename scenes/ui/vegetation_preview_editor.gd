@@ -1217,7 +1217,7 @@ func _save_species_default() -> void:
 		return
 	VegetationStyleConfig.save_species_default(_species, _species_preset_values())
 	if _preset_name_edit != null:
-		_preset_name_edit.placeholder_text = "Saved %s default" % VegSpeciesCatalog.label_for(_species)
+		_preset_name_edit.placeholder_text = I18n.f("Saved {species} default", {"species": VegSpeciesCatalog.label_for(_species)})
 
 
 func _on_preset_selected(idx: int) -> void:
@@ -1837,9 +1837,12 @@ func _build_vegmix_preview(settings: Dictionary) -> void:
 			clampf(float(_mix.get("floor_moss", 0.0)), 0.0, 1.0) * 0.8)
 	if _mix_stats != null:
 		var area_ha := PI * pow(_patch_diameter * 0.5, 2.0) / 10000.0
-		_mix_stats.text = "Preview: %s and %s on %.2f ha (≈ %d trees / ha)" % [
-			UiText.count(n_trees, "tree"), UiText.count(n_under, "understory plant"),
-			area_ha, int(round(float(n_trees) / maxf(area_ha, 0.0001)))]
+		_mix_stats.text = I18n.f("Preview: {n_trees} and {n_under} on {area_ha} ha (≈ {area_ha_2} trees / ha)", {
+			"n_trees": UiText.count(n_trees, "tree"),
+			"n_under": UiText.count(n_under, "understory plant"),
+			"area_ha": "%.2f" % area_ha,
+			"area_ha_2": "%d" % (int(round(float(n_trees) / maxf(area_ha, 0.0001)))),
+		})
 
 
 func _build_card_preview(spots: Array, settings: Dictionary) -> void:
@@ -2261,7 +2264,7 @@ func _push_brush(mix_saved: bool = false) -> void:
 func _refresh_apply_state(message: String = "") -> void:
 	var pending := pending_change_count()
 	if _apply_btn != null:
-		_apply_btn.text = "Apply to map (%d)" % pending if pending > 0 else "Apply to map"
+		_apply_btn.text = I18n.f("Apply to map ({pending})", {"pending": "%d" % pending}) if pending > 0 else "Apply to map"
 	if _apply_status == null:
 		return
 	if not message.is_empty():
@@ -2270,8 +2273,10 @@ func _refresh_apply_state(message: String = "") -> void:
 		return
 	_apply_status.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	if pending > 0:
-		_apply_status.text = "%d slider%s changed since the last apply" % [
-			pending, "" if pending == 1 else "s"]
+		_apply_status.text = I18n.f("{pending} slider{pending_2} changed since the last apply", {
+			"pending": "%d" % pending,
+			"pending_2": "" if pending == 1 else "s",
+		})
 	elif _applied_once:
 		_apply_status.text = "Map matches this preview"
 	else:
@@ -2572,15 +2577,19 @@ func _refresh_instance_labels() -> void:
 		n = int(_loader.call("veg_species_count", _species))
 	var src := str(_instance.get("source_label", ""))
 	if _inst_header != null:
-		_inst_header.text = "One %s · %s · %.0f m tall%s" % [label, src,
-			float(_instance.get("height_m", 0.0)),
-			" · has its own look" if not _instance_base.is_empty() else ""]
+		_inst_header.text = I18n.f("One {label} · {src} · {height_m} m tall{is_empty}", {
+			"label": label,
+			"src": src,
+			"height_m": "%.0f" % (float(_instance.get("height_m", 0.0))),
+			"is_empty": " · has its own look" if not _instance_base.is_empty() else "",
+		})
 	if _inst_world_btn != null:
-		_inst_world_btn.text = "All %s in this world (%s)" % [
-			UiText.plural_of(label.to_lower()) if n != 1 else label.to_lower(),
-			UiText.thousands(n)]
+		_inst_world_btn.text = I18n.f("All {label} in this world ({thousands})", {
+			"label": UiText.plural_of(label.to_lower()) if n != 1 else label.to_lower(),
+			"thousands": UiText.thousands(n),
+		})
 	if _inst_all_btn != null:
-		_inst_all_btn.text = "All %s in every world (species default)" % UiText.plural_of(label.to_lower())
+		_inst_all_btn.text = I18n.f("All {label} in every world (species default)", {"label": UiText.plural_of(label.to_lower())})
 	if _inst_reset_btn != null:
 		_inst_reset_btn.visible = not _instance_base.is_empty()
 

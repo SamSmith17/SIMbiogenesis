@@ -282,7 +282,7 @@ static func identify_screens(tree: SceneTree, seconds: float = 3.0) -> void:
 		await tree.process_frame
 		var idx := int(sc["index"])
 		var w := Window.new()
-		w.title = "Screen %d" % (idx + 1)
+		w.title = I18n.f("Screen {idx}", {"idx": "%d" % ((idx + 1))})
 		w.borderless = true
 		w.always_on_top = true
 		w.unresizable = true
@@ -302,7 +302,7 @@ static func identify_screens(tree: SceneTree, seconds: float = 3.0) -> void:
 		vb.add_theme_constant_override("separation", 6)
 		p.add_child(vb)
 		var big := Label.new()
-		big.text = "Screen %d" % (idx + 1)
+		big.text = I18n.f("Screen {idx}", {"idx": "%d" % ((idx + 1))})
 		big.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		big.add_theme_font_override("font", UITheme.font("semibold"))
 		big.add_theme_font_size_override("font_size", 56)

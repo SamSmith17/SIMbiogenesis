@@ -175,9 +175,10 @@ func _build_axis_row(key: String) -> Control:
 	set_row.add_theme_constant_override("separation", UITheme.SPACE_XS)
 	for which: String in ["min", "max", "home"]:
 		var b := Button.new()
-		b.text = "Set %s" % which
-		b.tooltip_text = "Capture the current jog pose as the soft %s" % which if which != "home" \
-			else "Capture the current jog pose as home / origin"
+		b.text = I18n.f("Set {which}", {"which": which})
+		b.tooltip_text = I18n.f("Capture the current jog pose as the soft {which}", {
+			"which": which,
+		}) if which != "home" else "Capture the current jog pose as home / origin"
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		UITheme.style_button(b)
 		var captured := which
@@ -294,7 +295,7 @@ func _apply_all_jogs() -> void:
 		node.position = (_rest_by_name[node_name] as Vector3) + dir * along
 		var jv := _jog_lbl.get(key) as Label
 		if jv != null:
-			jv.text = "%s  (home %s)" % [String.num(along, 2), String.num(float((_home_spin[key] as SpinBox).value), 2)]
+			jv.text = I18n.f("{along}  (home {spinbox})", {"along": String.num(along, 2), "spinbox": String.num(float((_home_spin[key] as SpinBox).value), 2)})
 
 
 func _on_limit_changed(key: String) -> void:
@@ -318,16 +319,16 @@ func _capture_limit(key: String, which: String) -> void:
 			if along > hi:
 				(_max_spin[key] as SpinBox).set_value_no_signal(along)
 			(_jog_slider[key] as HSlider).set_value_no_signal(0.0)
-			_status_lbl.text = "%s min ← %s" % [key.to_upper(), String.num(along, 2)]
+			_status_lbl.text = I18n.f("{key} min ← {along}", {"key": key.to_upper(), "along": String.num(along, 2)})
 		"max":
 			(_max_spin[key] as SpinBox).set_value_no_signal(along)
 			if along < lo:
 				(_min_spin[key] as SpinBox).set_value_no_signal(along)
 			(_jog_slider[key] as HSlider).set_value_no_signal(1.0)
-			_status_lbl.text = "%s max ← %s" % [key.to_upper(), String.num(along, 2)]
+			_status_lbl.text = I18n.f("{key} max ← {along}", {"key": key.to_upper(), "along": String.num(along, 2)})
 		"home":
 			(_home_spin[key] as SpinBox).set_value_no_signal(along)
-			_status_lbl.text = "%s home ← %s" % [key.to_upper(), String.num(along, 2)]
+			_status_lbl.text = I18n.f("{key} home ← {along}", {"key": key.to_upper(), "along": String.num(along, 2)})
 	_on_limit_changed(key)
 
 
@@ -401,7 +402,7 @@ func _on_auto_detect() -> void:
 				opt.select(i + 1)
 				break
 	_apply_all_jogs()
-	_status_lbl.text = "Auto-detected %s" % UiText.count(found.size(), "axis", "axes")
+	_status_lbl.text = I18n.f("Auto-detected {found}", {"found": UiText.count(found.size(), "axis", "axes")})
 
 
 func _on_save() -> void:

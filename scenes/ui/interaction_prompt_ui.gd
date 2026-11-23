@@ -126,7 +126,7 @@ func show_ride_and_charge_prompt(ride_text: String, vehicle_name: String) -> voi
 	var interact_label := get_action_label("interact")
 	var charge_label := get_action_label("charge")
 	key_icon.text = "[%s] / [%s]" % [interact_label, charge_label]
-	prompt_label.text = "%s / Charge %s" % [ride_text, vehicle_name]
+	prompt_label.text = I18n.f("{ride_text} / Charge {vehicle_name}", {"ride_text": ride_text, "vehicle_name": vehicle_name})
 	visible = true
 	if _tween:
 		_tween.kill()

@@ -414,7 +414,7 @@ func _on_save() -> void:
 		_on_save_as()
 		return
 	IntermodalUnits.save_user_unit(_template_id, _label_or_default(), _params, _unit_id)
-	_status.text = "Saved %s." % _label_or_default()
+	_status.text = I18n.f("Saved {label_or_default}.", {"label_or_default": _label_or_default()})
 	_refresh_list()
 	_select_id(_unit_id)
 
@@ -423,7 +423,7 @@ func _on_save_as() -> void:
 	if _template_id.is_empty():
 		return
 	var uid := IntermodalUnits.save_user_unit(_template_id, _label_or_default(), _params)
-	_status.text = "Saved %s to your units." % _label_or_default()
+	_status.text = I18n.f("Saved {label_or_default} to your units.", {"label_or_default": _label_or_default()})
 	_refresh_list()
 	_select_id(uid)
 
@@ -432,7 +432,7 @@ func _on_delete() -> void:
 	if _unit_id.is_empty():
 		return
 	IntermodalUnits.remove_user_unit(_unit_id)
-	_status.text = "Deleted %s." % _shell.name_edit.text
+	_status.text = I18n.f("Deleted {name_edit}.", {"name_edit": _shell.name_edit.text})
 	var tid := _template_id
 	_refresh_list()
 	_select_id(tid)
@@ -460,7 +460,7 @@ func _on_place() -> void:
 	if bool(res.get("ok", false)):
 		close()
 	else:
-		_status.text = "Could not place: %s" % str(res.get("error", "no world"))
+		_status.text = I18n.f("Could not place: {error}", {"error": str(res.get("error", "no world"))})
 
 
 func _label_or_default() -> String:

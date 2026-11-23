@@ -140,7 +140,7 @@ func _on_save_pressed() -> void:
 	var path: String = sg.get_manual_slot_path(idx)
 	if FileAccess.file_exists(path):
 		_pending_save_slot = idx
-		confirm_overwrite.dialog_text = "Overwrite slot %d?" % (idx + 1)
+		confirm_overwrite.dialog_text = I18n.f("Overwrite slot {idx}?", {"idx": "%d" % ((idx + 1))})
 		confirm_overwrite.popup_centered()
 		return
 	_do_save_slot(idx)
@@ -192,7 +192,7 @@ func _on_delete_pressed() -> void:
 		show_load_message("Slot %d is already empty." % (idx + 1), false)
 		return
 	_pending_delete_slot = idx
-	confirm_delete.dialog_text = "Delete save in slot %d? This cannot be undone." % (idx + 1)
+	confirm_delete.dialog_text = I18n.f("Delete save in slot {idx}? This cannot be undone.", {"idx": "%d" % ((idx + 1))})
 	confirm_delete.popup_centered()
 
 

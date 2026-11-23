@@ -515,7 +515,7 @@ func _load_settings() -> void:
 	_depth_spin.value = d if is_finite(d) else float(ctx.get("default_depth_m", 30.0))
 	_depth_spin.editable = is_finite(d)
 	var path := str(mc.call("profile_path"))
-	_site_lbl.text = "Saved per map → %s  ·  valley index %.0f m" % [path.get_file(), float(ctx.get("tpi_m", 0.0))]
+	_site_lbl.text = I18n.f("Saved per map → {file}  ·  valley index {tpi_m} m", {"file": path.get_file(), "tpi_m": "%.0f" % (float(ctx.get("tpi_m", 0.0)))})
 	_syncing = false
 
 
@@ -731,7 +731,7 @@ func _cond_row(c: Dictionary) -> Control:
 		e.custom_minimum_size.x = 56
 		var val: Variant = c.get(key, null)
 		e.text = "" if val == null or not is_finite(float(val)) else ("%.2f" % float(val)).rstrip("0").rstrip(".")
-		e.tooltip_text = "%s bound — blank = no limit" % key
+		e.tooltip_text = I18n.f("{key} bound — blank = no limit", {"key": key})
 		e.text_submitted.connect(func(t: String) -> void:
 			c[key] = NAN if t.strip_edges().is_empty() or not t.is_valid_float() else t.to_float()
 			_commit())

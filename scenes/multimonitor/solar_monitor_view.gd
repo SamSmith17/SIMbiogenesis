@@ -162,11 +162,11 @@ func _refresh() -> void:
 	var net_w := pv_w - load_w
 	if _pv_val != null:
 		_pv_val.text = _fmt_power(pv_w)
-		_pv_sub.text = "Today: %.2f kWh" % daily_kwh if daily_kwh > 0.0 else "Simulated PV arrays"
+		_pv_sub.text = I18n.f("Today: {daily_kwh} kWh", {"daily_kwh": "%.2f" % daily_kwh}) if daily_kwh > 0.0 else "Simulated PV arrays"
 	if _soc_val != null:
 		_soc_val.text = "%.1f %%" % clampf(soc_pct, 0.0, 100.0)
 		_soc_bar.value = clampf(soc_pct, 0.0, 100.0)
-		_soc_sub.text = "Bank capacity: %.1f kWh" % cap_kwh if cap_kwh > 0.0 else "Site battery bank"
+		_soc_sub.text = I18n.f("Bank capacity: {cap_kwh} kWh", {"cap_kwh": "%.1f" % cap_kwh}) if cap_kwh > 0.0 else "Site battery bank"
 	if _load_val != null:
 		_load_val.text = _fmt_power(load_w)
 		_load_sub.text = "Active AC + DC consumers"
@@ -178,7 +178,7 @@ func _refresh() -> void:
 		var dt := float(_main.get("day_time") if _main.get("day_time") != null else 12.0)
 		var hh := int(floor(dt)) % 24
 		var mm := int(floor((dt - floor(dt)) * 60.0))
-		_sub_lbl.text = "Local sim time %02d:%02d  ·  Updated live" % [hh, mm]
+		_sub_lbl.text = I18n.f("Local sim time {hh}:{mm}  ·  Updated live", {"hh": "%02d" % hh, "mm": "%02d" % mm})
 
 
 static func _fmt_power(w: float) -> String:

@@ -339,14 +339,14 @@ func _render_stats() -> void:
 		elif _use_imperial:
 			_rain_lbl.text = '%.2f"' % (rain_mmh / 25.4)
 		else:
-			_rain_lbl.text = "%.1fmm" % rain_mmh
+			_rain_lbl.text = I18n.f("{rain_mmh}mm", {"rain_mmh": "%.1f" % rain_mmh})
 	if _rain24_lbl != null:
 		if is_nan(rain_24h):
 			_rain24_lbl.text = "—"
 		elif _use_imperial:
 			_rain24_lbl.text = '%.2f"' % (rain_24h / 25.4)
 		else:
-			_rain24_lbl.text = "%.1fmm" % rain_24h
+			_rain24_lbl.text = I18n.f("{rain_24h}mm", {"rain_24h": "%.1f" % rain_24h})
 
 
 ## First-order condition glyph from radiation + rain (no dedicated code from

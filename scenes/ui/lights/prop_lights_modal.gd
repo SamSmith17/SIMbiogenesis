@@ -172,7 +172,7 @@ func _on_apply() -> void:
 	if main == null or _prop_id.is_empty():
 		return
 	var ids := PropModelLights.sync_prop(main, _prop_id, _light_panel.items())
-	_status.text = "Saved %s onto the prop." % UiText.count(ids.size(), "light")
+	_status.text = I18n.f("Saved {ids} onto the prop.", {"ids": UiText.count(ids.size(), "light")})
 
 
 func _on_open_j() -> void:

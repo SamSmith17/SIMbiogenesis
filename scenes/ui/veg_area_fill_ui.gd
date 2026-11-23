@@ -200,7 +200,7 @@ func _on_fill() -> void:
 		# rather than a broken fill — say so instead of failing silently.
 		_status_lbl.text = "Nothing placed — area may be excluded, too steep, or the tree budget is spent"
 		return
-	_status_lbl.text = "Planted %s (cleared %d)" % [UiText.count(placed, "plant"), int(res.get("removed", 0))]
+	_status_lbl.text = I18n.f("Planted {placed} (cleared {removed})", {"placed": UiText.count(placed, "plant"), "removed": "%d" % (int(res.get("removed", 0)))})
 
 
 func _on_clear() -> void:

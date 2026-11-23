@@ -3076,6 +3076,26 @@ Phase 0 is in. No real language ships yet.
     language wrong (fixed). In game: Settings 85-92 % in the language,
     0 UiAudit errors, Arabic mirrored. Still English: the 3D status labels
     (e.g. a turbine's RUNNING line), visual-style names, some toasts.
+- **Watching a run.** `translate.py` rewrites `locale/.progress.json`
+  (gitignored) after every batch; `python tools/i18n/watch.py` serves
+  http://127.0.0.1:8765, a card per language (progress, strings a minute, time
+  left, the latest translations beside their English, refusals) and whether
+  Ollama is on the GPU. `tools/i18n/after_run.ps1` waits for a running
+  translate.py to exit, then runs `update.py` (never two writers on a .po).
+- **Phase 2 (2026-11-22): `tools/i18n/codemod.py`** rewrites
+  `x.text = "... %.1f ..." % [a, b]` (also tooltip_text, title, placeholder,
+  dialog_text, a bare local `text` / `title`) into
+  `I18n.f("... {a} ...", {"a": "%.1f" % a, ...})`. Every spec but a bare %s
+  keeps its own formatting, so English output is unchanged.
+  - It joins statements that run over several lines (an open bracket, a
+    trailing backslash) and keeps a trailing `if c else d` outside the call
+    (`%` binds tighter).
+  - Placeholders are named from a dictionary key or the last identifier.
+  - Word-less templates ("%s%s") are left alone.
+  - 339 lines in 142 scripts. Check rewritten files with
+    `tools/i18n/compile_check.gd` (`-- --list=<file of res-relative paths>`).
+  - `extract.py` now decodes GDScript backslash-u escapes: the msgid held
+    "u2033" and never matched at runtime.
 
 ## UI foundation — theme, font, icons, text, HUD layout, audit (2026-10-13)
 

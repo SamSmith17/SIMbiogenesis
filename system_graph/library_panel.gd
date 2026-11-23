@@ -568,9 +568,11 @@ func _make_item_btn(preset: Dictionary, cat_idx: int) -> Button:
 	var packed := PackedSpec.for_preset_specs(str(preset.get("type", "")),
 		preset.get("specs", {}))
 	if not packed.is_empty():
-		btn.tooltip_text = "Packs to: %s · %s%s" % [
-			PackedSpec.format_dims(packed), PackedSpec.format_mass(packed),
-			"  (est.)" if str(packed.get("source", "")) == "estimated" else ""]
+		btn.tooltip_text = I18n.f("Packs to: {packed} · {packed_2}{source}", {
+			"packed": PackedSpec.format_dims(packed),
+			"packed_2": PackedSpec.format_mass(packed),
+			"source": "  (est.)" if str(packed.get("source", "")) == "estimated" else "",
+		})
 
 	return btn
 
@@ -790,7 +792,7 @@ func populate_world_inventory(groups: Array) -> void:
 	box.add_theme_constant_override("separation", 0)
 	_world_box = box
 	var hdr := Button.new()
-	hdr.text = "🌍  In the world, not on the graph (%d)  %s" % [total, "▼" if _world_open else "▶"]
+	hdr.text = I18n.f("🌍  In the world, not on the graph ({total})  {world_open}", {"total": "%d" % total, "world_open": "▼" if _world_open else "▶"})
 	hdr.tooltip_text = ("Things that exist in the 3D world but are not tracked by the graph yet — "
 		+ "lights from the Light Studio (J), placed machines and racks, OSM solar, ponds, "
 		+ "scene devices. Add puts one on the graph; ◎ shows it in the world.")

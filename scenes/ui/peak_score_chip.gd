@@ -99,8 +99,11 @@ func _refresh() -> void:
 	_now = int(sc.get("now", 0))
 	_today = int(sc.get("today", 0))
 	var close := int(b.call("peak_building", 0.5)) if b.has_method("peak_building") else 0
-	_sub.text = "·  %d now  ·  %s%s today" % [_now,
-		("⚡ %d close  ·  " % close) if close > 0 else "", _fmt(_today)]
+	_sub.text = I18n.f("·  {now} now  ·  {close}{today} today", {
+		"now": "%d" % _now,
+		"close": ("⚡ %d close  ·  " % close) if close > 0 else "",
+		"today": _fmt(_today),
+	})
 	_sub.tooltip_text = "now: at FUCK YES!!!  ·  close: more than halfway charged (the green outline)  ·  today: onsets this sim-day"
 	_chip.visible = true
 	_chip.reset_size()

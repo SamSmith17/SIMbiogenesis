@@ -532,9 +532,12 @@ func _refresh_festival_panel() -> void:
 	var tiers := ""
 	if int(st.get("light", 0)) > 0:
 		tiers = " · %d up close, %d as crowd" % [int(st.get("full", 0)), int(st.get("light", 0))]
-	_fest_status.text = "%s in %s%s · %s" % [
-		UiText.count(people, "person"), UiText.count(int(st.get("camps", 0)), "camp"), tiers,
-		UiText.count(int(st.get("venues", 0)), "seeded venue")]
+	_fest_status.text = I18n.f("{people} in {camps}{tiers} · {venues}", {
+		"people": UiText.count(people, "person"),
+		"camps": UiText.count(int(st.get("camps", 0)), "camp"),
+		"tiers": tiers,
+		"venues": UiText.count(int(st.get("venues", 0)), "seeded venue"),
+	})
 	_fest_natural = int(st.get("natural", 0))
 	if _fest_pop_lbl != null and _fest_pop_slider != null and _fest_pop_slider.value <= 0.0:
 		_fest_pop_lbl.text = _pop_text(0.0)
@@ -636,7 +639,7 @@ func _refresh() -> void:
 			if _peak_last >= 0 and total > _peak_last:
 				_peak_flash = 1.0
 			_peak_last = total
-			_peak_lbl.text = "✦ %s  ·  %d %s now" % [UiText.count(total, "Peak Experience"), int(ps.get("now", 0)), NpcPeak.LABEL]
+			_peak_lbl.text = I18n.f("✦ {total}  ·  {now} {label} now", {"total": UiText.count(total, "Peak Experience"), "now": "%d" % (int(ps.get("now", 0))), "label": NpcPeak.LABEL})
 		if _vibe_lbl.visible:
 			_vibe_lbl.text = str(v.get("headline", ""))
 			_vibe_lbl.add_theme_color_override("font_color", v.get("color", UITheme.C_TEXT) as Color)

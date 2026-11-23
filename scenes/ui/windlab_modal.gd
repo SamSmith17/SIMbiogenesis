@@ -880,16 +880,21 @@ func _refresh_header() -> void:
 	if not _name_edit.has_focus():
 		_name_edit.text = str(_spec["name"])
 	var dp: Dictionary = _design["design"]
-	_subtitle.text = "%s · %s at %.0f m/s · %s a year" % [WindLabSpec.describe(_spec), UiText.num(float(dp["p_elec"]), "W"),
-		float(_spec["site"]["design_wind_ms"]), _fmt_kwh(float(_design["aep_kwh"]))]
+	_subtitle.text = I18n.f("{spec} · {p_elec} at {design_wind_ms} m/s · {aep_kwh} a year", {
+		"spec": WindLabSpec.describe(_spec),
+		"p_elec": UiText.num(float(dp["p_elec"]), "W"),
+		"design_wind_ms": "%.0f" % float(_spec["site"]["design_wind_ms"]),
+		"aep_kwh": _fmt_kwh(float(_design["aep_kwh"])),
+	})
 	var item := _turbine_item()
 	_apply_btn.visible = not item.is_empty()
 	var mid := str((item.get("specs", {}) as Dictionary).get("model_id", "")) if not item.is_empty() else ""
 	_keep_chk.visible = not item.is_empty() and not mid.is_empty() and mid != WindLabBuilder.MODEL_ID
 	_bound_lbl.visible = not item.is_empty()
 	if not item.is_empty():
-		_bound_lbl.text = "Designing %s on the graph — Apply writes this design's power curve onto it." % \
-			str((item.get("specs", {}) as Dictionary).get("name", "the turbine"))
+		_bound_lbl.text = I18n.f("Designing {name} on the graph — Apply writes this design's power curve onto it.", {
+			"name": str((item.get("specs", {}) as Dictionary).get("name", "the turbine")),
+		})
 
 
 static func _fmt_kwh(e: float) -> String:
@@ -957,7 +962,7 @@ func _refresh_bom() -> void:
 		_bom_box.remove_child(c)
 		c.queue_free()
 	var t := WindLabDesign.bom_total(_design)
-	_bom_lbl.text = "About $%.0f and %s." % [float(t["cost"]), WindLabSpec.fmt_kg(float(t["kg"]))]
+	_bom_lbl.text = I18n.f("About ${cost} and {kg}.", {"cost": "%.0f" % float(t["cost"]), "kg": WindLabSpec.fmt_kg(float(t["kg"]))})
 	for r in _design["bom"]:
 		var l := Label.new()
 		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1011,8 +1016,11 @@ func _apply_studio_view() -> void:
 	var rpm := float(op["rpm"])
 	var shown := DISPLAY_RPM * (1.0 - exp(-rpm / DISPLAY_RPM)) if rpm > 0.0 else 0.0
 	_builder.set_spin_rpm(shown if _spinning else 0.0)
-	_studio_lbl.text = "%d rpm · λ %.2f · %s" % [int(round(rpm)), float(op["lam"]), UiText.num(float(op["p_elec"]), "W")] \
-		if bool(op["running"]) else "standing still"
+	_studio_lbl.text = I18n.f("{rpm} rpm · λ {lam} · {p_elec}", {
+		"rpm": "%d" % int(round(rpm)),
+		"lam": "%.2f" % float(op["lam"]),
+		"p_elec": UiText.num(float(op["p_elec"]), "W"),
+	}) if bool(op["running"]) else "standing still"
 
 
 func _frame_camera() -> void:
@@ -1724,8 +1732,13 @@ class SheetCanvas extends Control:
 				_dash(to.call(f["a"]), to.call(f["b"]), Color(0.3, 0.85, 0.4))
 			for lb in c["labels"]:
 				draw_string(font, to.call(lb["p"]) + Vector2(-30, 0), str(lb["text"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(1, 1, 1, 0.55))
-			title = "Sheet %d of %d — %s, %s%s" % [idx + 1, sheets.size(), str(d["nest"]["sheet_label"]),
-				str(WindLabParts.sheet(str(d["spec"]["build"]["sheet"]))["label"]), " (click for the next)" if sheets.size() > 1 else ""]
+			title = I18n.f("Sheet {idx} of {sheets} — {sheet}, {label}{sheets_2}", {
+				"idx": "%d" % (idx + 1),
+				"sheets": "%d" % sheets.size(),
+				"sheet": str(d["nest"]["sheet_label"]),
+				"label": str(WindLabParts.sheet(str(d["spec"]["build"]["sheet"]))["label"]),
+				"sheets_2": " (click for the next)" if sheets.size() > 1 else "",
+			})
 		draw_string(font, Vector2(24, 24), title, HORIZONTAL_ALIGNMENT_LEFT, size.x - 48, 13, UITheme.C_TEXT)
 		var y := size.y - 66.0
 		draw_string(font, Vector2(24, y), "Red: cut out · blue: cut inside (slots, holes) · green dashed: SCORE one skin and bend toward it",

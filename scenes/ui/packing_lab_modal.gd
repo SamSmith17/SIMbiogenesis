@@ -579,7 +579,7 @@ func _update_delivery_ui() -> void:
 	var vid := _bay_vehicle_id()
 	if _deliver_btn != null:
 		_deliver_btn.disabled = loader == null or sid.is_empty()
-		_deliver_btn.text = "Load into %s" % _bay_vehicle_name(vid) if not vid.is_empty() else "Deliver kit to site"
+		_deliver_btn.text = I18n.f("Load into {vid}", {"vid": _bay_vehicle_name(vid)}) if not vid.is_empty() else "Deliver kit to site"
 		if loader == null:
 			_deliver_btn.tooltip_text = "Needs a generated location map (no TerrainLoader here)"
 		elif sid.is_empty():
@@ -596,10 +596,13 @@ func _update_delivery_ui() -> void:
 	if e4.is_empty():
 		_deliver_lbl.text = ""
 		return
-	_deliver_lbl.text = "%s — unloading over 20 m\n4 people: %s, about %.0f s\n12 people: %s, about %.0f s" % [
-		str(sc.get("label", sid)),
-		str(e4["strategy"]).replace("_", " "), float(e4["eta_s"]),
-		str(e12["strategy"]).replace("_", " "), float(e12["eta_s"])]
+	_deliver_lbl.text = I18n.f("{label} — unloading over 20 m\n4 people: {strategy}, about {eta_s} s\n12 people: {strategy_2}, about {eta_s_2} s", {
+		"label": str(sc.get("label", sid)),
+		"strategy": str(e4["strategy"]).replace("_", " "),
+		"eta_s": "%.0f" % float(e4["eta_s"]),
+		"strategy_2": str(e12["strategy"]).replace("_", " "),
+		"eta_s_2": "%.0f" % float(e12["eta_s"]),
+	})
 
 
 func _find_loader() -> Node:

@@ -1778,7 +1778,7 @@ func _render_compound_item_v2(item: Dictionary) -> void:
 	if kind == "array" or kind == "pv_design":
 		accent = Color(0.15, 0.76, 0.95, 1.0)
 		var n := int(specs.get("array_panel_units", specs.get("panel_count", specs.get("child_count", 0))))
-		title = "Solar Array · %d panels" % n if n > 0 else "Solar Array"
+		title = I18n.f("Solar Array · {value} panels", {"value": "%d" % n}) if n > 0 else "Solar Array"
 	elif kind == "battery_bank":
 		accent = Color(0.17, 0.84, 0.52, 1.0)
 		title = "Battery Bank"

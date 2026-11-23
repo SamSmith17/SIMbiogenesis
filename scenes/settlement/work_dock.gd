@@ -315,9 +315,13 @@ func _chore_row(board: Variant, chore: Dictionary, day: int, reason: String) -> 
 			(" for " + _name_of(asg)) if not asg.is_empty() else ""]
 	elif not asg.is_empty():
 		who_line = "\nheld for %s" % _name_of(asg)
-	lbl.tooltip_text = "%.1f h left · %d of %d people%s%s" % [left, w, mn, who_line,
-		("\n%s %s" % [NpcChoreBoard.reason_glyph(reason), reason])
-			if not reason.is_empty() else ""]
+	lbl.tooltip_text = I18n.f("{left} h left · {w} of {mn} people{who_line}{is_empty}", {
+		"left": "%.1f" % left,
+		"w": "%d" % w,
+		"mn": "%d" % mn,
+		"who_line": who_line,
+		"is_empty": ("\n%s %s" % [NpcChoreBoard.reason_glyph(reason), reason]) if not reason.is_empty() else "",
+	})
 	# Labels default to MOUSE_FILTER_IGNORE and Godot suppresses tooltips on
 	# IGNORE controls — the reason line above was silently dead.
 	lbl.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -350,13 +354,13 @@ func _chore_row(board: Variant, chore: Dictionary, day: int, reason: String) -> 
 	UITheme.style_button(pri)
 	var pv := int(chore.get("priority", 0))
 	pri.text = "▲" if pv < 50 else ("▼" if pv > 50 else "–")
-	pri.tooltip_text = "Priority: %s (click to cycle). Lower sorts first." % _band_name(pv)
+	pri.tooltip_text = I18n.f("Priority: {pv} (click to cycle). Lower sorts first.", {"pv": _band_name(pv)})
 	# A system-minted chore (machine, rota, alarm, project) carries a priority
 	# its minter chose; one click here used to drop an alarm to Normal.
 	var badge: Array = NpcChoreBoard.system_badge(chore)
 	if not badge.is_empty():
 		pri.disabled = true
-		pri.tooltip_text = "Priority: %s — %s" % [_band_name(pv), str(badge[1])]
+		pri.tooltip_text = I18n.f("Priority: {pv} — {badge}", {"pv": _band_name(pv), "badge": str(badge[1])})
 	pri.pressed.connect(func() -> void:
 		board.call("update_chore", cid, {"priority": _next_band(pv)})
 		_sig = "<unbuilt>"

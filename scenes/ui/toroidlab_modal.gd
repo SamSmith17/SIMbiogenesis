@@ -647,10 +647,13 @@ func _refresh_header() -> void:
 	var st: Dictionary = _design.get("stats", {})
 	var bom: Dictionary = _design.get("bom", {})
 	var so: Dictionary = _design.get("solar", {})
-	_subtitle.text = "%s · %s high · %s floor · %s · %s" % [ToroidLabSpec.describe(_spec),
-		ToroidLabSpec.fmt_m(float(st.get("height_m", 0.0))), ToroidLabSpec.fmt_area(float(st.get("floor_area_m2", 0.0))),
-		("%.1f kW solar" % (float(so.get("total_w", 0.0)) / 1000.0)) if int(so.get("count", 0)) > 0 else "no panels",
-		ToroidLabSpec.fmt_kg(float(bom.get("mass_kg", 0.0)))]
+	_subtitle.text = I18n.f("{spec} · {height_m} high · {floor_area_m2} floor · {count} · {mass_kg}", {
+		"spec": ToroidLabSpec.describe(_spec),
+		"height_m": ToroidLabSpec.fmt_m(float(st.get("height_m", 0.0))),
+		"floor_area_m2": ToroidLabSpec.fmt_area(float(st.get("floor_area_m2", 0.0))),
+		"count": ("%.1f kW solar" % (float(so.get("total_w", 0.0)) / 1000.0)) if int(so.get("count", 0)) > 0 else "no panels",
+		"mass_kg": ToroidLabSpec.fmt_kg(float(bom.get("mass_kg", 0.0))),
+	})
 
 
 func _on_name_changed() -> void:
@@ -874,7 +877,7 @@ func _build_brace_row(i: int, ring_items: Array) -> void:
 	card.add_theme_constant_override("separation", 2)
 	var head := HBoxContainer.new()
 	var hl := Label.new()
-	hl.text = "Bracing %d" % (i + 1)
+	hl.text = I18n.f("Bracing {value}", {"value": "%d" % ((i + 1))})
 	hl.add_theme_color_override("font_color", UITheme.C_TEXT)
 	hl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(hl)
@@ -995,9 +998,13 @@ func _sync_settings() -> void:
 	var fr: Dictionary = _design["frame"]
 	var tn := _torus_box.find_child("torus_note", true, false) as Label
 	if tn != null:
-		tn.text = "Major radius %s, minor radius %s, centre %s up · ground cut %s below the equator · throat Ø %s" % [
-			ToroidLabSpec.fmt_m(float(fr["R"])), ToroidLabSpec.fmt_m(float(fr["r"])), ToroidLabSpec.fmt_m(float(fr["hc"])),
-			ToroidLabSpec.fmt_deg(float(fr["ground_deg"])), ToroidLabSpec.fmt_m(float(_design["stats"]["throat_r_m"]) * 2.0)]
+		tn.text = I18n.f("Major radius {r}, minor radius {r_2}, centre {hc} up · ground cut {ground_deg} below the equator · throat Ø {throat_r_m}", {
+			"r": ToroidLabSpec.fmt_m(float(fr["R"])),
+			"r_2": ToroidLabSpec.fmt_m(float(fr["r"])),
+			"hc": ToroidLabSpec.fmt_m(float(fr["hc"])),
+			"ground_deg": ToroidLabSpec.fmt_deg(float(fr["ground_deg"])),
+			"throat_r_m": ToroidLabSpec.fmt_m(float(_design["stats"]["throat_r_m"]) * 2.0),
+		})
 	var rl := _ring_box.find_child("ring_list", true, false) as Label
 	if rl != null:
 		var lines: Array = []
@@ -1011,17 +1018,25 @@ func _sync_settings() -> void:
 		var pcs: Array = c.get("pieces", [])
 		if not pcs.is_empty():
 			var p: Dictionary = pcs[0]
-			cn.text = "%d sectors · pieces %s × %s · %d sheets · folds %s" % [(c["sectors"] as Array).size(),
-				ToroidLabSpec.fmt_len(float(p["w_mm"]), str(_spec["fabrication"]["units"])),
-				ToroidLabSpec.fmt_len(float(p["h_mm"]), str(_spec["fabrication"]["units"])), int(_design["bom"]["sheets"]),
-				", ".join((p["fold"] as Array).map(func(f): return "%s %.0f°" % [str(f[3]), float(f[2])]))]
+			cn.text = I18n.f("{sectors} sectors · pieces {units} × {units_2} · {sheets} sheets · folds {fold}", {
+				"sectors": "%d" % ((c["sectors"] as Array).size()),
+				"units": ToroidLabSpec.fmt_len(float(p["w_mm"]), str(_spec["fabrication"]["units"])),
+				"units_2": ToroidLabSpec.fmt_len(float(p["h_mm"]), str(_spec["fabrication"]["units"])),
+				"sheets": "%d" % int(_design["bom"]["sheets"]),
+				"fold": ", ".join((p["fold"] as Array).map(func(f): return "%s %.0f°" % [str(f[3]), float(f[2])])),
+			})
 	var sn := _solar_box.find_child("solar_note", true, false) as Label
 	if sn != null:
 		var so: Dictionary = _design["solar"]
 		var sm: Dictionary = so["summary"]
-		sn.text = "%d panels · %.2f kW · %dS × %dP · string Voc %.1f V, Vmp %.1f V" % [int(so["count"]),
-			float(so["total_w"]) / 1000.0, int(so["series"]), int(so["parallel"]), float(sm.get("string_voc", 0.0)),
-			float(sm.get("string_vmp", 0.0))]
+		sn.text = I18n.f("{count} panels · {total_w} kW · {series}S × {parallel}P · string Voc {string_voc} V, Vmp {string_vmp} V", {
+			"count": "%d" % int(so["count"]),
+			"total_w": "%.2f" % (float(so["total_w"]) / 1000.0),
+			"series": "%d" % int(so["series"]),
+			"parallel": "%d" % int(so["parallel"]),
+			"string_voc": "%.1f" % (float(sm.get("string_voc", 0.0))),
+			"string_vmp": "%.1f" % (float(sm.get("string_vmp", 0.0))),
+		})
 
 
 # ---------------------------------------------------------------------------
@@ -1076,11 +1091,15 @@ func _set_highlight(label: String) -> void:
 func _refresh_bom() -> void:
 	_clear(_bom_box)
 	var bom: Dictionary = _design["bom"]
-	_bom_lbl.text = "%s · %s of tube in %d stock lengths (%.0f %% waste) · %d fittings%s%s" % [
-		ToroidLabSpec.fmt_kg(float(bom["mass_kg"])), ToroidLabSpec.fmt_m(float(bom["tube_m"])), int(bom["stock_pieces"]),
-		float(bom["waste_pct"]), (_design["frame"]["fittings"] as Array).size(),
-		(" · %s" % UiText.count(int(bom["sheets"]), "sheet")) if int(bom["sheets"]) > 0 else "",
-		(" · %s" % UiText.count(int(bom["panels"]), "panel")) if int(bom["panels"]) > 0 else ""]
+	_bom_lbl.text = I18n.f("{mass_kg} · {tube_m} of tube in {stock_pieces} stock lengths ({waste_pct} % waste) · {fittings} fittings{sheets}{panels}", {
+		"mass_kg": ToroidLabSpec.fmt_kg(float(bom["mass_kg"])),
+		"tube_m": ToroidLabSpec.fmt_m(float(bom["tube_m"])),
+		"stock_pieces": "%d" % int(bom["stock_pieces"]),
+		"waste_pct": "%.0f" % float(bom["waste_pct"]),
+		"fittings": "%d" % ((_design["frame"]["fittings"] as Array).size()),
+		"sheets": (" · %s" % UiText.count(int(bom["sheets"]), "sheet")) if int(bom["sheets"]) > 0 else "",
+		"panels": (" · %s" % UiText.count(int(bom["panels"]), "panel")) if int(bom["panels"]) > 0 else "",
+	})
 	_bom_box.add_child(_bom_row(["Qty", "Item", "Detail"], true))
 	for r in bom["rows"]:
 		_bom_box.add_child(_bom_row(["%d %s" % [int(r["qty"]), str(r["unit"])], str(r["item"]), str(r["detail"])], false))

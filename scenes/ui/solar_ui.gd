@@ -4526,7 +4526,7 @@ func _update_display() -> void:
 		battery_percent.text = "%.0f%%%s" % [battery_percent_val, battery_linked]
 		battery_percent.remove_theme_color_override("font_color")
 		battery_percent.tooltip_text = _get_link_tooltip("battery SOC", ha_battery_soc_entity)
-	battery_kwh.text = "%.1f / %.0f kWh stored" % [battery_kwh_stored, BATTERY_CAPACITY_KWH]
+	battery_kwh.text = I18n.f("{battery_kwh_stored} / {battery_capacity_kwh} kWh stored", {"battery_kwh_stored": "%.1f" % battery_kwh_stored, "battery_capacity_kwh": "%.0f" % BATTERY_CAPACITY_KWH})
 
 	_update_score_card()
 	_update_daily_column()
@@ -4544,7 +4544,7 @@ func _update_display() -> void:
 			if _is_csv_linked_role("daily_solar"):
 				csv_indicators.append("📊")
 			if csv_indicators.size() > 0:
-				title_label.text = "⚡ Power · CSV playback %s" % "".join(csv_indicators)
+				title_label.text = I18n.f("⚡ Power · CSV playback {csv_indicators}", {"csv_indicators": "".join(csv_indicators)})
 			else:
 				title_label.text = "⚡ Power · CSV playback"
 			title_label.add_theme_color_override("font_color", Color(0.55, 0.85, 1.0))
@@ -4561,7 +4561,7 @@ func _update_display() -> void:
 				ha_indicators.append("📊")
 			
 			if ha_indicators.size() > 0:
-				title_label.text = "⚡ Power · Live %s" % "".join(ha_indicators)
+				title_label.text = I18n.f("⚡ Power · Live {ha_indicators}", {"ha_indicators": "".join(ha_indicators)})
 			else:
 				title_label.text = "⚡ Power · Live"
 			title_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.5))
@@ -4586,7 +4586,7 @@ func _update_display() -> void:
 				title_label.text = "⚡ Power Scoreboard"
 				title_label.remove_theme_color_override("font_color")
 			elif ha_indicators.size() > 0:
-				title_label.text = "⚡ Power · Home Assistant %s" % "".join(ha_indicators)
+				title_label.text = I18n.f("⚡ Power · Home Assistant {ha_indicators}", {"ha_indicators": "".join(ha_indicators)})
 				title_label.remove_theme_color_override("font_color")
 			else:
 				title_label.text = "⚡ Power Scoreboard"
@@ -4644,14 +4644,14 @@ func _update_display() -> void:
 	# Load power (show 📡 live HA or 📂 CSV playback when linked)
 	var load_linked = _source_link_icon("load", _ha_load_override >= 0.0)
 	if not is_ac_output_enabled():
-		load_value.text = "Shed%s" % load_linked
+		load_value.text = I18n.f("Shed{load_linked}", {"load_linked": load_linked})
 		load_value.add_theme_color_override("font_color", Color(1.0, 0.28, 0.22, 1.0))
 		load_value.tooltip_text = _ac_shutdown_reason_label()
 	else:
 		var shown_kw := current_load_now_kw
 		load_value.text = "%s%s" % [_fmt_power(shown_kw), load_linked]
 		if _load_peak_show_w > shown_kw * 1000.0 + 50.0:
-			load_value.text = "%s  peak %s%s" % [_fmt_power(shown_kw), _fmt_power(_load_peak_show_w / 1000.0), load_linked]
+			load_value.text = I18n.f("{shown_kw}  peak {load_peak_show_w}{load_linked}", {"shown_kw": _fmt_power(shown_kw), "load_peak_show_w": _fmt_power(_load_peak_show_w / 1000.0), "load_linked": load_linked})
 		if shown_kw > 0.01 or _load_peak_show_w > 50.0:
 			load_value.add_theme_color_override("font_color", Color(1.0, 0.5, 0.3, 1.0))
 		else:
@@ -4683,23 +4683,23 @@ func _update_display() -> void:
 	var weather_icon : String = _get_weather_icon()
 	
 	if battery_percent_val >= 99.9:
-		status_label.text = "Full %s" % weather_icon
+		status_label.text = I18n.f("Full {weather_icon}", {"weather_icon": weather_icon})
 		status_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3, 1.0))
 	elif battery_percent_val >= 95.0 and _raw_solar_kw > current_solar_kw + 0.5:
 		# Solar is being throttled because battery is nearly full
-		status_label.text = "Full — solar throttled %s" % weather_icon
+		status_label.text = I18n.f("Full — solar throttled {weather_icon}", {"weather_icon": weather_icon})
 		status_label.add_theme_color_override("font_color", Color(0.3, 0.9, 0.7, 1.0))
 	elif battery_percent_val <= MIN_BATTERY_PERCENT:
-		status_label.text = "Low battery %s" % weather_icon
+		status_label.text = I18n.f("Low battery {weather_icon}", {"weather_icon": weather_icon})
 		status_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3, 1.0))
 	elif net_power > 0.1:
-		status_label.text = "Charging %s" % weather_icon
+		status_label.text = I18n.f("Charging {weather_icon}", {"weather_icon": weather_icon})
 		status_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.2, 1.0))
 	elif net_power < -0.01:
-		status_label.text = "Discharging %s" % weather_icon
+		status_label.text = I18n.f("Discharging {weather_icon}", {"weather_icon": weather_icon})
 		status_label.add_theme_color_override("font_color", Color(0.5, 0.8, 1.0, 1.0))
 	else:
-		status_label.text = "Idle %s" % weather_icon
+		status_label.text = I18n.f("Idle {weather_icon}", {"weather_icon": weather_icon})
 		status_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6, 1.0))
 	# Critical state in ONE place, one look (AlertBanner): AC off first, then
 	# a battery at its floor.
@@ -4846,7 +4846,7 @@ func _update_daily_column() -> void:
 		net_today.text = ("+" if net >= 0.0 else "−") + _fmt_energy(absf(net))
 		net_today.add_theme_color_override("font_color",
 			Color(0.3, 1.0, 0.3) if net >= 0.0 else Color(1.0, 0.3, 0.3))
-		net_today.tooltip_text = "%.3f kWh generated − %.3f kWh consumed since midnight" % [gen, daily_load_consumed_kwh]
+		net_today.tooltip_text = I18n.f("{gen} kWh generated − {daily_load_consumed_kwh} kWh consumed since midnight", {"gen": "%.3f" % gen, "daily_load_consumed_kwh": "%.3f" % daily_load_consumed_kwh})
 	if net_icon != null:
 		net_icon.add_theme_color_override("font_color",
 			Color(0.3, 1.0, 0.3) if net >= 0.0 else Color(1.0, 0.3, 0.3))
@@ -4857,7 +4857,7 @@ func _set_daily(lbl: Label, kwh: float, col: Color) -> void:
 		return
 	lbl.text = _fmt_energy(kwh)
 	lbl.add_theme_color_override("font_color", col if kwh >= 0.0005 else UITheme.C_TEXT_M)
-	lbl.tooltip_text = "%.3f kWh since midnight" % kwh
+	lbl.tooltip_text = I18n.f("{kwh} kWh since midnight", {"kwh": "%.3f" % kwh})
 
 
 func _get_weather_icon() -> String:
@@ -5131,16 +5131,16 @@ func _update_graph() -> void:
 			
 			if _history_loaded and history_source != "":
 				graph_title.text = "SOLAR OUTPUT (24h) 📡"
-				graph_title.tooltip_text = "🔗 Historical data from: %s\nClick to change energy sensor" % history_source
+				graph_title.tooltip_text = I18n.f("🔗 Historical data from: {history_source}\nClick to change energy sensor", {"history_source": history_source})
 			elif _history_request_pending and history_source != "":
 				graph_title.text = "SOLAR OUTPUT (24h) ⏳"
-				graph_title.tooltip_text = "🔗 Loading history from: %s\nClick to change energy sensor" % history_source
+				graph_title.tooltip_text = I18n.f("🔗 Loading history from: {history_source}\nClick to change energy sensor", {"history_source": history_source})
 			elif ha_solar_energy_entity != "":
 				graph_title.text = "SOLAR OUTPUT (24h)"
-				graph_title.tooltip_text = "🔗 Energy sensor: %s\nClick to change" % ha_solar_energy_entity
+				graph_title.tooltip_text = I18n.f("🔗 Energy sensor: {ha_solar_energy_entity}\nClick to change", {"ha_solar_energy_entity": ha_solar_energy_entity})
 			elif ha_solar_entity != "":
 				graph_title.text = "SOLAR OUTPUT (24h)"
-				graph_title.tooltip_text = "Using power sensor for history: %s\nClick to link dedicated energy sensor" % ha_solar_entity
+				graph_title.tooltip_text = I18n.f("Using power sensor for history: {ha_solar_entity}\nClick to link dedicated energy sensor", {"ha_solar_entity": ha_solar_entity})
 			else:
 				graph_title.text = "SOLAR OUTPUT (24h)"
 				graph_title.tooltip_text = "Click to link HA solar energy sensor for historical data\n(or uses linked power sensor automatically)"
@@ -5153,9 +5153,9 @@ func _update_graph() -> void:
 		if _csv_playback_active and _is_csv_linked_role("load"):
 			for val in load_history:
 				peak = maxf(peak, val)
-			graph_peak_label.text = "Peak: %.1f kW (solar/load)" % peak
+			graph_peak_label.text = I18n.f("Peak: {peak} kW (solar/load)", {"peak": "%.1f" % peak})
 		else:
-			graph_peak_label.text = "Peak: %.1f kW" % peak
+			graph_peak_label.text = I18n.f("Peak: {peak} kW", {"peak": "%.1f" % peak})
 	
 func _draw_solar_graph() -> void:
 	if solar_graph == null:

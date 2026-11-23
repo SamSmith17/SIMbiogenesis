@@ -240,7 +240,7 @@ func refresh() -> void:
 		_rows_box.add_child(_make_row(rows[i] as Dictionary))
 	if rows.size() > ROW_LIMIT:
 		var more := Label.new()
-		more.text = "+%d more (filter to narrow the list)" % (rows.size() - ROW_LIMIT)
+		more.text = I18n.f("+{row_limit} more (filter to narrow the list)", {"row_limit": "%d" % ((rows.size() - ROW_LIMIT))})
 		more.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		more.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 		_rows_box.add_child(more)

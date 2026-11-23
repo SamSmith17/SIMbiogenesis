@@ -280,9 +280,14 @@ func _refresh() -> void:
 	if rows.is_empty():
 		_totals.text = "No festival camps yet — Set up the gathering, or paint a camp and give it people."
 	else:
-		_totals.text = "%s · %s · the whole gathering, per day: %s water in, %s food, %s greywater and %s blackwater out." % [
-			UiText.count(rows.size(), "camp"), UiText.count(people, "person", "people"),
-			UiText.num(water, "L"), UiText.num(food, "kg"), UiText.num(grey, "L"), UiText.num(black, "L")]
+		_totals.text = I18n.f("{rows} · {people} · the whole gathering, per day: {water} water in, {food} food, {grey} greywater and {black} blackwater out.", {
+			"rows": UiText.count(rows.size(), "camp"),
+			"people": UiText.count(people, "person", "people"),
+			"water": UiText.num(water, "L"),
+			"food": UiText.num(food, "kg"),
+			"grey": UiText.num(grey, "L"),
+			"black": UiText.num(black, "L"),
+		})
 
 
 ## A camp's vehicles: one chip each (Look flies the view there) and a
@@ -309,7 +314,7 @@ func _update_vehicle_row(c: Dictionary, veh: Dictionary) -> void:
 	vrow.add_child(cap)
 	for i in names.size():
 		var b := Button.new()
-		b.text = "%s · Look" % str(names[i])
+		b.text = I18n.f("{names} · Look", {"names": str(names[i])})
 		b.tooltip_text = "Fly the view to this vehicle"
 		UITheme.style_button(b)
 		var at: Vector2 = pos[i] if i < pos.size() else Vector2.INF
@@ -320,7 +325,7 @@ func _update_vehicle_row(c: Dictionary, veh: Dictionary) -> void:
 				main.call("open_settlement_view", at))
 		vrow.add_child(b)
 	var cost := Label.new()
-	cost.text = "Getting here: %s in trips and fuel" % SiteCost.format_usd(float(veh.get("usd", 0.0)))
+	cost.text = I18n.f("Getting here: {usd} in trips and fuel", {"usd": SiteCost.format_usd(float(veh.get("usd", 0.0)))})
 	cost.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	cost.tooltip_text = "Both legs of each vehicle's trip, plus fuel bought on site"
 	vrow.add_child(cost)

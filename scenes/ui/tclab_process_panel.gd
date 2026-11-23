@@ -335,7 +335,7 @@ func _process(delta: float) -> void:
 			if _use_after_prerun:
 				_use_after_prerun = false
 				use_run()
-		_progress.text = "Running the batch… %d %%" % int(done_s / end * 100.0) if prerunning else ""
+		_progress.text = I18n.f("Running the batch… {end} %", {"end": "%d" % (int(done_s / end * 100.0))}) if prerunning else ""
 	elif playing:
 		var target := minf(sim.t_s + delta * speed, end)
 		_advance(target, BUDGET_US)
@@ -749,7 +749,7 @@ func _rebuild_control() -> void:
 			var cb := CheckButton.new()
 			cb.name = "act_%s" % key.replace(".", "_")
 			cb.text = str(a["label"])
-			cb.tooltip_text = "%s\nFlipping it changes the run from this moment on." % key
+			cb.tooltip_text = I18n.f("{key}\nFlipping it changes the run from this moment on.", {"key": key})
 			cb.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 			cb.clip_text = true
 			cb.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -896,7 +896,7 @@ func _board_tick(r: Dictionary) -> CheckBox:
 	var cb := CheckBox.new()
 	cb.name = "board_%s" % key.replace(".", "_")
 	cb.button_pressed = bool(r["on"])
-	cb.tooltip_text = "On the controller board (%s)" % str(r["note"])
+	cb.tooltip_text = I18n.f("On the controller board ({note})", {"note": str(r["note"])})
 	cb.toggled.connect(func(on: bool) -> void: set_on_board(key, on))
 	return cb
 
@@ -1138,11 +1138,18 @@ func _refresh_use(node: String = "") -> void:
 	var lab: Array = []
 	if not (proc.get("automations", []) as Array).is_empty():
 		lab = TcProcSummary.world_automations(proc.get("automations", []))["lab_only"]
-	_use_note.text = "Batch %.1f h at %s: %.1f kg in → %.2f kg char, %.2f m³ gas at %.1f MJ/m³, %.2f L wood vinegar, %.2f kg tar. %s%s" % [
-		float(sm.get("batch_h", 0.0)), UiText.num(float(sm.get("watts", 0.0)), "W"), float(sm.get("feed_kg", 0.0)),
-		float(sm.get("char_kg", 0.0)), float(sm.get("gas_nm3", 0.0)), float(sm.get("gas_lhv_mj_nm3", 0.0)),
-		float(sm.get("vinegar_l", 0.0)), float(sm.get("tar_kg", 0.0)), where,
-		(" Rules that read lab sensors stay in the lab: %s." % ", ".join(lab)) if not lab.is_empty() else ""]
+	_use_note.text = I18n.f("Batch {batch_h} h at {watts}: {feed_kg} kg in → {char_kg} kg char, {gas_nm3} m³ gas at {gas_lhv_mj_nm3} MJ/m³, {vinegar_l} L wood vinegar, {tar_kg} kg tar. {where}{is_empty}", {
+		"batch_h": "%.1f" % (float(sm.get("batch_h", 0.0))),
+		"watts": UiText.num(float(sm.get("watts", 0.0)), "W"),
+		"feed_kg": "%.1f" % (float(sm.get("feed_kg", 0.0))),
+		"char_kg": "%.2f" % (float(sm.get("char_kg", 0.0))),
+		"gas_nm3": "%.2f" % (float(sm.get("gas_nm3", 0.0))),
+		"gas_lhv_mj_nm3": "%.1f" % (float(sm.get("gas_lhv_mj_nm3", 0.0))),
+		"vinegar_l": "%.2f" % (float(sm.get("vinegar_l", 0.0))),
+		"tar_kg": "%.2f" % (float(sm.get("tar_kg", 0.0))),
+		"where": where,
+		"is_empty": (" Rules that read lab sensors stay in the lab: %s." % ", ".join(lab)) if not lab.is_empty() else "",
+	})
 
 
 ## The rules as Home Assistant YAML: on the clipboard and in a file.
@@ -1157,7 +1164,7 @@ func export_yaml() -> String:
 		f.store_string(y)
 		f.close()
 	if _yaml_note != null:
-		_yaml_note.text = "Copied, and saved as %s. Paste it into Home Assistant's automations.yaml once the board is added." % path.get_file()
+		_yaml_note.text = I18n.f("Copied, and saved as {file}. Paste it into Home Assistant's automations.yaml once the board is added.", {"file": path.get_file()})
 	return y
 
 

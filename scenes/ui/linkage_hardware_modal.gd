@@ -247,7 +247,7 @@ func _build_topbar() -> Control:
 		b.toggle_mode = true
 		b.focus_mode = Control.FOCUS_NONE
 		b.text = _short_label(id)
-		b.tooltip_text = "Edit the %s stack" % id
+		b.tooltip_text = I18n.f("Edit the {id} stack", {"id": id})
 		UITheme.style_button(b)
 		b.pressed.connect(_on_tab_pressed.bind(id))
 		bar.add_child(b)
@@ -947,14 +947,14 @@ func _rebuild_part_list() -> void:
 	for axis in LinkageHwLayout.AXES:
 		var parts := LinkageHardware.parts_on_axis(asm, str(axis))
 		var axis_head := Label.new()
-		axis_head.text = "%s axis" % str(axis)
+		axis_head.text = I18n.f("{axis} axis", {"axis": str(axis)})
 		axis_head.add_theme_color_override("font_color", C_TEXT_M)
 		axis_head.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		_parts_box.add_child(axis_head)
 		for part in parts:
 			_add_part_row(part as Dictionary, str(axis))
 		var add := Button.new()
-		add.text = "+ Add part to %s" % str(axis)
+		add.text = I18n.f("+ Add part to {axis}", {"axis": str(axis)})
 		add.focus_mode = Control.FOCUS_NONE
 		add.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		add.pressed.connect(_on_add_part.bind(str(axis)))
@@ -981,8 +981,11 @@ func _add_part_row(part: Dictionary, axis: String) -> void:
 	sel.text = "%s · %s%s" % [str(part.get("label", pid)),
 		_mm(LinkageHwLayout.part_axial_length(part)),
 		"  ×%d" % qty if qty > 1 else ""]
-	sel.tooltip_text = "%s · %d/module · $%.2f" % [str(part.get("type", "")),
-		int(part.get("perModule", 0)), float(part.get("cost", 0.0))]
+	sel.tooltip_text = I18n.f("{type} · {permodule}/module · ${cost}", {
+		"type": str(part.get("type", "")),
+		"permodule": "%d" % (int(part.get("perModule", 0))),
+		"cost": "%.2f" % (float(part.get("cost", 0.0))),
+	})
 	sel.pressed.connect(func() -> void: _select(pid, 0))
 	row.add_child(sel)
 
@@ -1359,12 +1362,15 @@ func _update_hint() -> void:
 		_hint.add_theme_color_override("font_color", C_TEXT)
 		return
 	if _drag_cross:
-		_hint.text = "%s · across %+.3f\"" % [label, float(part.get("crossOffset", 0.0))]
+		_hint.text = I18n.f("{label} · across {crossoffset}\"", {"label": label, "crossoffset": "%+.3f" % (float(part.get("crossOffset", 0.0)))})
 		_hint.add_theme_color_override("font_color", C_TEXT)
 		return
 	var suffix := "  ·  SNAP" if _drag_snapped else ""
-	_hint.text = "%s · offset %+.3f\"%s" % [
-		label, float(part.get("posAssembled", 0.0)), suffix]
+	_hint.text = I18n.f("{label} · offset {posassembled}\"{suffix}", {
+		"label": label,
+		"posassembled": "%+.3f" % (float(part.get("posAssembled", 0.0))),
+		"suffix": suffix,
+	})
 	_hint.add_theme_color_override("font_color",
 		UITheme.C_WARN if _drag_snapped else C_TEXT)
 

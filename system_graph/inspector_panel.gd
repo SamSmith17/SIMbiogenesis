@@ -1164,7 +1164,7 @@ func _build_connection_loss_section(conn: Dictionary, electrical: bool) -> void:
 	rl.custom_minimum_size.x = 120.0
 	ratio_row.add_child(rl)
 	var rv := Label.new()
-	rv.text = "%.2f× rating" % ratio
+	rv.text = I18n.f("{ratio}× rating", {"ratio": "%.2f" % ratio})
 	rv.add_theme_color_override("font_color",
 		UITheme.C_ERROR if ratio > 1.0 else (UITheme.C_WARN if ratio > 0.8 else C_TEXT))
 	ratio_row.add_child(rv)
@@ -1685,7 +1685,7 @@ func _close_loop_button(kind: String, text: String = "Close this loop", from_ite
 	var b := Button.new()
 	b.text = text
 	b.name = "close_loop_" + kind
-	b.tooltip_text = "Show machines that would close the %s loop here, as ghosts on the graph (Tab accepts, Esc dismisses)." % GraphSuggestions.kind_word(kind)
+	b.tooltip_text = I18n.f("Show machines that would close the {kind} loop here, as ghosts on the graph (Tab accepts, Esc dismisses).", {"kind": GraphSuggestions.kind_word(kind)})
 	b.pressed.connect(func() -> void:
 		var gv := ServiceLocator.graph()
 		if gv != null and gv.has_method("close_loop_for_kind"):
@@ -1696,7 +1696,7 @@ func _close_loop_button(kind: String, text: String = "Close this loop", from_ite
 func _separate_button(kind: String) -> void:
 	var b := Button.new()
 	b.text = "What can separate this?"
-	b.tooltip_text = "The machines and kinds of process that pull water, nitrogen, phosphorus, potassium or carbon out of %s." % ResourceKinds.display_name(kind).to_lower()
+	b.tooltip_text = I18n.f("The machines and kinds of process that pull water, nitrogen, phosphorus, potassium or carbon out of {kind}.", {"kind": ResourceKinds.display_name(kind).to_lower()})
 	b.pressed.connect(func() -> void:
 		var gv := ServiceLocator.graph()
 		if gv != null and gv.has_method("open_separate"):
@@ -1765,7 +1765,7 @@ func _build_appearance_section(item: Dictionary) -> void:
 	reset_btn.focus_mode = Control.FOCUS_NONE
 	reset_btn.add_theme_color_override("font_color", C_PRIMARY)
 	reset_btn.add_theme_font_size_override("font_size", 10)
-	reset_btn.tooltip_text = "Restore %s × %s for this node type" % [str(int(def_w)), str(int(def_h))]
+	reset_btn.tooltip_text = I18n.f("Restore {def_w} × {def_h} for this node type", {"def_w": str(int(def_w)), "def_h": str(int(def_h))})
 	reset_btn.pressed.connect(func() -> void:
 		if _model == null or _item_id.is_empty():
 			return
@@ -2961,9 +2961,10 @@ func _update_pp_extruder_live_labels(specs: Dictionary) -> void:
 	if _pp_ext_rate_lbl != null and is_instance_valid(_pp_ext_rate_lbl):
 		_pp_ext_rate_lbl.text = "%.2f m/h" % mph
 	if _pp_ext_stick_lbl != null and is_instance_valid(_pp_ext_stick_lbl):
-		_pp_ext_stick_lbl.text = "%.3f m (%.0f%% of cut)" % [
-			float(specs.get("extruded_length_m", 0.0)),
-			float(specs.get("extrude_fill_fraction", 0.0)) * 100.0]
+		_pp_ext_stick_lbl.text = I18n.f("{extruded_length_m} m ({extrude_fill_fraction}% of cut)", {
+			"extruded_length_m": "%.3f" % (float(specs.get("extruded_length_m", 0.0))),
+			"extrude_fill_fraction": "%.0f" % (float(specs.get("extrude_fill_fraction", 0.0)) * 100.0),
+		})
 	if _pp_ext_cuts_lbl != null and is_instance_valid(_pp_ext_cuts_lbl):
 		_pp_ext_cuts_lbl.text = "%d" % int(specs.get("beams_cut_total", 0))
 
@@ -3541,7 +3542,7 @@ func _build_cnc_cut_presets(item_id: String) -> void:
 			var bs_n := inv.count("dome_strut_b")
 			if as_n + bs_n > 0:
 				var conv := Button.new()
-				conv.text = "↩ Reclaim %s as beam stock" % UiText.count(as_n + bs_n, "strut")
+				conv.text = I18n.f("↩ Reclaim {bs_n} as beam stock", {"bs_n": UiText.count(as_n + bs_n, "strut")})
 				conv.tooltip_text = "If these came from the beam extruder (not the trash printer), convert them back to CNC feedstock."
 				conv.focus_mode = Control.FOCUS_NONE
 				conv.pressed.connect(func():
@@ -3793,7 +3794,7 @@ func _build_process_recipe_section(specs: Dictionary) -> void:
 
 	if bool(specs.get("recipe_waiting_chore", false)):
 		var banner := Label.new()
-		banner.text = "Waiting: %s" % str(specs.get("recipe_waiting_label", "chore"))
+		banner.text = I18n.f("Waiting: {recipe_waiting}", {"recipe_waiting": str(specs.get("recipe_waiting_label", "chore"))})
 		banner.add_theme_color_override("font_color", UITheme.C_WARN)
 		banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		_form_vbox.add_child(banner)
@@ -4466,10 +4467,10 @@ func _build_ha_link_section(item: Dictionary) -> void:
 				txt = "📡 %s  ·  %s" % [("on" if v >= 0.5 else "off") if unit_s == "bool" else "%.2f %s" % [v, unit_s], eid]
 				btn.add_theme_color_override("font_color", Color(0.27, 0.9, 0.42))
 			btn.text = txt
-			btn.tooltip_text = "Linked to %s. Click to change or unlink." % eid
+			btn.tooltip_text = I18n.f("Linked to {eid}. Click to change or unlink.", {"eid": eid})
 		else:
 			btn.text = "Link a sensor…"
-			btn.tooltip_text = "Pick a Home Assistant entity for %s." % str(f["label"]).to_lower()
+			btn.tooltip_text = I18n.f("Pick a Home Assistant entity for {label}.", {"label": str(f["label"]).to_lower()})
 		btn.pressed.connect(func() -> void:
 			var main := get_tree().current_scene
 			if main != null and main.has_method("open_ha_links"):
@@ -5033,15 +5034,16 @@ func _ensure_calibrator() -> void:
 func _on_calibrator_progress(remaining_s: float, samples: int,
 		current_w: float, avg_w: float, peak_w: float) -> void:
 	if _cal_remaining_lbl != null:
-		_cal_remaining_lbl.text = "Time remaining: %s   (%s)" % [
-			_format_duration(remaining_s), UiText.count(samples, "sample")
-		]
+		_cal_remaining_lbl.text = I18n.f("Time remaining: {remaining_s}   ({samples})", {
+			"remaining_s": _format_duration(remaining_s),
+			"samples": UiText.count(samples, "sample"),
+		})
 	if _cal_live_lbl != null:
-		_cal_live_lbl.text = "Live: %.1f W" % current_w
+		_cal_live_lbl.text = I18n.f("Live: {current_w} W", {"current_w": "%.1f" % current_w})
 	if _cal_avg_lbl != null:
-		_cal_avg_lbl.text = "Average: %.1f W" % avg_w
+		_cal_avg_lbl.text = I18n.f("Average: {avg_w} W", {"avg_w": "%.1f" % avg_w})
 	if _cal_peak_lbl != null:
-		_cal_peak_lbl.text = "Peak: %.1f W" % peak_w
+		_cal_peak_lbl.text = I18n.f("Peak: {peak_w} W", {"peak_w": "%.1f" % peak_w})
 	if _cal_graph != null and is_instance_valid(_cal_graph) \
 			and _calibrator != null:
 		var dur: float = _calibrator.get_duration_s()
@@ -6042,7 +6044,7 @@ func _build_provision_row(specs: Dictionary) -> void:
 		opt.add_item(CampProvisioning.preset_label(pid), i)
 		if pid == cur:
 			opt.select(i)
-	opt.tooltip_text = "How many days of water, food and firewood to stock (and waste tanks to size) for %d people" % n
+	opt.tooltip_text = I18n.f("How many days of water, food and firewood to stock (and waste tanks to size) for {value} people", {"value": "%d" % n})
 	prow.add_child(opt)
 	var btn := Button.new()
 	btn.text = "Stock up"

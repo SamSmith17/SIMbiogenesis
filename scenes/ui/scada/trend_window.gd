@@ -34,7 +34,9 @@ func open(view: Node, hub: Node) -> void:
 	bar.add_theme_constant_override("separation", 6)
 	_frame.body.add_child(bar)
 	var add := _btn("add_pen", "Add a pen…", func() -> void: _add_pen())
-	add.tooltip_text = "Pick a tag to draw (up to %d)." % int(_hub.get("MAX_PENS")) if _hub != null else ""
+	add.tooltip_text = I18n.f("Pick a tag to draw (up to {max_pens}).", {
+		"max_pens": "%d" % int(_hub.get("MAX_PENS")),
+	}) if _hub != null else ""
 	bar.add_child(add)
 	bar.add_child(VSeparator.new())
 	for sp in SPANS:
@@ -118,7 +120,9 @@ func _sync_bar() -> void:
 	for h in _span_btns:
 		(_span_btns[h] as Button).set_pressed_no_signal(absf(_chart.span_h - float(h)) < 0.01)
 	_now_btn.disabled = _chart.following()
-	_note.text = "Showing the last %s" % _span_text(_chart.span_h) if _chart.following() else "Looking back: %s wide" % _span_text(_chart.span_h)
+	_note.text = I18n.f("Showing the last {span_h}", {
+		"span_h": _span_text(_chart.span_h),
+	}) if _chart.following() else "Looking back: %s wide" % _span_text(_chart.span_h)
 
 
 static func _span_text(h: float) -> String:
@@ -175,7 +179,7 @@ func _rebuild_pens() -> void:
 			_chart.axis_pen = idx
 			_chart.queue_redraw())
 		name_b.flat = true
-		name_b.tooltip_text = "%s\nClick: show this pen's scale on the left axis." % id
+		name_b.tooltip_text = I18n.f("{id}\nClick: show this pen's scale on the left axis.", {"id": id})
 		name_b.clip_text = true
 		name_b.custom_minimum_size.x = minf(maxf(float(str(t.get("label", id)).length()) * 7.5, 60.0), 220.0)
 		row.add_child(name_b)

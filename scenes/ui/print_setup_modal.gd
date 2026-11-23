@@ -252,7 +252,7 @@ func _build_ui() -> void:
 func _apply_caps_chrome() -> void:
 	if _caps == null:
 		return
-	_title.text = "%s — print setup" % _caps.display_name
+	_title.text = I18n.f("{display_name} — print setup", {"display_name": _caps.display_name})
 	_preset_row.visible = _caps.show_part_presets
 	_design_btn.visible = _caps.show_design_building
 	_wet_lbl.text = _caps.wet_label
@@ -268,9 +268,14 @@ func _apply_caps_chrome() -> void:
 	_set_range(_offy, -_caps.work_y_mm * 0.5, _caps.work_y_mm * 0.5)
 	_set_range(_hop, 0.0, maxf(_caps.layer_hi * 4.0, 2.0))
 	var lim := PrintJob.limits_for_specs(_specs)
-	_machine_lbl.text = "Bed %.0f × %.0f × %.0f mm · max %.0f mm/s · %.0f mm/s² · jerk %.1f mm/s" % [
-		_caps.work_x_mm, _caps.work_y_mm, _caps.work_z_mm, float(lim.get("max_feed_mm_s", 0.0)),
-		float(lim.get("accel_mm_s2", 0.0)), float(lim.get("junction_mm_s", 0.0))]
+	_machine_lbl.text = I18n.f("Bed {work_x_mm} × {work_y_mm} × {work_z_mm} mm · max {max_feed_mm_s} mm/s · {accel_mm_s2} mm/s² · jerk {junction_mm_s} mm/s", {
+		"work_x_mm": "%.0f" % _caps.work_x_mm,
+		"work_y_mm": "%.0f" % _caps.work_y_mm,
+		"work_z_mm": "%.0f" % _caps.work_z_mm,
+		"max_feed_mm_s": "%.0f" % (float(lim.get("max_feed_mm_s", 0.0))),
+		"accel_mm_s2": "%.0f" % (float(lim.get("accel_mm_s2", 0.0))),
+		"junction_mm_s": "%.1f" % (float(lim.get("junction_mm_s", 0.0))),
+	})
 	_rebuild_bed_plane()
 	if _caps.show_part_presets:
 		_rebuild_preset_menu()
@@ -835,7 +840,7 @@ func _on_file_selected(path: String) -> void:
 func _load_stl_path(path: String, auto_fit: bool) -> void:
 	var tris := StlLoader.load_triangles(path)
 	if tris.is_empty():
-		_status.text = "Could not read %s." % path.get_file()
+		_status.text = I18n.f("Could not read {file}.", {"file": path.get_file()})
 		return
 	_tris = tris
 	_mesh = StlLoader.build_mesh(path)
@@ -858,7 +863,7 @@ func _load_stl_path(path: String, auto_fit: bool) -> void:
 func _on_gcode_file_selected(path: String) -> void:
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
-		_status.text = "Could not read %s." % path.get_file()
+		_status.text = I18n.f("Could not read {file}.", {"file": path.get_file()})
 		return
 	_gcode_text = f.get_as_text()
 	f.close()
@@ -941,7 +946,7 @@ func _reslice() -> void:
 	_task_out = {}
 	_slice_progress = 0.0
 	_slice_t0 = Time.get_ticks_msec()
-	_status.text = "Slicing %s…" % _source_name
+	_status.text = I18n.f("Slicing {source_name}…", {"source_name": _source_name})
 	_task_id = WorkerThreadPool.add_task(_slice_task.bind(inp), false, "print setup slice")
 
 
@@ -964,7 +969,7 @@ func _poll_slice(block: bool = false) -> void:
 	if _task_id < 0:
 		return
 	if not block and not WorkerThreadPool.is_task_completed(_task_id):
-		_status.text = "Slicing %s… %d %%" % [_source_name, int(_slice_progress * 100.0)]
+		_status.text = I18n.f("Slicing {source_name}… {slice_progress} %", {"source_name": _source_name, "slice_progress": "%d" % (int(_slice_progress * 100.0))})
 		return
 	WorkerThreadPool.wait_for_task_completion(_task_id)
 	_task_id = -1
@@ -991,9 +996,9 @@ func _apply_slice(out: Dictionary) -> void:
 	_job = job
 	var ms := Time.get_ticks_msec() - _slice_t0
 	if _source_kind == "stl":
-		_status.text = "%s · %s · sliced and planned in %s" % [_source_name, UiText.count(int(_parse.get("triangles", 0)), "triangle"), GantryLabMotion.fmt_duration(float(ms) / 1000.0)]
+		_status.text = I18n.f("{source_name} · {triangles} · sliced and planned in {ms}", {"source_name": _source_name, "triangles": UiText.count(int(_parse.get("triangles", 0)), "triangle"), "ms": GantryLabMotion.fmt_duration(float(ms) / 1000.0)})
 	else:
-		_status.text = "%s · %s · %s dialect · run as written" % [_source_name, UiText.count(int(_parse.get("lines", 0)), "line"), str(_parse.get("dialect", "reprap"))]
+		_status.text = I18n.f("{source_name} · {lines} · {dialect} dialect · run as written", {"source_name": _source_name, "lines": UiText.count(int(_parse.get("lines", 0)), "line"), "dialect": str(_parse.get("dialect", "reprap"))})
 	_player = PrintJobPlayer.new()
 	_player.set_job(_job)
 	_refresh_estimate()
@@ -1027,12 +1032,18 @@ func _refresh_estimate() -> void:
 	var fits := bmin.x >= bed.position.x - 0.5 and bmin.y >= bed.position.y - 0.5 and bmax.x <= bed.end.x + 0.5 and bmax.y <= bed.end.y + 0.5 and bmax.z <= _caps.work_z_mm + 0.5
 	if _roads != null and _roads.is_merged():
 		warn += "\n(drawn simplified: %s roads stand for its curves)" % UiText.thousands(_roads.road_count())
-	_est_lbl.text = "%s · %s · %.0f × %.0f × %.0f mm%s\n%s of material · %s at 1×%s%s" % [
-		UiText.count(int(_job.get("layers", 0)), "layer"), UiText.count(PrintMoves.count(_job["moves"]), "move"),
-		sz.x, sz.y, sz.z, "" if fits else "  — OFF THE BED",
-		mat_txt, GantryLabMotion.fmt_duration(_player.total_s),
-		(" (%s on this machine)" % GantryLabMotion.fmt_duration(_player.total_s / speed_factor)) if absf(speed_factor - 1.0) > 0.01 else "",
-		warn]
+	_est_lbl.text = I18n.f("{layers} · {moves} · {sz} × {y} × {z} mm{fits}\n{mat} of material · {total_s} at 1×{speed_factor}{warn}", {
+		"layers": UiText.count(int(_job.get("layers", 0)), "layer"),
+		"moves": UiText.count(PrintMoves.count(_job["moves"]), "move"),
+		"sz": "%.0f" % sz.x,
+		"y": "%.0f" % sz.y,
+		"z": "%.0f" % sz.z,
+		"fits": "" if fits else "  — OFF THE BED",
+		"mat": mat_txt,
+		"total_s": GantryLabMotion.fmt_duration(_player.total_s),
+		"speed_factor": (" (%s on this machine)" % GantryLabMotion.fmt_duration(_player.total_s / speed_factor)) if absf(speed_factor - 1.0) > 0.01 else "",
+		"warn": warn,
+	})
 
 
 # ---------------------------------------------------------------------------
@@ -1148,11 +1159,22 @@ func _apply_sim_time() -> void:
 	var layer := int(smp.get("layer", 0))
 	var layers := int(smp.get("layers", 0))
 	var plan: Dictionary = _player.plan
-	_hud.text = "%s · %s of %s · move %d of %d\nX %.1f  Y %.1f  Z %.1f mm · %s %.0f mm/s (asked %.0f)%s\n%d %% of moves hit the feed cap, %d %% never reach it (too short for the acceleration)" % [
-		_source_name, GantryLabMotion.fmt_duration(_sim_t), GantryLabMotion.fmt_duration(total), int(smp["i"]) + 1, int(plan.get("n", 0)),
-		pos.x, pos.y, pos.z, what, v, float(smp["feed"]),
-		(" · layer %d of %d" % [layer, layers]) if layers > 0 else "",
-		int(100.0 * float(plan.get("max_feed_hit_share", 0.0))), int(100.0 * float(plan.get("accel_limited_share", 0.0)))]
+	_hud.text = I18n.f("{source_name} · {sim_t} of {total} · move {i} of {n}\nX {pos}  Y {y}  Z {z} mm · {what} {value} mm/s (asked {feed}){layers}\n{max_feed_hit_share} % of moves hit the feed cap, {accel_limited_share} % never reach it (too short for the acceleration)", {
+		"source_name": _source_name,
+		"sim_t": GantryLabMotion.fmt_duration(_sim_t),
+		"total": GantryLabMotion.fmt_duration(total),
+		"i": "%d" % (int(smp["i"]) + 1),
+		"n": "%d" % (int(plan.get("n", 0))),
+		"pos": "%.1f" % pos.x,
+		"y": "%.1f" % pos.y,
+		"z": "%.1f" % pos.z,
+		"what": what,
+		"value": "%.0f" % v,
+		"feed": "%.0f" % float(smp["feed"]),
+		"layers": (" · layer %d of %d" % [layer, layers]) if layers > 0 else "",
+		"max_feed_hit_share": "%d" % (int(100.0 * float(plan.get("max_feed_hit_share", 0.0)))),
+		"accel_limited_share": "%d" % (int(100.0 * float(plan.get("accel_limited_share", 0.0)))),
+	})
 
 
 func _update_viewport_size() -> void:

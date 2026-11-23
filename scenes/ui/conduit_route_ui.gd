@@ -81,8 +81,10 @@ func show_route_mode(type_id: String, waypoint_count: int, length_m: float,
 			_hint.text = "Drag the pin · Shift locks to an axis · release commits · double-click a pin removes it · Esc cancel"
 		_:
 			_title.text = "Route 3D Conduit"
-			_hint.text = "LMB drops a pin (%s) · RMB undoes · Enter commits · Esc cancels%s" % [
-				UiText.count(waypoint_count, "pin"), "" if aim_valid else " · (aim at the ground)"]
+			_hint.text = I18n.f("LMB drops a pin ({waypoint_count}) · RMB undoes · Enter commits · Esc cancels{aim_valid}", {
+				"waypoint_count": UiText.count(waypoint_count, "pin"),
+				"aim_valid": "" if aim_valid else " · (aim at the ground)",
+			})
 
 
 func show_route_ex(type_id: String, waypoint_count: int, length_m: float,

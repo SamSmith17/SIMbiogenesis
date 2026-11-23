@@ -228,7 +228,7 @@ func _build_ui() -> void:
 	for axis_name: String in ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]:
 		var ab := Button.new()
 		ab.text = axis_name
-		ab.tooltip_text = "Aim the selected socket along the model's %s" % axis_name
+		ab.tooltip_text = I18n.f("Aim the selected socket along the model's {axis_name}", {"axis_name": axis_name})
 		ab.focus_mode = Control.FOCUS_NONE
 		ab.custom_minimum_size.x = 36
 		UITheme.style_button(ab)
@@ -616,7 +616,7 @@ func _refresh_approach_label() -> void:
 		_approach_lbl.text = "Points into the model: the run will leave further out. Aim it out (or Flip)."
 		_approach_lbl.add_theme_color_override("font_color", UITheme.C_WARN)
 	else:
-		_approach_lbl.text = "Out %s · %.2f m straight before it bends" % [_axis_words(n), m]
+		_approach_lbl.text = I18n.f("Out {axis_words} · {m} m straight before it bends", {"axis_words": _axis_words(n), "m": "%.2f" % m})
 		_approach_lbl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 
 
@@ -682,7 +682,7 @@ func _on_suggest_ports() -> void:
 	_refresh_handle_list()
 	_rebuild_gizmos()
 	_update_pending_banner()
-	_status_lbl.text = "%s placed: check them, then Save" % UiText.count(todo.size(), "port")
+	_status_lbl.text = I18n.f("{todo} placed: check them, then Save", {"todo": UiText.count(todo.size(), "port")})
 
 
 func _on_selected_type_changed(idx: int) -> void:
@@ -813,7 +813,7 @@ func _apply_selected_to_connections() -> void:
 		n += 1
 	_write_selected_type_pref()
 	_rebuild_wire_previews()
-	_status_lbl.text = "Updated %s" % UiText.count(n, "connection")
+	_status_lbl.text = I18n.f("Updated {value}", {"value": UiText.count(n, "connection")})
 
 
 func _first_conn_for_handle(handle_id: String) -> Dictionary:
@@ -927,7 +927,7 @@ func _rebuild_studio() -> void:
 	_studio_view.clear()
 	_model_inst = ModelCatalog.instantiate(_model_id)
 	if _model_inst == null:
-		_status_lbl.text = "Could not load model '%s'" % _model_id
+		_status_lbl.text = I18n.f("Could not load model '{model_id}'", {"model_id": _model_id})
 		return
 	_model_inst.name = "ModelRoot"
 	_studio_view.holder.add_child(_model_inst)
@@ -1125,7 +1125,7 @@ func _place_bind(handle_id: String, hit: Dictionary) -> void:
 	_refresh_handle_list()
 	_rebuild_gizmos()
 	_update_pending_banner()
-	_status_lbl.text = "Bound “%s” to mesh" % label
+	_status_lbl.text = I18n.f("Bound “{label}” to mesh", {"label": label})
 
 
 func _rebuild_gizmos() -> void:
@@ -1326,7 +1326,7 @@ func _on_clear_selected_bind() -> void:
 	_refresh_handle_list()
 	_rebuild_gizmos()
 	_update_pending_banner()
-	_status_lbl.text = "Cleared 3D bind for “%s”" % _selected_handle_id
+	_status_lbl.text = I18n.f("Cleared 3D bind for “{selected_handle_id}”", {"selected_handle_id": _selected_handle_id})
 
 
 func _on_save() -> void:
@@ -1358,5 +1358,5 @@ func _on_save() -> void:
 								bindings[hid] = str((p as Dictionary).get("id", ""))
 					specs["port_bindings"] = bindings
 					mdl.update_item(_item_id, {"specs": specs})
-	_status_lbl.text = "Saved %s" % UiText.count(_ports.size(), "binding") if ok else "Nothing to save"
+	_status_lbl.text = I18n.f("Saved {ports}", {"ports": UiText.count(_ports.size(), "binding")}) if ok else "Nothing to save"
 	ports_saved.emit(_model_id, _prop_id)

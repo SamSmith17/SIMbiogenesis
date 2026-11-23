@@ -325,8 +325,11 @@ func _build_left() -> void:
 		b.text = TcStandards.size_label(str(s))
 		b.toggle_mode = true
 		b.custom_minimum_size = Vector2(44, 28)
-		b.tooltip_text = "%s tube (%.1f mm OD, %.1f mm clamp face)" % [TcStandards.size_label(str(s)),
-			float(TcStandards.tube(str(s))["od"]), float(TcStandards.tube(str(s))["flange"])]
+		b.tooltip_text = I18n.f("{size} tube ({od} mm OD, {flange} mm clamp face)", {
+			"size": TcStandards.size_label(str(s)),
+			"od": "%.1f" % float(TcStandards.tube(str(s))["od"]),
+			"flange": "%.1f" % float(TcStandards.tube(str(s))["flange"]),
+		})
 		b.pressed.connect(_pick_size.bind(str(s)))
 		flow.add_child(b)
 		_size_btns[str(s)] = b
@@ -342,8 +345,10 @@ func _build_left() -> void:
 			b.toggle_mode = true
 			b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 			b.custom_minimum_size = Vector2(0, 28)
-			b.tooltip_text = "%s\n%s\nShift-click the sandbox to place several." % [
-				str(TcParts.TYPES[t]["designation"]), str(TcParts.TYPES[t]["why"])]
+			b.tooltip_text = I18n.f("{designation}\n{why}\nShift-click the sandbox to place several.", {
+				"designation": str(TcParts.TYPES[t]["designation"]),
+				"why": str(TcParts.TYPES[t]["why"]),
+			})
 			b.pressed.connect(_on_tool_pressed.bind(t))
 			col.add_child(b)
 			_tool_btns[t] = b
@@ -793,8 +798,11 @@ func _update_nozzle_drag(pos: Vector2) -> void:
 	for i in ports.size():
 		if str(ports[i]["id"]) == nid:
 			ports[i] = TcVessel.surface_hit(vp, ports[i], o, d)
-			_hover_lbl.text = "Nozzle %s · %d° · %s" % [nid, roundi(float(ports[i]["angle_deg"])),
-				("%d mm up" % roundi(float(ports[i]["h_mm"]))) if str(ports[i]["face"]) == "shell" else ("%d mm out" % roundi(float(ports[i]["r_mm"])))]
+			_hover_lbl.text = I18n.f("Nozzle {nid} · {angle_deg}° · {r_mm}", {
+				"nid": nid,
+				"angle_deg": "%d" % roundi(float(ports[i]["angle_deg"])),
+				"r_mm": ("%d mm up" % roundi(float(ports[i]["h_mm"]))) if str(ports[i]["face"]) == "shell" else ("%d mm out" % roundi(float(ports[i]["r_mm"]))),
+			})
 	_drag["spec"] = TcAssembly.set_part(base, vid, {"params": {"ports": ports}})
 	_design = TcDesign.solve_transient(_drag["spec"])
 	_rebuild_studio()
@@ -938,12 +946,12 @@ func _update_hover(pos: Vector2) -> void:
 	match str(hit.get("kind", "")):
 		"part":
 			var pd: Dictionary = _design["res"]["parts"][str(hit["id"])]
-			_hover_lbl.text = "%s · %s · drag to move" % [str(pd["built"]["label"]), str(pd["built"]["designation"])]
+			_hover_lbl.text = I18n.f("{label} · {designation} · drag to move", {"label": str(pd["built"]["label"]), "designation": str(pd["built"]["designation"])})
 		"port":
-			_hover_lbl.text = "Open end %s · click to pick it, then a part to join there" % str(hit["id"])
+			_hover_lbl.text = I18n.f("Open end {id} · click to pick it, then a part to join there", {"id": str(hit["id"])})
 		"joint":
 			var jd: Dictionary = _design["res"]["joints"][int(hit["id"])]
-			_hover_lbl.text = "%s clamp joint · roll %d°" % [TcStandards.size_label(str(jd["size"])), roundi(float(jd["roll_deg"]))]
+			_hover_lbl.text = I18n.f("{size} clamp joint · roll {roll_deg}°", {"size": TcStandards.size_label(str(jd["size"])), "roll_deg": "%d" % roundi(float(jd["roll_deg"]))})
 		_:
 			_hover_lbl.text = ""
 
@@ -1389,8 +1397,12 @@ func _vessel_card(id: String) -> void:
 		var it: Dictionary = ints[i]
 		var row := HBoxContainer.new()
 		var l := Label.new()
-		l.text = "%s Ø%d × %d at %d" % [str(TcVessel.INTERNAL_LABELS.get(str(it["kind"]), it["kind"])), roundi(float(it["od_mm"])),
-			roundi(float(it["h_mm"])), roundi(float(it["z_mm"]))]
+		l.text = I18n.f("{kind} Ø{od_mm} × {h_mm} at {z_mm}", {
+			"kind": str(TcVessel.INTERNAL_LABELS.get(str(it["kind"]), it["kind"])),
+			"od_mm": "%d" % roundi(float(it["od_mm"])),
+			"h_mm": "%d" % roundi(float(it["h_mm"])),
+			"z_mm": "%d" % roundi(float(it["z_mm"])),
+		})
 		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		l.add_theme_font_size_override("font_size", UITheme.FONT_SM)
@@ -1677,9 +1689,16 @@ func _refresh_summary() -> void:
 	var st: Dictionary = _design["stats"]
 	var bb: AABB = st["bounds_mm"]
 	var bom: Dictionary = _design["bom"]
-	_summary.text = "%s · %s · %s open\n%.0f × %.0f × %.0f mm · %.2f kg · holds %.2f L" % [
-		UiText.count(int(st["parts"]), "part"), UiText.count(int(bom["clamps"]), "clamp joint"),
-		str(int(st["open_ports"])), bb.size.x, bb.size.y, bb.size.z, float(st["mass_kg"]), float(st["volume_l"])]
+	_summary.text = I18n.f("{parts} · {clamps} · {open_ports} open\n{bb} × {y} × {z} mm · {mass_kg} kg · holds {volume_l} L", {
+		"parts": UiText.count(int(st["parts"]), "part"),
+		"clamps": UiText.count(int(bom["clamps"]), "clamp joint"),
+		"open_ports": str(int(st["open_ports"])),
+		"bb": "%.0f" % bb.size.x,
+		"y": "%.0f" % bb.size.y,
+		"z": "%.0f" % bb.size.z,
+		"mass_kg": "%.2f" % float(st["mass_kg"]),
+		"volume_l": "%.2f" % float(st["volume_l"]),
+	})
 	_clear(_bom_box)
 	for r in bom["rows"]:
 		var row := HBoxContainer.new()

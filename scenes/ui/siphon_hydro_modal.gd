@@ -1419,7 +1419,7 @@ func _load_from_model() -> bool:
 		_sync_flow_slider_from_spin(float(_sim_inflow_spin.value))
 	if _sim_inflow_btn != null:
 		_sim_inflow_btn.set_pressed_no_signal(bool(specs.get("lab_sim_inflow_enabled", false)))
-	_title_lbl.text = "Hydro Lab — %s" % str(specs.get("name", "Turbine"))
+	_title_lbl.text = I18n.f("Hydro Lab — {name}", {"name": str(specs.get("name", "Turbine"))})
 	_syncing = false
 	_cached_pond.clear()
 	_pond_cache_t = 0.0
@@ -1863,8 +1863,10 @@ func _on_auto_route_uphill() -> void:
 	if conn_id.is_empty():
 		_route_status_lbl.text = "Couldn't route the penstock."
 	else:
-		_route_status_lbl.text = "%s tapped %.1f m above the turbine." % [
-			str(source.get("label", "Source")), float(source.get("rise_m", 0.0))]
+		_route_status_lbl.text = I18n.f("{label} tapped {rise_m} m above the turbine.", {
+			"label": str(source.get("label", "Source")),
+			"rise_m": "%.1f" % (float(source.get("rise_m", 0.0))),
+		})
 		get_tree().create_timer(0.35).timeout.connect(_refresh_route_status.bind(true),
 				CONNECT_ONE_SHOT)
 	_redraw_preview()
@@ -1926,7 +1928,7 @@ func _refresh_route_status(force: bool = false) -> void:
 				else ("SHORT by %.0f ft" % ((run - stock) / 0.3048)))
 		_route_status_lbl.text = txt
 	else:
-		_route_status_lbl.text = "Routed: %s (measuring run…)" % pipe
+		_route_status_lbl.text = I18n.f("Routed: {pipe} (measuring run…)", {"pipe": pipe})
 
 
 ## Size / SDR / stock from the route row, as route_penstock_to_source opts.
@@ -2395,8 +2397,12 @@ func _update_ws_controls(can_designate: bool, area_m2: float) -> void:
 	var names := ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 	var wet_m3 := area_m2 * runoff * float(mm[wet_i]) / 1000.0
 	var dry_m3 := area_m2 * runoff * float(mm[dry_i]) / 1000.0
-	_ws_season_lbl.text = "Seasonal runoff ≈ %s m³ in %s (wettest) · %s m³ in %s (driest)" % [
-		_fmt_m3(wet_m3), names[wet_i], _fmt_m3(dry_m3), names[dry_i]]
+	_ws_season_lbl.text = I18n.f("Seasonal runoff ≈ {wet_m3} m³ in {wet_i} (wettest) · {dry_m3} m³ in {dry_i} (driest)", {
+		"wet_m3": _fmt_m3(wet_m3),
+		"wet_i": names[wet_i],
+		"dry_m3": _fmt_m3(dry_m3),
+		"dry_i": names[dry_i],
+	})
 
 
 func _fmt_m3(v: float) -> String:
@@ -2912,7 +2918,7 @@ func _refresh_estimate(sim_specs: Dictionary) -> void:
 			_capfac_lbl.text = "%.0f%%" % clampf(mean_kw * 1000.0 / nameplate_w * 100.0, 0.0, 100.0)
 		else:
 			_capfac_lbl.text = "n/a (no nameplate)"
-		_annual_lbl.text = "%.0f kWh/yr" % float(ann.get("annual_kwh", 0.0))
+		_annual_lbl.text = I18n.f("{annual_kwh} kWh/yr", {"annual_kwh": "%.0f" % (float(ann.get("annual_kwh", 0.0)))})
 		_refresh_firm_flow(est, supply_prof, ann)
 		_sens_text = _sensitivity_text(est, gross)
 		if supply_prof.size() == 12:
@@ -2921,7 +2927,7 @@ func _refresh_estimate(sim_specs: Dictionary) -> void:
 			for v: Variant in supply_prof:
 				lo = minf(lo, float(v))
 				hi = maxf(hi, float(v))
-			_estimate_hint_lbl.text = "Representative-year estimate from the intake's SEASONAL supply (%.2f–%.2f L/s over the year), not today's flow." % [lo, hi]
+			_estimate_hint_lbl.text = I18n.f("Representative-year estimate from the intake's SEASONAL supply ({lo}–{hi} L/s over the year), not today's flow.", {"lo": "%.2f" % lo, "hi": "%.2f" % hi})
 		else:
 			_estimate_hint_lbl.text = "Representative-year estimate at continuous flow (Q capped by pipe + design flow); seasonal precipitation weights the monthly flow."
 	# Always: the chart's OPERATING-POINT MARKER is live telemetry. The curve
@@ -2996,7 +3002,7 @@ func _refresh_warnings() -> void:
 		var cur_mm := float(_nozzle_d_spin.value)
 		_fit_nozzle_btn.visible = fit_mm > 0.0 and absf(snapped - cur_mm) > step * 0.5
 		if _fit_nozzle_btn.visible:
-			_fit_nozzle_btn.text = "Fit the %.1f mm nozzle" % snapped
+			_fit_nozzle_btn.text = I18n.f("Fit the {value} mm nozzle", {"value": "%.1f" % snapped})
 			_fit_nozzle_btn.tooltip_text = ("Sets Nozzle Ø to %.1f mm — the jet "
 					+ "this supply can actually feed, so the head goes into "
 					+ "velocity instead of being left unconverted.") % snapped
@@ -3255,14 +3261,16 @@ func _refresh_net_readout(level_m: float) -> void:
 	var full := not is_nan(lvl_now) and not is_nan(rim_m) and lvl_now >= rim_m - 0.05
 	if full and draw <= 0.01:
 		# The reason an inflow "does nothing": there is nowhere for it to go.
-		_net_lbl.text = "Pond: FULL at its max fill level (%.2f m) — any inflow spills over. Raise the max fill level (Ctrl-aim the pond surface in 3D and drag it up, or Pond settings) so the pond can reach a crest above the rim; or lower the turbine, extend the dip tube, or prime with a pump." % rim_m
+		_net_lbl.text = I18n.f("Pond: FULL at its max fill level ({rim_m} m) — any inflow spills over. Raise the max fill level (Ctrl-aim the pond surface in 3D and drag it up, or Pond settings) so the pond can reach a crest above the rim; or lower the turbine, extend the dip tube, or prime with a pump.", {"rim_m": "%.2f" % rim_m})
 		_net_lbl.add_theme_color_override("font_color", C_WARN)
 		return
 	if not on:
-		_net_lbl.text = "Pond: the siphon draws %.1f L/s%s. Turn on the test inflow, or fill the pond to the prime level." % [
-				draw, rate_txt] if draw > 0.01 else "Pond: still (nothing flowing)."
+		_net_lbl.text = I18n.f("Pond: the siphon draws {draw} L/s{rate}. Turn on the test inflow, or fill the pond to the prime level.", {
+			"draw": "%.1f" % draw,
+			"rate": rate_txt,
+		}) if draw > 0.01 else "Pond: still (nothing flowing)."
 	else:
-		_net_lbl.text = "Pond: inflow %.1f − siphon draw %.1f = net %+.1f L/s%s" % [fill, draw, net, rate_txt]
+		_net_lbl.text = I18n.f("Pond: inflow {fill} − siphon draw {draw} = net {net} L/s{rate}", {"fill": "%.1f" % fill, "draw": "%.1f" % draw, "net": "%+.1f" % net, "rate": rate_txt})
 		if net < -0.01 and draw > 0.01:
 			_net_lbl.text += " — the fill cannot keep up; the level falls until the siphon breaks."
 	_net_lbl.add_theme_color_override("font_color", C_WARN if (on and net < -0.01 and draw > 0.01) else C_MUTED)

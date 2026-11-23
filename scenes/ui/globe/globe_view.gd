@@ -1819,8 +1819,11 @@ func _place_moon() -> void:
 		_moon_label.position = _moon_mi.position
 		_moon_label.visible = _body == "earth"
 		var ph := MoonGlobe.phase(jd)
-		_moon_label.text = "Moon\n%s km · %s %d %%" % [UiText.thousands(int(roundf(MoonGlobe.distance_km(jd) / 100.0) * 100.0)),
-			str(ph.name).to_lower(), int(round(float(ph.lit) * 100.0))]
+		_moon_label.text = I18n.f("Moon\n{jd} km · {name} {lit} %", {
+			"jd": UiText.thousands(int(roundf(MoonGlobe.distance_km(jd) / 100.0) * 100.0)),
+			"name": str(ph.name).to_lower(),
+			"lit": "%d" % (int(round(float(ph.lit) * 100.0))),
+		})
 	if _body == "moon":
 		_cam_dirty = true
 

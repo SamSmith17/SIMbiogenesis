@@ -547,8 +547,12 @@ func _tune() -> void:
 		lbl.add_theme_color_override("font_color", UITheme.C_WARN)
 		return
 	var g: Dictionary = _last_tune["gains"]
-	lbl.text = "%s\nSuggested (an estimate): gain %s %% per unit, integral time %s min%s." % [str(g.get("text", "")),
-		str(g["kp"]), str(g["ti_min"]), ", more output LOWERS the reading" if bool(g.get("reverse", false)) else ""]
+	lbl.text = I18n.f("{text}\nSuggested (an estimate): gain {kp} % per unit, integral time {ti_min} min{reverse}.", {
+		"text": str(g.get("text", "")),
+		"kp": str(g["kp"]),
+		"ti_min": str(g["ti_min"]),
+		"reverse": ", more output LOWERS the reading" if bool(g.get("reverse", false)) else "",
+	})
 	var use := Button.new()
 	use.name = "tune_use"
 	use.text = "Use these gains"
@@ -565,8 +569,11 @@ func _export() -> void:
 	_last_export = _hub.call("export_logic")
 	DisplayServer.clipboard_set(str(_last_export.get("yaml", "")))
 	if _status != null and is_instance_valid(_status):
-		_status.text = "Copied %d automation(s) and %d script(s) as YAML. Saved to %s" % [int(_last_export.get("automations", 0)),
-			int(_last_export.get("scripts", 0)), str(_last_export.get("path", "the user folder"))]
+		_status.text = I18n.f("Copied {automations} automation(s) and {scripts} script(s) as YAML. Saved to {path}", {
+			"automations": "%d" % (int(_last_export.get("automations", 0))),
+			"scripts": "%d" % (int(_last_export.get("scripts", 0))),
+			"path": str(_last_export.get("path", "the user folder")),
+		})
 
 
 func _set_cond(i: int, key: String, value: Variant, rebuild: bool = false) -> void:

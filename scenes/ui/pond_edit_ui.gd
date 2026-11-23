@@ -228,7 +228,7 @@ func _load_from_loader() -> bool:
 	_vol_spin.value = float(info.get("capacity_l", 1000.0))
 	_vol_spin.editable = is_user and cap_mode == "manual"
 	var terrain_cap := float(info.get("terrain_capacity_l", info.get("default_capacity_l", 0.0)))
-	_terrain_cap_lbl.text = "Terrain volume ≈ %s (Auto)" % UiText.num(terrain_cap, "L")
+	_terrain_cap_lbl.text = I18n.f("Terrain volume ≈ {terrain_cap} (Auto)", {"terrain_cap": UiText.num(terrain_cap, "L")})
 	_recalc_btn.disabled = not is_user
 
 	var fill_mode := str(info.get("fill_mode", "auto"))
@@ -240,9 +240,9 @@ func _load_from_loader() -> bool:
 	if _max_spin != null:
 		_max_spin.value = basin_rim if is_nan(mx) else mx
 	if _max_lbl != null:
-		_max_lbl.text = "Basin rim %.2f m — at the rim (inflow spills there)" % basin_rim if (is_nan(mx) or mx <= basin_rim + 0.005) \
-				else "Basin rim %.2f m — dammed +%.2f m (capacity +%s over the footprint)" % [
-					basin_rim, mx - basin_rim, UiText.num((mx - basin_rim) * float(info.get("area_m2", 0.0)) * 1000.0, "L")]
+		_max_lbl.text = I18n.f("Basin rim {basin_rim} m — at the rim (inflow spills there)", {
+			"basin_rim": "%.2f" % basin_rim,
+		}) if (is_nan(mx) or mx <= basin_rim + 0.005) else "Basin rim %.2f m — dammed +%.2f m (capacity +%s over the footprint)" % [ basin_rim, mx - basin_rim, UiText.num((mx - basin_rim) * float(info.get("area_m2", 0.0)) * 1000.0, "L")]
 
 	var on_graph := bool(info.get("on_graph", false))
 	_graph_btn.text = "Remove from graph" if on_graph else "Add to graph"
@@ -264,9 +264,11 @@ func _refresh_watershed_row(info: Dictionary) -> void:
 	var tag := str(info.get("tag", ""))
 	if bool(preview.get("valid", false)) and str(preview.get("pond_tag", "")) == tag:
 		var ha := float(preview.get("area_m2", 0.0)) / 10000.0
-		_ws_lbl.text = "Upstream ~%.2f ha (%s)%s" % [
-			ha, UiText.count(int(preview.get("cell_count", 0)), "cell"),
-			" · on the graph" if has_ws else ""]
+		_ws_lbl.text = I18n.f("Upstream ~{ha} ha ({cell_count}){has_ws}", {
+			"ha": "%.2f" % ha,
+			"cell_count": UiText.count(int(preview.get("cell_count", 0)), "cell"),
+			"has_ws": " · on the graph" if has_ws else "",
+		})
 	elif has_ws:
 		_ws_lbl.text = "A watershed catchment is on the graph — Preview refreshes the outline"
 	else:
@@ -358,11 +360,12 @@ func _on_ws_preview() -> void:
 	_load_from_loader()
 	if _ws_lbl != null:
 		if bool(result.get("valid", false)):
-			_ws_lbl.text = "Upstream ~%.2f ha (%s) — a teal outline on the ground and in the Elevation and Site Plan lenses" % [
-				float(result.get("area_m2", 0.0)) / 10000.0,
-				UiText.count(int(result.get("cell_count", 0)), "cell")]
+			_ws_lbl.text = I18n.f("Upstream ~{area_m2} ha ({cell_count}) — a teal outline on the ground and in the Elevation and Site Plan lenses", {
+				"area_m2": "%.2f" % (float(result.get("area_m2", 0.0)) / 10000.0),
+				"cell_count": UiText.count(int(result.get("cell_count", 0)), "cell"),
+			})
 		else:
-			_ws_lbl.text = "The watershed could not be traced: %s" % str(result.get("reason", "unknown"))
+			_ws_lbl.text = I18n.f("The watershed could not be traced: {reason}", {"reason": str(result.get("reason", "unknown"))})
 
 
 func _on_ws_clear() -> void:

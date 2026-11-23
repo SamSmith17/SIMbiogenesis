@@ -228,7 +228,7 @@ func _refresh() -> void:
 		_radius_value.text = "%d m" % int(round(r))
 	if _area_lbl != null:
 		var km2: float = float(_svc.call("area_m2")) / 1_000_000.0
-		_area_lbl.text = "Area  %.2f km²" % km2
+		_area_lbl.text = I18n.f("Area  {km2} km²", {"km2": "%.2f" % km2})
 	if _pbi_lbl != null:
 		var month := _sim_month()
 		var day := _sim_day()
@@ -240,9 +240,9 @@ func _refresh() -> void:
 		var wind_ms: float = float(atmo.get("wind_ms", 0.0))
 		var kinetic: float = AtmospherePbi.kinetic_flux_kw(wind_ms, float(_svc.call("area_m2")))
 		if kinetic >= 1000.0:
-			_pbi_lbl.text = "Wind PBI  %.1f MW · %.0f m/s" % [kinetic / 1000.0, wind_ms]
+			_pbi_lbl.text = I18n.f("Wind PBI  {kinetic} MW · {wind_ms} m/s", {"kinetic": "%.1f" % (kinetic / 1000.0), "wind_ms": "%.0f" % wind_ms})
 		else:
-			_pbi_lbl.text = "Wind PBI  %.0f kW · %.0f m/s" % [kinetic, wind_ms]
+			_pbi_lbl.text = I18n.f("Wind PBI  {kinetic} kW · {wind_ms} m/s", {"kinetic": "%.0f" % kinetic, "wind_ms": "%.0f" % wind_ms})
 
 
 func _sim_month() -> int:

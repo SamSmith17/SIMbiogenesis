@@ -352,7 +352,9 @@ func _update_anim_status() -> void:
 	if _anim_status_lbl == null:
 		return
 	if _anim_playing:
-		_anim_status_lbl.text = "Animating — %s" % ("expanding" if _anim_direction > 0.0 else "collapsing")
+		_anim_status_lbl.text = I18n.f("Animating — {anim_direction}", {
+			"anim_direction": ("expanding" if _anim_direction > 0.0 else "collapsing"),
+		})
 	else:
 		_anim_status_lbl.text = "Idle"
 
@@ -974,10 +976,13 @@ func _update_radial_readout() -> void:
 	if pl.is_empty():
 		lbl.text = "Off — a single structure."
 		return
-	lbl.text = "%s drawn (%d planned, slots 0–%d) · ring radius %s · pattern across %s" % [
-		UiText.count(int(pl["visible_count"]), "copy"), (pl["slots"] as Array).size(), (pl["slots"] as Array).size() - 1,
-		_fmt_len(float(pl["radius"])),
-		_fmt_len(2.0 * float((_builder.last_frame() if _builder != null else {}).get("max_rad", 0.0)))]
+	lbl.text = I18n.f("{visible_count} drawn ({slots} planned, slots 0–{slots_2}) · ring radius {radius} · pattern across {max_rad}", {
+		"visible_count": UiText.count(int(pl["visible_count"]), "copy"),
+		"slots": "%d" % ((pl["slots"] as Array).size()),
+		"slots_2": "%d" % ((pl["slots"] as Array).size() - 1),
+		"radius": _fmt_len(float(pl["radius"])),
+		"max_rad": _fmt_len(2.0 * float((_builder.last_frame() if _builder != null else {}).get("max_rad", 0.0))),
+	})
 	var sc: Dictionary = _builder.fold_schedule() if _builder != null else {}
 	if not sc.is_empty():
 		var moving := int(sc["active_index"])
@@ -1133,7 +1138,7 @@ func _rebuild_span_rows(n: int) -> void:
 		row.add_theme_constant_override("separation", 4)
 		box.add_child(row)
 		var lbl := Label.new()
-		lbl.text = "Span %d" % (i + 1)
+		lbl.text = I18n.f("Span {value}", {"value": "%d" % ((i + 1))})
 		lbl.custom_minimum_size.x = 52
 		lbl.add_theme_color_override("font_color", C_TEXT_S)
 		lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
@@ -2877,12 +2882,12 @@ func _on_queue_crew_build() -> void:
 			LinkageStructureBuilder.MODEL_ID, px, pz,
 			{"packed": true, "linkage_spec": params.to_config()})
 		if not bool(placed.get("ok", false)):
-			_crew_status.text = "Couldn't place the kit crate — %s" % str(placed.get("error", ""))
+			_crew_status.text = I18n.f("Couldn't place the kit crate — {error}", {"error": str(placed.get("error", ""))})
 			return
 		crate_id = str(placed.get("prop_id", ""))
 	var q: Dictionary = sd.call("queue_item", "prop", crate_id, SiteDeploySchedule.ACTION_DEPLOY)
 	if not bool(q.get("ok", false)):
-		_crew_status.text = "The crew can't take it — %s." % str(q.get("error", ""))
+		_crew_status.text = I18n.f("The crew can't take it — {error}.", {"error": str(q.get("error", ""))})
 		var loader := TerrainSurfaceQuery.find_terrain_loader(scene) if fresh else null
 		if loader != null and loader.has_method("delete_prop_by_id"):
 			loader.call("delete_prop_by_id", crate_id)

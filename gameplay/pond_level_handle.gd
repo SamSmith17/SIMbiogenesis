@@ -193,10 +193,13 @@ func _update_readout(y: float) -> void:
 	var above := y - _basin_rim
 	var extra_l := maxf(above, 0.0) * _area_m2 * 1000.0
 	if above <= 0.02:
-		_label.text = "max fill = basin rim (%.2f m)" % y
+		_label.text = I18n.f("max fill = basin rim ({y} m)", {"y": "%.2f" % y})
 	else:
-		_label.text = "max fill +%.2f m above the basin rim (%.2f m) · capacity +%.0f kL" % [
-				above, y, extra_l / 1000.0]
+		_label.text = I18n.f("max fill +{above} m above the basin rim ({y} m) · capacity +{extra_l} kL", {
+			"above": "%.2f" % above,
+			"y": "%.2f" % y,
+			"extra_l": "%.0f" % (extra_l / 1000.0),
+		})
 
 
 # -- Interactable ------------------------------------------------------------

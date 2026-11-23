@@ -191,7 +191,7 @@ func _slot_rows(i: int) -> void:
 	var r1 := HBoxContainer.new()
 	r1.add_theme_constant_override("separation", 6)
 	var hdr := Label.new()
-	hdr.text = "Slot %d" % (i + 1)
+	hdr.text = I18n.f("Slot {value}", {"value": "%d" % ((i + 1))})
 	hdr.custom_minimum_size = Vector2(60, 0)
 	hdr.add_theme_color_override("font_color", C_PRIMARY)
 	r1.add_child(hdr)
@@ -266,7 +266,7 @@ func _update_layout_readout() -> void:
 		per += ("%.0f°" % WindowWallLayout.slot_hfov_deg(f)) if not f.is_empty() else "n/a"
 		if int(s["index"]) < slots.size() - 1:
 			per += " / "
-	_layout_lbl.text = "Row spans %.2f m; whole wall covers %.0f° horizontally; per monitor %s." % [span, wall_fov, per]
+	_layout_lbl.text = I18n.f("Row spans {span} m; whole wall covers {wall_fov}° horizontally; per monitor {per}.", {"span": "%.2f" % span, "wall_fov": "%.0f" % wall_fov, "per": per})
 
 
 func _update_viewpoint_readout() -> void:
@@ -276,7 +276,7 @@ func _update_viewpoint_readout() -> void:
 	if vp == null:
 		_viewpoint_lbl.text = "No viewpoint saved for this map — the view will open where the player stands."
 	else:
-		_viewpoint_lbl.text = "Saved: %s%s" % [vp.describe(), ("  (" + vp.saved_at + ")") if not vp.saved_at.is_empty() else ""]
+		_viewpoint_lbl.text = I18n.f("Saved: {describe}{is_empty}", {"describe": vp.describe(), "is_empty": ("  (" + vp.saved_at + ")") if not vp.saved_at.is_empty() else ""})
 
 
 func _on_set_viewpoint() -> void:

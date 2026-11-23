@@ -908,10 +908,18 @@ func _pose() -> void:
 	if FarmBotGeom.is_radial(_spec):
 		axes = "arm %.1f°  out %.2f m  Z %.0f mm" % [rad_to_deg(FarmBotGeom.arm_angle(_spec, p.x)), p.y / 1000.0, p.z]
 	var arms_txt := "" if all.size() <= 1 else " · %d of %d arms working" % [busy, all.size()]
-	_now_lbl.text = "%s · %02d:%02d:%02d · %s · %s · %s · %s of %s%s" % [str(_job["label"]),
-		int(hh), int(fposmod(hh, 1.0) * 60.0), int(fposmod(ts, 60.0)), _act_word(str(r["act"])),
-		str(FarmBotSpec.TOOL_LABELS.get(str(r["tool"]), "no tool")), axes,
-		UiText.duration(_t / 3600.0), UiText.duration(float(_job["dur_s"]) / 3600.0), arms_txt]
+	_now_lbl.text = I18n.f("{label} · {hh}:{hh_2}:{ts} · {act} · {tool} · {axes} · {t} of {dur_s}{arms}", {
+		"label": str(_job["label"]),
+		"hh": "%02d" % int(hh),
+		"hh_2": "%02d" % (int(fposmod(hh, 1.0) * 60.0)),
+		"ts": "%02d" % (int(fposmod(ts, 60.0))),
+		"act": _act_word(str(r["act"])),
+		"tool": str(FarmBotSpec.TOOL_LABELS.get(str(r["tool"]), "no tool")),
+		"axes": axes,
+		"t": UiText.duration(_t / 3600.0),
+		"dur_s": UiText.duration(float(_job["dur_s"]) / 3600.0),
+		"arms": arms_txt,
+	})
 	_plan_view.queue_redraw()
 
 

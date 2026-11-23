@@ -722,7 +722,7 @@ func _refresh_selected() -> void:
 		UITheme.style_button(mv)
 		mv.pressed.connect(func() -> void:
 			if ScheduleSources.retime(cur, ScheduleSources.now_h()):
-				_status.text = "Moved %s to now." % str(cur["label"])
+				_status.text = I18n.f("Moved {label} to now.", {"label": str(cur["label"])})
 			_refresh_tab())
 		_sel_box.add_child(mv)
 		var rm := Button.new()
@@ -731,7 +731,7 @@ func _refresh_selected() -> void:
 		UITheme.style_button(rm)
 		rm.pressed.connect(func() -> void:
 			if ScheduleSources.remove(cur):
-				_status.text = "Removed %s." % str(cur["label"])
+				_status.text = I18n.f("Removed {label}.", {"label": str(cur["label"])})
 			_sel_event = {}
 			_refresh_tab())
 		_sel_box.add_child(rm)
@@ -767,15 +767,15 @@ func _on_moved(seg: Dictionary, new_a: float) -> void:
 	if ev.is_empty():
 		return
 	if ScheduleSources.retime(ev, new_a):
-		_status.text = "Moved %s to %s." % [str(ev["label"]), _when({"at_h": new_a, "end_h": new_a})]
+		_status.text = I18n.f("Moved {label} to {a}.", {"label": str(ev["label"]), "a": _when({"at_h": new_a, "end_h": new_a})})
 	else:
-		_status.text = "%s follows something else and cannot be moved here." % str(ev["label"])
+		_status.text = I18n.f("{label} follows something else and cannot be moved here.", {"label": str(ev["label"])})
 	_refresh_tab()
 
 
 func _jump_to(abs_h: float) -> void:
 	ScheduleSources.set_now_h(abs_h)
-	_status.text = "Clock moved to %s." % _when({"at_h": abs_h, "end_h": abs_h})
+	_status.text = I18n.f("Clock moved to {abs_h}.", {"abs_h": _when({"at_h": abs_h, "end_h": abs_h})})
 
 
 func _open_person(pid: String) -> void:
@@ -1034,8 +1034,10 @@ func _refresh_work() -> void:
 	])
 	var per := hours / maxf(float(names.size()), 1.0)
 	var note := Label.new()
-	note.text = "%.0f person-hours of recurring work this week, %s per person. One-off jobs, machine steps and builds stay on the open board." % [
-		hours, UiText.duration(per)]
+	note.text = I18n.f("{hours} person-hours of recurring work this week, {per} per person. One-off jobs, machine steps and builds stay on the open board.", {
+		"hours": "%.0f" % hours,
+		"per": UiText.duration(per),
+	})
 	note.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_work_box.add_child(note)
@@ -1140,7 +1142,7 @@ func _refresh_balance() -> void:
 		UITheme.style_progress(bar)
 		row.add_child(bar)
 		var vl := Label.new()
-		vl.text = "planned %s · worked %s" % [UiText.duration(float(d[1])), UiText.duration(float(d[2]))]
+		vl.text = I18n.f("planned {d} · worked {d_2}", {"d": UiText.duration(float(d[1])), "d_2": UiText.duration(float(d[2]))})
 		vl.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 		row.add_child(vl)
 		_balance_box.add_child(row)
@@ -1186,7 +1188,7 @@ func _add_time_use(b: Object, ps: Array) -> void:
 	_balance_box.add_child(g)
 	g.set_summary(tu)
 	var src := Label.new()
-	src.text = "Ticks: %s. A reference, not a target." % NpcTimeUse.ATUS_SOURCE
+	src.text = I18n.f("Ticks: {atus_source}. A reference, not a target.", {"atus_source": NpcTimeUse.ATUS_SOURCE})
 	src.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 	src.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	_balance_box.add_child(src)
@@ -1226,8 +1228,11 @@ func _export() -> void:
 	var h0 := float(ScheduledEvents.day_of(ScheduleSources.now_h())) * 24.0
 	var res := ScheduleSources.export_ics(h0, h0 + 7.0 * 24.0)
 	var files: Array = res.get("files", [])
-	_status.text = "Wrote %s (%s) to %s." % [UiText.count(files.size(), "calendar"),
-		UiText.count(int(res.get("events", 0)), "event"), ProjectSettings.globalize_path(str(res.get("dir", "")))]
+	_status.text = I18n.f("Wrote {files} ({events}) to {dir}.", {
+		"files": UiText.count(files.size(), "calendar"),
+		"events": UiText.count(int(res.get("events", 0)), "event"),
+		"dir": ProjectSettings.globalize_path(str(res.get("dir", ""))),
+	})
 	_status.tooltip_text = _status.text
 	set_meta("last_export", res)
 

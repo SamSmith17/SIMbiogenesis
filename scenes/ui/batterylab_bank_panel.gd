@@ -195,7 +195,7 @@ func set_design(d: Dictionary) -> void:
 		if bo != null:
 			bo.disabled = str(d["bus"]) == "distributor"
 			if bo.disabled:
-				bo.tooltip_text = "A distributor box has its own bars (rated %.0f A)" % BankDesign.DIST_RATING_A
+				bo.tooltip_text = I18n.f("A distributor box has its own bars (rated {dist_rating_a} A)", {"dist_rating_a": "%.0f" % BankDesign.DIST_RATING_A})
 			elif bk == "bus_bar":
 				bo.tooltip_text = "The copper bars' size: sized for the current, or your own"
 			else:
@@ -214,12 +214,24 @@ func set_design(d: Dictionary) -> void:
 	var N := int(d["series"])
 	var M := int(d["parallel"])
 	var fuse: Dictionary = d["fuse"]
-	_summary.text = "%d × %.1f V in series = %.1f V · %d strings × %.0f Ah = %.0f Ah · %.1f kWh (%.1f usable) · %.0f A continuous (%s strings share %.0f–%.0f %%) · fault current %s A · %s · %.0f kg · $%s (estimate)" % [
-		N, float(pe["v_nom"]), float(e["v_nom"]), M, float(pe["ah"]), float(e["ah"]), float(e["wh"]) * 0.001,
-		float(e["usable_wh"]) * 0.001, float(e["cont_discharge_a"]), "the" if M > 1 else "one", float(e["min_share"]) * 100.0,
-		float(e["max_share"]) * 100.0, UiText.thousands(int(e["i_sc"])),
-		("%s %.0f A fuse per string" % [fuse["label"], float(fuse["amps"])]) if not fuse.is_empty() else "no fuses",
-		float(d["mass_kg"]), UiText.thousands(int(d["cost_usd"]))]
+	_summary.text = I18n.f("{n} × {v_nom} V in series = {v_nom_2} V · {m} strings × {ah} Ah = {ah_2} Ah · {wh} kWh ({usable_wh} usable) · {cont_discharge_a} A continuous ({m_2} strings share {min_share}–{max_share} %) · fault current {i_sc} A · {amps} · {mass_kg} kg · ${cost_usd} (estimate)", {
+		"n": "%d" % N,
+		"v_nom": "%.1f" % float(pe["v_nom"]),
+		"v_nom_2": "%.1f" % float(e["v_nom"]),
+		"m": "%d" % M,
+		"ah": "%.0f" % float(pe["ah"]),
+		"ah_2": "%.0f" % float(e["ah"]),
+		"wh": "%.1f" % (float(e["wh"]) * 0.001),
+		"usable_wh": "%.1f" % (float(e["usable_wh"]) * 0.001),
+		"cont_discharge_a": "%.0f" % float(e["cont_discharge_a"]),
+		"m_2": "the" if M > 1 else "one",
+		"min_share": "%.0f" % (float(e["min_share"]) * 100.0),
+		"max_share": "%.0f" % (float(e["max_share"]) * 100.0),
+		"i_sc": UiText.thousands(int(e["i_sc"])),
+		"amps": ("%s %.0f A fuse per string" % [fuse["label"], float(fuse["amps"])]) if not fuse.is_empty() else "no fuses",
+		"mass_kg": "%.0f" % float(d["mass_kg"]),
+		"cost_usd": UiText.thousands(int(d["cost_usd"])),
+	})
 	var errs := 0
 	for c2 in (d["checks"] as Array):
 		if str(c2["level"]) == "error":

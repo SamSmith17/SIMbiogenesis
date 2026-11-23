@@ -667,7 +667,7 @@ func _on_new_layout() -> void:
 	var vid := CampStyleStore.add_variant(_draft, _style_id, "",
 		CampStyleStore.merge_entry(base, _delta))
 	if vid.is_empty():
-		_warn_lbl.text = "Layout limit reached (%d) — delete one first" % CampStyleStore.MAX_VARIANTS
+		_warn_lbl.text = I18n.f("Layout limit reached ({max_variants}) — delete one first", {"max_variants": "%d" % CampStyleStore.MAX_VARIANTS})
 		return
 	_variant_id = vid
 	_delta = {}
@@ -735,8 +735,13 @@ func _model_row(class_id: String, model: Dictionary, mix: Dictionary) -> void:
 	v.add_child(head)
 	var sz: Array = model["size"]
 	var name_lbl := Label.new()
-	name_lbl.text = "%s  ·  %.1f × %.1f × %.1f m  ·  %s tris" % [str(model["label"]),
-		float(sz[0]), float(sz[2]), float(sz[1]), CampStyleStore._k(int(model["tris"]))]
+	name_lbl.text = I18n.f("{label}  ·  {sz} × {sz_2} × {sz_3} m  ·  {tris} tris", {
+		"label": str(model["label"]),
+		"sz": "%.1f" % float(sz[0]),
+		"sz_2": "%.1f" % float(sz[2]),
+		"sz_3": "%.1f" % float(sz[1]),
+		"tris": CampStyleStore._k(int(model["tris"])),
+	})
 	name_lbl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	name_lbl.clip_text = true
 	name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -800,7 +805,7 @@ func _on_library_pick(index: int) -> void:
 func _on_import_file(path: String) -> void:
 	var entry := ModelImporter.import_from_path(path)
 	if entry.is_empty():
-		_warn_lbl.text = "Could not import %s" % path.get_file()
+		_warn_lbl.text = I18n.f("Could not import {file}", {"file": path.get_file()})
 		return
 	_add_model(str(entry.get("id", "")), str(entry.get("label", "Imported model")))
 
@@ -808,11 +813,11 @@ func _on_import_file(path: String) -> void:
 func _add_model(model_id: String, label: String) -> void:
 	var measured := CampMeshLibrary.measure_model(model_id)
 	if measured.is_empty():
-		_warn_lbl.text = "%s has no mesh that can be instanced as camp geometry" % label
+		_warn_lbl.text = I18n.f("{label} has no mesh that can be instanced as camp geometry", {"label": label})
 		return
 	var cid := CampStyleStore.add_model(_draft, model_id, label, measured)
 	if cid.is_empty():
-		_warn_lbl.text = "Model limit reached (%d) — remove one first" % CampStyleStore.MAX_MODELS
+		_warn_lbl.text = I18n.f("Model limit reached ({max_models}) — remove one first", {"max_models": "%d" % CampStyleStore.MAX_MODELS})
 		return
 	# A newly added model starts with a modest share of what is on screen, so
 	# adding it visibly does something.
@@ -870,11 +875,14 @@ func _rebuild_preview() -> void:
 	var area_m2 := maxf(CampAreaLayer.record_area(area), 1.0)
 	var cost := CampStyleStore.layout_cost(counts, tris, area_m2)
 	var resolved := _resolved()
-	_stats_lbl.text = "%s in %s on %.2f ha  ·  plot %.1f × %.1f m  ·  ~%s tris/ha up close" % [
-		UiText.count(int(stats.get("structures", 0)), "structure"),
-		UiText.count(int(stats.get("households", 0)), "household"), area_m2 / 10000.0,
-		float(resolved["cell_u"]), float(resolved["cell_v"]),
-		CampStyleStore._k(int(cost["tris_per_ha"]))]
+	_stats_lbl.text = I18n.f("{structures} in {households} on {area_m2} ha  ·  plot {cell_u} × {cell_v} m  ·  ~{tris_per_ha} tris/ha up close", {
+		"structures": UiText.count(int(stats.get("structures", 0)), "structure"),
+		"households": UiText.count(int(stats.get("households", 0)), "household"),
+		"area_m2": "%.2f" % (area_m2 / 10000.0),
+		"cell_u": "%.1f" % float(resolved["cell_u"]),
+		"cell_v": "%.1f" % float(resolved["cell_v"]),
+		"tris_per_ha": CampStyleStore._k(int(cost["tris_per_ha"])),
+	})
 	var warnings: Array = cost["warnings"]
 	if int(stats.get("structures", 0)) == 0:
 		warnings.append("Nothing fits here — the area is smaller than one household, or too steep.")

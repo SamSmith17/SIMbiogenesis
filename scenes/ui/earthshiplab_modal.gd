@@ -530,8 +530,10 @@ func _on_best_glazing() -> void:
 	_spec["glazing_deg"] = EarthshipDesign.glazing_for_lat(lat)
 	_sync_rows()
 	_rebuild_preview()
-	_status.text = "Glazing at %s for latitude %s." % [UiText.num(float(_spec["glazing_deg"]), "°", 3),
-		UiText.num(absf(lat), "°", 3)]
+	_status.text = I18n.f("Glazing at {glazing_deg} for latitude {lat}.", {
+		"glazing_deg": UiText.num(float(_spec["glazing_deg"]), "°", 3),
+		"lat": UiText.num(absf(lat), "°", 3),
+	})
 
 
 func _on_best_pv() -> void:
@@ -540,8 +542,10 @@ func _on_best_pv() -> void:
 	_spec["pv_tilt"] = EarthshipDesign.pv_tilt_for_lat(lat)
 	_sync_rows()
 	_rebuild_preview()
-	_status.text = "Panels at %s for latitude %s." % [UiText.num(float(_spec["pv_tilt"]), "°", 3),
-		UiText.num(absf(lat), "°", 3)]
+	_status.text = I18n.f("Panels at {pv_tilt} for latitude {lat}.", {
+		"pv_tilt": UiText.num(float(_spec["pv_tilt"]), "°", 3),
+		"lat": UiText.num(absf(lat), "°", 3),
+	})
 
 
 func _on_save() -> void:
@@ -551,7 +555,7 @@ func _on_save() -> void:
 	_spec["name"] = name
 	EarthshipPresets.save_design(_spec)
 	_refresh_list()
-	_status.text = "Saved %s." % name
+	_status.text = I18n.f("Saved {name}.", {"name": name})
 
 
 func _on_place() -> void:
@@ -564,7 +568,7 @@ func _on_place() -> void:
 	if bool(res.get("ok", false)):
 		close()
 	else:
-		_status.text = "Could not place: %s" % str(res.get("error", "no world"))
+		_status.text = I18n.f("Could not place: {error}", {"error": str(res.get("error", "no world"))})
 
 
 func _on_apply() -> void:

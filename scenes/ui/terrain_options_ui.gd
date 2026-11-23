@@ -684,7 +684,7 @@ func _sync_osm_offset_lbl(opts: Dictionary = {}) -> void:
 		var live: Dictionary = _loader.call("get_terrain_options")
 		ee = float(live.get("osm_offset_east_m", 0.0))
 		nn = float(live.get("osm_offset_north_m", 0.0))
-	_osm_offset_lbl.text = "Offset: %+.0f m E, %+.0f m N" % [ee, nn]
+	_osm_offset_lbl.text = I18n.f("Offset: {ee} m E, {nn} m N", {"ee": "%+.0f" % ee, "nn": "%+.0f" % nn})
 
 
 func _add_nudge_btn(parent: Control, label: String, tip: String,
@@ -737,7 +737,7 @@ func _build_extent_ui(parent: Control) -> void:
 	parent.add_child(detail_row)
 	var detail_lbl := Label.new()
 	detail_lbl.text = "Hi-res DEM/imagery"
-	detail_lbl.tooltip_text = "Width of the hi-res elevation + imagery patch in the middle, edge to edge. The sharpest imagery layers stay inside it. 1 m USGS lidar (US sites, key required) needs %s or less." % TerrainExtents.format_side(ElevationService.USGS1M_MAX_SIDE_M)
+	detail_lbl.tooltip_text = I18n.f("Width of the hi-res elevation + imagery patch in the middle, edge to edge. The sharpest imagery layers stay inside it. 1 m USGS lidar (US sites, key required) needs {usgs1m_max_side_m} or less.", {"usgs1m_max_side_m": TerrainExtents.format_side(ElevationService.USGS1M_MAX_SIDE_M)})
 	detail_lbl.add_theme_color_override("font_color", C_MUTED)
 	detail_lbl.add_theme_font_size_override("font_size", 11)
 	detail_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -831,7 +831,7 @@ func _update_extent_hint() -> void:
 	if TerrainExtents.side_from_half(detail_half) <= cap:
 		_extent_hint_lbl.text = "Small enough to attempt 1 m USGS lidar, using your OpenTopography key from Settings -> Keys. That dataset needs an ACADEMIC-tier key though -- an ordinary key falls back to 10 m (see below)."
 	else:
-		_extent_hint_lbl.text = "Over %s -- the hi-res patch uses the 10 m DEM" % TerrainExtents.format_side(cap)
+		_extent_hint_lbl.text = I18n.f("Over {cap} -- the hi-res patch uses the 10 m DEM", {"cap": TerrainExtents.format_side(cap)})
 	_extent_hint_lbl.add_theme_color_override("font_color", C_MUTED)
 
 

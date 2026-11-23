@@ -816,7 +816,7 @@ func _open_veg_tune(species_hint: String) -> void:
 		# "Species: X" row used to open on whatever was last selected.
 		_loader.call("open_vegetation_preview_editor", -1, species_hint)
 		if not species_hint.is_empty():
-			_status.text = "Opened Tune look (%s)" % species_hint
+			_status.text = I18n.f("Opened Tune look ({species_hint})", {"species_hint": species_hint})
 		close()
 		return
 	_status.text = "Tune look needs a location map."
@@ -867,7 +867,7 @@ func _place_structure(model_id: String) -> void:
 		return
 	var r: Dictionary = PlacedPropService.begin_placement(main, model_id)
 	if not bool(r.get("ok", false)):
-		_status.text = "Could not start placement: %s" % str(r.get("error", "?"))
+		_status.text = I18n.f("Could not start placement: {error}", {"error": str(r.get("error", "?"))})
 		return
 	var ppui := main.get_node_or_null("UILayer/PlacedPropsUI")
 	if ppui != null and ppui.has_method("notify_bundle_imported"):
@@ -891,7 +891,7 @@ func _spawn_graph_preset(preset: Dictionary) -> void:
 			sgv.call("set_open", true)
 	if sgv.has_method("_spawn_at_canvas_center"):
 		sgv.call("_spawn_at_canvas_center", preset)
-		_status.text = "Spawned %s on the graph" % str(preset.get("label", "?"))
+		_status.text = I18n.f("Spawned {label} on the graph", {"label": str(preset.get("label", "?"))})
 		close()
 		return
 	_status.text = "Could not spawn graph preset"

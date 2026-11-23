@@ -64,7 +64,7 @@ func apply(query: String) -> int:
 			_none.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			_column.add_child(_none)
 			_column.move_child(_none, get_index() + 1)
-		_none.text = "No setting matches “%s”." % query.strip_edges()
+		_none.text = I18n.f("No setting matches “{query}”.", {"query": query.strip_edges()})
 		_none.visible = true
 	filtered.emit(query, total)
 	return total

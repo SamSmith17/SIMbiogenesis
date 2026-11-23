@@ -634,13 +634,17 @@ func _update_label(state: Dictionary, smp: Dictionary, active: bool, completed: 
 		var layers := int(smp.get("layers", 0))
 		var v := float(smp.get("v", 0.0))
 		var what := "travel" if bool(smp.get("rapid", false)) else ("printing" if bool(smp.get("extruding", false)) else "feed")
-		text = "%s · %d %%\n%s%s · %.0f mm/s %s\n%s left" % [
-			str(state.get("name", "Printing")), int(progress * 100.0),
-			("layer %d of %d · " % [layer, layers]) if layers > 0 else "",
-			GantryLabMotion.fmt_duration(float(smp.get("t", 0.0))), v, what,
-			GantryLabMotion.fmt_duration(float(smp.get("remaining_s", 0.0)) / maxf(float(state.get("speed_factor", 1.0)), 0.05))]
+		text = I18n.f("{name} · {progress} %\n{layers}{t} · {value} mm/s {what}\n{speed_factor} left", {
+			"name": str(state.get("name", "Printing")),
+			"progress": "%d" % (int(progress * 100.0)),
+			"layers": ("layer %d of %d · " % [layer, layers]) if layers > 0 else "",
+			"t": GantryLabMotion.fmt_duration(float(smp.get("t", 0.0))),
+			"value": "%.0f" % v,
+			"what": what,
+			"speed_factor": GantryLabMotion.fmt_duration(float(smp.get("remaining_s", 0.0)) / maxf(float(state.get("speed_factor", 1.0)), 0.05)),
+		})
 	elif completed and not _job_id.is_empty():
-		text = "%s · done" % str(state.get("job_name", "Print"))
+		text = I18n.f("{job_name} · done", {"job_name": str(state.get("job_name", "Print"))})
 	if _label == null:
 		if text.is_empty():
 			return

@@ -1343,10 +1343,20 @@ func _refresh_live() -> void:
 		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		l.add_theme_color_override("font_color", UITheme.C_TEXT if bool(rg["ok"]) else UITheme.C_WARN)
-		l.text = "Input %d: %dS × %dP · STC %.0f W, Voc %.1f V, Isc %.2f A · at %.0f W/m², %.0f °C: %.0f W at %.1f V, %.2f A%s" % [
-			gi + 1, int(rg["series"]), int(rg["parallel"]), float(rg["wmp"]), float(rg["voc"]), float(rg["isc"]),
-			g, t, float(mpp["p"]), float(mpp["v"]), float(mpp["i"]),
-			(" — the test shadow costs %.0f %%" % (loss * 100.0)) if _shade_test != "none" else ""]
+		l.text = I18n.f("Input {gi}: {series}S × {parallel}P · STC {wmp} W, Voc {voc} V, Isc {isc} A · at {g} W/m², {t} °C: {p} W at {v} V, {i} A{shade_test}", {
+			"gi": "%d" % (gi + 1),
+			"series": "%d" % int(rg["series"]),
+			"parallel": "%d" % int(rg["parallel"]),
+			"wmp": "%.0f" % float(rg["wmp"]),
+			"voc": "%.1f" % float(rg["voc"]),
+			"isc": "%.2f" % float(rg["isc"]),
+			"g": "%.0f" % g,
+			"t": "%.0f" % t,
+			"p": "%.0f" % float(mpp["p"]),
+			"v": "%.1f" % float(mpp["v"]),
+			"i": "%.2f" % float(mpp["i"]),
+			"shade_test": (" — the test shadow costs %.0f %%" % (loss * 100.0)) if _shade_test != "none" else "",
+		})
 		_live_box.add_child(l)
 	var now := _site_now()
 	if not now.is_empty():
@@ -1457,8 +1467,14 @@ func _refresh_chart() -> void:
 		curves.append({"v": c["v"], "i": c["i"], "color": UITheme.C_AMBER, "label": "Module"})
 		var best := PvLabIV.array_mpp(model, [[_uniform(model, _chart_g)]], _chart_t)
 		mpp = Vector2(float(best["v"]), float(best["i"]))
-		title = "%s · %.0f W/m², %.0f °C · MPP %.1f W at %.2f V, %.2f A" % [str(_spec["module"]["name"]), _chart_g,
-			_chart_t, float(best["p"]), mpp.x, mpp.y]
+		title = I18n.f("{name} · {chart_g} W/m², {chart_t} °C · MPP {p} W at {mpp} V, {y} A", {
+			"name": str(_spec["module"]["name"]),
+			"chart_g": "%.0f" % _chart_g,
+			"chart_t": "%.0f" % _chart_t,
+			"p": "%.1f" % float(best["p"]),
+			"mpp": "%.2f" % mpp.x,
+			"y": "%.2f" % mpp.y,
+		})
 		if _chart_g != 1000.0 or _chart_t != 25.0:
 			var stc := PvLabIV.module_curve(model, 1000.0, 25.0)
 			curves.append({"v": stc["v"], "i": stc["i"], "color": UITheme.C_TEXT_M, "label": "STC"})
@@ -1476,7 +1492,7 @@ func _refresh_chart() -> void:
 			if rf.has("curve"):
 				curves.append({"v": rf["curve"]["v"], "i": rf["curve"]["i"], "color": UITheme.C_TEXT_M, "label": "No shade"})
 		mpp = Vector2(float(r["v"]), float(r["i"]))
-		title = "Input 1 · %.0f W/m², %.0f °C · MPP %.0f W at %.1f V, %.2f A" % [_chart_g, _chart_t, float(r["p"]), mpp.x, mpp.y]
+		title = I18n.f("Input 1 · {chart_g} W/m², {chart_t} °C · MPP {p} W at {mpp} V, {y} A", {"chart_g": "%.0f" % _chart_g, "chart_t": "%.0f" % _chart_t, "p": "%.0f" % float(r["p"]), "mpp": "%.1f" % mpp.x, "y": "%.2f" % mpp.y})
 	_chart.set("curves", curves)
 	_chart.set("mpp", mpp)
 	_chart.set("title", title)
@@ -1493,8 +1509,11 @@ func _uniform(model: Dictionary, g: float) -> Array:
 func _refresh_bom() -> void:
 	_clear(_bom_box)
 	var bom: Dictionary = _design["bom"]
-	_bom_lbl.text = "%s · about $%.0f · %d stock lengths" % [DomeLabSpec.fmt_kg(float(bom["mass_kg"])),
-		float(bom["cost_usd"]), int(bom["stock"])]
+	_bom_lbl.text = I18n.f("{mass_kg} · about ${cost_usd} · {stock} stock lengths", {
+		"mass_kg": DomeLabSpec.fmt_kg(float(bom["mass_kg"])),
+		"cost_usd": "%.0f" % float(bom["cost_usd"]),
+		"stock": "%d" % int(bom["stock"]),
+	})
 	for r in bom["rows"]:
 		var row := HBoxContainer.new()
 		for cell in [["%d %s" % [int(r["qty"]), str(r["unit"])], 70], [str(r["item"]), 0], ["$%.0f" % float(r["cost"]), 56]]:
@@ -1841,7 +1860,7 @@ func _refresh_part_card() -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", UITheme.SPACE_XS)
 	var all_b := Button.new()
-	all_b.text = "Light all %d" % n
+	all_b.text = I18n.f("Light all {value}", {"value": "%d" % n})
 	all_b.toggle_mode = true
 	all_b.button_pressed = _sel_all
 	all_b.tooltip_text = "Show every one like it in the view"

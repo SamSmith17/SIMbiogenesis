@@ -528,7 +528,7 @@ func _update_entity_btn_text() -> void:
 	var mapper: RefCounted = _player.get_mapper()
 	if mapper != null:
 		linked = mapper.linked_role_count()
-	_entity_btn.text = "%s  ·  %s  ·  %d linked  ▸" % [fname, UiText.count(count, "entity"), linked]
+	_entity_btn.text = I18n.f("{fname}  ·  {value}  ·  {linked} linked  ▸", {"fname": fname, "value": UiText.count(count, "entity"), "linked": "%d" % linked})
 
 
 
@@ -630,7 +630,7 @@ func _on_player_state_changed(s: int) -> void:
 			_player.State.READY:
 				_status_lbl.text = "Ready"
 			_player.State.PLAYING:
-				_status_lbl.text = "Playing %.0f×" % _player.get_speed()
+				_status_lbl.text = I18n.f("Playing {speed}×", {"speed": "%.0f" % _player.get_speed()})
 			_player.State.PAUSED:
 				_status_lbl.text = "Paused"
 			_player.State.STOPPED:
@@ -648,7 +648,7 @@ func _on_loading_progress(parsed: int, total: int) -> void:
 		var pct := 0
 		if total > 0:
 			pct = int(round(100.0 * float(parsed) / float(total)))
-		_status_lbl.text = "Loading CSV… %d%%" % pct
+		_status_lbl.text = I18n.f("Loading CSV… {pct}%", {"pct": "%d" % pct})
 
 
 func _on_data_ready(start_t: int, end_t: int, entity_count: int) -> void:

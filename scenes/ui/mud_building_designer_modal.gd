@@ -772,15 +772,15 @@ func _apply_build(build: Dictionary) -> void:
 				fill_name = "sine fill"
 			MudBuildingSpec.FillMode.GYROID:
 				fill_name = "gyroid fill"
-		_est_lbl.text = "%s · gap %.0f mm · %s · %s · %.0f m · ~%.1f L · %s" % [
-			UiText.count(int(_last_parse.get("island_count", 0)), "room"),
-			_spec.shell_gap_mm,
-			UiText.count(int(_last_parse.get("layer_count", 0)), "layer"),
-			fill_name,
-			float(_last_parse.get("path_length_mm", 0.0)) / 1000.0,
-			float(_last_parse.get("volume_mm3", 0.0)) / 1_000_000.0,
-			_fmt_time(float(_last_parse.get("est_time_hr", 0.0))),
-		]
+		_est_lbl.text = I18n.f("{island_count} · gap {shell_gap_mm} mm · {layer_count} · {fill_name} · {path_length_mm} m · ~{volume_mm3} L · {est_time_hr}", {
+			"island_count": UiText.count(int(_last_parse.get("island_count", 0)), "room"),
+			"shell_gap_mm": "%.0f" % _spec.shell_gap_mm,
+			"layer_count": UiText.count(int(_last_parse.get("layer_count", 0)), "layer"),
+			"fill_name": fill_name,
+			"path_length_mm": "%.0f" % (float(_last_parse.get("path_length_mm", 0.0)) / 1000.0),
+			"volume_mm3": "%.1f" % (float(_last_parse.get("volume_mm3", 0.0)) / 1_000_000.0),
+			"est_time_hr": _fmt_time(float(_last_parse.get("est_time_hr", 0.0))),
+		})
 		_status.text = "Solid-layer preview ready — print, export, or place"
 	else:
 		_est_lbl.text = "—"
@@ -997,7 +997,7 @@ func _on_export_grbl_pressed() -> void:
 	if user_path.is_empty():
 		_status.text = "Could not write user://machines/exports/"
 		return
-	_status.text = "Saved %s — choose a copy location…" % user_path
+	_status.text = I18n.f("Saved {user_path} — choose a copy location…", {"user_path": user_path})
 	_ensure_export_dialog()
 	_export_dialog.set_meta("pending_gcode", str(result.get("gcode", "")))
 	_export_dialog.current_file = "mud_building_%d.gcode" % Time.get_unix_time_from_system()
@@ -1032,17 +1032,17 @@ func _on_export_file_selected(path: String) -> void:
 			return
 		gcode = str(result.get("gcode", ""))
 		if not MudGrblExport.write_file(result, path):
-			_status.text = "Could not save %s" % path
+			_status.text = I18n.f("Could not save {path}", {"path": path})
 			return
 	else:
 		var f := FileAccess.open(path, FileAccess.WRITE)
 		if f == null:
-			_status.text = "Could not save %s" % path
+			_status.text = I18n.f("Could not save {path}", {"path": path})
 			return
 		f.store_string(gcode)
 		f.close()
 		MudGrblExport.last_export_path = path
-	_status.text = "GRBL exported → %s" % path
+	_status.text = I18n.f("GRBL exported → {path}", {"path": path})
 
 
 func _on_add_doorway() -> void:
@@ -1067,7 +1067,7 @@ func _on_add_doorway() -> void:
 	kept.append(opening)
 	_spec.openings = kept
 	_schedule_rebuild()
-	_status.text = "Doorway added (lintel %.0f mm)" % float(opening["lintel_mm"])
+	_status.text = I18n.f("Doorway added (lintel {lintel_mm} mm)", {"lintel_mm": "%.0f" % float(opening["lintel_mm"])})
 
 
 func _on_clear_doors() -> void:
@@ -1076,8 +1076,10 @@ func _on_clear_doors() -> void:
 	var n := _spec.openings.size()
 	_spec.openings.clear()
 	_schedule_rebuild()
-	_status.text = "Cleared %d doorway%s" % [n, "" if n == 1 else "s"] if n > 0 \
-		else "No doorways to clear"
+	_status.text = I18n.f("Cleared {value} doorway{value_2}", {
+		"value": "%d" % n,
+		"value_2": "" if n == 1 else "s",
+	}) if n > 0 else "No doorways to clear"
 
 
 func _on_place_pressed() -> void:

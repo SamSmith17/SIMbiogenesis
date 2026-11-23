@@ -401,7 +401,7 @@ func _status_of(model: GraphModel, it: Dictionary, power: Dictionary) -> Diction
 			var text := str(reasons[0]) if not reasons.is_empty() else ""
 			if text.is_empty():
 				if int(r["people"]) > 0:
-					text = "%d ppl" % int(r["people"])
+					text = I18n.f("{people} ppl", {"people": "%d" % int(r["people"])})
 				elif float(r["soc"]) >= 0.0:
 					text = "%d%%" % int(round(float(r["soc"]) * 100.0))
 			return {"level": str(r["level"]), "text": text}

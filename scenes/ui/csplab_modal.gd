@@ -289,7 +289,7 @@ func _process(delta: float) -> void:
 				break
 		if _opt != null:
 			_opt_bar.value = _opt.progress()
-			_opt_lbl.text = "Searching… %d designs tried, best %s" % [_opt.evals, _fmt_obj(_opt.best_value)]
+			_opt_lbl.text = I18n.f("Searching… {evals} designs tried, best {best}", {"evals": "%d" % _opt.evals, "best": _fmt_obj(_opt.best_value)})
 
 
 func _input(e: InputEvent) -> void:
@@ -937,7 +937,7 @@ func _refresh_header() -> void:
 func _refresh_legend() -> void:
 	var mirror := str(CspLabSpec.OPTIC[str(_spec["type"])]) == "mirror"
 	var lands := "[color=#ff9e26]━[/color] lands on the receiver" if mirror else "[color=#7fd0ff]━[/color] lands, in its wavelength's colour"
-	_legend3d.text = "[color=#fff299]━[/color] sunlight in   %s   [color=#ff4033]━[/color] misses   [color=#8c8c99]━[/color] shaded or blocked   [color=#f24dd9]━[/color] off the end   [color=#ffe066]●[/color] the sun" % lands
+	_legend3d.text = I18n.f("[color=#fff299]━[/color] sunlight in   {lands}   [color=#ff4033]━[/color] misses   [color=#8c8c99]━[/color] shaded or blocked   [color=#f24dd9]━[/color] off the end   [color=#ffe066]●[/color] the sun", {"lands": lands})
 
 
 func _set_res(key: String, text: String) -> void:
@@ -1155,7 +1155,7 @@ func _refresh_now(sun: Dictionary) -> void:
 		rows.append(["Heat now", "%s (steam %s kg/h)" % [_kw(float(o["thermal_kw"])), _num(float(o["steam_kg_h"]))]])
 		var suns := float(_at_sun.get("mean_suns", 0.0)) * float(o["dni"]) / 1000.0
 		_builder.set_glow(suns)
-		_hover_lbl.text = "%s · DNI %s W/m² · %s" % [_hour_lbl.text, _num(float(o["dni"])), _kw(float(o["thermal_kw"]))]
+		_hover_lbl.text = I18n.f("{hour} · DNI {dni} W/m² · {thermal_kw}", {"hour": _hour_lbl.text, "dni": _num(float(o["dni"])), "thermal_kw": _kw(float(o["thermal_kw"]))})
 	for r in rows:
 		_now_box.add_child(FormRow.value(str(r[0]), str(r[1])))
 	var note := Label.new()
@@ -1355,14 +1355,21 @@ func _refresh_year() -> void:
 	if _year_result.is_empty():
 		if _year_job == null:
 			var covered := _ws() != null and _ws().has_method("covers") and bool(_ws().call("covers", _lat, _lon))
-			_year_lbl.text = "At %s, from %s. Run it to see the heat month by month." % [_site_name,
-				"the site's weather" if covered else "a cloudless clear sky (no weather data loaded here)"]
+			_year_lbl.text = I18n.f("At {site_name}, from {covered}. Run it to see the heat month by month.", {
+				"site_name": _site_name,
+				"covered": "the site's weather" if covered else "a cloudless clear sky (no weather data loaded here)",
+			})
 		return
 	var r := _year_result
 	var cap_kw := maxf(float(_design["q_useful_kw"]), 1e-6)
-	_year_lbl.text = "%s of heat a year · %s h running · direct beam %s kWh/m² vs global %s kWh/m² (direct is %s of the light on the ground) · capacity factor %s" % [
-		_kwh(float(r["annual_kwh"])), _num(float(r["run_hours"])), _num(float(r["annual_dni"])), _num(float(r["annual_ghi"])),
-		UiText.pct(float(r["direct_share"])), UiText.pct(float(r["annual_kwh"]) / (cap_kw * 8760.0))]
+	_year_lbl.text = I18n.f("{annual_kwh} of heat a year · {run_hours} h running · direct beam {annual_dni} kWh/m² vs global {annual_ghi} kWh/m² (direct is {direct_share} of the light on the ground) · capacity factor {annual_kwh_2}", {
+		"annual_kwh": _kwh(float(r["annual_kwh"])),
+		"run_hours": _num(float(r["run_hours"])),
+		"annual_dni": _num(float(r["annual_dni"])),
+		"annual_ghi": _num(float(r["annual_ghi"])),
+		"direct_share": UiText.pct(float(r["direct_share"])),
+		"annual_kwh_2": UiText.pct(float(r["annual_kwh"]) / (cap_kw * 8760.0)),
+	})
 
 
 # ---------------------------------------------------------------------------
@@ -1418,10 +1425,14 @@ func _finish_optimize() -> Dictionary:
 			var b := float((best[str(p[0])] as Dictionary)[str(p[1])])
 			if absf(a - b) > 1e-6:
 				changed.append("%s %s → %s" % [_field_label(str(p[0]), str(p[1]), str(_spec["type"])).to_lower(), _num(a), _num(b)])
-		_opt_lbl.text = "Better: %s → %s after %d designs. %s. Ctrl+Z puts it back." % [_fmt_obj(opt.start_value),
-			_fmt_obj(opt.best_value), opt.evals, ", ".join(PackedStringArray(changed))]
+		_opt_lbl.text = I18n.f("Better: {start} → {best} after {evals} designs. {changed}. Ctrl+Z puts it back.", {
+			"start": _fmt_obj(opt.start_value),
+			"best": _fmt_obj(opt.best_value),
+			"evals": "%d" % opt.evals,
+			"changed": ", ".join(PackedStringArray(changed)),
+		})
 	else:
-		_opt_lbl.text = "Nothing better within these ranges (%d designs tried)." % opt.evals
+		_opt_lbl.text = I18n.f("Nothing better within these ranges ({evals} designs tried).", {"evals": "%d" % opt.evals})
 	return out
 
 

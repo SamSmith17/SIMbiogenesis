@@ -503,6 +503,8 @@ func _update_panel() -> void:
 	if _panel_label == null:
 		return
 	var sizes := "Quad %d of %d" % [active_quad + 1, _quads.size()] if _quads.size() > 1 else "One quad"
-	_panel_label.text = "%s · %s. Drag the corners onto the surface. Tab next quad · F8 reset · Enter save · Esc done." % [
-		sizes, "saved" if _has_saved else "not saved yet"]
+	_panel_label.text = I18n.f("{sizes} · {has_saved}. Drag the corners onto the surface. Tab next quad · F8 reset · Enter save · Esc done.", {
+		"sizes": sizes,
+		"has_saved": "saved" if _has_saved else "not saved yet",
+	})
 	_place_panel()

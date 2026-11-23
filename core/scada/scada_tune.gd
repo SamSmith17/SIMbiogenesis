@@ -107,12 +107,12 @@ static func gains(f: Dictionary, min_tc_h: float = 1.0 / 60.0) -> Dictionary:
 	if str(f["kind"]) == "integrating":
 		kp = 1.0 / (k * (tc + th))
 		ti_h = 4.0 * (tc + th)
-		text = "The reading ramps %s per hour for each %% of output (it never settles by itself)." % _n(k)
+		text = I18n.f("The reading ramps {k} per hour for each % of output (it never settles by itself).", {"k": _n(k)})
 	else:
 		var tau := float(f["tau_h"])
 		kp = tau / (k * (tc + th))
 		ti_h = minf(tau, 4.0 * (tc + th))
-		text = "Each %% of output moves the reading %s, settling in about %s." % [_n(k), _dur(tau * 3.0)]
+		text = I18n.f("Each % of output moves the reading {k}, settling in about {tau}.", {"k": _n(k), "tau": _dur(tau * 3.0)})
 	if th > 1e-4:
 		text += " It answers after %s." % _dur(th)
 	return {"ok": true, "kp": snappedf(clampf(kp, 0.01, 1000.0), 0.01), "ti_min": snappedf(clampf(ti_h * 60.0, 0.1, 100000.0), 0.1),

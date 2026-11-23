@@ -337,7 +337,7 @@ func _on_save() -> void:
 	var saved := ProcessRecipeCatalog.save_user_recipe(r)
 	_recipe = saved
 	_populate()
-	_status.text = "Saved %s" % str(saved.get("label", ""))
+	_status.text = I18n.f("Saved {label}", {"label": str(saved.get("label", ""))})
 
 
 func _on_delete() -> void:

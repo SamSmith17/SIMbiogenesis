@@ -195,14 +195,14 @@ func _refresh_restore_button() -> void:
 	var burned := FireNode.get_burned_meshes()
 	restore_button.visible = burned.size() > 0
 	if burned.size() > 0:
-		restore_button.text = "Regenerate burned (%d)" % burned.size()
+		restore_button.text = I18n.f("Regenerate burned ({burned})", {"burned": "%d" % burned.size()})
 
 
 func _on_restore_burned_pressed() -> void:
 	var n := FireNode.regenerate_burned_meshes()
 	_refresh_restore_button()
 	if n > 0:
-		status_label.text = "Restored %d burned mesh(es)" % n
+		status_label.text = I18n.f("Restored {value} burned mesh(es)", {"value": "%d" % n})
 		alert_panel.visible = true
 		if _alert_tween:
 			_alert_tween.kill()
@@ -260,6 +260,6 @@ func _update_extinguisher_ui(extinguisher: Node3D) -> void:
 		if extinguisher.has_method("can_spray"):
 			var can_spray: bool = extinguisher.can_spray()
 			if can_spray:
-				pressure_label.text = "Pressure: %.0f%%" % (pressure_pct * 100.0)
+				pressure_label.text = I18n.f("Pressure: {pressure_pct}%", {"pressure_pct": "%.0f" % ((pressure_pct * 100.0))})
 			else:
-				pressure_label.text = "Pressure: LOW (%.0f%%)" % (pressure_pct * 100.0)
+				pressure_label.text = I18n.f("Pressure: LOW ({pressure_pct}%)", {"pressure_pct": "%.0f" % ((pressure_pct * 100.0))})

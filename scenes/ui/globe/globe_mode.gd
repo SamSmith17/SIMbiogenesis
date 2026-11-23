@@ -596,7 +596,7 @@ func _build_worlds_drawer() -> void:
 			var b := Button.new()
 			b.text = md.display_name
 			b.focus_mode = Control.FOCUS_NONE
-			b.tooltip_text = "Start a new world on %s" % md.display_name
+			b.tooltip_text = I18n.f("Start a new world on {display_name}", {"display_name": md.display_name})
 			UITheme.style_button(b)
 			b.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 			var m_def := md
@@ -1186,8 +1186,11 @@ func _build_legend() -> void:
 			btn.custom_minimum_size = Vector2(44, 20)
 			btn.focus_mode = Control.FOCUS_NONE
 			btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-			btn.tooltip_text = "Zone %d (%s) — %s\nClick to inspect this Solar Energy Zone and its reference cities." % [
-				zid, str(labels[i]), ZONE_BAR.difficulty_of(zid)]
+			btn.tooltip_text = I18n.f("Zone {zid} ({labels}) — {zid_2}\nClick to inspect this Solar Energy Zone and its reference cities.", {
+				"zid": "%d" % zid,
+				"labels": str(labels[i]),
+				"zid_2": ZONE_BAR.difficulty_of(zid),
+			})
 			var bsb := StyleBoxFlat.new()
 			bsb.bg_color = col_i
 			bsb.set_corner_radius_all(5)
@@ -1298,7 +1301,9 @@ func _load_worlds() -> void:
 			globe.set_marker("world_%d" % i, ll[0], ll[1], Color(1.0, 0.78, 0.25), short_name(world_title(rec)))
 			i += 1
 	if _worlds_btn != null:
-		_worlds_btn.text = "Worlds (%d)" % _all_worlds.size() if not _all_worlds.is_empty() else "Worlds"
+		_worlds_btn.text = I18n.f("Worlds ({all_worlds})", {
+			"all_worlds": "%d" % _all_worlds.size(),
+		}) if not _all_worlds.is_empty() else "Worlds"
 	if _home_btn != null:
 		_home_btn.visible = _here.size() == 2 or not _worlds.is_empty()
 	if _continue_btn != null:
@@ -1623,7 +1628,7 @@ func _on_body_changed(body: String) -> void:
 			_colour_by.add_item("Sunlight on the Moon", COLOUR_IRRADIANCE)
 		_colour_by.select(_colour_by.get_item_index(COLOUR_IRRADIANCE))
 		_set_colour(COLOUR_IRRADIANCE)
-		_hover.text = "The Moon, %s km away · drag to turn · wheel to zoom · click a point" % UiText.thousands(int(globe.moon_distance_km()))
+		_hover.text = I18n.f("The Moon, {moon_distance_km} km away · drag to turn · wheel to zoom · click a point", {"moon_distance_km": UiText.thousands(int(globe.moon_distance_km()))})
 	else:
 		var idx := _colour_by.get_item_index(COLOUR_IRRADIANCE)
 		if idx >= 0:
@@ -1648,15 +1653,21 @@ func _show_moon_point(lat: float, lon: float) -> void:
 	_card.visible = true
 	_card_thumb.visible = false
 	_card_title.text = "On the Moon"
-	_card_place.text = "Selenographic; the prime meridian faces the Earth. %s, %d %% lit, %.1f days old, %s km from Earth." % [
-		str(ph.name), int(round(float(ph.lit) * 100.0)), float(ph.age_days), UiText.thousands(int(MoonGlobe.distance_km(jd)))]
+	_card_place.text = I18n.f("Selenographic; the prime meridian faces the Earth. {name}, {lit} % lit, {age_days} days old, {jd} km from Earth.", {
+		"name": str(ph.name),
+		"lit": "%d" % (int(round(float(ph.lit) * 100.0))),
+		"age_days": "%.1f" % float(ph.age_days),
+		"jd": UiText.thousands(int(MoonGlobe.distance_km(jd))),
+	})
 	_card_coords.text = SitePrivacy.coords(lat, lon)
 	var w := MoonGlobe.irradiance_at(lat, lon, jd)
 	var elev := rad_to_deg(asin(clampf(GlobeMath.to_unit(lat, lon).dot(MoonGlobe.sun_body(jd)), -1.0, 1.0)))
 	_card_zone_chip.visible = true
 	_card_zone_chip.add_theme_stylebox_override("panel", UITheme.chip_style(irradiance_color(w)))
-	_card_zone.text = "%.0f W/m² of sunlight here · Sun %s" % [w,
-		("%.0f° up" % elev) if elev > 0.0 else "below the horizon (lunar night, about two weeks)"]
+	_card_zone.text = I18n.f("{w} W/m² of sunlight here · Sun {elev}", {
+		"w": "%.0f" % w,
+		"elev": ("%.0f° up" % elev) if elev > 0.0 else "below the horizon (lunar night, about two weeks)",
+	})
 	_zone_row.visible = true
 	_zone_bar.visible = false
 	_zone_hint_lbl.visible = false
@@ -1763,7 +1774,7 @@ func select_builtin_map(md: MapDefinition) -> void:
 	_new_world_box.visible = true
 	_name_edit.visible = true
 	_name_edit.text = ""
-	_name_edit.placeholder_text = "World name (default: %s)" % md.display_name
+	_name_edit.placeholder_text = I18n.f("World name (default: {display_name})", {"display_name": md.display_name})
 	_cache_note_lbl.visible = false
 	_refetch_chk.visible = false
 	_guided_btn.visible = true
@@ -1796,7 +1807,7 @@ func select_energy_zone(zone_id: int) -> void:
 	_zone_row.visible = true
 	_card_zone_chip.visible = true
 	_card_zone_chip.add_theme_stylebox_override("panel", UITheme.chip_style(zd.get("color", Color.WHITE)))
-	_card_zone.text = "%s kWh/m²/day band" % str(ghi.call("zone_ghi_range_label", zd))
+	_card_zone.text = I18n.f("{zd} kWh/m²/day band", {"zd": str(ghi.call("zone_ghi_range_label", zd))})
 	_zone_bar.visible = true
 	_zone_bar.call("refresh", zone_id)
 	var pop_s := ZONE_BAR.pop_summary_line(ghi, zone_id)
@@ -1898,8 +1909,11 @@ func _fill_zone(lat: float, lon: float) -> void:
 	_card_zone_chip.visible = true
 	_card_zone_chip.add_theme_stylebox_override("panel", UITheme.chip_style(z.color))
 	var diff := ZONE_BAR.difficulty_of(zid)
-	_card_zone.text = "%s%s · %.1f kWh/m²/day of sun" % [str(z.label),
-		(" (" + diff + ")") if not diff.is_empty() else "", g_val]
+	_card_zone.text = I18n.f("{label}{is_empty} · {g} kWh/m²/day of sun", {
+		"label": str(z.label),
+		"is_empty": (" (" + diff + ")") if not diff.is_empty() else "",
+		"g": "%.1f" % g_val,
+	})
 	_zone_bar.visible = true
 	_zone_bar.call("refresh", zid)
 	if ghi != null:
@@ -1961,8 +1975,12 @@ func _city_fly_chip(city: Dictionary, is_sister: bool) -> Button:
 	b.custom_minimum_size = Vector2(0, 22)
 	b.focus_mode = Control.FOCUS_NONE
 	b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	b.tooltip_text = "%s, %s (%.1f kWh/m²/d)%s\nClick to fly the globe there." % [
-		nm, ctry, cg, " — opposite-hemisphere solar match" if is_sister else ""]
+	b.tooltip_text = I18n.f("{nm}, {ctry} ({cg} kWh/m²/d){is_sister}\nClick to fly the globe there.", {
+		"nm": nm,
+		"ctry": ctry,
+		"cg": "%.1f" % cg,
+		"is_sister": " — opposite-hemisphere solar match" if is_sister else "",
+	})
 	var col := UITheme.C_PRIMARY if is_sister else UITheme.C_TEXT_S
 	var sb := UITheme.chip_style(col)
 	sb.content_margin_top = 1
@@ -2116,13 +2134,16 @@ func _on_point_hovered(lat: float, lon: float, on_globe: bool) -> void:
 	if globe.hovered_body != "":
 		if globe.hovered_body == "moon":
 			var ph := MoonGlobe.phase(globe.current_jd())
-			_hover.text = "The Moon · %s km · %s, %d %% lit — click to go there" % [
-				UiText.thousands(int(globe.moon_distance_km())), str(ph.name), int(round(float(ph.lit) * 100.0))]
+			_hover.text = I18n.f("The Moon · {moon_distance_km} km · {name}, {lit} % lit — click to go there", {
+				"moon_distance_km": UiText.thousands(int(globe.moon_distance_km())),
+				"name": str(ph.name),
+				"lit": "%d" % (int(round(float(ph.lit) * 100.0))),
+			})
 		else:
-			_hover.text = "The Earth · %s km — click to go back" % UiText.thousands(int(globe.moon_distance_km()))
+			_hover.text = I18n.f("The Earth · {moon_distance_km} km — click to go back", {"moon_distance_km": UiText.thousands(int(globe.moon_distance_km()))})
 		return
 	if not on_globe:
-		_hover.text = "Altitude %s" % _alt_text()
+		_hover.text = I18n.f("Altitude {alt_text}", {"alt_text": _alt_text()})
 		return
 	var zr := _zone_at(lat, lon)
 	var ztxt := ""
@@ -2134,7 +2155,7 @@ func _on_point_hovered(lat: float, lon: float, on_globe: bool) -> void:
 			ztxt += " · PV %.2f kWh/kWp/day" % pv
 	if globe.primary_body() == "moon":
 		ztxt = " · %.0f W/m²" % MoonGlobe.irradiance_at(lat, lon, globe.current_jd())
-	_hover.text = "%s%s%s · altitude %s" % [_fmt_ll(lat, lon), ztxt, wind_text(lat, lon), _alt_text()]
+	_hover.text = I18n.f("{lon}{ztxt}{lon_2} · altitude {alt_text}", {"lon": _fmt_ll(lat, lon), "ztxt": ztxt, "lon_2": wind_text(lat, lon), "alt_text": _alt_text()})
 
 
 ## " · wind 5.2 m/s from 240° · 12 °C" from the loaded GFS run, or "".
@@ -2178,7 +2199,7 @@ func _launch_new_world(base_opts: Dictionary) -> void:
 		var rec := WorldStore.create(map_ref, nm)
 		var err := WorldLauncher.play(get_tree(), rec, base_opts)
 		if err != OK:
-			_status.text = "Could not create the world (error %d)." % err
+			_status.text = I18n.f("Could not create the world (error {err}).", {"err": "%d" % err})
 			return
 		close()
 		return
@@ -2214,7 +2235,7 @@ func _play_world_record(rec: Dictionary, opts: Dictionary = {}) -> void:
 	if ll.size() != 2:
 		var err0 := WorldLauncher.play(get_tree(), rec, opts)
 		if err0 != OK:
-			_status.text = "Could not open that world (error %d)." % err0
+			_status.text = I18n.f("Could not open that world (error {err0}).", {"err0": "%d" % err0})
 			return
 		close()
 		return
@@ -2239,7 +2260,7 @@ func _start_world_transition(rec: Dictionary, opts: Dictionary = {}) -> void:
 	if err != OK:
 		trans.queue_free()
 		_launching_world = false
-		_status.text = "Could not open that world (error %d)." % err
+		_status.text = I18n.f("Could not open that world (error {err}).", {"err": "%d" % err})
 
 
 func _on_continue_pressed() -> void:

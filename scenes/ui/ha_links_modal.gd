@@ -374,7 +374,7 @@ func _rebuild_link_box(t: Dictionary, st: Dictionary) -> void:
 	if eunit.is_empty():
 		eunit = str(st.get("unit", ""))
 	var tunit := str(t.get("unit", ""))
-	conv.text = "Unit: %s → %s" % [eunit if not eunit.is_empty() else "none (taken as %s)" % tunit, tunit]
+	conv.text = I18n.f("Unit: {tunit} → {tunit_2}", {"tunit": eunit if not eunit.is_empty() else "none (taken as %s)" % tunit, "tunit_2": tunit})
 	if not str(st.get("warn", "")).is_empty():
 		conv.text += "   ⚠ " + str(st["warn"])
 		conv.add_theme_color_override("font_color", UITheme.C_WARN)
@@ -501,9 +501,13 @@ func _rebuild_entities() -> void:
 		if not str(r.get("unit", "")).is_empty():
 			val += " " + str(r["unit"])
 		b.text = "%s     %s     %s" % [str(r.get("name", eid)), val, eid]
-		b.tooltip_text = "%s\n%s\nstate: %s%s\nClick to link it to: %s" % [str(r.get("name", eid)), eid, val,
-			("\ndevice class: " + str(r["device_class"])) if not str(r.get("device_class", "")).is_empty() else "",
-			str(t.get("label", _sel))]
+		b.tooltip_text = I18n.f("{name}\n{eid}\nstate: {val}{device_class}\nClick to link it to: {label}", {
+			"name": str(r.get("name", eid)),
+			"eid": eid,
+			"val": val,
+			"device_class": ("\ndevice class: " + str(r["device_class"])) if not str(r.get("device_class", "")).is_empty() else "",
+			"label": str(t.get("label", _sel)),
+		})
 		if eid == linked_eid:
 			b.add_theme_color_override("font_color", UITheme.C_OK)
 			b.text = "✓ " + b.text

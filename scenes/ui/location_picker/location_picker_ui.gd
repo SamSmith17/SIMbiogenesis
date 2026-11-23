@@ -1655,7 +1655,7 @@ func _launch_world(rec: Dictionary, opts: Dictionary) -> void:
 		hide_picker()
 	var err := WorldSession.launch(rec, opts)
 	if err != OK and _launch_status != null:
-		_launch_status.text = "Could not open that world (error %d)." % err
+		_launch_status.text = I18n.f("Could not open that world (error {err}).", {"err": "%d" % err})
 
 
 ## In-game (overlay) the running world is saved before switching.
@@ -1706,7 +1706,7 @@ func _duplicate_world(index: int) -> void:
 		return
 	_refresh_worlds_list(str(copy.get("id", "")))
 	if _launch_status != null:
-		_launch_status.text = "Copied — “%s” is an independent world." % WorldStore.display_name(copy)
+		_launch_status.text = I18n.f("Copied — “{copy}” is an independent world.", {"copy": WorldStore.display_name(copy)})
 
 
 func _confirm_delete_world(index: int) -> void:
@@ -1876,7 +1876,7 @@ func _refresh_new_world_panel() -> void:
 		_nw_tour_btn.disabled = false
 	var map: Dictionary = src["map"]
 	_nw_source_lbl.text = SitePrivacy.place(str(src["label"]))
-	_nw_name.placeholder_text = "World name (default: %s)" % str(src["label"])
+	_nw_name.placeholder_text = I18n.f("World name (default: {label})", {"label": str(src["label"])})
 	var others := WorldStore.worlds_on_map(map).size()
 	var bits: Array[String] = []
 	if bool(src["generated"]):

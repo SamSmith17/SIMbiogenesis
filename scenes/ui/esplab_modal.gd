@@ -607,8 +607,12 @@ func _refresh_palette() -> void:
 			var b := Button.new()
 			b.name = "add_%s" % pid
 			b.text = EspParts.short_label(p)
-			b.tooltip_text = "%s — %s\n%s · %s\nClick to add it to the board." % [p["label"], EspParts.badge(p), p.get("desc", ""),
-				{"3v3": "3.3 V", "5v": "needs 5 V", "any": "3.3-5 V"}.get(str(p.get("supply", "")), "")]
+			b.tooltip_text = I18n.f("{label} — {p}\n{desc} · {supply}\nClick to add it to the board.", {
+				"label": p["label"],
+				"p": EspParts.badge(p),
+				"desc": p.get("desc", ""),
+				"supply": {"3v3": "3.3 V", "5v": "needs 5 V", "any": "3.3-5 V"}.get(str(p.get("supply", "")), ""),
+			})
 			b.focus_mode = Control.FOCUS_NONE
 			b.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 			UITheme.style_button(b)
@@ -843,7 +847,7 @@ func _part_card(iid: String) -> void:
 	_card.add_child(_caption("Source: " + str(part.get("src_doc", ""))))
 	var rm := Button.new()
 	rm.name = "remove_part"
-	rm.text = "Remove %s" % str(inst["label"])
+	rm.text = I18n.f("Remove {label}", {"label": str(inst["label"])})
 	UITheme.style_button(rm)
 	rm.add_theme_color_override("font_color", UITheme.C_ERROR)
 	rm.pressed.connect(remove_part.bind(iid))
@@ -933,9 +937,12 @@ func _refresh_power() -> void:
 				"level": "warn" if float(p["ma_3v3"]) > float(p["reg_ma"]) else ""},
 			{"caption": "5 V in", "value": "%d mA" % int(p["ma_5v"]), "level": "warn" if over else "",
 				"tip": "More than a USB port gives" if over else "Fine on USB"}])
-	_power_lbl.text = "3.3 V rail: %d of %d mA (board + 3.3 V parts)\n5 V in: %d mA total%s" % [
-		int(p["ma_3v3"]), int(p["reg_ma"]), int(p["ma_5v"]),
-		" — more than a USB port gives" if float(p["ma_5v"]) > float(p["usb_ma"]) else ", fine on USB"]
+	_power_lbl.text = I18n.f("3.3 V rail: {ma_3v3} of {reg_ma} mA (board + 3.3 V parts)\n5 V in: {ma_5v} mA total{usb_ma}", {
+		"ma_3v3": "%d" % int(p["ma_3v3"]),
+		"reg_ma": "%d" % int(p["reg_ma"]),
+		"ma_5v": "%d" % int(p["ma_5v"]),
+		"usb_ma": " — more than a USB port gives" if float(p["ma_5v"]) > float(p["usb_ma"]) else ", fine on USB",
+	})
 
 
 func _refresh_entities() -> void:
@@ -1255,8 +1262,11 @@ func find_real_board() -> int:
 	for e in _design["entities"]:
 		if str(e["iid"]) != "":
 			want += 1
-	_cmp_status.text = "Found %d of %d entities in Home Assistant%s." % [m.size(), want,
-		"" if m.size() == want else " (pick the others by hand, or flash the YAML first)"]
+	_cmp_status.text = I18n.f("Found {m} of {want} entities in Home Assistant{want_2}.", {
+		"m": "%d" % m.size(),
+		"want": "%d" % want,
+		"want_2": "" if m.size() == want else " (pick the others by hand, or flash the YAML first)",
+	})
 	_refresh_compare_rows()
 	return m.size()
 
@@ -1294,7 +1304,7 @@ func run_compare() -> void:
 		var eid := str(e["entity_id"])
 		if str(e["iid"]) == "" or not real_map.has(eid):
 			continue
-		_cmp_status.text = "Fetching %s…" % str(real_map[eid])
+		_cmp_status.text = I18n.f("Fetching {eid}…", {"eid": str(real_map[eid])})
 		var box := {"rows": null}
 		svc.call("request_history", str(real_map[eid]), t0u, t1u, func(rows: Array) -> void: box["rows"] = rows)
 		var waited := 0
@@ -1309,8 +1319,10 @@ func run_compare() -> void:
 			"t0": t0, "t1": t1, "real_id": str(real_map[eid])}
 		done += 1
 	_cmp_running = false
-	_cmp_status.text = "Compared %s over the %s (the twin's ideal reading: the weather data at the board's spot, through this design's filters)." % [
-		UiText.count(done, "entity", "entities"), str(_cmp_span.get_item_text(_cmp_span.selected)).to_lower()]
+	_cmp_status.text = I18n.f("Compared {done} over the {selected} (the twin's ideal reading: the weather data at the board's spot, through this design's filters).", {
+		"done": UiText.count(done, "entity", "entities"),
+		"selected": str(_cmp_span.get_item_text(_cmp_span.selected)).to_lower(),
+	})
 	_refresh_compare_rows()
 
 
@@ -1408,9 +1420,15 @@ func _refresh_compare_rows() -> void:
 			else:
 				var u := str(e["unit"])
 				var verdict := str(res["verdict"])
-				line.text = "Real − twin: %+.2f %s · typical gap %.2f %s · r %s · %s — %s" % [float(st["bias"]), u, float(st["rmse"]), u,
-					("%.2f" % float(st["r"])) if not is_nan(float(st["r"])) else "–", UiText.pct(float(st["coverage"])) + " covered",
-					{"good": "within the part's accuracy", "fair": "a little outside its accuracy", "poor": "well outside its accuracy: calibrate it, or check where it is mounted"}.get(verdict, verdict)]
+				line.text = I18n.f("Real − twin: {bias} {u} · typical gap {rmse} {u_2} · r {r} · {coverage} — {verdict}", {
+					"bias": "%+.2f" % float(st["bias"]),
+					"u": u,
+					"rmse": "%.2f" % float(st["rmse"]),
+					"u_2": u,
+					"r": ("%.2f" % float(st["r"])) if not is_nan(float(st["r"])) else "–",
+					"coverage": UiText.pct(float(st["coverage"])) + " covered",
+					"verdict": {"good": "within the part's accuracy", "fair": "a little outside its accuracy", "poor": "well outside its accuracy: calibrate it, or check where it is mounted"}.get(verdict, verdict),
+				})
 				line.add_theme_color_override("font_color", {"good": UITheme.C_OK, "fair": UITheme.C_WARN, "poor": UITheme.C_ERROR}.get(verdict, UITheme.C_TEXT_S))
 			box.add_child(line)
 			if str(e["kind"]) == "sensor" and int(st["n"]) >= EspCompare.MIN_POINTS:
@@ -1437,5 +1455,5 @@ func _refresh_compare_rows() -> void:
 func apply_calibration(iid: String, k: String, f: Dictionary) -> void:
 	_set_spec(EspCompare.with_calibration(_spec, iid, k, f))
 	var what := ("offset %+.2f" % float(f["offset"])) if f.has("offset") else "a scale and offset"
-	_cmp_status.text = "Calibration written into the YAML (%s). Flash the board, then compare again." % what
+	_cmp_status.text = I18n.f("Calibration written into the YAML ({what}). Flash the board, then compare again.", {"what": what})
 	_refresh_compare_rows()

@@ -1167,7 +1167,7 @@ func _xw_refresh_dust_now() -> void:
 		verdict = "dust %d%%" % roundi(sev * 100.0)
 	var ground := float(d.get("ground", 1.0))
 	var ground_txt := "" if ground >= 0.999 else " · ground x%.2f (wet climate)" % ground
-	_xw_dust_now.text = "Now: wind %.0f mph, %s → %s%s" % [mph, rain_txt, verdict, ground_txt]
+	_xw_dust_now.text = I18n.f("Now: wind {mph} mph, {rain} → {verdict}{ground}", {"mph": "%.0f" % mph, "rain": rain_txt, "verdict": verdict, "ground": ground_txt})
 
 
 func _xw_dust_changed() -> void:
@@ -3888,9 +3888,14 @@ func _build_crowd_detail(v: VBoxContainer) -> void:
 		var budget := int(host.call("hero_budget"))
 		var over := int(cr.call("full_people_drawn")) if cr != null else 0
 		var crowd := int(cr.call("people_drawn")) - over if cr != null else 0
-		live.text = "Now: %s (budget %d) · %s · %d light crowd%s · %d fps" % [
-			UiText.count(heroes, "full-detail figure"), budget, UiText.count(over, "full-tier as crowd figure"), maxi(crowd, 0),
-			"" if NpcDisplayPrefs.light_crowd() else " (hidden)", Engine.get_frames_per_second()]
+		live.text = I18n.f("Now: {heroes} (budget {budget}) · {over} · {crowd} light crowd{light_crowd} · {frames_per_second} fps", {
+			"heroes": UiText.count(heroes, "full-detail figure"),
+			"budget": "%d" % budget,
+			"over": UiText.count(over, "full-tier as crowd figure"),
+			"crowd": "%d" % (maxi(crowd, 0)),
+			"light_crowd": "" if NpcDisplayPrefs.light_crowd() else " (hidden)",
+			"frames_per_second": "%d" % Engine.get_frames_per_second(),
+		})
 	tick.timeout.connect(refresh)
 	refresh.call()
 	_add_hint(v, "Turn a number up and watch the frame rate here (or F3). The full simulation and the full figures cost CPU; the crowd figures and their reach cost GPU. 0 / far left = Auto.")

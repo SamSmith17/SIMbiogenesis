@@ -32,7 +32,7 @@ func _ready() -> void :
 	_root.add_child( _total_label )
 
 	_popup_label = Label.new()
-	_popup_label.text = "Another %d Mars College Credits!" % CREDITS_PER_FIRE
+	_popup_label.text = I18n.f("Another {credits_per_fire} Mars College Credits!", {"credits_per_fire": "%d" % CREDITS_PER_FIRE})
 	_popup_label.visible = false
 	_popup_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_popup_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -70,7 +70,7 @@ func on_fire_extinguished_reward() -> void :
 
 func _refresh_total_label() -> void :
 	if _total_label != null :
-		_total_label.text = "Mars College Credits: %d" % total_credits
+		_total_label.text = I18n.f("Mars College Credits: {total_credits}", {"total_credits": "%d" % total_credits})
 
 
 func _play_popup() -> void :
@@ -78,7 +78,7 @@ func _play_popup() -> void :
 		return
 	if _popup_tween != null and _popup_tween.is_valid() :
 		_popup_tween.kill()
-	_popup_label.text = "Another %d Mars College Credits!" % CREDITS_PER_FIRE
+	_popup_label.text = I18n.f("Another {credits_per_fire} Mars College Credits!", {"credits_per_fire": "%d" % CREDITS_PER_FIRE})
 	_popup_label.visible = true
 	_popup_label.modulate = Color( 1, 1, 1, 1 )
 	_popup_label.scale = Vector2( 0.35, 0.35 )

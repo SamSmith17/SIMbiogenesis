@@ -248,7 +248,7 @@ static func state_for(specs: Dictionary) -> Dictionary:
 		text = "%s · %s · %.0f W" % ["RUNNING" if has_penstock else "PRIMED", _lps_text(q), p]
 	elif primed or q > 0.05:
 		state = "primed"
-		text = "PRIMED · %s · no power" % _lps_text(q)
+		text = I18n.f("PRIMED · {q} · no power", {"q": _lps_text(q)})
 	else:
 		state = "idle"
 		text = "DRY — no water at the intake" if has_penstock else "NOT PRIMED — pond below the crest"

@@ -344,7 +344,7 @@ func _world_row(it: Dictionary) -> Control:
 		var mc := _catalog.item(mc_id)
 		var mcb := CheckBox.new()
 		mcb.focus_mode = Control.FOCUS_NONE
-		mcb.text = "Map data · %s" % AssetPackFormat.human_size(int(mc.get("size", 0)))
+		mcb.text = I18n.f("Map data · {size}", {"size": AssetPackFormat.human_size(int(mc.get("size", 0)))})
 		mcb.tooltip_text = ("Elevation, aerial imagery, buildings, vegetation and weather for this place, "
 			+ "so it looks exactly the same and loads without internet. Without it, your friend's "
 			+ "game downloads the map again (today's map data may differ slightly).")
@@ -606,8 +606,11 @@ func _build_import_preview(info: Dictionary) -> void:
 	var who := str(man.get("creator", "")).strip_edges()
 	var when := Time.get_datetime_string_from_unix_time(int(man.get("created_unix", 0)), true)
 	var head := Label.new()
-	head.text = "From %s · %s · %s" % [who if not who.is_empty() else "someone", when.substr(0, 16),
-		AssetPackFormat.human_size(int(man.get("bytes", 0)))]
+	head.text = I18n.f("From {is_empty} · {substr} · {bytes}", {
+		"is_empty": who if not who.is_empty() else "someone",
+		"substr": when.substr(0, 16),
+		"bytes": AssetPackFormat.human_size(int(man.get("bytes", 0))),
+	})
 	head.add_theme_font_override("font", UITheme.font("semibold"))
 	head.add_theme_font_size_override("font_size", UITheme.FONT_LG)
 	box.add_child(head)
@@ -868,8 +871,11 @@ func _process(_dt: float) -> void:
 	if _view == View.PROGRESS:
 		var s := _job.progress.snapshot()
 		_prog_bar.value = float(s["fraction"])
-		_prog_detail.text = "%s of %s · %s" % [AssetPackFormat.human_size(int(s["done"])),
-			AssetPackFormat.human_size(int(s["total"])), str(s["label"])]
+		_prog_detail.text = I18n.f("{done} of {total} · {label}", {
+			"done": AssetPackFormat.human_size(int(s["done"])),
+			"total": AssetPackFormat.human_size(int(s["total"])),
+			"label": str(s["label"]),
+		})
 	if _reimport_pid >= 0:
 		if OS.is_process_running(_reimport_pid):
 			var secs := (Time.get_ticks_msec() - _reimport_t0) / 1000

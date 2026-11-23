@@ -33,6 +33,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import urllib.request
 
@@ -272,6 +273,37 @@ def select(cat: po.Catalog, only: list[str], include_fuzzy: bool) -> list[po.Ent
     return out
 
 
+# ---- live progress (tools/i18n/watch.py shows it) ---------------------------------
+PROGRESS = os.path.join(LOCALE, ".progress.json")
+_prog_lock = threading.Lock()
+_prog: dict = {}
+
+
+def progress(code: str, **kw) -> None:
+    """Merge kw into this language's progress and rewrite locale/.progress.json."""
+    with _prog_lock:
+        st = _prog.setdefault("langs", {}).setdefault(code, {"recent": [], "failed": []})
+        for k, v in kw.items():
+            if k in ("recent", "failed"):
+                st[k] = (v + st[k])[:40]
+            else:
+                st[k] = v
+        _prog["updated"] = time.time()
+        tmp = PROGRESS + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(_prog, fh, ensure_ascii=False)
+        os.replace(tmp, PROGRESS)
+
+
+def progress_start(args, codes: list[str]) -> None:
+    with _prog_lock:
+        _prog.clear()
+        _prog.update({"model": args.model, "started": time.time(), "jobs": args.jobs,
+                      "only": args.only[:20], "langs": {}})
+    for c in codes:
+        progress(c, state="waiting", name=LANG_NAMES.get(c, c))
+
+
 def run_lang(code: str, args) -> dict:
     path = os.path.join(LOCALE, f"{code}.po")
     if not os.path.exists(path):
@@ -307,6 +339,8 @@ def run_lang(code: str, args) -> dict:
           f"{len(singles)} strings + {len(plurals)} plurals to ask {args.model}")
     if args.dry_run:
         return stats
+    progress(code, state="translating", total=len(singles) + len(plurals), done=0,
+             memory=stats["tm"], ok=0, failed_n=0, rate=0.0, eta_s=None, t0=time.time())
     t0 = time.time()
     done_n = 0
     for i in range(0, len(singles), args.batch):
@@ -314,6 +348,8 @@ def run_lang(code: str, args) -> dict:
         items = [(str(j + 1), e) for j, e in enumerate(batch)]
         pending = items
         tm_rows = []
+        recent: list = []
+        nfail = len(stats["failed"])
         for attempt in range(2):
             if not pending:
                 break
@@ -340,6 +376,7 @@ def run_lang(code: str, args) -> dict:
                 e.set_comment("machine", stamp)
                 tm_rows.append({"k": tm_key(e), "s": e.msgstr, "m": stamp, "src": e.msgid})
                 stats["ok"] += 1
+                recent.insert(0, {"src": e.msgid, "out": out, "where": where_of(e)})
             pending = retry
         append_tm(code, tm_rows)
         po.write(path, cat, po.HEADER_ORDER)
@@ -348,6 +385,9 @@ def run_lang(code: str, args) -> dict:
         left = (len(singles) - done_n) / max(rate, 1e-6)
         print(f"  {code} {done_n}/{len(singles)}  ok {stats['ok']}  failed {len(stats['failed'])}  "
               f"~{left / 60:.0f} min left", flush=True)
+        progress(code, done=done_n, ok=stats["ok"], failed_n=len(stats["failed"]), rate=rate,
+                 eta_s=left, recent=recent[:12],
+                 failed=[{"why": f} for f in stats["failed"][nfail:]])
     for e in plurals:
         forms = translate_plural(args.url, args.model, system, code, e, gl)
         if forms:
@@ -360,7 +400,11 @@ def run_lang(code: str, args) -> dict:
         else:
             stats["failed"].append(f"{e.msgid!r}: plural forms")
         po.write(path, cat, po.HEADER_ORDER)
+        done_n += 1
+        progress(code, done=done_n, ok=stats["ok"], failed_n=len(stats["failed"]),
+                 recent=[{"src": e.msgid, "out": " | ".join(forms or []), "where": where_of(e)}])
     po.write(path, cat, po.HEADER_ORDER)
+    progress(code, state="done", done=done_n, ok=stats["ok"], failed_n=len(stats["failed"]), eta_s=0)
     return stats
 
 
@@ -392,6 +436,8 @@ def main() -> int:
     # writing tokens is limited by memory speed, and parallel requests share each pass
     # over the weights (gemma4 on a Radeon 890M: 19 tok/s alone, 52 with four at once).
     import concurrent.futures as cf
+    if not args.dry_run:
+        progress_start(args, codes)
     with cf.ThreadPoolExecutor(max(1, min(args.jobs, len(codes)))) as ex:
         results = list(ex.map(lambda c: (c, run_lang(c, args)), codes))
     for code, s in results:

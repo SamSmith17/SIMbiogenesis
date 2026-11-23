@@ -975,9 +975,11 @@ func build_rows(box: Container) -> void:
 		var conn := _model().get_connection(_picked)
 		var tid := ConduitKinds.derive_type_for_connection(conn)
 		var spec := ConduitSpecs.for_run(conn)
-		lbl.text = "%s · %s · bends %.0f mm" % [ConduitKinds.display_name_with_size(tid,
-			conn.get("conduit_style", {}) as Dictionary), ConduitLength.format(float(spec["length_m"])),
-			float(spec["bend_radius_m"]) * 1000.0]
+		lbl.text = I18n.f("{conduit_style} · {length_m} · bends {bend_radius_m} mm", {
+			"conduit_style": ConduitKinds.display_name_with_size(tid, conn.get("conduit_style", {}) as Dictionary),
+			"length_m": ConduitLength.format(float(spec["length_m"])),
+			"bend_radius_m": "%.0f" % (float(spec["bend_radius_m"]) * 1000.0),
+		})
 		box.add_child(lbl)
 		var style_btn := Button.new()
 		style_btn.text = "Style…"
@@ -1002,7 +1004,7 @@ func build_rows(box: Container) -> void:
 		var bd := _mgr().bundle_of(_picked) if _mgr() != null else {}
 		if not bd.is_empty():
 			var lane_lbl := Label.new()
-			lane_lbl.text = "Lane %d of %d" % [int(bd["lane"]) + 1, int(bd["lanes"])]
+			lane_lbl.text = I18n.f("Lane {lane} of {lanes}", {"lane": "%d" % (int(bd["lane"]) + 1), "lanes": "%d" % int(bd["lanes"])})
 			box.add_child(lane_lbl)
 		if bool((conn.get("conduit_style", {}) as Dictionary).get("lane_free", false)):
 			var rejoin := Button.new()

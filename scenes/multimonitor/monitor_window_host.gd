@@ -167,9 +167,9 @@ func _refresh_window_title(slot_cfg: Dictionary) -> void:
 	var lbl := str(slot_cfg.get("label", slot_id))
 	var v_short := MultiMonitorCatalog.short_label_of(active_view_id)
 	if is_monitor_fullscreen:
-		title = "SIMbiogenesis — %s · %s" % [lbl, v_short]
+		title = I18n.f("SIMbiogenesis — {lbl} · {v_short}", {"lbl": lbl, "v_short": v_short})
 	else:
-		title = "SIMbiogenesis — %s · %s  (Drag to monitor, click ⛶ Fullscreen or press F11)" % [lbl, v_short]
+		title = I18n.f("SIMbiogenesis — {lbl} · {v_short}  (Drag to monitor, click ⛶ Fullscreen or press F11)", {"lbl": lbl, "v_short": v_short})
 
 
 # ---------------------------------------------------------------------------

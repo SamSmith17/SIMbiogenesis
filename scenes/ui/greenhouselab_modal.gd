@@ -1017,7 +1017,7 @@ func _on_save() -> void:
 		lib.append({"id": id, "name": name, "spec": _spec.duplicate(true)})
 	GreenhousePresets.save_library(lib)
 	_refresh_list()
-	_status.text = "Saved %s." % name
+	_status.text = I18n.f("Saved {name}.", {"name": name})
 
 
 func _on_place() -> void:
@@ -1030,7 +1030,7 @@ func _on_place() -> void:
 	if bool(res.get("ok", false)):
 		close()
 	else:
-		_status.text = "Could not place: %s" % str(res.get("error", "no world"))
+		_status.text = I18n.f("Could not place: {error}", {"error": str(res.get("error", "no world"))})
 
 
 func _on_apply() -> void:
@@ -1155,7 +1155,7 @@ func _start_year(force: bool = false) -> void:
 			"cancel": func() -> bool: return bool(job["stop"]),
 			"progress": func(f: float) -> void: job["progress"] = f}))
 	_climate_btn.disabled = true
-	_climate_line.text = "Running a year at %s…" % str(s["where"])
+	_climate_line.text = I18n.f("Running a year at {where}…", {"where": str(s["where"])})
 
 
 func _stop_year() -> void:
@@ -1182,7 +1182,7 @@ func _process(delta: float) -> void:
 	if _year_task < 0:
 		return
 	if not WorkerThreadPool.is_task_completed(_year_task):
-		_climate_line.text = "Running a year… %s" % UiText.pct(float(_year_job.get("progress", 0.0)))
+		_climate_line.text = I18n.f("Running a year… {progress}", {"progress": UiText.pct(float(_year_job.get("progress", 0.0)))})
 		return
 	WorkerThreadPool.wait_for_task_completion(_year_task)
 	_year_task = -1
@@ -1208,8 +1208,13 @@ func _show_year() -> void:
 	var s := _site()
 	_climate_chart.set_data(r["daily"])
 	var src := "real weather" if bool(r["real_weather"]) else "a made-up year for the latitude (no weather loaded)"
-	_climate_line.text = "A year at %s, %s. Coldest hour inside %.0f °C (outside %.0f °C), hottest %.0f °C." % [
-		str(s["where"]), src, float(tot["coldest_in"]), float(tot["coldest_out"]), float(tot["hottest_in"])]
+	_climate_line.text = I18n.f("A year at {where}, {src}. Coldest hour inside {coldest_in} °C (outside {coldest_out} °C), hottest {hottest_in} °C.", {
+		"where": str(s["where"]),
+		"src": src,
+		"coldest_in": "%.0f" % float(tot["coldest_in"]),
+		"coldest_out": "%.0f" % float(tot["coldest_out"]),
+		"hottest_in": "%.0f" % float(tot["hottest_in"]),
+	})
 	for c in _climate_box.get_children():
 		_climate_box.remove_child(c)
 		c.queue_free()

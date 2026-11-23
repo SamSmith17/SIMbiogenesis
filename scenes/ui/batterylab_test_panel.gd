@@ -281,8 +281,10 @@ func _show() -> void:
 	else:
 		st = "Discharge switch open: a charger can still fill it."
 	_state_lbl.text = "%.2f V, %s. %s" % [float(f["v"]), doing, st]
-	_soc_lbl.text = "Charge: %.0f %% true · %.0f %% counted by the BMS" % [float(f["soc"]) * 100.0, float(f["soc_est"]) * 100.0] if prot \
-		else "Charge: %.0f %%" % (float(f["soc"]) * 100.0)
+	_soc_lbl.text = I18n.f("Charge: {soc} % true · {soc_est} % counted by the BMS", {
+		"soc": "%.0f" % (float(f["soc"]) * 100.0),
+		"soc_est": "%.0f" % (float(f["soc_est"]) * 100.0),
+	}) if prot else "Charge: %.0f %%" % (float(f["soc"]) * 100.0)
 	frame_changed.emit(f)
 
 

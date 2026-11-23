@@ -118,7 +118,7 @@ func show_community(kind: String, title: String, detail: String = "",
 			last.set_meta("community_count", n)
 			var head: Label = last.get_meta("community_head", null)
 			if head != null:
-				head.text = "%s · +%d more" % [title, n - 1]
+				head.text = I18n.f("{title} · +{value} more", {"title": title, "value": "%d" % (n - 1)})
 			var sub: Label = last.get_meta("community_sub", null)
 			if sub != null and not detail.is_empty():
 				sub.text = detail
@@ -393,7 +393,7 @@ func _make_part_up_entry(label: String, count: int) -> PanelContainer:
 	panel.add_child(row)
 
 	var title := Label.new()
-	title.text = "+%d UP" % count
+	title.text = I18n.f("+{value} UP", {"value": "%d" % count})
 	title.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	title.add_theme_color_override("font_color", color)
 	row.add_child(title)

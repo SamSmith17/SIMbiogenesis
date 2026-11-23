@@ -679,7 +679,7 @@ func _sync_controls_from_style() -> void:
 
 	var src := str(roof.get("source", "default"))
 	var src_txt := "OSM tag" if src == "osm" else ("your override" if src == "user" else "default")
-	_prov_label.text = "Roof: %s (%s)" % [str(roof.get("shape", "flat")), src_txt]
+	_prov_label.text = I18n.f("Roof: {shape} ({src})", {"shape": str(roof.get("shape", "flat")), "src": src_txt})
 	var tags: Dictionary = _record.get("tags", {})
 	if _prop_id != "":
 		_shell.set_title("Building builder", "a placed building")
@@ -899,7 +899,7 @@ func _refresh_reference() -> void:
 	if near.is_empty():
 		_ref_status.text = "No street photos within 150 m of this building."
 		return
-	_ref_status.text = "%s nearby — click: wall color, right-click: roof color" % UiText.count(mini(near.size(), 6), "street photo")
+	_ref_status.text = I18n.f("{near} nearby — click: wall color, right-click: roof color", {"near": UiText.count(mini(near.size(), 6), "street photo")})
 	for i in mini(near.size(), 6):
 		var photo: Dictionary = near[i]
 		var id := str(photo.get("id", ""))

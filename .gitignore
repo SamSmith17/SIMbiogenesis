@@ -149,3 +149,6 @@ __pycache__/
 
 # Localization working files (tools/i18n/)
 /locale/.extract_report.json
+/locale/.progress.json
+/locale/.progress.json.tmp
+/locale/*.po.tmp

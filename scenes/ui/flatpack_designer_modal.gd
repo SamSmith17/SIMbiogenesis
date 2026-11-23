@@ -1018,13 +1018,16 @@ func _refresh_cut_list() -> void:
 	_clear(_cut_box)
 	var units := str(_spec["machine"]["units"])
 	var bom: Dictionary = _design.get("bom", {})
-	_bom_lbl.text = "%s of %s · %d%% used\nCut length %.0f ft in %s · about %s on the router\nAbout %.0f kg (%.0f lb)" % [
-		UiText.count(int(bom.get("sheets", 0)), "sheet"),
-		FlatpackSpec.SHEET_LABELS.get(str(_spec["material"]["sheet"]), "custom stock"),
-		int(round(float(bom.get("utilization", 0.0)) * 100.0)), float(bom.get("cut_ft", 0.0)),
-		UiText.count(int(bom.get("passes", 1)), "pass", "passes"),
-		UiText.duration(float(bom.get("cut_min", 0.0)) / 60.0), float(bom.get("mass_kg", 0.0)),
-		float(bom.get("mass_kg", 0.0)) / FlatpackSpec.LB_TO_KG]
+	_bom_lbl.text = I18n.f("{sheets} of {sheet} · {utilization}% used\nCut length {cut_ft} ft in {passes} · about {cut_min} on the router\nAbout {mass_kg} kg ({mass_kg_2} lb)", {
+		"sheets": UiText.count(int(bom.get("sheets", 0)), "sheet"),
+		"sheet": FlatpackSpec.SHEET_LABELS.get(str(_spec["material"]["sheet"]), "custom stock"),
+		"utilization": "%d" % (int(round(float(bom.get("utilization", 0.0)) * 100.0))),
+		"cut_ft": "%.0f" % (float(bom.get("cut_ft", 0.0))),
+		"passes": UiText.count(int(bom.get("passes", 1)), "pass", "passes"),
+		"cut_min": UiText.duration(float(bom.get("cut_min", 0.0)) / 60.0),
+		"mass_kg": "%.0f" % (float(bom.get("mass_kg", 0.0))),
+		"mass_kg_2": "%.0f" % (float(bom.get("mass_kg", 0.0)) / FlatpackSpec.LB_TO_KG),
+	})
 	var head := _cut_row(["", "Part", "Qty", "Size", "Slots", "Sheet"], true)
 	_cut_box.add_child(head)
 	for r in _design.get("cut_list", []):
@@ -1118,10 +1121,14 @@ func _select_part(id: String) -> void:
 	var p := FlatpackDesign.part(_design, _selected)
 	if not p.is_empty():
 		var bb: Rect2 = p["bbox"]
-		_hover_lbl.text = "%s %s · %s · %s, %s · sheet %d" % [str(p.get("label", "")), str(p["name"]),
-			FlatpackSpec.fmt_size(bb.size.x, bb.size.y, str(_spec["machine"]["units"])),
-			UiText.count((p["notches"] as Array).size(), "slot"), UiText.count((p["holes"] as Array).size(), "hole"),
-			int(p.get("sheet", 0)) + 1]
+		_hover_lbl.text = I18n.f("{label} {name} · {units} · {notches}, {holes} · sheet {sheet}", {
+			"label": str(p.get("label", "")),
+			"name": str(p["name"]),
+			"units": FlatpackSpec.fmt_size(bb.size.x, bb.size.y, str(_spec["machine"]["units"])),
+			"notches": UiText.count((p["notches"] as Array).size(), "slot"),
+			"holes": UiText.count((p["holes"] as Array).size(), "hole"),
+			"sheet": "%d" % (int(p.get("sheet", 0)) + 1),
+		})
 
 
 # ---------------------------------------------------------------------------

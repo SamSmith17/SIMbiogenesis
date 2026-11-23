@@ -395,7 +395,7 @@ func _sync_pill(id: String, rec: Dictionary, show: bool, r: Rect2) -> void:
 		hv.border_color = UITheme.C_PRIMARY
 		pill.add_theme_stylebox_override("hover", hv)
 		pill.add_theme_stylebox_override("pressed", hv)
-		pill.tooltip_text = "Show %s" % str((rec["opts"] as Dictionary).get("title", id))
+		pill.tooltip_text = I18n.f("Show {title}", {"title": str((rec["opts"] as Dictionary).get("title", id))})
 		var icon := str((rec["opts"] as Dictionary).get("icon", ""))
 		if not icon.is_empty():
 			pill.icon = UiIcons.icon(icon, 14)

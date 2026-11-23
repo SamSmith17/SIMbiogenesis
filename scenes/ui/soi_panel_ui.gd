@@ -154,10 +154,10 @@ func _refresh_labels() -> void:
 	if _radius_slider != null and not _radius_slider.has_focus():
 		_radius_slider.value = r
 	if _radius_label != null:
-		_radius_label.text = "Radius: %d m" % int(round(r))
+		_radius_label.text = I18n.f("Radius: {r} m", {"r": "%d" % int(round(r))})
 	if _area_label != null:
 		var km2: float = svc.area_m2() / 1_000_000.0
-		_area_label.text = "Area: %.2f km²" % km2
+		_area_label.text = I18n.f("Area: {km2} km²", {"km2": "%.2f" % km2})
 
 
 func _on_radius_changed(v: float) -> void:

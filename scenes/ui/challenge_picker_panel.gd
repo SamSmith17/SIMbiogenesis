@@ -115,7 +115,7 @@ func refresh_active_label() -> void:
 		var ev: Dictionary = runner.call("evaluate_now") as Dictionary
 		elapsed = float(ev.get("elapsed_h", 0.0))
 	var dur := float(def.duration_hours) if def != null else 0.0
-	_active_lbl.text = "Running: %s — %.0f / %.0f h" % [title, elapsed, dur]
+	_active_lbl.text = I18n.f("Running: {title} — {elapsed} / {dur} h", {"title": title, "elapsed": "%.0f" % elapsed, "dur": "%.0f" % dur})
 	if _abort_btn != null:
 		_abort_btn.visible = true
 

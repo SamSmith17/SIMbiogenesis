@@ -389,7 +389,7 @@ func _update_url_preview() -> void:
 	var n := HaUrl.normalize(raw)
 	_url_preview.visible = true
 	if bool(n.get("ok", false)):
-		_url_preview.text = "Will connect to %s" % n["url"]
+		_url_preview.text = I18n.f("Will connect to {url}", {"url": n["url"]})
 		_url_preview.add_theme_color_override("font_color", C_TEXT_M)
 	else:
 		_url_preview.text = str(n.get("error", ""))
@@ -405,7 +405,7 @@ func _update_token_note() -> void:
 	var c := HaToken.check(t)
 	_token_note.visible = true
 	if bool(c.get("ok", false)):
-		_token_note.text = "Token looks right (%d characters)." % t.length()
+		_token_note.text = I18n.f("Token looks right ({t} characters).", {"t": "%d" % t.length()})
 		_token_note.add_theme_color_override("font_color", C_TEXT_M)
 	else:
 		_token_note.text = str(c.get("error", ""))

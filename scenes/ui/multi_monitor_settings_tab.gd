@@ -416,10 +416,12 @@ func _build_slot_card(idx: int, sc: Dictionary, screens: Array, host: MultiMonit
 	var matched_scr := MultiMonitorDisplay.resolve_screen(
 		str(sc.get("screen_fingerprint", "")), int(sc.get("screen_index", -1)), screens)
 	if is_open:
-		status_lbl.text = "● Open (%s)" % ("Fullscreen" if live_win.is_monitor_fullscreen else "Draggable Window")
+		status_lbl.text = I18n.f("● Open ({is_monitor_fullscreen})", {
+			"is_monitor_fullscreen": ("Fullscreen" if live_win.is_monitor_fullscreen else "Draggable Window"),
+		})
 		status_lbl.add_theme_color_override("font_color", UITheme.C_OK)
 	elif bool(sc.get("placed", false)) and matched_scr >= 0:
-		status_lbl.text = "Saved → Screen %d%s" % [matched_scr + 1, " (Fullscreen)" if bool(sc.get("is_fullscreen", false)) else " (Windowed)"]
+		status_lbl.text = I18n.f("Saved → Screen {matched_scr}{is_fullscreen}", {"matched_scr": "%d" % (matched_scr + 1), "is_fullscreen": " (Fullscreen)" if bool(sc.get("is_fullscreen", false)) else " (Windowed)"})
 		status_lbl.add_theme_color_override("font_color", C_TEXT_S)
 	else:
 		status_lbl.text = "Unplaced — launches draggable"

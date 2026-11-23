@@ -375,9 +375,11 @@ func _rebuild_row(rec: Dictionary) -> Control:
 	var pname := str(spec.get("name", spec.get("designName", ""))).strip_edges()
 	if pname.is_empty():
 		pname = str(ModelCatalog.find(str(rec.get("model_id", ""))).get("label", "Structure"))
-	lbl.text = "%s, packed" % pname
-	lbl.tooltip_text = "Stands at %d m east, %d m south of the map's middle" % [
-		int(rec.get("x", 0.0)), int(rec.get("z", 0.0))]
+	lbl.text = I18n.f("{pname}, packed", {"pname": pname})
+	lbl.tooltip_text = I18n.f("Stands at {x} m east, {z} m south of the map's middle", {
+		"x": "%d" % (int(rec.get("x", 0.0))),
+		"z": "%d" % (int(rec.get("z", 0.0))),
+	})
 	lbl.mouse_filter = Control.MOUSE_FILTER_STOP
 	lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	lbl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
@@ -686,13 +688,13 @@ func _task_row(task: Dictionary, board) -> Control:
 		var crew := Label.new()
 		crew.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		if workers > 0 and workers < min_w:
-			crew.text = "%d/%d ppl — waiting" % [workers, min_w]
+			crew.text = I18n.f("{workers}/{min_w} ppl — waiting", {"workers": "%d" % workers, "min_w": "%d" % min_w})
 			crew.add_theme_color_override("font_color", C_ACTIVE)
 		elif workers > 0:
-			crew.text = "%d ppl" % workers
+			crew.text = I18n.f("{workers} ppl", {"workers": "%d" % workers})
 			crew.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 		elif min_w > 1:
-			crew.text = "needs %d ppl" % min_w
+			crew.text = I18n.f("needs {min_w} ppl", {"min_w": "%d" % min_w})
 			crew.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 		# Nobody on it: say why, with the same words and glyph as the work
 		# dock and the Routines panel (a bare ○ answered nothing).
@@ -931,15 +933,19 @@ func _experiment_table() -> Control:
 	if not _lab_summary.is_empty() and not str(_lab_summary.get("best_label", "")).is_empty():
 		var best := Label.new()
 		if not bool(_lab_summary.get("baseline_done", false)):
-			best.text = "Fastest: %s (%.1f h) — as it stands, the job never finishes" % [
-				str(_lab_summary["best_label"]), float(_lab_summary.get("best_h", 0.0))]
+			best.text = I18n.f("Fastest: {best} ({best_h} h) — as it stands, the job never finishes", {
+				"best": str(_lab_summary["best_label"]),
+				"best_h": "%.1f" % (float(_lab_summary.get("best_h", 0.0))),
+			})
 		elif float(_lab_summary.get("saving_h", 0.0)) > 0.01:
-			best.text = "Fastest: %s — %.1f h saved over how it stands" % [
-				str(_lab_summary["best_label"]),
-				float(_lab_summary.get("saving_h", 0.0))]
+			best.text = I18n.f("Fastest: {best} — {saving_h} h saved over how it stands", {
+				"best": str(_lab_summary["best_label"]),
+				"saving_h": "%.1f" % (float(_lab_summary.get("saving_h", 0.0))),
+			})
 		else:
-			best.text = "Nothing beats how it stands (%.1f h)" % \
-				float(_lab_summary.get("baseline_h", 0.0))
+			best.text = I18n.f("Nothing beats how it stands ({baseline_h} h)", {
+				"baseline_h": "%.1f" % (float(_lab_summary.get("baseline_h", 0.0))),
+			})
 		best.add_theme_color_override("font_color", C_DONE)
 		vb.add_child(best)
 	var caveat := Label.new()

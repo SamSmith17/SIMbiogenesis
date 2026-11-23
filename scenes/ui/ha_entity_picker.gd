@@ -129,7 +129,7 @@ func _rebuild() -> void:
 		b.focus_mode = Control.FOCUS_NONE
 		UITheme.style_button(b)
 		b.text = "%s     %s     %s" % [str(r.get("name", eid)), val, eid]
-		b.tooltip_text = "%s\n%s\nnow: %s\nClick to add it as a timeline track." % [str(r.get("name", eid)), eid, val]
+		b.tooltip_text = I18n.f("{name}\n{eid}\nnow: {val}\nClick to add it as a timeline track.", {"name": str(r.get("name", eid)), "eid": eid, "val": val})
 		b.pressed.connect(_pick.bind(eid, str(r.get("name", eid))))
 		_list.add_child(b)
 	_note.text = "%s%s" % [UiText.count(hits.size(), "sensor"),

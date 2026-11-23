@@ -849,7 +849,7 @@ func _refresh_header() -> void:
 	if _name_edit.text != str(_spec["name"]):
 		_name_edit.text = str(_spec["name"])
 	var st: Dictionary = _design["stats"]
-	_subtitle.text = "%s · %.0f L · %.1f kg · $%.0f · %.0f W" % [GantryLabSpec.describe(_spec), float(st["volume_l"]), float(st["mass_kg"]), float(st["usd"]), float(st["watts"])]
+	_subtitle.text = I18n.f("{spec} · {volume_l} L · {mass_kg} kg · ${usd} · {watts} W", {"spec": GantryLabSpec.describe(_spec), "volume_l": "%.0f" % float(st["volume_l"]), "mass_kg": "%.1f" % float(st["mass_kg"]), "usd": "%.0f" % float(st["usd"]), "watts": "%.0f" % float(st["watts"])})
 	_why_lbl.text = str(GantryLabSpec.KINEMATICS_WHY[_spec["kinematics"]])
 	if _col != null:
 		var v: Dictionary = _spec["volume"]
@@ -1169,9 +1169,14 @@ func _refresh_motors() -> void:
 func _refresh_bom() -> void:
 	_clear(_bom_box)
 	var bom: Dictionary = _design["bom"]
-	_bom_lbl.text = "$%.0f · %.1f kg · %.1f m of extrusion in %s · %s · %s" % [float(bom["usd"]), float(bom["kg"]), float(bom["extrusion_m"]),
-		UiText.count(int(bom["stock"]["pieces"]), "stock length"), UiText.count(int(bom["motors"]), "motor"),
-		str(GantryLabParts.HARDWARE[str(bom["psu"])]["label"])]
+	_bom_lbl.text = I18n.f("${usd} · {kg} kg · {extrusion_m} m of extrusion in {pieces} · {motors} · {label}", {
+		"usd": "%.0f" % float(bom["usd"]),
+		"kg": "%.1f" % float(bom["kg"]),
+		"extrusion_m": "%.1f" % float(bom["extrusion_m"]),
+		"pieces": UiText.count(int(bom["stock"]["pieces"]), "stock length"),
+		"motors": UiText.count(int(bom["motors"]), "motor"),
+		"label": str(GantryLabParts.HARDWARE[str(bom["psu"])]["label"]),
+	})
 	_bom_box.add_child(_table_row(["Qty", "Item", "Detail", "$"], true, [48, 160, 0, 52]))
 	for r in bom["rows"]:
 		_bom_box.add_child(_table_row(["%d %s" % [int(r["qty"]), str(r["unit"])], str(r["item"]), str(r["detail"]), "%.0f" % (float(r["usd"]) * float(r["qty"]))], false, [48, 160, 0, 52]))
@@ -1463,7 +1468,7 @@ func _refresh_motor_readout() -> void:
 			_kin_text.text = "A = X + Z and B = X − Z: the belts share X and Z, so a vertical move is as fast as a horizontal one and there is no lead screw to wobble. Y is the bed."
 		"delta":
 			var r := GantryLabKinematics.delta_reach(_spec)
-			_kin_text.text = "Each tower carriage sits at z + √(L² − d²), d its horizontal distance to the tool: all three move for every move, and the farther the tool from a tower the lower that carriage. Arms %.0f mm, delta radius %.0f mm, reach %.0f mm from the centre at %.0f° minimum arm angle." % [float(_spec["delta"]["arm_mm"]), float(r["delta_radius_mm"]), float(r["reach_mm"]), GantryLabKinematics.DELTA_MIN_ARM_DEG]
+			_kin_text.text = I18n.f("Each tower carriage sits at z + √(L² − d²), d its horizontal distance to the tool: all three move for every move, and the farther the tool from a tower the lower that carriage. Arms {arm_mm} mm, delta radius {delta_radius_mm} mm, reach {reach_mm} mm from the centre at {delta_min_arm_deg}° minimum arm angle.", {"arm_mm": "%.0f" % float(_spec["delta"]["arm_mm"]), "delta_radius_mm": "%.0f" % float(r["delta_radius_mm"]), "reach_mm": "%.0f" % float(r["reach_mm"]), "delta_min_arm_deg": "%.0f" % GantryLabKinematics.DELTA_MIN_ARM_DEG})
 		"bedslinger":
 			_kin_text.text = "One motor per axis. The bed carries Y (it moves the opposite way to the commanded Y, so the tool ends up over the point), the X beam climbs the Z screws, the X carriage slides along it."
 		"router":
@@ -1530,7 +1535,7 @@ func _replan(reset: bool = false) -> void:
 	_parse = GantryLabGcode.parse(_gcode_text)
 	if not bool(_parse.get("ok", false)):
 		_plan = {}
-		_hud.text = "No motion in this program: %s" % str(_parse.get("error", ""))
+		_hud.text = I18n.f("No motion in this program: {error}", {"error": str(_parse.get("error", ""))})
 		return
 	_plan = GantryLabMotion.plan(_parse, _design["limits"])
 	if reset:
@@ -1606,14 +1611,26 @@ func _apply_sim_time() -> void:
 		var spm := float((_design["motors"][mini(i, (_design["motors"] as Array).size() - 1)] as Dictionary)["steps_per_mm"])
 		motor_lines.append("%-8s %8.1f mm  %6.0f mm/s  %7.0f steps/s" % [str(mp[i]["label"]), float(mp[i]["mm"]), v * float(mv[i]), v * float(mv[i]) * spm])
 	var est_hr := total / 3600.0
-	_hud.text = "%s · %s of %s · move %d of %d (line %d)\nX %.1f  Y %.1f  Z %.1f mm · %s %.0f mm/s (asked %.0f) · %s\n%s\n%s · peak %s steps/s on %s · %s" % [
-		_gcode_name, GantryLabMotion.fmt_duration(_sim_t), GantryLabMotion.fmt_duration(total), int(smp["i"]) + 1, int(_plan["n"]), int(smp["line"]),
-		pos.x, pos.y, pos.z, "rapid" if bool(smp["rapid"]) else ("extruding" if bool(smp["extruding"]) else "feed"), v, float(smp["feed"]),
-		"layer %d of %d" % [_layer_of(pos.z), int(_plan["layers"])] if int(_plan["layers"]) > 0 else "",
-		"\n".join(motor_lines),
-		"%d %% of moves hit the feed cap, %d %% never reach it (too short for the acceleration)" % [int(100.0 * float(_plan["max_feed_hit_share"])), int(100.0 * float(_plan["accel_limited_share"]))],
-		_fmt_k(float(_plan["peak_step_hz"])), str((_design["motors"][int(_plan["peak_motor"])] as Dictionary)["label"]) if int(_plan["peak_motor"]) < (_design["motors"] as Array).size() else "?",
-		("job %s at 1× (%.2f kg of %s)" % [GantryLabMotion.fmt_duration(total), _material_kg(), str(GantryLabParts.tool(str(_spec["tool"]["id"]))["material"])]) if GantryLabSpec.is_additive(_spec) else "job %s at 1×" % GantryLabMotion.fmt_duration(total)]
+	_hud.text = I18n.f("{gcode_name} · {sim_t} of {total} · move {i} of {n} (line {line})\nX {pos}  Y {y}  Z {z} mm · {extruding} {value} mm/s (asked {feed}) · {layers}\n{motor_lines}\n{accel_limited_share} · peak {peak_step_hz} steps/s on {motors} · {material}", {
+		"gcode_name": _gcode_name,
+		"sim_t": GantryLabMotion.fmt_duration(_sim_t),
+		"total": GantryLabMotion.fmt_duration(total),
+		"i": "%d" % (int(smp["i"]) + 1),
+		"n": "%d" % int(_plan["n"]),
+		"line": "%d" % int(smp["line"]),
+		"pos": "%.1f" % pos.x,
+		"y": "%.1f" % pos.y,
+		"z": "%.1f" % pos.z,
+		"extruding": "rapid" if bool(smp["rapid"]) else ("extruding" if bool(smp["extruding"]) else "feed"),
+		"value": "%.0f" % v,
+		"feed": "%.0f" % float(smp["feed"]),
+		"layers": "layer %d of %d" % [_layer_of(pos.z), int(_plan["layers"])] if int(_plan["layers"]) > 0 else "",
+		"motor_lines": "\n".join(motor_lines),
+		"accel_limited_share": "%d %% of moves hit the feed cap, %d %% never reach it (too short for the acceleration)" % [int(100.0 * float(_plan["max_feed_hit_share"])), int(100.0 * float(_plan["accel_limited_share"]))],
+		"peak_step_hz": _fmt_k(float(_plan["peak_step_hz"])),
+		"motors": str((_design["motors"][int(_plan["peak_motor"])] as Dictionary)["label"]) if int(_plan["peak_motor"]) < (_design["motors"] as Array).size() else "?",
+		"material": ("job %s at 1× (%.2f kg of %s)" % [GantryLabMotion.fmt_duration(total), _material_kg(), str(GantryLabParts.tool(str(_spec["tool"]["id"]))["material"])]) if GantryLabSpec.is_additive(_spec) else "job %s at 1×" % GantryLabMotion.fmt_duration(total),
+	})
 	if est_hr > 0.0:
 		pass
 

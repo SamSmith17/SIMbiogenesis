@@ -337,7 +337,7 @@ func _build_card(ai: int) -> void:
 			card_vbox.add_child(push_row)
 
 		var id_lbl := Label.new()
-		id_lbl.text = "ID: %s" % auto_id
+		id_lbl.text = I18n.f("ID: {auto_id}", {"auto_id": auto_id})
 		id_lbl.add_theme_color_override("font_color", C_TEXT_M)
 		id_lbl.add_theme_font_size_override("font_size", 9)
 		card_vbox.add_child(id_lbl)
@@ -365,7 +365,7 @@ func _build_subsection(parent: VBoxContainer, title: String, accent: Color,
 	add_btn.focus_mode = Control.FOCUS_NONE
 	add_btn.custom_minimum_size = Vector2(18, 0)
 	add_btn.add_theme_color_override("font_color", accent)
-	add_btn.tooltip_text = "Add %s" % kind
+	add_btn.tooltip_text = I18n.f("Add {kind}", {"kind": kind})
 	add_btn.pressed.connect(_add_sub.bind(ai, kind))
 	hdr.add_child(add_btn)
 	parent.add_child(hdr)

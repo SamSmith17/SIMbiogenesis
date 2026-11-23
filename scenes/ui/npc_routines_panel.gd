@@ -504,17 +504,21 @@ func _refresh() -> void:
 	if _bridge == null or not _active:
 		return
 	var summ: Dictionary = _bridge.summary_for(_item_id)
-	_title.text = "Routines & Chores — %d of %d present · %s" % [
-		int(summ.get("count", 0)), int(summ.get("initial_count", 0)),
-		str(summ.get("morale_label", "—"))]
+	_title.text = I18n.f("Routines & Chores — {count} of {initial_count} present · {morale}", {
+		"count": "%d" % (int(summ.get("count", 0))),
+		"initial_count": "%d" % (int(summ.get("initial_count", 0))),
+		"morale": str(summ.get("morale_label", "—")),
+	})
 	# Walking cost is a scheduling input, not trivia: time spent getting
 	# somewhere is time not available for chores.
 	var walk_m := float(summ.get("walk_distance_m", 0.0))
 	if walk_m > 1.0 and _walk_lbl != null:
-		_walk_lbl.text = "Walking today: %.0f m/person · %.0f kcal · %.1f%% of the day — %s" % [
-			walk_m, float(summ.get("walk_kcal", 0.0)),
-			float(summ.get("walk_overhead", 0.0)) * 100.0,
-			str(summ.get("walk_label", ""))]
+		_walk_lbl.text = I18n.f("Walking today: {walk_m} m/person · {walk_kcal} kcal · {walk_overhead}% of the day — {walk}", {
+			"walk_m": "%.0f" % walk_m,
+			"walk_kcal": "%.0f" % (float(summ.get("walk_kcal", 0.0))),
+			"walk_overhead": "%.1f" % (float(summ.get("walk_overhead", 0.0)) * 100.0),
+			"walk": str(summ.get("walk_label", "")),
+		})
 	elif _walk_lbl != null:
 		_walk_lbl.text = ""
 	_refresh_weather()
@@ -528,9 +532,12 @@ func _refresh_weather() -> void:
 	if w.is_empty():
 		_weather_lbl.text = ""
 		return
-	_weather_lbl.text = "%.0f °C · %.0f m/s wind · %.1f mm/h rain — %s" % [
-		NpcWeatherGate.temp_c(w), NpcWeatherGate.wind_ms(w), NpcWeatherGate.rain_mmh(w),
-		NpcWeatherGate.describe(w)]
+	_weather_lbl.text = I18n.f("{w} °C · {w_2} m/s wind · {w_3} mm/h rain — {w_4}", {
+		"w": "%.0f" % NpcWeatherGate.temp_c(w),
+		"w_2": "%.0f" % NpcWeatherGate.wind_ms(w),
+		"w_3": "%.1f" % NpcWeatherGate.rain_mmh(w),
+		"w_4": NpcWeatherGate.describe(w),
+	})
 
 
 ## Signature-gated rebuilds (the work dock's discipline): a blind rebuild
@@ -556,7 +563,7 @@ func _refresh_roster() -> void:
 		for c in _roster_box.get_children():
 			c.queue_free()
 		var note := Label.new()
-		note.text = "This camp is simulated as a crowd right now: %s, none up close. Look at the camp from nearby (or watch it) to see each person." % UiText.count(n, "person", "people")
+		note.text = I18n.f("This camp is simulated as a crowd right now: {value}, none up close. Look at the camp from nearby (or watch it) to see each person.", {"value": UiText.count(n, "person", "people")})
 		note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		note.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		note.add_theme_color_override("font_color", UITheme.C_TEXT_S)
@@ -667,7 +674,7 @@ func _refresh_roster() -> void:
 ## that entirely: it lives outside the box that gets torn down.
 func _open_rename_dialog(agent: NpcAgent) -> void:
 	var dlg := ConfirmationDialog.new()
-	dlg.title = "Rename %s" % agent.display_name
+	dlg.title = I18n.f("Rename {display_name}", {"display_name": agent.display_name})
 	dlg.ok_button_text = "Rename"
 	# AcceptDialog has no "margin_*" theme constants of its own (those belong
 	# to MarginContainer) — a bare LineEdit child would hug the window edges,
@@ -733,7 +740,7 @@ func _open_bed_dialog(agent: NpcAgent) -> void:
 	if reg == null:
 		return
 	var dlg := ConfirmationDialog.new()
-	dlg.title = "%s's bed" % agent.display_name
+	dlg.title = I18n.f("{display_name}'s bed", {"display_name": agent.display_name})
 	dlg.ok_button_text = "Assign"
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 16)
@@ -811,9 +818,13 @@ func _day_plan_strip(agent: NpcAgent, assigned_h: float) -> Control:
 		bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		bar.size_flags_stretch_ratio = hours
 		strip.add_child(bar)
-	strip.tooltip_text = "sleep %.1f h · needs %.1f h · chores %.1f h · free %.1f h%s" % [
-		sleep_h, need_h, chore_h, free_h,
-		"  ⚠ OVER-SCHEDULED by %.1f h" % over_h if over_h > 0.01 else ""]
+	strip.tooltip_text = I18n.f("sleep {sleep_h} h · needs {need_h} h · chores {chore_h} h · free {free_h} h{over_h}", {
+		"sleep_h": "%.1f" % sleep_h,
+		"need_h": "%.1f" % need_h,
+		"chore_h": "%.1f" % chore_h,
+		"free_h": "%.1f" % free_h,
+		"over_h": "  ⚠ OVER-SCHEDULED by %.1f h" % over_h if over_h > 0.01 else "",
+	})
 	return strip
 
 
@@ -983,10 +994,12 @@ func _refresh_chores() -> void:
 		# panel lacked while the hygiene stall was invisible.
 		var reason := board.blocked_reason(chore, abs_h, fposmod(abs_h, 24.0),
 			weather, _bridge.roster_size_for(_item_id), Callable(self, "_name_for"))
-		lbl.tooltip_text = "%s priority · %s%s%s" % [pri_name,
-			_repeat_text(chore), "
-Paused" if held else "", ("
-⚠ " + reason) if not reason.is_empty() else ""]
+		lbl.tooltip_text = I18n.f("{pri_name} priority · {chore}{held}{is_empty}", {
+			"pri_name": pri_name,
+			"chore": _repeat_text(chore),
+			"held": " Paused" if held else "",
+			"is_empty": (" ⚠ " + reason) if not reason.is_empty() else "",
+		})
 		if pri != 50:
 			lbl.text = "%s %s" % ["▲" if pri < 50 else "▼", lbl.text]
 		if done_today:
@@ -1006,10 +1019,13 @@ Paused" if held else "", ("
 		var min_w := int(chore.get("min_workers", 1))
 		var left := maxf(float(chore.get("chore_hours", 0.0))
 			- float(chore.get("progress_h", 0.0)), 0.0)
-		bar.tooltip_text = "%.1f h of %.1f h left · %d of %d people%s" % [
-			left, float(chore.get("chore_hours", 0.0)), workers, min_w,
-			" (max %d)" % int(chore.get("max_workers", 1))
-				if int(chore.get("max_workers", 1)) > min_w else ""]
+		bar.tooltip_text = I18n.f("{left} h of {chore_hours} h left · {workers} of {min_w} people{max_workers}", {
+			"left": "%.1f" % left,
+			"chore_hours": "%.1f" % (float(chore.get("chore_hours", 0.0))),
+			"workers": "%d" % workers,
+			"min_w": "%d" % min_w,
+			"max_workers": " (max %d)" % int(chore.get("max_workers", 1)) if int(chore.get("max_workers", 1)) > min_w else "",
+		})
 		row.add_child(bar)
 
 		var crew := Label.new()
@@ -1055,8 +1071,7 @@ Paused" if held else "", ("
 		meta.custom_minimum_size.x = 106
 		meta.mouse_filter = Control.MOUSE_FILTER_PASS
 		if gated:
-			meta.tooltip_text = "Too %s to work outside right now" % \
-					NpcWeatherGate.describe(weather).to_lower()
+			meta.tooltip_text = I18n.f("Too {weather} to work outside right now", {"weather": NpcWeatherGate.describe(weather).to_lower()})
 		row.add_child(meta)
 
 		# A chore with no target happens wherever the worker is standing, which
@@ -1066,8 +1081,7 @@ Paused" if held else "", ("
 		match str(tgt.get("kind", "")):
 			"pos":
 				place.text = "📍"
-				place.tooltip_text = "At %d, %d" % [
-					int(tgt.get("x", 0)), int(tgt.get("z", 0))]
+				place.tooltip_text = I18n.f("At {x}, {z}", {"x": "%d" % (int(tgt.get("x", 0))), "z": "%d" % (int(tgt.get("z", 0)))})
 			"prop":
 				place.text = "📍"
 				place.tooltip_text = "At a placed object"
@@ -1090,15 +1104,16 @@ Paused" if held else "", ("
 		if not covered.is_empty():
 			# Who is ACTUALLY doing it outranks who it is assigned to.
 			who.text = _name_for(covered)
-			who.tooltip_text = "Covering%s" % (
-				" for %s" % _name_for(assigned) if not assigned.is_empty() else "")
+			who.tooltip_text = I18n.f("Covering{is_empty}", {
+				"is_empty": ( " for %s" % _name_for(assigned) if not assigned.is_empty() else ""),
+			})
 		elif not assigned.is_empty():
 			who.text = _name_for(assigned)
 		elif not orphaned.is_empty():
 			# Stamped by validate_assignments precisely so the UI can say WHY
 			# this is suddenly everyone's job.
-			who.text = "anyone (was %s — left)" % _name_for(orphaned)
-			who.tooltip_text = "%s was assigned but left the settlement" % _name_for(orphaned)
+			who.text = I18n.f("anyone (was {orphaned} — left)", {"orphaned": _name_for(orphaned)})
+			who.tooltip_text = I18n.f("{orphaned} was assigned but left the settlement", {"orphaned": _name_for(orphaned)})
 		else:
 			who.text = "anyone"
 		who.add_theme_font_size_override("font_size", UITheme.FONT_XS)
@@ -1445,11 +1460,12 @@ func _time_spin(idx: int, key: String, sync_dur: Callable) -> SpinBox:
 	sp.value = round(float((_draft[idx] as Dictionary).get(key, 0.0)) * 60.0)
 	sp.custom_minimum_size.x = 84
 	sp.prefix = ""
-	sp.tooltip_text = "Minutes past midnight (currently %s)" % NpcRoutine.format_hour(
-			float((_draft[idx] as Dictionary).get(key, 0.0)))
+	sp.tooltip_text = I18n.f("Minutes past midnight (currently {key})", {
+		"key": NpcRoutine.format_hour( float((_draft[idx] as Dictionary).get(key, 0.0))),
+	})
 	sp.value_changed.connect(func(v: float) -> void:
 		(_draft[idx] as Dictionary)[key] = v / 60.0
-		sp.tooltip_text = "Minutes past midnight (currently %s)" % NpcRoutine.format_hour(v / 60.0)
+		sp.tooltip_text = I18n.f("Minutes past midnight (currently {format_hour})", {"format_hour": NpcRoutine.format_hour(v / 60.0)})
 		sync_dur.call()
 		_routine_edited_in_place())
 	return sp

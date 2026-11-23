@@ -732,9 +732,12 @@ func _sync_pv() -> void:
 	var o := PvArrayBuilder.orientation_for(float(_tf.get("yaw", _rec.get("yaw", 0.0))),
 			float(spec["tilt_deg"]))
 	var bound := str(_rec.get("graph_item_id", ""))
-	_pv_info.text = "%s · faces %.0f° (compass) at %.0f°%s" % [UiText.count(int(spec["count"]), "panel"),
-			float(o["azimuth_deg"]), float(o["tilt_deg"]),
-			"" if bound.is_empty() else " · drives graph array " + bound]
+	_pv_info.text = I18n.f("{count} · faces {azimuth_deg}° (compass) at {tilt_deg}°{bound}", {
+		"count": UiText.count(int(spec["count"]), "panel"),
+		"azimuth_deg": "%.0f" % float(o["azimuth_deg"]),
+		"tilt_deg": "%.0f" % float(o["tilt_deg"]),
+		"bound": "" if bound.is_empty() else " · drives graph array " + bound,
+	})
 
 
 func _on_pv_tilt(v: float) -> void:
@@ -890,7 +893,7 @@ func _sync_widgets() -> void:
 	if not str(_rec.get("graph_item_id", "")).is_empty():
 		parts.append("on the graph")
 	_sub_lbl.text = " · ".join(parts)
-	_sub_lbl.tooltip_text = "Prop id %s" % _prop_id
+	_sub_lbl.tooltip_text = I18n.f("Prop id {prop_id}", {"prop_id": _prop_id})
 	_sub_lbl.mouse_filter = Control.MOUSE_FILTER_PASS
 	for key in _spins:
 		(_spins[key] as SpinBox).set_value_no_signal(float(_tf.get(key, 0.0)))
@@ -1123,12 +1126,17 @@ func _refresh_packed_line() -> void:
 		return
 	var est := "  (est.)" if str(packed.get("source", "")) == "estimated" else ""
 	if bool(_rec.get("packed", false)):
-		_packed_lbl.text = "Contains %s · %s%s" % [
-			PlacedPropRuntime.packed_contents_label(_rec, get_tree().current_scene),
-			PackedSpec.format_mass(packed), est]
+		_packed_lbl.text = I18n.f("Contains {current_scene} · {packed}{est}", {
+			"current_scene": PlacedPropRuntime.packed_contents_label(_rec, get_tree().current_scene),
+			"packed": PackedSpec.format_mass(packed),
+			"est": est,
+		})
 	else:
-		_packed_lbl.text = "Packs to %s · %s%s" % [
-			PackedSpec.format_dims(packed), PackedSpec.format_mass(packed), est]
+		_packed_lbl.text = I18n.f("Packs to {packed} · {packed_2}{est}", {
+			"packed": PackedSpec.format_dims(packed),
+			"packed_2": PackedSpec.format_mass(packed),
+			"est": est,
+		})
 
 
 # ---------------------------------------------------------------------------
@@ -1514,12 +1522,13 @@ func _sync_fire() -> void:
 	for key in _fire_spins:
 		(_fire_spins[key] as SpinBox).set_value_no_signal(round(float(durations.get(key, 0.0)) * 60.0))
 	var auto: Dictionary = burn.get("auto", {}) if not burn.is_empty() else _estimate()
-	_fire_auto_lbl.text = "Auto estimate: %s pre-roll · %s to collapse · %s bonfire · %s embers (%s of fuel)" % [
-		FireTimeline.fmt_hours(float(auto.get("preroll_h", 0.0))),
-		FireTimeline.fmt_hours(float(auto.get("climb_h", 0.0))),
-		FireTimeline.fmt_hours(float(auto.get("bonfire_h", 0.0))),
-		FireTimeline.fmt_hours(float(auto.get("ember_h", 0.0))),
-		("%d kg" % int(float(auto.get("mass_kg", 0.0)))) if float(auto.get("mass_kg", -1.0)) > 0.0 else "unknown mass"]
+	_fire_auto_lbl.text = I18n.f("Auto estimate: {preroll_h} pre-roll · {climb_h} to collapse · {bonfire_h} bonfire · {ember_h} embers ({mass_kg} of fuel)", {
+		"preroll_h": FireTimeline.fmt_hours(float(auto.get("preroll_h", 0.0))),
+		"climb_h": FireTimeline.fmt_hours(float(auto.get("climb_h", 0.0))),
+		"bonfire_h": FireTimeline.fmt_hours(float(auto.get("bonfire_h", 0.0))),
+		"ember_h": FireTimeline.fmt_hours(float(auto.get("ember_h", 0.0))),
+		"mass_kg": ("%d kg" % int(float(auto.get("mass_kg", 0.0)))) if float(auto.get("mass_kg", -1.0)) > 0.0 else "unknown mass",
+	})
 	# The date boxes follow the record's ignition time (a flag dragged on the
 	# timeline moves it); with no burn they sit at the playhead until edited.
 	var sched_key := "%.4f" % float(burn.get("ignited_h", -1.0)) if not burn.is_empty() else "none"
@@ -1561,8 +1570,9 @@ func _refresh_fire_status() -> void:
 	var burn := _burn_rec()
 	if burn.is_empty():
 		var plan: Variant = _rec.get("fire_plan", null)
-		_fire_status.text = "Not burning. %s" % (
-			"Durations set by you." if plan is Dictionary else "Durations will be estimated when it catches.")
+		_fire_status.text = I18n.f("Not burning. {dictionary}", {
+			"dictionary": ( "Durations set by you." if plan is Dictionary else "Durations will be estimated when it catches."),
+		})
 		return
 	var t := _clock_hours()
 	var st := FireTimeline.state_at(burn, t)
@@ -2315,9 +2325,11 @@ func _refresh_made_of() -> void:
 	if bool(o.get("known", false)):
 		var emb := BuiltStock.embodied(o["materials"])
 		var c := float((emb["elements"] as Dictionary).get("C", 0.0))
-		_made_lbl.text = "Made of %s%s%s" % [BuiltStock.describe(o["materials"]),
-			"  (est.)" if bool(o.get("est", false)) else "",
-			(" · holds %s of carbon" % ElementLedger.fmt_kg(c)) if c > 0.05 else ""]
+		_made_lbl.text = I18n.f("Made of {materials}{est}{c}", {
+			"materials": BuiltStock.describe(o["materials"]),
+			"est": "  (est.)" if bool(o.get("est", false)) else "",
+			"c": (" · holds %s of carbon" % ElementLedger.fmt_kg(c)) if c > 0.05 else "",
+		})
 	else:
 		_made_lbl.text = "What it is made of is not known."
 	if _salv_btn != null:

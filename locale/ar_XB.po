@@ -69,6 +69,10 @@ msgid "D"
 msgstr "‮D‬"
 
 # machine: pseudo
+msgid "Preview  ·  {t}  ·  {vid_s} / {total_s} of video{paused}"
+msgstr "‮Preview  ·  {t}  ·  {vid_s} / {total_s} of video{paused}‬"
+
+# machine: pseudo
 msgid "Drag to scrub the video (← / → step a second)"
 msgstr "‮Drag to scrub the video (← / → step a second)‬"
 
@@ -105,8 +109,8 @@ msgid "Penstock outlet"
 msgstr "‮Penstock outlet‬"
 
 # machine: pseudo
-msgid "Nozzle inlet (1/4u2033 NPT barb)"
-msgstr "‮Nozzle inlet (1/4u2033 NPT barb)‬"
+msgid "Nozzle inlet (1/4″ NPT barb)"
+msgstr "‮Nozzle inlet (1/4″ NPT barb)‬"
 
 # machine: pseudo
 msgid "Housing bottom (tailwater)"
@@ -117,8 +121,8 @@ msgid "DC +"
 msgstr "‮DC +‬"
 
 # machine: pseudo
-msgid "DC u2212"
-msgstr "‮DC u2212‬"
+msgid "DC −"
+msgstr "‮DC −‬"
 
 # machine: pseudo
 msgid "Penstock inlet"
@@ -129,8 +133,14 @@ msgid "Tailrace outlet"
 msgstr "‮Tailrace outlet‬"
 
 # machine: pseudo
-msgid "DC −"
-msgstr "‮DC −‬"
+msgid ""
+"Surge closing the valve over {close_s} s: +{dh} m (instant stop would be +{instant} m; 2L/a = {a} s)"
+msgstr ""
+"‮Surge closing the valve over {close_s} s: +{dh} m (instant stop would be +{instant} m; 2L/a = {a} s)‬"
+
+# machine: pseudo
+msgid "Surge on an instant stop +{dh} m (wave {a} m/s)"
+msgstr "‮Surge on an instant stop +{dh} m (wave {a} m/s)‬"
 
 # machine: pseudo
 msgid "Receiver"
@@ -579,6 +589,16 @@ msgstr "‮Battery‬"
 # machine: pseudo
 msgid "AC load"
 msgstr "‮AC load‬"
+
+# machine: pseudo
+msgid ""
+"The reading ramps {k} per hour for each % of output (it never settles by itself)."
+msgstr ""
+"‮The reading ramps {k} per hour for each % of output (it never settles by itself).‬"
+
+# machine: pseudo
+msgid "Each % of output moves the reading {k}, settling in about {tau}."
+msgstr "‮Each % of output moves the reading {k}, settling in about {tau}.‬"
 
 # machine: pseudo
 msgid "C"
@@ -1141,6 +1161,10 @@ msgid "My feature"
 msgstr "‮My feature‬"
 
 # machine: pseudo
+msgid "  Flow view · site outflow {qs} · rain {rain} mm/h  "
+msgstr "‮  Flow view · site outflow {qs} · rain {rain} mm/h  ‬"
+
+# machine: pseudo
 msgid "PVC pipe"
 msgstr "‮PVC pipe‬"
 
@@ -1197,6 +1221,22 @@ msgid "Nacelle, yaw bearing, tail"
 msgstr "‮Nacelle, yaw bearing, tail‬"
 
 # machine: pseudo
+msgid "Regenerate burned ({burned})"
+msgstr "‮Regenerate burned ({burned})‬"
+
+# machine: pseudo
+msgid "Restored {value} burned mesh(es)"
+msgstr "‮Restored {value} burned mesh(es)‬"
+
+# machine: pseudo
+msgid "Pressure: {pressure_pct}%"
+msgstr "‮Pressure: {pressure_pct}%‬"
+
+# machine: pseudo
+msgid "Pressure: LOW ({pressure_pct}%)"
+msgstr "‮Pressure: LOW ({pressure_pct}%)‬"
+
+# machine: pseudo
 msgid "CRISIS ALERT"
 msgstr "‮CRISIS ALERT‬"
 
@@ -1213,6 +1253,20 @@ msgid "Pressure: 100%"
 msgstr "‮Pressure: 100%‬"
 
 # machine: pseudo
+msgid ""
+"{name} · {progress} %\n"
+"{layers}{t} · {value} mm/s {what}\n"
+"{speed_factor} left"
+msgstr ""
+"‮{name} · {progress} %‬\n"
+"‮{layers}{t} · {value} mm/s {what}‬\n"
+"‮{speed_factor} left‬"
+
+# machine: pseudo
+msgid "{job_name} · done"
+msgstr "‮{job_name} · done‬"
+
+# machine: pseudo
 msgid "Flames"
 msgstr "‮Flames‬"
 
@@ -1221,12 +1275,26 @@ msgid "Sparks"
 msgstr "‮Sparks‬"
 
 # machine: pseudo
+msgid "max fill = basin rim ({y} m)"
+msgstr "‮max fill = basin rim ({y} m)‬"
+
+# machine: pseudo
+msgid ""
+"max fill +{above} m above the basin rim ({y} m) · capacity +{extra_l} kL"
+msgstr ""
+"‮max fill +{above} m above the basin rim ({y} m) · capacity +{extra_l} kL‬"
+
+# machine: pseudo
 msgid "LIFT TOO HIGH — the column lets go"
 msgstr "‮LIFT TOO HIGH — the column lets go‬"
 
 # machine: pseudo
 msgid "BROKEN — sucking air"
 msgstr "‮BROKEN — sucking air‬"
+
+# machine: pseudo
+msgid "PRIMED · {q} · no power"
+msgstr "‮PRIMED · {q} · no power‬"
 
 # machine: pseudo
 msgid "Aim at the ground or a matching port, then release"
@@ -1247,6 +1315,10 @@ msgstr "‮Can't place an intake here‬"
 # machine: pseudo
 msgid "Drag from the TURBINE's penstock port to move the intake"
 msgstr "‮Drag from the TURBINE's penstock port to move the intake‬"
+
+# machine: pseudo
+msgid "Brightness: {brightness}%"
+msgstr "‮Brightness: {brightness}%‬"
 
 # machine: pseudo
 msgid "Color"
@@ -1323,6 +1395,16 @@ msgid "Save the automation first, then A/B it."
 msgstr "‮Save the automation first, then A/B it.‬"
 
 # machine: pseudo
+msgid "SIMbiogenesis — {lbl} · {v_short}"
+msgstr "‮SIMbiogenesis — {lbl} · {v_short}‬"
+
+# machine: pseudo
+msgid ""
+"SIMbiogenesis — {lbl} · {v_short}  (Drag to monitor, click ⛶ Fullscreen or press F11)"
+msgstr ""
+"‮SIMbiogenesis — {lbl} · {v_short}  (Drag to monitor, click ⛶ Fullscreen or press F11)‬"
+
+# machine: pseudo
 msgid "Switch what view or dashboard is displayed on this monitor."
 msgstr "‮Switch what view or dashboard is displayed on this monitor.‬"
 
@@ -1353,8 +1435,24 @@ msgid "Close this monitor window."
 msgstr "‮Close this monitor window.‬"
 
 # machine: pseudo
+msgid "Screen {idx}"
+msgstr "‮Screen {idx}‬"
+
+# machine: pseudo
+msgid "Today: {daily_kwh} kWh"
+msgstr "‮Today: {daily_kwh} kWh‬"
+
+# machine: pseudo
+msgid "Bank capacity: {cap_kwh} kWh"
+msgstr "‮Bank capacity: {cap_kwh} kWh‬"
+
+# machine: pseudo
 msgid "Active AC + DC consumers"
 msgstr "‮Active AC + DC consumers‬"
+
+# machine: pseudo
+msgid "Local sim time {hh}:{mm}  ·  Updated live"
+msgstr "‮Local sim time {hh}:{mm}  ·  Updated live‬"
 
 # machine: pseudo
 msgid "☀ Site Energy & Inverter Telemetry"
@@ -1413,8 +1511,22 @@ msgstr ""
 "‮No festival camps yet — Set up the gathering, or paint a camp and give it people.‬"
 
 # machine: pseudo
+msgid ""
+"{rows} · {people} · the whole gathering, per day: {water} water in, {food} food, {grey} greywater and {black} blackwater out."
+msgstr ""
+"‮{rows} · {people} · the whole gathering, per day: {water} water in, {food} food, {grey} greywater and {black} blackwater out.‬"
+
+# machine: pseudo
+msgid "{names} · Look"
+msgstr "‮{names} · Look‬"
+
+# machine: pseudo
 msgid "Fly the view to this vehicle"
 msgstr "‮Fly the view to this vehicle‬"
+
+# machine: pseudo
+msgid "Getting here: {usd} in trips and fuel"
+msgstr "‮Getting here: {usd} in trips and fuel‬"
 
 # machine: pseudo
 msgid "Both legs of each vehicle's trip, plus fuel bought on site"
@@ -1537,6 +1649,10 @@ msgstr "‮Shared venues to add (where the site has none yet)‬"
 # machine: pseudo
 msgid "Camp name"
 msgstr "‮Camp name‬"
+
+# machine: pseudo
+msgid "{rows} · {value} in all"
+msgstr "‮{rows} · {value} in all‬"
 
 # machine: pseudo
 msgid "Set up the gathering"
@@ -1729,12 +1845,20 @@ msgstr ""
 "‮Carry every festival camp, road, zone and seeded space so the festival is centred on the location marker‬"
 
 # machine: pseudo
+msgid "{people} in {camps}{tiers} · {venues}"
+msgstr "‮{people} in {camps}{tiers} · {venues}‬"
+
+# machine: pseudo
 msgid "Tagged space"
 msgstr "‮Tagged space‬"
 
 # machine: pseudo
 msgid "Placed prop"
 msgstr "‮Placed prop‬"
+
+# machine: pseudo
+msgid "✦ {total}  ·  {now} {label} now"
+msgstr "‮✦ {total}  ·  {now} {label} now‬"
 
 # machine: pseudo
 msgid "Edit the site"
@@ -1850,6 +1974,10 @@ msgid "Nothing queued."
 msgstr "‮Nothing queued.‬"
 
 # machine: pseudo
+msgid "{left} h left · {w} of {mn} people{who_line}{is_empty}"
+msgstr "‮{left} h left · {w} of {mn} people{who_line}{is_empty}‬"
+
+# machine: pseudo
 msgid "done"
 msgstr "‮done‬"
 
@@ -1860,6 +1988,14 @@ msgstr "‮hold‬"
 # machine: pseudo
 msgid "waiting"
 msgstr "‮waiting‬"
+
+# machine: pseudo
+msgid "Priority: {pv} (click to cycle). Lower sorts first."
+msgstr "‮Priority: {pv} (click to cycle). Lower sorts first.‬"
+
+# machine: pseudo
+msgid "Priority: {pv} — {badge}"
+msgstr "‮Priority: {pv} — {badge}‬"
 
 # machine: pseudo
 msgid "Look at this job"
@@ -1918,12 +2054,20 @@ msgid "Never included"
 msgstr "‮Never included‬"
 
 # machine: pseudo
+msgid "Map data · {size}"
+msgstr "‮Map data · {size}‬"
+
+# machine: pseudo
 msgid "Drop a .simpack.zip onto this window, or"
 msgstr "‮Drop a .simpack.zip onto this window, or‬"
 
 # machine: pseudo
 msgid "Choose pack…"
 msgstr "‮Choose pack…‬"
+
+# machine: pseudo
+msgid "From {is_empty} · {substr} · {bytes}"
+msgstr "‮From {is_empty} · {substr} · {bytes}‬"
 
 # machine: pseudo
 msgid "Each arrives as a new world; yours are never touched"
@@ -1940,6 +2084,10 @@ msgstr "‮Restart the game first so the new art is loaded.‬"
 # machine: pseudo
 msgid "The new art is imported. Restart the game to load it."
 msgstr "‮The new art is imported. Restart the game to load it.‬"
+
+# machine: pseudo
+msgid "{done} of {total} · {label}"
+msgstr "‮{done} of {total} · {label}‬"
 
 # machine: pseudo
 msgid "Enable / disable this automation"
@@ -1960,6 +2108,14 @@ msgstr "‮Push to Home Assistant...‬"
 # machine: pseudo
 msgid "Export this rule to HA (requires HA entity under Advanced)"
 msgstr "‮Export this rule to HA (requires HA entity under Advanced)‬"
+
+# machine: pseudo
+msgid "ID: {auto_id}"
+msgstr "‮ID: {auto_id}‬"
+
+# machine: pseudo
+msgid "Add {kind}"
+msgstr "‮Add {kind}‬"
 
 # machine: pseudo
 msgid "(none)"
@@ -2098,12 +2254,22 @@ msgstr ""
 "‮Set this bank down in the world: it joins the graph as one battery with its BMS limits‬"
 
 # machine: pseudo
+msgid "A distributor box has its own bars (rated {dist_rating_a} A)"
+msgstr "‮A distributor box has its own bars (rated {dist_rating_a} A)‬"
+
+# machine: pseudo
 msgid "The copper bars' size: sized for the current, or your own"
 msgstr "‮The copper bars' size: sized for the current, or your own‬"
 
 # machine: pseudo
 msgid "Bars laid together on each pole: more carry more current"
 msgstr "‮Bars laid together on each pole: more carry more current‬"
+
+# machine: pseudo
+msgid ""
+"{n} × {v_nom} V in series = {v_nom_2} V · {m} strings × {ah} Ah = {ah_2} Ah · {wh} kWh ({usable_wh} usable) · {cont_discharge_a} A continuous ({m_2} strings share {min_share}–{max_share} %) · fault current {i_sc} A · {amps} · {mass_kg} kg · ${cost_usd} (estimate)"
+msgstr ""
+"‮{n} × {v_nom} V in series = {v_nom_2} V · {m} strings × {ah} Ah = {ah_2} Ah · {wh} kWh ({usable_wh} usable) · {cont_discharge_a} A continuous ({m_2} strings share {min_share}–{max_share} %) · fault current {i_sc} A · {amps} · {mass_kg} kg · ${cost_usd} (estimate)‬"
 
 # machine: pseudo
 msgid "Amps"
@@ -2190,8 +2356,18 @@ msgid "trip · release · delay"
 msgstr "‮trip · release · delay‬"
 
 # machine: pseudo
+msgid "{key} — opens {key_2}"
+msgstr "‮{key} — opens {key_2}‬"
+
+# machine: pseudo
 msgid "retries"
 msgstr "‮retries‬"
+
+# machine: pseudo
+msgid ""
+"Current trips close the switch again after {recover_s} s (a short after {sc_recover_s} s)"
+msgstr ""
+"‮Current trips close the switch again after {recover_s} s (a short after {sc_recover_s} s)‬"
 
 # machine: pseudo
 msgid "Back to the BMS's own settings"
@@ -2360,6 +2536,10 @@ msgstr ""
 # machine: pseudo
 msgid "Nothing tripped."
 msgstr "‮Nothing tripped.‬"
+
+# machine: pseudo
+msgid "Charge: {soc} % true · {soc_est} % counted by the BMS"
+msgstr "‮Charge: {soc} % true · {soc_est} % counted by the BMS‬"
 
 # machine: pseudo
 msgid "No BMS"
@@ -2550,6 +2730,10 @@ msgid "Capacity"
 msgstr "‮Capacity‬"
 
 # machine: pseudo
+msgid "Roof: {shape} ({src})"
+msgstr "‮Roof: {shape} ({src})‬"
+
+# machine: pseudo
 msgid "None (procedural)"
 msgstr "‮None (procedural)‬"
 
@@ -2612,6 +2796,10 @@ msgstr "‮Loading photo index …‬"
 # machine: pseudo
 msgid "No street photos within 150 m of this building."
 msgstr "‮No street photos within 150 m of this building.‬"
+
+# machine: pseudo
+msgid "{near} nearby — click: wall color, right-click: roof color"
+msgstr "‮{near} nearby — click: wall color, right-click: roof color‬"
 
 # machine: pseudo
 msgid "Open"
@@ -2758,6 +2946,14 @@ msgid "One layout so far, so every camp of this style is laid out alike. "
 msgstr "‮One layout so far, so every camp of this style is laid out alike. ‬"
 
 # machine: pseudo
+msgid "Layout limit reached ({max_variants}) — delete one first"
+msgstr "‮Layout limit reached ({max_variants}) — delete one first‬"
+
+# machine: pseudo
+msgid "{label}  ·  {sz} × {sz_2} × {sz_3} m  ·  {tris} tris"
+msgstr "‮{label}  ·  {sz} × {sz_2} × {sz_3} m  ·  {tris} tris‬"
+
+# machine: pseudo
 msgid "Aligned"
 msgstr "‮Aligned‬"
 
@@ -2780,12 +2976,34 @@ msgid "Remove this model from every camp style"
 msgstr "‮Remove this model from every camp style‬"
 
 # machine: pseudo
+msgid "Could not import {file}"
+msgstr "‮Could not import {file}‬"
+
+# machine: pseudo
 msgid "Imported model"
 msgstr "‮Imported model‬"
 
 # machine: pseudo
+msgid "{label} has no mesh that can be instanced as camp geometry"
+msgstr "‮{label} has no mesh that can be instanced as camp geometry‬"
+
+# machine: pseudo
+msgid "Model limit reached ({max_models}) — remove one first"
+msgstr "‮Model limit reached ({max_models}) — remove one first‬"
+
+# machine: pseudo
+msgid ""
+"{structures} in {households} on {area_m2} ha  ·  plot {cell_u} × {cell_v} m  ·  ~{tris_per_ha} tris/ha up close"
+msgstr ""
+"‮{structures} in {households} on {area_m2} ha  ·  plot {cell_u} × {cell_v} m  ·  ~{tris_per_ha} tris/ha up close‬"
+
+# machine: pseudo
 msgid "Pick a mission for this location."
 msgstr "‮Pick a mission for this location.‬"
+
+# machine: pseudo
+msgid "Running: {title} — {elapsed} / {dur} h"
+msgstr "‮Running: {title} — {elapsed} / {dur} h‬"
 
 # machine: pseudo
 msgid "🎯  Challenges"
@@ -2838,6 +3056,10 @@ msgstr "‮Up a level (right-click, Backspace)‬"
 # machine: pseudo
 msgid "Nothing to show"
 msgstr "‮Nothing to show‬"
+
+# machine: pseudo
+msgid "and {shown} more"
+msgstr "‮and {shown} more‬"
 
 # machine: pseudo
 msgid "Nothing further inside"
@@ -3034,6 +3256,10 @@ msgid "1 camera keyframe: the shot is locked on that view."
 msgstr "‮1 camera keyframe: the shot is locked on that view.‬"
 
 # machine: pseudo
+msgid "{value}, {inside} inside this range: {how}."
+msgstr "‮{value}, {inside} inside this range: {how}.‬"
+
+# machine: pseudo
 msgid "Folder for the video"
 msgstr "‮Folder for the video‬"
 
@@ -3076,6 +3302,10 @@ msgid "Path"
 msgstr "‮Path‬"
 
 # machine: pseudo
+msgid "Keyframe {sel} of {value} · {t}"
+msgstr "‮Keyframe {sel} of {value} · {t}‬"
+
+# machine: pseudo
 msgid "Keyframes put back as they were when the editor opened."
 msgstr "‮Keyframes put back as they were when the editor opened.‬"
 
@@ -3116,8 +3346,18 @@ msgid "  ·  dismissed"
 msgstr "‮  ·  dismissed‬"
 
 # machine: pseudo
+msgid ""
+"{hours} person-hours of recurring work this week, {per} per person. One-off jobs, machine steps and builds stay on the open board."
+msgstr ""
+"‮{hours} person-hours of recurring work this week, {per} per person. One-off jobs, machine steps and builds stay on the open board.‬"
+
+# machine: pseudo
 msgid "No simulated people here yet."
 msgstr "‮No simulated people here yet.‬"
+
+# machine: pseudo
+msgid "planned {d} · worked {d_2}"
+msgstr "‮planned {d} · worked {d_2}‬"
 
 # machine: pseudo
 msgid "How they spend their days"
@@ -3126,6 +3366,14 @@ msgstr "‮How they spend their days‬"
 # machine: pseudo
 msgid "Nothing measured yet: run the clock for a while."
 msgstr "‮Nothing measured yet: run the clock for a while.‬"
+
+# machine: pseudo
+msgid "Ticks: {atus_source}. A reference, not a target."
+msgstr "‮Ticks: {atus_source}. A reference, not a target.‬"
+
+# machine: pseudo
+msgid "Wrote {files} ({events}) to {dir}."
+msgstr "‮Wrote {files} ({events}) to {dir}.‬"
 
 # machine: pseudo
 msgid "Open the habitat's inspector on the graph → Routines & chores."
@@ -3236,8 +3484,28 @@ msgid "Move to the clock"
 msgstr "‮Move to the clock‬"
 
 # machine: pseudo
+msgid "Moved {label} to now."
+msgstr "‮Moved {label} to now.‬"
+
+# machine: pseudo
 msgid "Remove"
 msgstr "‮Remove‬"
+
+# machine: pseudo
+msgid "Removed {label}."
+msgstr "‮Removed {label}.‬"
+
+# machine: pseudo
+msgid "Moved {label} to {a}."
+msgstr "‮Moved {label} to {a}.‬"
+
+# machine: pseudo
+msgid "{label} follows something else and cannot be moved here."
+msgstr "‮{label} follows something else and cannot be moved here.‬"
+
+# machine: pseudo
+msgid "Clock moved to {abs_h}."
+msgstr "‮Clock moved to {abs_h}.‬"
 
 # machine: pseudo
 msgid "Work they like"
@@ -3284,6 +3552,12 @@ msgid "No camp is simulated here yet."
 msgstr "‮No camp is simulated here yet.‬"
 
 # machine: pseudo
+msgid ""
+"LMB pin · RMB undo · Enter commit · Esc cancel · drag focused cord/lights to hang"
+msgstr ""
+"‮LMB pin · RMB undo · Enter commit · Esc cancel · drag focused cord/lights to hang‬"
+
+# machine: pseudo
 msgid "Route 3D Conduit"
 msgstr "‮Route 3D Conduit‬"
 
@@ -3306,6 +3580,12 @@ msgstr ""
 "‮Drag the pin · Shift locks to an axis · release commits · double-click a pin removes it · Esc cancel‬"
 
 # machine: pseudo
+msgid ""
+"LMB drops a pin ({waypoint_count}) · RMB undoes · Enter commits · Esc cancels{aim_valid}"
+msgstr ""
+"‮LMB drops a pin ({waypoint_count}) · RMB undoes · Enter commits · Esc cancels{aim_valid}‬"
+
+# machine: pseudo
 msgid "Hang / Reroute Conduit"
 msgstr "‮Hang / Reroute Conduit‬"
 
@@ -3314,12 +3594,6 @@ msgid ""
 "Drag pin to move · release commits · double-click pin removes · Esc cancel"
 msgstr ""
 "‮Drag pin to move · release commits · double-click pin removes · Esc cancel‬"
-
-# machine: pseudo
-msgid ""
-"LMB pin · RMB undo · Enter commit · Esc cancel · drag focused cord/lights to hang"
-msgstr ""
-"‮LMB pin · RMB undo · Enter commit · Esc cancel · drag focused cord/lights to hang‬"
 
 # machine: pseudo
 msgid "Reverted to how the wire was"
@@ -3338,8 +3612,16 @@ msgid "Changes apply to the wire as you make them"
 msgstr "‮Changes apply to the wire as you make them‬"
 
 # machine: pseudo
+msgid "✓ Default saved for {type_id}"
+msgstr "‮✓ Default saved for {type_id}‬"
+
+# machine: pseudo
 msgid "Could not save the kind's default"
 msgstr "‮Could not save the kind's default‬"
+
+# machine: pseudo
+msgid "Loaded “{label}” onto the wire"
+msgstr "‮Loaded “{label}” onto the wire‬"
 
 # machine: pseudo
 msgid "Conduit"
@@ -3520,8 +3802,16 @@ msgid "Load selected preset"
 msgstr "‮Load selected preset‬"
 
 # machine: pseudo
+msgid "{value} mm"
+msgstr "‮{value} mm‬"
+
+# machine: pseudo
 msgid "Updating the wire…"
 msgstr "‮Updating the wire…‬"
+
+# machine: pseudo
+msgid "{lane} of {lanes} (drag it with the Route tool's Lane)"
+msgstr "‮{lane} of {lanes} (drag it with the Route tool's Lane)‬"
 
 # machine: pseudo
 msgid "✓ On the wire"
@@ -3540,12 +3830,24 @@ msgid "No 2D ports to bind"
 msgstr "‮No 2D ports to bind‬"
 
 # machine: pseudo
+msgid "Bound “{label}” to mesh"
+msgstr "‮Bound “{label}” to mesh‬"
+
+# machine: pseudo
 msgid "Select a bound 2D port first"
 msgstr "‮Select a bound 2D port first‬"
 
 # machine: pseudo
 msgid "That port has no 3D bind"
 msgstr "‮That port has no 3D bind‬"
+
+# machine: pseudo
+msgid "Cleared 3D bind for “{selected_handle_id}”"
+msgstr "‮Cleared 3D bind for “{selected_handle_id}”‬"
+
+# machine: pseudo
+msgid "Saved {ports}"
+msgstr "‮Saved {ports}‬"
 
 # machine: pseudo
 msgid "Graph ports"
@@ -3566,6 +3868,10 @@ msgstr "‮Forget where the selected port sits on the model‬"
 # machine: pseudo
 msgid "Suggest places"
 msgstr "‮Suggest places‬"
+
+# machine: pseudo
+msgid "Aim the selected socket along the model's {axis_name}"
+msgstr "‮Aim the selected socket along the model's {axis_name}‬"
 
 # machine: pseudo
 msgid "Flip"
@@ -3638,6 +3944,10 @@ msgstr ""
 "‮Points into the model: the run will leave further out. Aim it out (or Flip).‬"
 
 # machine: pseudo
+msgid "Out {axis_words} · {m} m straight before it bends"
+msgstr "‮Out {axis_words} · {m} m straight before it bends‬"
+
+# machine: pseudo
 msgid "Bind the port to the model first"
 msgstr "‮Bind the port to the model first‬"
 
@@ -3648,6 +3958,10 @@ msgstr "‮Fitting set‬"
 # machine: pseudo
 msgid "Every port already has a place"
 msgstr "‮Every port already has a place‬"
+
+# machine: pseudo
+msgid "{todo} placed: check them, then Save"
+msgstr "‮{todo} placed: check them, then Save‬"
 
 # machine: pseudo
 msgid "Select a bound port first"
@@ -3662,8 +3976,16 @@ msgid "No graph connections to update"
 msgstr "‮No graph connections to update‬"
 
 # machine: pseudo
+msgid "Updated {value}"
+msgstr "‮Updated {value}‬"
+
+# machine: pseudo
 msgid "Drop on the 3D preview to place"
 msgstr "‮Drop on the 3D preview to place‬"
+
+# machine: pseudo
+msgid "Could not load model '{model_id}'"
+msgstr "‮Could not load model '{model_id}'‬"
 
 # machine: pseudo
 msgid "Nothing to fix."
@@ -3686,6 +4008,10 @@ msgid "Night — stowed"
 msgstr "‮Night — stowed‬"
 
 # machine: pseudo
+msgid "{hour} · DNI {dni} W/m² · {thermal_kw}"
+msgstr "‮{hour} · DNI {dni} W/m² · {thermal_kw}‬"
+
+# machine: pseudo
 msgid ""
 "A concentrator only uses the direct beam; a flat solar panel would also take the diffuse sky."
 msgstr ""
@@ -3700,6 +4026,17 @@ msgid "Tracing the year…"
 msgstr "‮Tracing the year…‬"
 
 # machine: pseudo
+msgid "At {site_name}, from {covered}. Run it to see the heat month by month."
+msgstr ""
+"‮At {site_name}, from {covered}. Run it to see the heat month by month.‬"
+
+# machine: pseudo
+msgid ""
+"{annual_kwh} of heat a year · {run_hours} h running · direct beam {annual_dni} kWh/m² vs global {annual_ghi} kWh/m² (direct is {direct_share} of the light on the ground) · capacity factor {annual_kwh_2}"
+msgstr ""
+"‮{annual_kwh} of heat a year · {run_hours} h running · direct beam {annual_dni} kWh/m² vs global {annual_ghi} kWh/m² (direct is {direct_share} of the light on the ground) · capacity factor {annual_kwh_2}‬"
+
+# machine: pseudo
 msgid "Stopped."
 msgstr "‮Stopped.‬"
 
@@ -3710,6 +4047,16 @@ msgstr "‮Tick at least one number to vary.‬"
 # machine: pseudo
 msgid "Stop"
 msgstr "‮Stop‬"
+
+# machine: pseudo
+msgid ""
+"Better: {start} → {best} after {evals} designs. {changed}. Ctrl+Z puts it back."
+msgstr ""
+"‮Better: {start} → {best} after {evals} designs. {changed}. Ctrl+Z puts it back.‬"
+
+# machine: pseudo
+msgid "Nothing better within these ranges ({evals} designs tried)."
+msgstr "‮Nothing better within these ranges ({evals} designs tried).‬"
 
 # machine: pseudo
 msgid "Placing needs a world with the systems graph."
@@ -3726,6 +4073,10 @@ msgstr "‮Couldn't write the template.‬"
 # machine: pseudo
 msgid "Play the day"
 msgstr "‮Play the day‬"
+
+# machine: pseudo
+msgid "Searching… {evals} designs tried, best {best}"
+msgstr "‮Searching… {evals} designs tried, best {best}‬"
 
 # machine: pseudo
 msgid "Save design"
@@ -3865,6 +4216,12 @@ msgstr ""
 
 # machine: pseudo
 msgid ""
+"[color=#fff299]━[/color] sunlight in   {lands}   [color=#ff4033]━[/color] misses   [color=#8c8c99]━[/color] shaded or blocked   [color=#f24dd9]━[/color] off the end   [color=#ffe066]●[/color] the sun"
+msgstr ""
+"‮[color=#fff299]━[/color] sunlight in   {lands}   [color=#ff4033]━[/color] misses   [color=#8c8c99]━[/color] shaded or blocked   [color=#f24dd9]━[/color] off the end   [color=#ffe066]●[/color] the sun‬"
+
+# machine: pseudo
+msgid ""
 "Nothing on this concentrator moves (a fixed or level optic): there is nothing to drive."
 msgstr ""
 "‮Nothing on this concentrator moves (a fixed or level optic): there is nothing to drive.‬"
@@ -3906,6 +4263,12 @@ msgid ""
 "Multiplies the angle (e.g. steps per degree, or mm of actuator stroke per degree)"
 msgstr ""
 "‮Multiplies the angle (e.g. steps per degree, or mm of actuator stroke per degree)‬"
+
+# machine: pseudo
+msgid ""
+"Copied: input_number helpers for {chans} drives and an example automation."
+msgstr ""
+"‮Copied: input_number helpers for {chans} drives and an example automation.‬"
 
 # machine: pseudo
 msgid "Send to Home Assistant"
@@ -4022,6 +4385,10 @@ msgid "Apply"
 msgstr "‮Apply‬"
 
 # machine: pseudo
+msgid "{fname}  ·  {value}  ·  {linked} linked  ▸"
+msgstr "‮{fname}  ·  {value}  ·  {linked} linked  ▸‬"
+
+# machine: pseudo
 msgid "Loading…"
 msgstr "‮Loading…‬"
 
@@ -4034,12 +4401,20 @@ msgid "Loading CSV…"
 msgstr "‮Loading CSV…‬"
 
 # machine: pseudo
+msgid "Playing {speed}×"
+msgstr "‮Playing {speed}×‬"
+
+# machine: pseudo
 msgid "Paused"
 msgstr "‮Paused‬"
 
 # machine: pseudo
 msgid "Stopped"
 msgstr "‮Stopped‬"
+
+# machine: pseudo
+msgid "Loading CSV… {pct}%"
+msgstr "‮Loading CSV… {pct}%‬"
 
 # machine: pseudo
 msgid "(no file selected)"
@@ -4074,6 +4449,10 @@ msgstr "‮Could not write the wiring sheet.‬"
 # machine: pseudo
 msgid "No ports yet: Add port, then click the unit."
 msgstr "‮No ports yet: Add port, then click the unit.‬"
+
+# machine: pseudo
+msgid "{connector} on the {face}"
+msgstr "‮{connector} on the {face}‬"
 
 # machine: pseudo
 msgid "Every check passes."
@@ -4217,6 +4596,10 @@ msgid "Port removed."
 msgstr "‮Port removed.‬"
 
 # machine: pseudo
+msgid "Click a face of the unit to put the {id} there."
+msgstr "‮Click a face of the unit to put the {id} there.‬"
+
+# machine: pseudo
 msgid "Port moved."
 msgstr "‮Port moved.‬"
 
@@ -4239,6 +4622,12 @@ msgstr "‮Save the brief as Markdown and JSON.‬"
 # machine: pseudo
 msgid "No parts"
 msgstr "‮No parts‬"
+
+# machine: pseudo
+msgid ""
+"{mass_kg} · {strut_m} of {label} in {stock_pieces} stock lengths ({waste_pct} % waste) · {bolts} bolts{panels_m2}"
+msgstr ""
+"‮{mass_kg} · {strut_m} of {label} in {stock_pieces} stock lengths ({waste_pct} % waste) · {bolts} bolts{panels_m2}‬"
 
 # machine: pseudo
 msgid "Built-in designs stay."
@@ -4331,6 +4720,10 @@ msgstr "‮Parts (click to highlight)‬"
 # machine: pseudo
 msgid "Fabrication files"
 msgstr "‮Fabrication files‬"
+
+# machine: pseudo
+msgid "{spec} · {height_m} high · {floor_area_m2} floor · {mass_kg}"
+msgstr "‮{spec} · {height_m} high · {floor_area_m2} floor · {mass_kg}‬"
 
 # machine: pseudo
 msgid "Base solid"
@@ -4675,6 +5068,10 @@ msgid "Corner roundness"
 msgstr "‮Corner roundness‬"
 
 # machine: pseudo
+msgid "Rhombus type {z} (generators {z_2} apart)"
+msgstr "‮Rhombus type {z} (generators {z_2} apart)‬"
+
+# machine: pseudo
 msgid "Openings in"
 msgstr "‮Openings in‬"
 
@@ -4837,6 +5234,22 @@ msgid "Beds"
 msgstr "‮Beds‬"
 
 # machine: pseudo
+msgid "Glazing at {glazing_deg} for latitude {lat}."
+msgstr "‮Glazing at {glazing_deg} for latitude {lat}.‬"
+
+# machine: pseudo
+msgid "Panels at {pv_tilt} for latitude {lat}."
+msgstr "‮Panels at {pv_tilt} for latitude {lat}.‬"
+
+# machine: pseudo
+msgid "Saved {name}."
+msgstr "‮Saved {name}.‬"
+
+# machine: pseudo
+msgid "Could not place: {error}"
+msgstr "‮Could not place: {error}‬"
+
+# machine: pseudo
 msgid "Applied to the placed Earthship."
 msgstr "‮Applied to the placed Earthship.‬"
 
@@ -4941,8 +5354,22 @@ msgid "Connect Home Assistant first (Settings → Home Assistant)."
 msgstr "‮Connect Home Assistant first (Settings → Home Assistant).‬"
 
 # machine: pseudo
+msgid "Found {m} of {want} entities in Home Assistant{want_2}."
+msgstr "‮Found {m} of {want} entities in Home Assistant{want_2}.‬"
+
+# machine: pseudo
 msgid "None of this board's entities are in Home Assistant yet."
 msgstr "‮None of this board's entities are in Home Assistant yet.‬"
+
+# machine: pseudo
+msgid "Fetching {eid}…"
+msgstr "‮Fetching {eid}…‬"
+
+# machine: pseudo
+msgid ""
+"Compared {done} over the {selected} (the twin's ideal reading: the weather data at the board's spot, through this design's filters)."
+msgstr ""
+"‮Compared {done} over the {selected} (the twin's ideal reading: the weather data at the board's spot, through this design's filters).‬"
 
 # machine: pseudo
 msgid ""
@@ -4957,6 +5384,18 @@ msgstr "‮Not on the real board‬"
 # machine: pseudo
 msgid "Not enough readings from the real board over this span."
 msgstr "‮Not enough readings from the real board over this span.‬"
+
+# machine: pseudo
+msgid ""
+"Real − twin: {bias} {u} · typical gap {rmse} {u_2} · r {r} · {coverage} — {verdict}"
+msgstr ""
+"‮Real − twin: {bias} {u} · typical gap {rmse} {u_2} · r {r} · {coverage} — {verdict}‬"
+
+# machine: pseudo
+msgid ""
+"Calibration written into the YAML ({what}). Flash the board, then compare again."
+msgstr ""
+"‮Calibration written into the YAML ({what}). Flash the board, then compare again.‬"
 
 # machine: pseudo
 msgid "Board"
@@ -5003,6 +5442,16 @@ msgstr "‮what the board will report‬"
 # machine: pseudo
 msgid "Parts list"
 msgstr "‮Parts list‬"
+
+# machine: pseudo
+msgid ""
+"{label} — {p}\n"
+"{desc} · {supply}\n"
+"Click to add it to the board."
+msgstr ""
+"‮{label} — {p}‬\n"
+"‮{desc} · {supply}‬\n"
+"‮Click to add it to the board.‬"
 
 # machine: pseudo
 msgid "Nothing yet: click a part above."
@@ -5059,6 +5508,10 @@ msgid "Give its pins back to the tool"
 msgstr "‮Give its pins back to the tool‬"
 
 # machine: pseudo
+msgid "Remove {label}"
+msgstr "‮Remove {label}‬"
+
+# machine: pseudo
 msgid "Nothing is wired here. Drag a part's pin onto it to wire it yourself."
 msgstr ""
 "‮Nothing is wired here. Drag a part's pin onto it to wire it yourself.‬"
@@ -5077,6 +5530,14 @@ msgstr "‮Select it‬"
 
 # machine: pseudo
 msgid ""
+"3.3 V rail: {ma_3v3} of {reg_ma} mA (board + 3.3 V parts)\n"
+"5 V in: {ma_5v} mA total{usb_ma}"
+msgstr ""
+"‮3.3 V rail: {ma_3v3} of {reg_ma} mA (board + 3.3 V parts)‬\n"
+"‮5 V in: {ma_5v} mA total{usb_ma}‬"
+
+# machine: pseudo
+msgid ""
 "The twin reads the world at the site, now: the weather, sunlight and air quality where you stand, with each part's own accuracy and noise."
 msgstr ""
 "‮The twin reads the world at the site, now: the weather, sunlight and air quality where you stand, with each part's own accuracy and noise.‬"
@@ -5084,6 +5545,10 @@ msgstr ""
 # machine: pseudo
 msgid "fuel"
 msgstr "‮fuel‬"
+
+# machine: pseudo
+msgid "{battery_wh} / {battery_capacity} Wh"
+msgstr "‮{battery_wh} / {battery_capacity} Wh‬"
 
 # machine: pseudo
 msgid " EUC STATUS"
@@ -5128,6 +5593,14 @@ msgstr "‮1000 / 1000 Wh‬"
 # machine: pseudo
 msgid "Discard them all"
 msgstr "‮Discard them all‬"
+
+# machine: pseudo
+msgid "From AI tools ({value})"
+msgstr "‮From AI tools ({value})‬"
+
+# machine: pseudo
+msgid "Click again to delete “{t}”"
+msgstr "‮Click again to delete “{t}”‬"
 
 # machine: pseudo
 msgid "Compare sim with reality"
@@ -5186,6 +5659,10 @@ msgid "The span must end after it starts."
 msgstr "‮The span must end after it starts.‬"
 
 # machine: pseudo
+msgid "{duration}, simulated every {step}. Times are this site's clock."
+msgstr "‮{duration}, simulated every {step}. Times are this site's clock.‬"
+
+# machine: pseudo
 msgid "A"
 msgstr "‮A‬"
 
@@ -5219,6 +5696,16 @@ msgstr "‮B − A; the better side is marked‬"
 # machine: pseudo
 msgid "Scores"
 msgstr "‮Scores‬"
+
+# machine: pseudo
+msgid "{forks} in this world"
+msgstr "‮{forks} in this world‬"
+
+# machine: pseudo
+msgid ""
+"Editing fork: {fork_name} — your world is set aside and the clock is held."
+msgstr ""
+"‮Editing fork: {fork_name} — your world is set aside and the clock is held.‬"
 
 # machine: pseudo
 msgid "Discard changes"
@@ -5309,8 +5796,28 @@ msgid "Parked over the tool bay."
 msgstr "‮Parked over the tool bay.‬"
 
 # machine: pseudo
+msgid ""
+"{label} · {hh}:{hh_2}:{ts} · {act} · {tool} · {axes} · {t} of {dur_s}{arms}"
+msgstr ""
+"‮{label} · {hh}:{hh_2}:{ts} · {act} · {tool} · {axes} · {t} of {dur_s}{arms}‬"
+
+# machine: pseudo
+msgid ""
+"{sheets} of {sheet} · {utilization}% used\n"
+"Cut length {cut_ft} ft in {passes} · about {cut_min} on the router\n"
+"About {mass_kg} kg ({mass_kg_2} lb)"
+msgstr ""
+"‮{sheets} of {sheet} · {utilization}% used‬\n"
+"‮Cut length {cut_ft} ft in {passes} · about {cut_min} on the router‬\n"
+"‮About {mass_kg} kg ({mass_kg_2} lb)‬"
+
+# machine: pseudo
 msgid "Everything slots together and fits the sheets."
 msgstr "‮Everything slots together and fits the sheets.‬"
+
+# machine: pseudo
+msgid "{label} {name} · {units} · {notches}, {holes} · sheet {sheet}"
+msgstr "‮{label} {name} · {units} · {notches}, {holes} · sheet {sheet}‬"
 
 # machine: pseudo
 msgid "Saved design"
@@ -5614,9 +6121,21 @@ msgstr "‮Bed‬"
 
 # machine: pseudo
 msgid ""
+"${usd} · {kg} kg · {extrusion_m} m of extrusion in {pieces} · {motors} · {label}"
+msgstr ""
+"‮${usd} · {kg} kg · {extrusion_m} m of extrusion in {pieces} · {motors} · {label}‬"
+
+# machine: pseudo
+msgid ""
 "A = X + Z and B = X − Z: the belts share X and Z, so a vertical move is as fast as a horizontal one and there is no lead screw to wobble. Y is the bed."
 msgstr ""
 "‮A = X + Z and B = X − Z: the belts share X and Z, so a vertical move is as fast as a horizontal one and there is no lead screw to wobble. Y is the bed.‬"
+
+# machine: pseudo
+msgid ""
+"Each tower carriage sits at z + √(L² − d²), d its horizontal distance to the tool: all three move for every move, and the farther the tool from a tower the lower that carriage. Arms {arm_mm} mm, delta radius {delta_radius_mm} mm, reach {reach_mm} mm from the centre at {delta_min_arm_deg}° minimum arm angle."
+msgstr ""
+"‮Each tower carriage sits at z + √(L² − d²), d its horizontal distance to the tool: all three move for every move, and the farther the tool from a tower the lower that carriage. Arms {arm_mm} mm, delta radius {delta_radius_mm} mm, reach {reach_mm} mm from the centre at {delta_min_arm_deg}° minimum arm angle.‬"
 
 # machine: pseudo
 msgid ""
@@ -5635,6 +6154,22 @@ msgid ""
 "One motor per axis. The head moves in X along the beam and in Y with the beam on the top rails; only the bed moves in Z, dropping a layer at a time."
 msgstr ""
 "‮One motor per axis. The head moves in X along the beam and in Y with the beam on the top rails; only the bed moves in Z, dropping a layer at a time.‬"
+
+# machine: pseudo
+msgid "No motion in this program: {error}"
+msgstr "‮No motion in this program: {error}‬"
+
+# machine: pseudo
+msgid ""
+"{gcode_name} · {sim_t} of {total} · move {i} of {n} (line {line})\n"
+"X {pos}  Y {y}  Z {z} mm · {extruding} {value} mm/s (asked {feed}) · {layers}\n"
+"{motor_lines}\n"
+"{accel_limited_share} · peak {peak_step_hz} steps/s on {motors} · {material}"
+msgstr ""
+"‮{gcode_name} · {sim_t} of {total} · move {i} of {n} (line {line})‬\n"
+"‮X {pos}  Y {y}  Z {z} mm · {extruding} {value} mm/s (asked {feed}) · {layers}‬\n"
+"‮{motor_lines}‬\n"
+"‮{accel_limited_share} · peak {peak_step_hz} steps/s on {motors} · {material}‬"
 
 # machine: pseudo
 msgid "Place the machine first, then send it a program."
@@ -5825,6 +6360,10 @@ msgid "Files"
 msgstr "‮Files‬"
 
 # machine: pseudo
+msgid "{spec} · {volume_l} L · {mass_kg} kg · ${usd} · {watts} W"
+msgstr "‮{spec} · {volume_l} L · {mass_kg} kg · ${usd} · {watts} W‬"
+
+# machine: pseudo
 msgid " mm"
 msgstr "‮ mm‬"
 
@@ -5943,10 +6482,26 @@ msgid "Show collisions"
 msgstr "‮Show collisions‬"
 
 # machine: pseudo
+msgid "{mid} · moved {dv} mm{mirrored}"
+msgstr "‮{mid} · moved {dv} mm{mirrored}‬"
+
+# machine: pseudo
+msgid "Place: {tool_params} — click where it fastens"
+msgstr "‮Place: {tool_params} — click where it fastens‬"
+
+# machine: pseudo
+msgid "Place: {tool_params} — nothing it fastens to under the pointer"
+msgstr "‮Place: {tool_params} — nothing it fastens to under the pointer‬"
+
+# machine: pseudo
 msgid ""
 "Click a module in the view to pick it, drag it to move it as one, double-click to open it."
 msgstr ""
 "‮Click a module in the view to pick it, drag it to move it as one, double-click to open it.‬"
+
+# machine: pseudo
+msgid "Inside the {ctx}: click a part or sub-module; Esc steps back out."
+msgstr "‮Inside the {ctx}: click a part or sub-module; Esc steps back out.‬"
 
 # machine: pseudo
 msgid "Part"
@@ -5981,12 +6536,26 @@ msgid "Height: follows the belt's plane (spacer stack set for you)"
 msgstr "‮Height: follows the belt's plane (spacer stack set for you)‬"
 
 # machine: pseudo
+msgid "Mirrored with the {tw}"
+msgstr "‮Mirrored with the {tw}‬"
+
+# machine: pseudo
 msgid "Unlink"
 msgstr "‮Unlink‬"
 
 # machine: pseudo
 msgid "Edit this side on its own from now on"
 msgstr "‮Edit this side on its own from now on‬"
+
+# machine: pseudo
+msgid ""
+"{ref} — click, then click where it fastens. R turns it, Shift keeps the tool, Esc stops."
+msgstr ""
+"‮{ref} — click, then click where it fastens. R turns it, Shift keeps the tool, Esc stops.‬"
+
+# machine: pseudo
+msgid "Mirrored with the {tm}: moves follow on the other side."
+msgstr "‮Mirrored with the {tm}: moves follow on the other side.‬"
 
 # machine: pseudo
 msgid "Pick this sub-module"
@@ -5999,6 +6568,10 @@ msgstr "‮Pick this part‬"
 # machine: pseudo
 msgid "Double-click: pick its parts one by one"
 msgstr "‮Double-click: pick its parts one by one‬"
+
+# machine: pseudo
+msgid "Del: every part in it{is_empty}"
+msgstr "‮Del: every part in it{is_empty}‬"
 
 # machine: pseudo
 msgid "Entering world…"
@@ -6015,6 +6588,18 @@ msgstr "‮Descending from orbit…‬"
 # machine: pseudo
 msgid "Preparing the solar zones…"
 msgstr "‮Preparing the solar zones…‬"
+
+# machine: pseudo
+msgid ""
+"Zone {zid} ({labels}) — {zid_2}\n"
+"Click to inspect this Solar Energy Zone and its reference cities."
+msgstr ""
+"‮Zone {zid} ({labels}) — {zid_2}‬\n"
+"‮Click to inspect this Solar Energy Zone and its reference cities.‬"
+
+# machine: pseudo
+msgid "Worlds ({all_worlds})"
+msgstr "‮Worlds ({all_worlds})‬"
 
 # machine: pseudo
 msgid ""
@@ -6055,8 +6640,24 @@ msgid "Sunlight on the Moon"
 msgstr "‮Sunlight on the Moon‬"
 
 # machine: pseudo
+msgid ""
+"The Moon, {moon_distance_km} km away · drag to turn · wheel to zoom · click a point"
+msgstr ""
+"‮The Moon, {moon_distance_km} km away · drag to turn · wheel to zoom · click a point‬"
+
+# machine: pseudo
 msgid "On the Moon"
 msgstr "‮On the Moon‬"
+
+# machine: pseudo
+msgid ""
+"Selenographic; the prime meridian faces the Earth. {name}, {lit} % lit, {age_days} days old, {jd} km from Earth."
+msgstr ""
+"‮Selenographic; the prime meridian faces the Earth. {name}, {lit} % lit, {age_days} days old, {jd} km from Earth.‬"
+
+# machine: pseudo
+msgid "{w} W/m² of sunlight here · Sun {elev}"
+msgstr "‮{w} W/m² of sunlight here · Sun {elev}‬"
 
 # machine: pseudo
 msgid "A lunar day is 29.5 Earth days: the sunlight map turns once a month."
@@ -6075,12 +6676,24 @@ msgid "Built-in map scene — starts empty or with a starter system."
 msgstr "‮Built-in map scene — starts empty or with a starter system.‬"
 
 # machine: pseudo
+msgid "World name (default: {display_name})"
+msgstr "‮World name (default: {display_name})‬"
+
+# machine: pseudo
 msgid "Click a city below or anywhere on the globe to pick a site."
 msgstr "‮Click a city below or anywhere on the globe to pick a site.‬"
 
 # machine: pseudo
+msgid "{zd} kWh/m²/day band"
+msgstr "‮{zd} kWh/m²/day band‬"
+
+# machine: pseudo
 msgid "Solar data unavailable"
 msgstr "‮Solar data unavailable‬"
+
+# machine: pseudo
+msgid "{label}{is_empty} · {g} kWh/m²/day of sun"
+msgstr "‮{label}{is_empty} · {g} kWh/m²/day of sun‬"
 
 # machine: pseudo
 msgid "Sister:"
@@ -6091,8 +6704,46 @@ msgid "Peers:"
 msgstr "‮Peers:‬"
 
 # machine: pseudo
+msgid ""
+"{nm}, {ctry} ({cg} kWh/m²/d){is_sister}\n"
+"Click to fly the globe there."
+msgstr ""
+"‮{nm}, {ctry} ({cg} kWh/m²/d){is_sister}‬\n"
+"‮Click to fly the globe there.‬"
+
+# machine: pseudo
 msgid "Solar atlas: asking…"
 msgstr "‮Solar atlas: asking…‬"
+
+# machine: pseudo
+msgid ""
+"The Moon · {moon_distance_km} km · {name}, {lit} % lit — click to go there"
+msgstr ""
+"‮The Moon · {moon_distance_km} km · {name}, {lit} % lit — click to go there‬"
+
+# machine: pseudo
+msgid "The Earth · {moon_distance_km} km — click to go back"
+msgstr "‮The Earth · {moon_distance_km} km — click to go back‬"
+
+# machine: pseudo
+msgid "Altitude {alt_text}"
+msgstr "‮Altitude {alt_text}‬"
+
+# machine: pseudo
+msgid "{lon}{ztxt}{lon_2} · altitude {alt_text}"
+msgstr "‮{lon}{ztxt}{lon_2} · altitude {alt_text}‬"
+
+# machine: pseudo
+msgid "Could not create the world (error {err})."
+msgstr "‮Could not create the world (error {err}).‬"
+
+# machine: pseudo
+msgid "Could not open that world (error {err0})."
+msgstr "‮Could not open that world (error {err0}).‬"
+
+# machine: pseudo
+msgid "Could not open that world (error {err})."
+msgstr "‮Could not open that world (error {err}).‬"
 
 # machine: pseudo
 msgid "Flying in…"
@@ -6161,6 +6812,10 @@ msgstr "‮Your worlds‬"
 # machine: pseudo
 msgid "Built-in maps:"
 msgstr "‮Built-in maps:‬"
+
+# machine: pseudo
+msgid "Start a new world on {display_name}"
+msgstr "‮Start a new world on {display_name}‬"
 
 # machine: pseudo
 msgid "World name"
@@ -6277,6 +6932,14 @@ msgstr ""
 "‮Play the year: 1 hour, 1 day, then 7 days per second. Click again to pause (Space).‬"
 
 # machine: pseudo
+msgid ""
+"Moon\n"
+"{jd} km · {name} {lit} %"
+msgstr ""
+"‮Moon‬\n"
+"‮{jd} km · {name} {lit} %‬"
+
+# machine: pseudo
 msgid "Applied to the placed greenhouse."
 msgstr "‮Applied to the placed greenhouse.‬"
 
@@ -6287,6 +6950,20 @@ msgstr "‮Run the year‬"
 # machine: pseudo
 msgid "Step this design through a year of weather at the site, hour by hour"
 msgstr "‮Step this design through a year of weather at the site, hour by hour‬"
+
+# machine: pseudo
+msgid "Running a year at {where}…"
+msgstr "‮Running a year at {where}…‬"
+
+# machine: pseudo
+msgid "Running a year… {progress}"
+msgstr "‮Running a year… {progress}‬"
+
+# machine: pseudo
+msgid ""
+"A year at {where}, {src}. Coldest hour inside {coldest_in} °C (outside {coldest_out} °C), hottest {hottest_in} °C."
+msgstr ""
+"‮A year at {where}, {src}. Coldest hour inside {coldest_in} °C (outside {coldest_out} °C), hottest {hottest_in} °C.‬"
 
 # machine: pseudo
 msgid "The year"
@@ -6460,6 +7137,18 @@ msgid "Loading your entities…"
 msgstr "‮Loading your entities…‬"
 
 # machine: pseudo
+msgid ""
+"{name}\n"
+"{eid}\n"
+"now: {val}\n"
+"Click to add it as a timeline track."
+msgstr ""
+"‮{name}‬\n"
+"‮{eid}‬\n"
+"‮now: {val}‬\n"
+"‮Click to add it as a timeline track.‬"
+
+# machine: pseudo
 msgid "Search by name or entity id…"
 msgstr "‮Search by name or entity id…‬"
 
@@ -6496,6 +7185,10 @@ msgid "Off keeps the link but stops it driving or recording."
 msgstr "‮Off keeps the link but stops it driving or recording.‬"
 
 # machine: pseudo
+msgid "Unit: {tunit} → {tunit_2}"
+msgstr "‮Unit: {tunit} → {tunit_2}‬"
+
+# machine: pseudo
 msgid "Multiply the reading (after the unit conversion). 1 = as is."
 msgstr "‮Multiply the reading (after the unit conversion). 1 = as is.‬"
 
@@ -6518,6 +7211,18 @@ msgstr ""
 # machine: pseudo
 msgid "Loading the entity list…"
 msgstr "‮Loading the entity list…‬"
+
+# machine: pseudo
+msgid ""
+"{name}\n"
+"{eid}\n"
+"state: {val}{device_class}\n"
+"Click to link it to: {label}"
+msgstr ""
+"‮{name}‬\n"
+"‮{eid}‬\n"
+"‮state: {val}{device_class}‬\n"
+"‮Click to link it to: {label}‬"
 
 # machine: pseudo
 msgid ""
@@ -6544,6 +7249,10 @@ msgstr "‮Linked only‬"
 # machine: pseudo
 msgid "Don't link a node"
 msgstr "‮Don't link a node‬"
+
+# machine: pseudo
+msgid "Make {plan}"
+msgstr "‮Make {plan}‬"
 
 # machine: pseudo
 msgid "Device presets"
@@ -6638,6 +7347,14 @@ msgid "Sure?"
 msgstr "‮Sure?‬"
 
 # machine: pseudo
+msgid "Will connect to {url}"
+msgstr "‮Will connect to {url}‬"
+
+# machine: pseudo
+msgid "Token looks right ({t} characters)."
+msgstr "‮Token looks right ({t} characters).‬"
+
+# machine: pseudo
 msgid "Home Assistant instance"
 msgstr "‮Home Assistant instance‬"
 
@@ -6645,6 +7362,10 @@ msgstr "‮Home Assistant instance‬"
 msgid "Saved Home Assistant instances. Each keeps its own address and token."
 msgstr ""
 "‮Saved Home Assistant instances. Each keeps its own address and token.‬"
+
+# machine: pseudo
+msgid "Previewing {icon} {label} · {severity} · {remain} — click to clear"
+msgstr "‮Previewing {icon} {label} · {severity} · {remain} — click to clear‬"
 
 # machine: pseudo
 msgid "HEALTH"
@@ -6693,8 +7414,16 @@ msgid "Tips"
 msgstr "‮Tips‬"
 
 # machine: pseudo
+msgid "Show {title}"
+msgstr "‮Show {title}‬"
+
+# machine: pseudo
 msgid "almost done"
 msgstr "‮almost done‬"
+
+# machine: pseudo
+msgid "about {eta_s} left"
+msgstr "‮about {eta_s} left‬"
 
 # machine: pseudo
 msgid "Rendering simulation"
@@ -6713,6 +7442,10 @@ msgid ""
 "Siphon elevation — the pond's surface, the dip tube, the runner in its pipe, the draft · drag to orbit · wheel to zoom"
 msgstr ""
 "‮Siphon elevation — the pond's surface, the dip tube, the runner in its pipe, the draft · drag to orbit · wheel to zoom‬"
+
+# machine: pseudo
+msgid "{ride_text} / Charge {vehicle_name}"
+msgstr "‮{ride_text} / Charge {vehicle_name}‬"
 
 # machine: pseudo
 msgid "[O]"
@@ -6827,6 +7560,18 @@ msgid "The empty unit itself, as cargo"
 msgstr "‮The empty unit itself, as cargo‬"
 
 # machine: pseudo
+msgid "Saved {label_or_default}."
+msgstr "‮Saved {label_or_default}.‬"
+
+# machine: pseudo
+msgid "Saved {label_or_default} to your units."
+msgstr "‮Saved {label_or_default} to your units.‬"
+
+# machine: pseudo
+msgid "Deleted {name_edit}."
+msgstr "‮Deleted {name_edit}.‬"
+
+# machine: pseudo
 msgid "Process recipes"
 msgstr "‮Process recipes‬"
 
@@ -6837,6 +7582,10 @@ msgstr "‮what the machines run‬"
 # machine: pseudo
 msgid "🔨 Assemble & place"
 msgstr "‮🔨 Assemble & place‬"
+
+# machine: pseudo
+msgid "👷 ~{total_s} person-h · crew up to {max_crew} · {phases}"
+msgstr "‮👷 ~{total_s} person-h · crew up to {max_crew} · {phases}‬"
 
 # machine: pseudo
 msgid "👷 Assemble with crew…"
@@ -6885,6 +7634,20 @@ msgid "Open the wiring diagram of this chain"
 msgstr "‮Open the wiring diagram of this chain‬"
 
 # machine: pseudo
+msgid "{units} (you are designing this one)"
+msgstr "‮{units} (you are designing this one)‬"
+
+# machine: pseudo
+msgid ""
+"{units}\n"
+"Open {k} in its lab\n"
+"{name}"
+msgstr ""
+"‮{units}‬\n"
+"‮Open {k} in its lab‬\n"
+"‮{name}‬"
+
+# machine: pseudo
 msgid "Not on the graph yet: place it to join a solar chain"
 msgstr "‮Not on the graph yet: place it to join a solar chain‬"
 
@@ -6897,8 +7660,20 @@ msgid "Open every section"
 msgstr "‮Open every section‬"
 
 # machine: pseudo
+msgid "No setting matches “{query}”."
+msgstr "‮No setting matches “{query}”.‬"
+
+# machine: pseudo
 msgid "TERRAIN IMAGERY"
 msgstr "‮TERRAIN IMAGERY‬"
+
+# machine: pseudo
+msgid "As saved ({saved_name}) · {vs} GPU"
+msgstr "‮As saved ({saved_name}) · {vs} GPU‬"
+
+# machine: pseudo
+msgid "My quality ({local_name}) · {vl} GPU"
+msgstr "‮My quality ({local_name}) · {vl} GPU‬"
 
 # machine: pseudo
 msgid "Light limit reached"
@@ -6997,6 +7772,10 @@ msgstr ""
 "‮Click a surface: selected spots turn to face it; selected movers centre their sweep on it‬"
 
 # machine: pseudo
+msgid "New {kind}:"
+msgstr "‮New {kind}:‬"
+
+# machine: pseudo
 msgid "Redone"
 msgstr "‮Redone‬"
 
@@ -7007,6 +7786,16 @@ msgstr "‮Undone‬"
 # machine: pseudo
 msgid "Place a light to start a style."
 msgstr "‮Place a light to start a style.‬"
+
+# machine: pseudo
+msgid ""
+"{name_btn} — {kind}, {uses}\n"
+"Click: select every light using this style\n"
+"Double-click: rename"
+msgstr ""
+"‮{name_btn} — {kind}, {uses}‬\n"
+"‮Click: select every light using this style‬\n"
+"‮Double-click: rename‬"
 
 # machine: pseudo
 msgid "Rename style"
@@ -7115,6 +7904,10 @@ msgid "Show bulb"
 msgstr "‮Show bulb‬"
 
 # machine: pseudo
+msgid "Finish ({string_pts})"
+msgstr "‮Finish ({string_pts})‬"
+
+# machine: pseudo
 msgid "Click any surface on the 3D model to place an omni light (RMB orbits)."
 msgstr ""
 "‮Click any surface on the 3D model to place an omni light (RMB orbits).‬"
@@ -7122,6 +7915,12 @@ msgstr ""
 # machine: pseudo
 msgid "Click a surface on the 3D model to place an aimed spot light."
 msgstr "‮Click a surface on the 3D model to place an aimed spot light.‬"
+
+# machine: pseudo
+msgid ""
+"Click points on the 3D model to pin a string ({string_pts} placed) · Finish or double-click ends it."
+msgstr ""
+"‮Click points on the 3D model to pin a string ({string_pts} placed) · Finish or double-click ends it.‬"
 
 # machine: pseudo
 msgid ""
@@ -7146,6 +7945,10 @@ msgstr ""
 # machine: pseudo
 msgid "Frame the model"
 msgstr "‮Frame the model‬"
+
+# machine: pseudo
+msgid "Saved {ids} onto the prop."
+msgstr "‮Saved {ids} onto the prop.‬"
 
 # machine: pseudo
 msgid "Build guide"
@@ -7174,6 +7977,10 @@ msgid "Write the whole guide as a JSON file"
 msgstr "‮Write the whole guide as a JSON file‬"
 
 # machine: pseudo
+msgid "📦 Folded: {spec} · {mass_kg}"
+msgstr "‮📦 Folded: {spec} · {mass_kg}‬"
+
+# machine: pseudo
 msgid "Bill of Materials"
 msgstr "‮Bill of Materials‬"
 
@@ -7199,6 +8006,16 @@ msgstr "‮Coverings & Cut Files‬"
 
 # machine: pseudo
 msgid ""
+"Per structure — the design holds {copies}, so cut every piece {copies_2} times."
+msgstr ""
+"‮Per structure — the design holds {copies}, so cut every piece {copies_2} times.‬"
+
+# machine: pseudo
+msgid "Wrote {dir}"
+msgstr "‮Wrote {dir}‬"
+
+# machine: pseudo
+msgid ""
 "One full-scale SVG per wall, table and the floor deck (1 unit = 1 inch), a pattern per fabric band, and the tarp layout."
 msgstr ""
 "‮One full-scale SVG per wall, table and the floor deck (1 unit = 1 inch), a pattern per fabric band, and the tarp layout.‬"
@@ -7216,8 +8033,18 @@ msgid "Assembly Sequence"
 msgstr "‮Assembly Sequence‬"
 
 # machine: pseudo
+msgid "{label}  ({per_module_pieces} per module)"
+msgstr "‮{label}  ({per_module_pieces} per module)‬"
+
+# machine: pseudo
 msgid "Build Sequence"
 msgstr "‮Build Sequence‬"
+
+# machine: pseudo
+msgid ""
+"{steps} ({reps} shown — identical repeats folded){generated}. Play them in the Lab's Steps dock."
+msgstr ""
+"‮{steps} ({reps} shown — identical repeats folded){generated}. Play them in the Lab's Steps dock.‬"
 
 # machine: pseudo
 msgid "Crew Plan"
@@ -7244,12 +8071,24 @@ msgid "Delete this part"
 msgstr "‮Delete this part‬"
 
 # machine: pseudo
+msgid "{label} · across {crossoffset}\""
+msgstr "‮{label} · across {crossoffset}\"‬"
+
+# machine: pseudo
+msgid "{label} · offset {posassembled}\"{suffix}"
+msgstr "‮{label} · offset {posassembled}\"{suffix}‬"
+
+# machine: pseudo
 msgid "The bracket anchors this joint — it cannot be deleted."
 msgstr "‮The bracket anchors this joint — it cannot be deleted.‬"
 
 # machine: pseudo
 msgid "Hardware detail"
 msgstr "‮Hardware detail‬"
+
+# machine: pseudo
+msgid "Edit the {id} stack"
+msgstr "‮Edit the {id} stack‬"
 
 # machine: pseudo
 msgid "In structure"
@@ -7304,6 +8143,18 @@ msgstr "‮— preset —‬"
 # machine: pseudo
 msgid "Assembly & spacing"
 msgstr "‮Assembly & spacing‬"
+
+# machine: pseudo
+msgid "{axis} axis"
+msgstr "‮{axis} axis‬"
+
+# machine: pseudo
+msgid "+ Add part to {axis}"
+msgstr "‮+ Add part to {axis}‬"
+
+# machine: pseudo
+msgid "{type} · {permodule}/module · ${cost}"
+msgstr "‮{type} · {permodule}/module · ${cost}‬"
 
 # machine: pseudo
 msgid ""
@@ -7410,6 +8261,10 @@ msgstr "‮Lift (in)‬"
 # machine: pseudo
 msgid "Opacity"
 msgstr "‮Opacity‬"
+
+# machine: pseudo
+msgid "Span {value}"
+msgstr "‮Span {value}‬"
 
 # machine: pseudo
 msgid "Lower band"
@@ -7588,6 +8443,18 @@ msgstr "‮Load‬"
 # machine: pseudo
 msgid "No population running — load a map first."
 msgstr "‮No population running — load a map first.‬"
+
+# machine: pseudo
+msgid "Couldn't place the kit crate — {error}"
+msgstr "‮Couldn't place the kit crate — {error}‬"
+
+# machine: pseudo
+msgid "The crew can't take it — {error}."
+msgstr "‮The crew can't take it — {error}.‬"
+
+# machine: pseudo
+msgid "Animating — {anim_direction}"
+msgstr "‮Animating — {anim_direction}‬"
 
 # machine: pseudo
 msgid "Idle"
@@ -7782,8 +8649,18 @@ msgid "Off — a single structure."
 msgstr "‮Off — a single structure.‬"
 
 # machine: pseudo
+msgid ""
+"{visible_count} drawn ({slots} planned, slots 0–{slots_2}) · ring radius {radius} · pattern across {max_rad}"
+msgstr ""
+"‮{visible_count} drawn ({slots} planned, slots 0–{slots_2}) · ring radius {radius} · pattern across {max_rad}‬"
+
+# machine: pseudo
 msgid "No steps"
 msgstr "‮No steps‬"
+
+# machine: pseudo
+msgid "Step {value} / {steps}{rep} — {title}"
+msgstr "‮Step {value} / {steps}{rep} — {title}‬"
 
 # machine: pseudo
 msgid "Build steps"
@@ -7828,6 +8705,10 @@ msgstr "‮Duration‬"
 # machine: pseudo
 msgid "Delete this step"
 msgstr "‮Delete this step‬"
+
+# machine: pseudo
+msgid "{steps} · {steps_2} shown · {secs} s{dirty}"
+msgstr "‮{steps} · {steps_2} shown · {secs} s{dirty}‬"
 
 # machine: pseudo
 msgid "StarShade queued — create or start a map to place it."
@@ -7900,6 +8781,10 @@ msgid "Could not copy that world."
 msgstr "‮Could not copy that world.‬"
 
 # machine: pseudo
+msgid "Copied — “{copy}” is an independent world."
+msgstr "‮Copied — “{copy}” is an independent world.‬"
+
+# machine: pseudo
 msgid "No worlds yet."
 msgstr "‮No worlds yet.‬"
 
@@ -7922,6 +8807,10 @@ msgstr "‮Show me around‬"
 # machine: pseudo
 msgid "Pick a place on the map, search an address, or enter coordinates."
 msgstr "‮Pick a place on the map, search an address, or enter coordinates.‬"
+
+# machine: pseudo
+msgid "World name (default: {label})"
+msgstr "‮World name (default: {label})‬"
 
 # machine: pseudo
 msgid ""
@@ -8050,6 +8939,34 @@ msgid "Where the node is now (its home in brackets)"
 msgstr "‮Where the node is now (its home in brackets)‬"
 
 # machine: pseudo
+msgid "Set {which}"
+msgstr "‮Set {which}‬"
+
+# machine: pseudo
+msgid "Capture the current jog pose as the soft {which}"
+msgstr "‮Capture the current jog pose as the soft {which}‬"
+
+# machine: pseudo
+msgid "{along}  (home {spinbox})"
+msgstr "‮{along}  (home {spinbox})‬"
+
+# machine: pseudo
+msgid "{key} min ← {along}"
+msgstr "‮{key} min ← {along}‬"
+
+# machine: pseudo
+msgid "{key} max ← {along}"
+msgstr "‮{key} max ← {along}‬"
+
+# machine: pseudo
+msgid "{key} home ← {along}"
+msgstr "‮{key} home ← {along}‬"
+
+# machine: pseudo
+msgid "Auto-detected {found}"
+msgstr "‮Auto-detected {found}‬"
+
+# machine: pseudo
 msgid "Saved. Applied to placed machines of this model."
 msgstr "‮Saved. Applied to placed machines of this model.‬"
 
@@ -8060,6 +8977,14 @@ msgstr "‮the node that cuts or prints‬"
 # machine: pseudo
 msgid "Mars College Credits: 0"
 msgstr "‮Mars College Credits: 0‬"
+
+# machine: pseudo
+msgid "Another {credits_per_fire} Mars College Credits!"
+msgstr "‮Another {credits_per_fire} Mars College Credits!‬"
+
+# machine: pseudo
+msgid "Mars College Credits: {total_credits}"
+msgstr "‮Mars College Credits: {total_credits}‬"
 
 # machine: pseudo
 msgid "Filter materials…"
@@ -8154,8 +9079,24 @@ msgid "Upload…"
 msgstr "‮Upload…‬"
 
 # machine: pseudo
+msgid "Remove uploaded {slot_id} map"
+msgstr "‮Remove uploaded {slot_id} map‬"
+
+# machine: pseudo
+msgid "{label}  ·  {live_n} live surface{live_n_2} in world"
+msgstr "‮{label}  ·  {live_n} live surface{live_n_2} in world‬"
+
+# machine: pseudo
 msgid "Derived from albedo"
 msgstr "‮Derived from albedo‬"
+
+# machine: pseudo
+msgid "{label}  ·  {live_n} live surface{live_n_2}"
+msgstr "‮{label}  ·  {live_n} live surface{live_n_2}‬"
+
+# machine: pseudo
+msgid "Upload {slot} texture for {selected_id}"
+msgstr "‮Upload {slot} texture for {selected_id}‬"
 
 # machine: pseudo
 msgid ""
@@ -8204,6 +9145,10 @@ msgid "Data corrections"
 msgstr "‮Data corrections‬"
 
 # machine: pseudo
+msgid "Saved per map → {file}  ·  valley index {tpi_m} m"
+msgstr "‮Saved per map → {file}  ·  valley index {tpi_m} m‬"
+
+# machine: pseudo
 msgid "— saved looks —"
 msgstr "‮— saved looks —‬"
 
@@ -8222,6 +9167,10 @@ msgstr "‮Count‬"
 # machine: pseudo
 msgid "How many nights this rule fires over the loaded weather year."
 msgstr "‮How many nights this rule fires over the loaded weather year.‬"
+
+# machine: pseudo
+msgid "{key} bound — blank = no limit"
+msgstr "‮{key} bound — blank = no limit‬"
 
 # machine: pseudo
 msgid ""
@@ -8270,12 +9219,32 @@ msgid "[color=#ef4444]Microclimate service not loaded.[/color]"
 msgstr "‮[color=#ef4444]Microclimate service not loaded.[/color]‬"
 
 # machine: pseudo
+msgid "Saved {user_path} — choose a copy location…"
+msgstr "‮Saved {user_path} — choose a copy location…‬"
+
+# machine: pseudo
 msgid "Save GRBL…"
 msgstr "‮Save GRBL…‬"
 
 # machine: pseudo
+msgid "Could not save {path}"
+msgstr "‮Could not save {path}‬"
+
+# machine: pseudo
+msgid "GRBL exported → {path}"
+msgstr "‮GRBL exported → {path}‬"
+
+# machine: pseudo
 msgid "Select a closed room first"
 msgstr "‮Select a closed room first‬"
+
+# machine: pseudo
+msgid "Doorway added (lintel {lintel_mm} mm)"
+msgstr "‮Doorway added (lintel {lintel_mm} mm)‬"
+
+# machine: pseudo
+msgid "Cleared {value} doorway{value_2}"
+msgstr "‮Cleared {value} doorway{value_2}‬"
 
 # machine: pseudo
 msgid "No graph view — cannot place"
@@ -8441,6 +9410,12 @@ msgid "Meshing…"
 msgstr "‮Meshing…‬"
 
 # machine: pseudo
+msgid ""
+"{island_count} · gap {shell_gap_mm} mm · {layer_count} · {fill_name} · {path_length_mm} m · ~{volume_mm3} L · {est_time_hr}"
+msgstr ""
+"‮{island_count} · gap {shell_gap_mm} mm · {layer_count} · {fill_name} · {path_length_mm} m · ~{volume_mm3} L · {est_time_hr}‬"
+
+# machine: pseudo
 msgid "Solid-layer preview ready — print, export, or place"
 msgstr "‮Solid-layer preview ready — print, export, or place‬"
 
@@ -8547,6 +9522,14 @@ msgid "Monitor nickname"
 msgstr "‮Monitor nickname‬"
 
 # machine: pseudo
+msgid "● Open ({is_monitor_fullscreen})"
+msgstr "‮● Open ({is_monitor_fullscreen})‬"
+
+# machine: pseudo
+msgid "Saved → Screen {matched_scr}{is_fullscreen}"
+msgstr "‮Saved → Screen {matched_scr}{is_fullscreen}‬"
+
+# machine: pseudo
 msgid "Unplaced — launches draggable"
 msgstr "‮Unplaced — launches draggable‬"
 
@@ -8568,10 +9551,22 @@ msgstr ""
 "‮Pins the top window control bar and enlarges buttons for finger taps.‬"
 
 # machine: pseudo
+msgid "Changes waiting for you ({review})"
+msgstr "‮Changes waiting for you ({review})‬"
+
+# machine: pseudo
 msgid ""
 "Alt+Y accept · Alt+N decline the oldest · Esc frees the cursor to click"
 msgstr ""
 "‮Alt+Y accept · Alt+N decline the oldest · Esc frees the cursor to click‬"
+
+# machine: pseudo
+msgid "… and {max_cards}"
+msgstr "‮… and {max_cards}‬"
+
+# machine: pseudo
+msgid "• … and {lines}"
+msgstr "‮• … and {lines}‬"
 
 # machine: pseudo
 msgid "Accept this player's changes from now on without asking"
@@ -8584,6 +9579,10 @@ msgstr "‮Message… (Enter send · Esc cancel)‬"
 # machine: pseudo
 msgid "No community imported yet."
 msgstr "‮No community imported yet.‬"
+
+# machine: pseudo
+msgid "Loaded {name} — edit and re-create to publish an update."
+msgstr "‮Loaded {name} — edit and re-create to publish an update.‬"
 
 # machine: pseudo
 msgid "Discord sign-in unavailable in this build"
@@ -8633,6 +9632,10 @@ msgid "Security settings applied"
 msgstr "‮Security settings applied‬"
 
 # machine: pseudo
+msgid "Minted friend key (copied): {key}"
+msgstr "‮Minted friend key (copied): {key}‬"
+
+# machine: pseudo
 msgid "Join code refreshed — share the new code"
 msgstr "‮Join code refreshed — share the new code‬"
 
@@ -8659,6 +9662,12 @@ msgstr "‮Opened Discord invite‬"
 # machine: pseudo
 msgid "Multiplayer (private beta)"
 msgstr "‮Multiplayer (private beta)‬"
+
+# machine: pseudo
+msgid ""
+"Private beta · max {max_peers} players. Join codes expire. Optional password + trusted keys. Enter to chat; Discord for voice."
+msgstr ""
+"‮Private beta · max {max_peers} players. Join codes expire. Optional password + trusted keys. Enter to chat; Discord for voice.‬"
 
 # machine: pseudo
 msgid "Manual"
@@ -8974,8 +9983,26 @@ msgid "Incoming design offers"
 msgstr "‮Incoming design offers‬"
 
 # machine: pseudo
+msgid ""
+"Expires in ~{hrs}h · password {has_host_password} · trusted {require_trusted}"
+msgstr ""
+"‮Expires in ~{hrs}h · password {has_host_password} · trusted {require_trusted}‬"
+
+# machine: pseudo
+msgid "Hosting · {host_address}:{host_port} · {status}"
+msgstr "‮Hosting · {host_address}:{host_port} · {status}‬"
+
+# machine: pseudo
+msgid "Connected · {status}"
+msgstr "‮Connected · {status}‬"
+
+# machine: pseudo
 msgid "Loading host map / connecting…"
 msgstr "‮Loading host map / connecting…‬"
+
+# machine: pseudo
+msgid "Ghost preview active · {ghost_prop_count}"
+msgstr "‮Ghost preview active · {ghost_prop_count}‬"
 
 # machine: pseudo
 msgid ""
@@ -8984,8 +10011,24 @@ msgstr ""
 "‮The host's world is the shared one. Guests' edits show on their screen straight away and wait for your answer.‬"
 
 # machine: pseudo
+msgid ""
+"Accepted {accepted_count} · declined {rejected_count} · waiting {review}. Waiting changes show as ghosts in the world; Alt+Y / Alt+N take the oldest."
+msgstr ""
+"‮Accepted {accepted_count} · declined {rejected_count} · waiting {review}. Waiting changes show as ghosts in the world; Alt+Y / Alt+N take the oldest.‬"
+
+# machine: pseudo
+msgid ""
+"The host decides. Your waiting changes: {my_pending} · accepted {accepted_count} · declined {rejected_count}."
+msgstr ""
+"‮The host decides. Your waiting changes: {my_pending} · accepted {accepted_count} · declined {rejected_count}.‬"
+
+# machine: pseudo
 msgid "Paste the SMBC1: code your server owner shared"
 msgstr "‮Paste the SMBC1: code your server owner shared‬"
+
+# machine: pseudo
+msgid "Imported {name}{warns}"
+msgstr "‮Imported {name}{warns}‬"
 
 # machine: pseudo
 msgid "No session message yet — press Play together once to create it"
@@ -9016,6 +10059,24 @@ msgid ""
 "The host's session code is stale — ask them to press Play together again"
 msgstr ""
 "‮The host's session code is stale — ask them to press Play together again‬"
+
+# machine: pseudo
+msgid ""
+"{name}'s session needs a Discord sign-in — sign in above, then Play together"
+msgstr ""
+"‮{name}'s session needs a Discord sign-in — sign in above, then Play together‬"
+
+# machine: pseudo
+msgid "Joining {name}…"
+msgstr "‮Joining {name}…‬"
+
+# machine: pseudo
+msgid "Discord membership {require_discord}"
+msgstr "‮Discord membership {require_discord}‬"
+
+# machine: pseudo
+msgid "Copied to clipboard — paste it in your Discord server.{warns}"
+msgstr "‮Copied to clipboard — paste it in your Discord server.{warns}‬"
 
 # machine: pseudo
 msgid "NPC animation editor"
@@ -9066,6 +10127,10 @@ msgid "Joints"
 msgstr "‮Joints‬"
 
 # machine: pseudo
+msgid "Select the {b} joint ({name})"
+msgstr "‮Select the {b} joint ({name})‬"
+
+# machine: pseudo
 msgid "Onion skin"
 msgstr "‮Onion skin‬"
 
@@ -9082,8 +10147,30 @@ msgid "Select a joint (click a limb or a button above)."
 msgstr "‮Select a joint (click a limb or a button above).‬"
 
 # machine: pseudo
+msgid "Body: height (m), pitch, yaw (°) at {t} s"
+msgstr "‮Body: height (m), pitch, yaw (°) at {t} s‬"
+
+# machine: pseudo
+msgid "{sel} at {t} s{keyed}"
+msgstr "‮{sel} at {t} s{keyed}‬"
+
+# machine: pseudo
+msgid ""
+"{left} h of {chore_hours} h left · {workers} of {min_w} people{max_workers}"
+msgstr ""
+"‮{left} h of {chore_hours} h left · {workers} of {min_w} people{max_workers}‬"
+
+# machine: pseudo
 msgid "paused"
 msgstr "‮paused‬"
+
+# machine: pseudo
+msgid "Too {weather} to work outside right now"
+msgstr "‮Too {weather} to work outside right now‬"
+
+# machine: pseudo
+msgid "At {x}, {z}"
+msgstr "‮At {x}, {z}‬"
 
 # machine: pseudo
 msgid "At a placed object"
@@ -9096,6 +10183,18 @@ msgstr "‮At a tagged space‬"
 # machine: pseudo
 msgid "No place set — done wherever the worker stands"
 msgstr "‮No place set — done wherever the worker stands‬"
+
+# machine: pseudo
+msgid "Covering{is_empty}"
+msgstr "‮Covering{is_empty}‬"
+
+# machine: pseudo
+msgid "anyone (was {orphaned} — left)"
+msgstr "‮anyone (was {orphaned} — left)‬"
+
+# machine: pseudo
+msgid "{orphaned} was assigned but left the settlement"
+msgstr "‮{orphaned} was assigned but left the settlement‬"
 
 # machine: pseudo
 msgid "anyone"
@@ -9144,6 +10243,14 @@ msgstr "‮to‬"
 # machine: pseudo
 msgid "Remove this block"
 msgstr "‮Remove this block‬"
+
+# machine: pseudo
+msgid "Minutes past midnight (currently {key})"
+msgstr "‮Minutes past midnight (currently {key})‬"
+
+# machine: pseudo
+msgid "Minutes past midnight (currently {format_hour})"
+msgstr "‮Minutes past midnight (currently {format_hour})‬"
 
 # machine: pseudo
 msgid "Applied"
@@ -9292,6 +10399,26 @@ msgid "Anyone free"
 msgstr "‮Anyone free‬"
 
 # machine: pseudo
+msgid "Routines & Chores — {count} of {initial_count} present · {morale}"
+msgstr "‮Routines & Chores — {count} of {initial_count} present · {morale}‬"
+
+# machine: pseudo
+msgid ""
+"Walking today: {walk_m} m/person · {walk_kcal} kcal · {walk_overhead}% of the day — {walk}"
+msgstr ""
+"‮Walking today: {walk_m} m/person · {walk_kcal} kcal · {walk_overhead}% of the day — {walk}‬"
+
+# machine: pseudo
+msgid "{w} °C · {w_2} m/s wind · {w_3} mm/h rain — {w_4}"
+msgstr "‮{w} °C · {w_2} m/s wind · {w_3} mm/h rain — {w_4}‬"
+
+# machine: pseudo
+msgid ""
+"This camp is simulated as a crowd right now: {value}, none up close. Look at the camp from nearby (or watch it) to see each person."
+msgstr ""
+"‮This camp is simulated as a crowd right now: {value}, none up close. Look at the camp from nearby (or watch it) to see each person.‬"
+
+# machine: pseudo
 msgid "Hours, skills and on-call — open in the Work Planner"
 msgstr "‮Hours, skills and on-call — open in the Work Planner‬"
 
@@ -9300,12 +10427,26 @@ msgid "Rename"
 msgstr "‮Rename‬"
 
 # machine: pseudo
+msgid "Rename {display_name}"
+msgstr "‮Rename {display_name}‬"
+
+# machine: pseudo
+msgid "{display_name}'s bed"
+msgstr "‮{display_name}'s bed‬"
+
+# machine: pseudo
 msgid "Assign"
 msgstr "‮Assign‬"
 
 # machine: pseudo
 msgid "Any free spot"
 msgstr "‮Any free spot‬"
+
+# machine: pseudo
+msgid ""
+"sleep {sleep_h} h · needs {need_h} h · chores {chore_h} h · free {free_h} h{over_h}"
+msgstr ""
+"‮sleep {sleep_h} h · needs {need_h} h · chores {chore_h} h · free {free_h} h{over_h}‬"
 
 # machine: pseudo
 msgid "Site rules:"
@@ -9345,6 +10486,10 @@ msgstr ""
 # machine: pseudo
 msgid "Unapplied changes"
 msgstr "‮Unapplied changes‬"
+
+# machine: pseudo
+msgid "{pri_name} priority · {chore}{held}{is_empty}"
+msgstr "‮{pri_name} priority · {chore}{held}{is_empty}‬"
 
 # machine: pseudo
 msgid ""
@@ -9631,6 +10776,10 @@ msgid "This side up"
 msgstr "‮This side up‬"
 
 # machine: pseudo
+msgid "Load into {vid}"
+msgstr "‮Load into {vid}‬"
+
+# machine: pseudo
 msgid "Needs a generated location map (no TerrainLoader here)"
 msgstr "‮Needs a generated location map (no TerrainLoader here)‬"
 
@@ -9651,8 +10800,48 @@ msgstr ""
 "‮A container with the kit's crates arrives 14 m ahead of you; the crew unloads it‬"
 
 # machine: pseudo
+msgid ""
+"{label} — unloading over 20 m\n"
+"4 people: {strategy}, about {eta_s} s\n"
+"12 people: {strategy_2}, about {eta_s_2} s"
+msgstr ""
+"‮{label} — unloading over 20 m‬\n"
+"‮4 people: {strategy}, about {eta_s} s‬\n"
+"‮12 people: {strategy_2}, about {eta_s_2} s‬"
+
+# machine: pseudo
+msgid ""
+"{type} at {at_ft} along the {face} face  (snaps to 6\" • drag round a corner to change face)"
+msgstr ""
+"‮{type} at {at_ft} along the {face} face  (snaps to 6\" • drag round a corner to change face)‬"
+
+# machine: pseudo
+msgid "Deck height: {h}  (snaps to 1\" on release)"
+msgstr "‮Deck height: {h}  (snaps to 1\" on release)‬"
+
+# machine: pseudo
+msgid "Beam offset: {dy}\"  (snaps to 1\" on release)"
+msgstr "‮Beam offset: {dy}\"  (snaps to 1\" on release)‬"
+
+# machine: pseudo
+msgid "Deck depth: {depth_ft} ft"
+msgstr "‮Deck depth: {depth_ft} ft‬"
+
+# machine: pseudo
 msgid "Step tool: click a cell to drop steps  (Esc to exit)"
 msgstr "‮Step tool: click a cell to drop steps  (Esc to exit)‬"
+
+# machine: pseudo
+msgid "{tool}: {tool_prompt}  (Shift-click to place several • Esc to stop)"
+msgstr "‮{tool}: {tool_prompt}  (Shift-click to place several • Esc to stop)‬"
+
+# machine: pseudo
+msgid "Selected: {spec}  (drag to move • Del remove • Ctrl+D duplicate)"
+msgstr "‮Selected: {spec}  (drag to move • Del remove • Ctrl+D duplicate)‬"
+
+# machine: pseudo
+msgid "Selected: {what}  ({tips})"
+msgstr "‮Selected: {what}  ({tips})‬"
 
 # machine: pseudo
 msgid "In this design"
@@ -9687,18 +10876,66 @@ msgid "Preset name"
 msgstr "‮Preset name‬"
 
 # machine: pseudo
+msgid "Show {value}"
+msgstr "‮Show {value}‬"
+
+# machine: pseudo
 msgid ""
 "Six is the fewest who can build a rack: two holding each of two frames, two seating the beams."
 msgstr ""
 "‮Six is the fewest who can build a rack: two holding each of two frames, two seating the beams.‬"
 
 # machine: pseudo
+msgid ""
+"This crew can't finish it: {blocked} can't start (too few hands to hold the frames while the beams go on)."
+msgstr ""
+"‮This crew can't finish it: {blocked} can't start (too few hands to hold the frames while the beams go on).‬"
+
+# machine: pseudo
+msgid ""
+"{crew}: about {makespan}, {jobs}. The longest chain of steps alone takes {tl}."
+msgstr ""
+"‮{crew}: about {makespan}, {jobs}. The longest chain of steps alone takes {tl}.‬"
+
+# machine: pseudo
+msgid ""
+"{type} on the {face} face, {span}  (drag onto another face to move it there)"
+msgstr ""
+"‮{type} on the {face} face, {span}  (drag onto another face to move it there)‬"
+
+# machine: pseudo
+msgid "{type} at bay {b}"
+msgstr "‮{type} at bay {b}‬"
+
+# machine: pseudo
+msgid "{type} at bay {b}, column {c}"
+msgstr "‮{type} at bay {b}, column {c}‬"
+
+# machine: pseudo
 msgid "Drag onto another bay to move it there  (Alt-drag raises or lowers)"
 msgstr "‮Drag onto another bay to move it there  (Alt-drag raises or lowers)‬"
 
 # machine: pseudo
+msgid ""
+"Move to bay {dlt}, column {y}  (release to drop; what is there swaps in)"
+msgstr ""
+"‮Move to bay {dlt}, column {y}  (release to drop; what is there swaps in)‬"
+
+# machine: pseudo
+msgid "Swap bay {src} with bay {j}  (release to swap their coverings)"
+msgstr "‮Swap bay {src} with bay {j}  (release to swap their coverings)‬"
+
+# machine: pseudo
 msgid "Drag onto another bay of the slope to swap them"
 msgstr "‮Drag onto another bay of the slope to swap them‬"
+
+# machine: pseudo
+msgid "Rack {value}: {shared} meet another rack's  (Alt: no snap)"
+msgstr "‮Rack {value}: {shared} meet another rack's  (Alt: no snap)‬"
+
+# machine: pseudo
+msgid "Rack {value}: not touching another rack  (Alt: no snap)"
+msgstr "‮Rack {value}: not touching another rack  (Alt: no snap)‬"
 
 # machine: pseudo
 msgid "Rack system"
@@ -9829,10 +11066,18 @@ msgid "Build it with a crew"
 msgstr "‮Build it with a crew‬"
 
 # machine: pseudo
+msgid "Rack {mh} — click to edit it, drag to move it (Alt: no snap)"
+msgstr "‮Rack {mh} — click to edit it, drag to move it (Alt: no snap)‬"
+
+# machine: pseudo
 msgid ""
 "Nothing recorded yet: let the clock run, or render ahead with 📈 Render."
 msgstr ""
 "‮Nothing recorded yet: let the clock run, or render ahead with 📈 Render.‬"
+
+# machine: pseudo
+msgid "{date} to {n_days} · {n_days_2} recorded"
+msgstr "‮{date} to {n_days} · {n_days_2} recorded‬"
 
 # machine: pseudo
 msgid "Net power"
@@ -9870,6 +11115,10 @@ msgstr "‮Two stores against each other‬"
 # machine: pseudo
 msgid "Battery charge against"
 msgstr "‮Battery charge against‬"
+
+# machine: pseudo
+msgid "·  {now} now  ·  {close}{today} today"
+msgstr "‮·  {now} now  ·  {close}{today} today‬"
 
 # machine: pseudo
 msgid ""
@@ -9963,6 +11212,20 @@ msgstr ""
 "‮Opened from the Hydro Lab, the site is that turbine's head, pipe and water.‬"
 
 # machine: pseudo
+msgid "{spec} · {rpm} rpm · {p_elec_w}"
+msgstr "‮{spec} · {rpm} rpm · {p_elec_w}‬"
+
+# machine: pseudo
+msgid ""
+"Designing the wheel of {name} — its head ({gross_head_m} m), penstock and water are the site."
+msgstr ""
+"‮Designing the wheel of {name} — its head ({gross_head_m} m), penstock and water are the site.‬"
+
+# machine: pseudo
+msgid "About ${cost} and {kg}, built from stock parts."
+msgstr "‮About ${cost} and {kg}, built from stock parts.‬"
+
+# machine: pseudo
 msgid "As exported"
 msgstr "‮As exported‬"
 
@@ -9977,8 +11240,26 @@ msgstr ""
 "‮SketchUp has no gloss data, so its glTF exporters invent it (everything semi-glossy). Auto replaces it with real-world roughness by material name.‬"
 
 # machine: pseudo
+msgid "Contains {current_scene} · {packed}{est}"
+msgstr "‮Contains {current_scene} · {packed}{est}‬"
+
+# machine: pseudo
+msgid "Packs to {packed} · {packed_2}{est}"
+msgstr "‮Packs to {packed} · {packed_2}{est}‬"
+
+# machine: pseudo
 msgid "Drag the arrows to move, the rings to turn. Shift snaps. Esc closes."
 msgstr "‮Drag the arrows to move, the rings to turn. Shift snaps. Esc closes.‬"
+
+# machine: pseudo
+msgid ""
+"Auto estimate: {preroll_h} pre-roll · {climb_h} to collapse · {bonfire_h} bonfire · {ember_h} embers ({mass_kg} of fuel)"
+msgstr ""
+"‮Auto estimate: {preroll_h} pre-roll · {climb_h} to collapse · {bonfire_h} bonfire · {ember_h} embers ({mass_kg} of fuel)‬"
+
+# machine: pseudo
+msgid "Not burning. {dictionary}"
+msgstr "‮Not burning. {dictionary}‬"
 
 # machine: pseudo
 msgid "No crisis manager on this map"
@@ -10017,6 +11298,10 @@ msgstr "‮This map cannot duplicate props‬"
 # machine: pseudo
 msgid "Copied. This is the copy."
 msgstr "‮Copied. This is the copy.‬"
+
+# machine: pseudo
+msgid "Made of {materials}{est}{c}"
+msgstr "‮Made of {materials}{est}{c}‬"
 
 # machine: pseudo
 msgid "What it is made of is not known."
@@ -10191,6 +11476,10 @@ msgid "No other rack feeds this rack's controller"
 msgstr "‮No other rack feeds this rack's controller‬"
 
 # machine: pseudo
+msgid "{count} · faces {azimuth_deg}° (compass) at {tilt_deg}°{bound}"
+msgstr "‮{count} · faces {azimuth_deg}° (compass) at {tilt_deg}°{bound}‬"
+
+# machine: pseudo
 msgid "Fire"
 msgstr "‮Fire‬"
 
@@ -10207,6 +11496,10 @@ msgid ""
 "Light it at a set date and time. A flag appears on the timeline; scrub the clock across it to watch the structure burn, and back to un-burn it."
 msgstr ""
 "‮Light it at a set date and time. A flag appears on the timeline; scrub the clock across it to watch the structure burn, and back to un-burn it.‬"
+
+# machine: pseudo
+msgid "Prop id {prop_id}"
+msgstr "‮Prop id {prop_id}‬"
 
 # machine: pseudo
 msgid "Placed Props"
@@ -10277,9 +11570,31 @@ msgid "The hillside that drains into this pond"
 msgstr "‮The hillside that drains into this pond‬"
 
 # machine: pseudo
+msgid "Terrain volume ≈ {terrain_cap} (Auto)"
+msgstr "‮Terrain volume ≈ {terrain_cap} (Auto)‬"
+
+# machine: pseudo
+msgid "Basin rim {basin_rim} m — at the rim (inflow spills there)"
+msgstr "‮Basin rim {basin_rim} m — at the rim (inflow spills there)‬"
+
+# machine: pseudo
+msgid "Upstream ~{ha} ha ({cell_count}){has_ws}"
+msgstr "‮Upstream ~{ha} ha ({cell_count}){has_ws}‬"
+
+# machine: pseudo
 msgid "A watershed catchment is on the graph — Preview refreshes the outline"
 msgstr ""
 "‮A watershed catchment is on the graph — Preview refreshes the outline‬"
+
+# machine: pseudo
+msgid ""
+"Upstream ~{area_m2} ha ({cell_count}) — a teal outline on the ground and in the Elevation and Site Plan lenses"
+msgstr ""
+"‮Upstream ~{area_m2} ha ({cell_count}) — a teal outline on the ground and in the Elevation and Site Plan lenses‬"
+
+# machine: pseudo
+msgid "The watershed could not be traced: {reason}"
+msgstr "‮The watershed could not be traced: {reason}‬"
 
 # machine: pseudo
 msgid ""
@@ -10296,6 +11611,28 @@ msgid "Max fill level"
 msgstr "‮Max fill level‬"
 
 # machine: pseudo
+msgid "{source_name} · {lines} · {dialect} dialect · run as written"
+msgstr "‮{source_name} · {lines} · {dialect} dialect · run as written‬"
+
+# machine: pseudo
+msgid ""
+"{layers} · {moves} · {sz} × {y} × {z} mm{fits}\n"
+"{mat} of material · {total_s} at 1×{speed_factor}{warn}"
+msgstr ""
+"‮{layers} · {moves} · {sz} × {y} × {z} mm{fits}‬\n"
+"‮{mat} of material · {total_s} at 1×{speed_factor}{warn}‬"
+
+# machine: pseudo
+msgid ""
+"{source_name} · {sim_t} of {total} · move {i} of {n}\n"
+"X {pos}  Y {y}  Z {z} mm · {what} {value} mm/s (asked {feed}){layers}\n"
+"{max_feed_hit_share} % of moves hit the feed cap, {accel_limited_share} % never reach it (too short for the acceleration)"
+msgstr ""
+"‮{source_name} · {sim_t} of {total} · move {i} of {n}‬\n"
+"‮X {pos}  Y {y}  Z {z} mm · {what} {value} mm/s (asked {feed}){layers}‬\n"
+"‮{max_feed_hit_share} % of moves hit the feed cap, {accel_limited_share} % never reach it (too short for the acceleration)‬"
+
+# machine: pseudo
 msgid "Load an STL or a G-code file first."
 msgstr "‮Load an STL or a G-code file first.‬"
 
@@ -10310,6 +11647,16 @@ msgstr "‮Nothing to export yet.‬"
 # machine: pseudo
 msgid "Load an STL to slice it, or a G-code file to run it as written."
 msgstr "‮Load an STL to slice it, or a G-code file to run it as written.‬"
+
+# machine: pseudo
+msgid "{display_name} — print setup"
+msgstr "‮{display_name} — print setup‬"
+
+# machine: pseudo
+msgid ""
+"Bed {work_x_mm} × {work_y_mm} × {work_z_mm} mm · max {max_feed_mm_s} mm/s · {accel_mm_s2} mm/s² · jerk {junction_mm_s} mm/s"
+msgstr ""
+"‮Bed {work_x_mm} × {work_y_mm} × {work_z_mm} mm · max {max_feed_mm_s} mm/s · {accel_mm_s2} mm/s² · jerk {junction_mm_s} mm/s‬"
 
 # machine: pseudo
 msgid "Printer — print setup"
@@ -10446,8 +11793,24 @@ msgid "Mud Building Designer unavailable."
 msgstr "‮Mud Building Designer unavailable.‬"
 
 # machine: pseudo
+msgid "Could not read {file}."
+msgstr "‮Could not read {file}.‬"
+
+# machine: pseudo
 msgid "Slicing…"
 msgstr "‮Slicing…‬"
+
+# machine: pseudo
+msgid "Slicing {source_name}…"
+msgstr "‮Slicing {source_name}…‬"
+
+# machine: pseudo
+msgid "Slicing {source_name}… {slice_progress} %"
+msgstr "‮Slicing {source_name}… {slice_progress} %‬"
+
+# machine: pseudo
+msgid "{source_name} · {triangles} · sliced and planned in {ms}"
+msgstr "‮{source_name} · {triangles} · sliced and planned in {ms}‬"
 
 # machine: pseudo
 msgid "Inputs"
@@ -10528,6 +11891,10 @@ msgstr "‮Remove this step‬"
 # machine: pseudo
 msgid "Give the recipe a name first"
 msgstr "‮Give the recipe a name first‬"
+
+# machine: pseudo
+msgid "Saved {label}"
+msgstr "‮Saved {label}‬"
 
 # machine: pseudo
 msgid "A built-in or unsaved recipe cannot be deleted"
@@ -10702,6 +12069,10 @@ msgid "PAUSED"
 msgstr "‮PAUSED‬"
 
 # machine: pseudo
+msgid "{best_i} SYNC"
+msgstr "‮{best_i} SYNC‬"
+
+# machine: pseudo
 msgid "Projection mapping · sim camera | live feed"
 msgstr "‮Projection mapping · sim camera | live feed‬"
 
@@ -10712,6 +12083,32 @@ msgstr "‮None (leave unconfigured)‬"
 # machine: pseudo
 msgid "Click LIVE panel or INPUT to choose camera"
 msgstr "‮Click LIVE panel or INPUT to choose camera‬"
+
+# machine: pseudo
+msgid "Current input: {display_name}"
+msgstr "‮Current input: {display_name}‬"
+
+# machine: pseudo
+msgid ""
+"{camera_extension_status}\n"
+"Select a feed above and click Apply Feed."
+msgstr ""
+"‮{camera_extension_status}‬\n"
+"‮Select a feed above and click Apply Feed.‬"
+
+# machine: pseudo
+msgid ""
+"{camera_extension_status}\n"
+"Start OBS Virtual Camera, then click Refresh Feed List."
+msgstr ""
+"‮{camera_extension_status}‬\n"
+"‮Start OBS Virtual Camera, then click Refresh Feed List.‬"
+
+# machine: pseudo
+msgid ""
+"{sizes} · {has_saved}. Drag the corners onto the surface. Tab next quad · F8 reset · Enter save · Esc done."
+msgstr ""
+"‮{sizes} · {has_saved}. Drag the corners onto the surface. Tab next quad · F8 reset · Enter save · Esc done.‬"
 
 # machine: pseudo
 msgid "Set the type to Folding / portable for leaves, hinges and kickstands."
@@ -10743,12 +12140,34 @@ msgid "From the library"
 msgstr "‮From the library‬"
 
 # machine: pseudo
+msgid ""
+"Input {gi}: {series}S × {parallel}P · STC {wmp} W, Voc {voc} V, Isc {isc} A · at {g} W/m², {t} °C: {p} W at {v} V, {i} A{shade_test}"
+msgstr ""
+"‮Input {gi}: {series}S × {parallel}P · STC {wmp} W, Voc {voc} V, Isc {isc} A · at {g} W/m², {t} °C: {p} W at {v} V, {i} A{shade_test}‬"
+
+# machine: pseudo
+msgid "{name} · {chart_g} W/m², {chart_t} °C · MPP {p} W at {mpp} V, {y} A"
+msgstr "‮{name} · {chart_g} W/m², {chart_t} °C · MPP {p} W at {mpp} V, {y} A‬"
+
+# machine: pseudo
+msgid "Input 1 · {chart_g} W/m², {chart_t} °C · MPP {p} W at {mpp} V, {y} A"
+msgstr "‮Input 1 · {chart_g} W/m², {chart_t} °C · MPP {p} W at {mpp} V, {y} A‬"
+
+# machine: pseudo
+msgid "{mass_kg} · about ${cost_usd} · {stock} stock lengths"
+msgstr "‮{mass_kg} · about ${cost_usd} · {stock} stock lengths‬"
+
+# machine: pseudo
 msgid "Show every one in the view"
 msgstr "‮Show every one in the view‬"
 
 # machine: pseudo
 msgid "Built-in entries stay."
 msgstr "‮Built-in entries stay.‬"
+
+# machine: pseudo
+msgid "Light all {value}"
+msgstr "‮Light all {value}‬"
 
 # machine: pseudo
 msgid "Show every one like it in the view"
@@ -10886,6 +12305,10 @@ msgstr ""
 "‮Load CMIP6 projection data first (opens automatically on first visit).‬"
 
 # machine: pseudo
+msgid "Computing… {done}/{total}"
+msgstr "‮Computing… {done}/{total}‬"
+
+# machine: pseudo
 msgid "Recompute Scenario"
 msgstr "‮Recompute Scenario‬"
 
@@ -10902,8 +12325,16 @@ msgid "Regenerate Weather"
 msgstr "‮Regenerate Weather‬"
 
 # machine: pseudo
+msgid "Loading training {loaded}/{total}…"
+msgstr "‮Loading training {loaded}/{total}…‬"
+
+# machine: pseudo
 msgid "Training model…"
 msgstr "‮Training model…‬"
+
+# machine: pseudo
+msgid "Training fetch failed: {reason}"
+msgstr "‮Training fetch failed: {reason}‬"
 
 # machine: pseudo
 msgid "Climate Record Book"
@@ -10954,6 +12385,18 @@ msgid ""
 "Temperature records: 1940-present · NWS alerts: 1986-present (IEM) · Global anomaly: NASA GISTEMP v4"
 msgstr ""
 "‮Temperature records: 1940-present · NWS alerts: 1986-present (IEM) · Global anomaly: NASA GISTEMP v4‬"
+
+# machine: pseudo
+msgid "🌡 Climate Record Book — {loc}"
+msgstr "‮🌡 Climate Record Book — {loc}‬"
+
+# machine: pseudo
+msgid "Overwrite slot {idx}?"
+msgstr "‮Overwrite slot {idx}?‬"
+
+# machine: pseudo
+msgid "Delete save in slot {idx}? This cannot be undone."
+msgstr "‮Delete save in slot {idx}? This cannot be undone.‬"
 
 # machine: pseudo
 msgid "Delete save?"
@@ -11030,12 +12473,20 @@ msgid "Open the alarms"
 msgstr "‮Open the alarms‬"
 
 # machine: pseudo
+msgid "{priority} priority"
+msgstr "‮{priority} priority‬"
+
+# machine: pseudo
 msgid ""
 "No alarm rules yet.\n"
 "A rule watches one tag: a tank nearly full, a pump that tripped, a battery running low."
 msgstr ""
 "‮No alarm rules yet.‬\n"
 "‮A rule watches one tag: a tank nearly full, a pump that tripped, a battery running low.‬"
+
+# machine: pseudo
+msgid "{name}  ·  shelved"
+msgstr "‮{name}  ·  shelved‬"
 
 # machine: pseudo
 msgid ""
@@ -11276,8 +12727,22 @@ msgid "Start again after the last step"
 msgstr "‮Start again after the last step‬"
 
 # machine: pseudo
+msgid ""
+"{text}\n"
+"Suggested (an estimate): gain {kp} % per unit, integral time {ti_min} min{reverse}."
+msgstr ""
+"‮{text}‬\n"
+"‮Suggested (an estimate): gain {kp} % per unit, integral time {ti_min} min{reverse}.‬"
+
+# machine: pseudo
 msgid "Use these gains"
 msgstr "‮Use these gains‬"
+
+# machine: pseudo
+msgid ""
+"Copied {automations} automation(s) and {scripts} script(s) as YAML. Saved to {path}"
+msgstr ""
+"‮Copied {automations} automation(s) and {scripts} script(s) as YAML. Saved to {path}‬"
 
 # machine: pseudo
 msgid "A switch takes 1 (on / open) or 0; a control valve its opening in %."
@@ -11468,6 +12933,18 @@ msgid "Search by name, node or unit…"
 msgstr "‮Search by name, node or unit…‬"
 
 # machine: pseudo
+msgid "Showing the last {span_h}"
+msgstr "‮Showing the last {span_h}‬"
+
+# machine: pseudo
+msgid ""
+"{id}\n"
+"Click: show this pen's scale on the left axis."
+msgstr ""
+"‮{id}‬\n"
+"‮Click: show this pen's scale on the left axis.‬"
+
+# machine: pseudo
 msgid "Remove this pen"
 msgstr "‮Remove this pen‬"
 
@@ -11480,6 +12957,14 @@ msgstr ""
 # machine: pseudo
 msgid "Trends"
 msgstr "‮Trends‬"
+
+# machine: pseudo
+msgid "Pick a tag to draw (up to {max_pens})."
+msgstr "‮Pick a tag to draw (up to {max_pens}).‬"
+
+# machine: pseudo
+msgid "Put a {label} on the graph."
+msgstr "‮Put a {label} on the graph.‬"
 
 # machine: pseudo
 msgid "No machine yet"
@@ -11703,6 +13188,10 @@ msgstr ""
 "‮Right-drag pans · wheel zooms at the cursor (Ctrl = fine) · F frames the turbine, Home the whole run · heading locked to source→outlet‬"
 
 # machine: pseudo
+msgid "Hydro Lab — {name}"
+msgstr "‮Hydro Lab — {name}‬"
+
+# machine: pseudo
 msgid "Place the turbine on the map first (Site Plan / 3D)."
 msgstr "‮Place the turbine on the map first (Site Plan / 3D).‬"
 
@@ -11746,8 +13235,16 @@ msgid "Couldn't route the penstock."
 msgstr "‮Couldn't route the penstock.‬"
 
 # machine: pseudo
+msgid "{label} tapped {rise_m} m above the turbine."
+msgstr "‮{label} tapped {rise_m} m above the turbine.‬"
+
+# machine: pseudo
 msgid "Not routed — physics uses the typed length/head above."
 msgstr "‮Not routed — physics uses the typed length/head above.‬"
+
+# machine: pseudo
+msgid "Routed: {pipe} (measuring run…)"
+msgstr "‮Routed: {pipe} (measuring run…)‬"
 
 # machine: pseudo
 msgid "— (no seasonal supply: bind a stream intake)"
@@ -11760,6 +13257,12 @@ msgstr "‮n/a (no nozzle)‬"
 # machine: pseudo
 msgid "No flow yet — route the penstock to a source above the turbine."
 msgstr "‮No flow yet — route the penstock to a source above the turbine.‬"
+
+# machine: pseudo
+msgid ""
+"Seasonal runoff ≈ {wet_m3} m³ in {wet_i} (wettest) · {dry_m3} m³ in {dry_i} (driest)"
+msgstr ""
+"‮Seasonal runoff ≈ {wet_m3} m³ in {wet_i} (wettest) · {dry_m3} m³ in {dry_i} (driest)‬"
 
 # machine: pseudo
 msgid "FLOWING"
@@ -11816,14 +13319,44 @@ msgid "n/a (no nameplate)"
 msgstr "‮n/a (no nameplate)‬"
 
 # machine: pseudo
+msgid "{annual_kwh} kWh/yr"
+msgstr "‮{annual_kwh} kWh/yr‬"
+
+# machine: pseudo
+msgid ""
+"Representative-year estimate from the intake's SEASONAL supply ({lo}–{hi} L/s over the year), not today's flow."
+msgstr ""
+"‮Representative-year estimate from the intake's SEASONAL supply ({lo}–{hi} L/s over the year), not today's flow.‬"
+
+# machine: pseudo
 msgid ""
 "Representative-year estimate at continuous flow (Q capped by pipe + design flow); seasonal precipitation weights the monthly flow."
 msgstr ""
 "‮Representative-year estimate at continuous flow (Q capped by pipe + design flow); seasonal precipitation weights the monthly flow.‬"
 
 # machine: pseudo
+msgid "Fit the {value} mm nozzle"
+msgstr "‮Fit the {value} mm nozzle‬"
+
+# machine: pseudo
 msgid "No head yet — raise the pond or lower the turbine."
 msgstr "‮No head yet — raise the pond or lower the turbine.‬"
+
+# machine: pseudo
+msgid ""
+"Pond: FULL at its max fill level ({rim_m} m) — any inflow spills over. Raise the max fill level (Ctrl-aim the pond surface in 3D and drag it up, or Pond settings) so the pond can reach a crest above the rim; or lower the turbine, extend the dip tube, or prime with a pump."
+msgstr ""
+"‮Pond: FULL at its max fill level ({rim_m} m) — any inflow spills over. Raise the max fill level (Ctrl-aim the pond surface in 3D and drag it up, or Pond settings) so the pond can reach a crest above the rim; or lower the turbine, extend the dip tube, or prime with a pump.‬"
+
+# machine: pseudo
+msgid ""
+"Pond: the siphon draws {draw} L/s{rate}. Turn on the test inflow, or fill the pond to the prime level."
+msgstr ""
+"‮Pond: the siphon draws {draw} L/s{rate}. Turn on the test inflow, or fill the pond to the prime level.‬"
+
+# machine: pseudo
+msgid "Pond: inflow {fill} − siphon draw {draw} = net {net} L/s{rate}"
+msgstr "‮Pond: inflow {fill} − siphon draw {draw} = net {net} L/s{rate}‬"
 
 # machine: pseudo
 msgid "Test stream flow at intake (L/s)"
@@ -12044,6 +13577,14 @@ msgid "Put this job on the board as a project"
 msgstr "‮Put this job on the board as a project‬"
 
 # machine: pseudo
+msgid "{pname}, packed"
+msgstr "‮{pname}, packed‬"
+
+# machine: pseudo
+msgid "Stands at {x} m east, {z} m south of the map's middle"
+msgstr "‮Stands at {x} m east, {z} m south of the map's middle‬"
+
+# machine: pseudo
 msgid "👷 Rebuild…"
 msgstr "‮👷 Rebuild…‬"
 
@@ -12070,6 +13611,18 @@ msgid ""
 "Removes the remaining phases. Completed work keeps its effects; a cancelled ASSEMBLY refunds its parts and clears the ghost."
 msgstr ""
 "‮Removes the remaining phases. Completed work keeps its effects; a cancelled ASSEMBLY refunds its parts and clears the ghost.‬"
+
+# machine: pseudo
+msgid "{workers}/{min_w} ppl — waiting"
+msgstr "‮{workers}/{min_w} ppl — waiting‬"
+
+# machine: pseudo
+msgid "{workers} ppl"
+msgstr "‮{workers} ppl‬"
+
+# machine: pseudo
+msgid "needs {min_w} ppl"
+msgstr "‮needs {min_w} ppl‬"
 
 # machine: pseudo
 msgid "What-if (planned makespan — the sim will stretch it):"
@@ -12102,10 +13655,32 @@ msgid "Simulated (real crew — needs, morale, weather, windows):"
 msgstr "‮Simulated (real crew — needs, morale, weather, windows):‬"
 
 # machine: pseudo
+msgid "Fastest: {best} ({best_h} h) — as it stands, the job never finishes"
+msgstr "‮Fastest: {best} ({best_h} h) — as it stands, the job never finishes‬"
+
+# machine: pseudo
+msgid "Fastest: {best} — {saving_h} h saved over how it stands"
+msgstr "‮Fastest: {best} — {saving_h} h saved over how it stands‬"
+
+# machine: pseudo
+msgid "Nothing beats how it stands ({baseline_h} h)"
+msgstr "‮Nothing beats how it stands ({baseline_h} h)‬"
+
+# machine: pseudo
 msgid ""
 "Fresh crew from the current hour · today's weather held · straight-line routes, no terrain · 15-minute resolution."
 msgstr ""
 "‮Fresh crew from the current hour · today's weather held · straight-line routes, no terrain · 15-minute resolution.‬"
+
+# machine: pseudo
+msgid ""
+"Nothing packable on this site yet — add components to the graph or place 3D props."
+msgstr ""
+"‮Nothing packable on this site yet — add components to the graph or place 3D props.‬"
+
+# machine: pseudo
+msgid "📊 Site Report — {label}"
+msgstr "‮📊 Site Report — {label}‬"
 
 # machine: pseudo
 msgid "📊 Site Report"
@@ -12190,19 +13765,69 @@ msgstr "‮Fetching weather for this site…‬"
 
 # machine: pseudo
 msgid ""
+"[b]{solar_annual_kwh_m2}[/b] kWh/m²·yr   ·   [b]{solar_peak_sun_hours}[/b] peak-sun-h/day   ·   climatology [b]{ghi_climatology_kwh_m2_day}[/b] kWh/m²·day ({ghi_zone})"
+msgstr ""
+"‮[b]{solar_annual_kwh_m2}[/b] kWh/m²·yr   ·   [b]{solar_peak_sun_hours}[/b] peak-sun-h/day   ·   climatology [b]{ghi_climatology_kwh_m2_day}[/b] kWh/m²·day ({ghi_zone})‬"
+
+# machine: pseudo
+msgid ""
+"[b]{pv_annual_kwh}[/b] kWh/yr  ·  [b]{pv_peak_kw}[/b] kWp ({pv_panel_count})  ·  capacity factor [b]{pv_capacity_factor}%[/b]  ·  tilt {pv_panel_tilt_deg}° az {pv_panel_azimuth_deg}°"
+msgstr ""
+"‮[b]{pv_annual_kwh}[/b] kWh/yr  ·  [b]{pv_peak_kw}[/b] kWp ({pv_panel_count})  ·  capacity factor [b]{pv_capacity_factor}%[/b]  ·  tilt {pv_panel_tilt_deg}° az {pv_panel_azimuth_deg}°‬"
+
+# machine: pseudo
+msgid ""
 "[color=#8090a8]No PV panels in the current graph — add panels to see production potential.[/color]"
 msgstr ""
 "‮[color=#8090a8]No PV panels in the current graph — add panels to see production potential.[/color]‬"
 
 # machine: pseudo
-msgid "Recompute to see the year hour by hour."
-msgstr "‮Recompute to see the year hour by hour.‬"
+msgid ""
+"[b]{wind_annual_kwh}[/b] kWh/yr  ·  {wind_turbine_count}, [b]{wind_rated_kw}[/b] kW rated  ·  capacity factor [b]{wind_capacity_factor}%[/b]  ·  mean wind [b]{wind_mean_speed_ms}[/b] m/s"
+msgstr ""
+"‮[b]{wind_annual_kwh}[/b] kWh/yr  ·  {wind_turbine_count}, [b]{wind_rated_kw}[/b] kW rated  ·  capacity factor [b]{wind_capacity_factor}%[/b]  ·  mean wind [b]{wind_mean_speed_ms}[/b] m/s‬"
 
 # machine: pseudo
 msgid ""
-"Nothing packable on this site yet — add components to the graph or place 3D props."
+"[color=#8090a8]No wind turbines in the graph — mean site wind [b]{wind_mean_speed_ms}[/b] m/s. Add a turbine to estimate yield.[/color]"
 msgstr ""
-"‮Nothing packable on this site yet — add components to the graph or place 3D props.‬"
+"‮[color=#8090a8]No wind turbines in the graph — mean site wind [b]{wind_mean_speed_ms}[/b] m/s. Add a turbine to estimate yield.[/color]‬"
+
+# machine: pseudo
+msgid ""
+"[b]{precip_annual_mm}[/b] mm/yr  ·  [b]{precip_wet_days_total}[/b] wet days"
+msgstr ""
+"‮[b]{precip_annual_mm}[/b] mm/yr  ·  [b]{precip_wet_days_total}[/b] wet days‬"
+
+# machine: pseudo
+msgid ""
+"mean [b]{temp_annual_mean_c}[/b]°C  ·  range [b]{temp_annual_min_c}[/b]…[b]{temp_annual_max_c}[/b]°C"
+msgstr ""
+"‮mean [b]{temp_annual_mean_c}[/b]°C  ·  range [b]{temp_annual_min_c}[/b]…[b]{temp_annual_max_c}[/b]°C‬"
+
+# machine: pseudo
+msgid ""
+"[b]{hydro_annual_kwh}[/b] kWh/yr  ·  {hydro_count}  (precipitation-scaled seasonal flow)"
+msgstr ""
+"‮[b]{hydro_annual_kwh}[/b] kWh/yr  ·  {hydro_count}  (precipitation-scaled seasonal flow)‬"
+
+# machine: pseudo
+msgid ""
+"[color=#{muted}]Nothing measured yet: time is counted while the clock runs with people simulated.[/color]"
+msgstr ""
+"‮[color=#{muted}]Nothing measured yet: time is counted while the clock runs with people simulated.[/color]‬"
+
+# machine: pseudo
+msgid ""
+"Work this site takes: [b]{work_h_week} per person a week[/b] [color=#{vc}]({value})[/color]{planned} · leisure {leisure_h_day} a day · {people} over {days}\n"
+"[color=#{muted}]Ticks: {atus_source}. A reference, not a target.[/color]"
+msgstr ""
+"‮Work this site takes: [b]{work_h_week} per person a week[/b] [color=#{vc}]({value})[/color]{planned} · leisure {leisure_h_day} a day · {people} over {days}‬\n"
+"‮[color=#{muted}]Ticks: {atus_source}. A reference, not a target.[/color]‬"
+
+# machine: pseudo
+msgid "Recompute to see the year hour by hour."
+msgstr "‮Recompute to see the year hour by hour.‬"
 
 # machine: pseudo
 msgid ""
@@ -12221,6 +13846,14 @@ msgstr "‮Open Snowglobe (recommended)‬"
 # machine: pseudo
 msgid "Reset to map centre"
 msgstr "‮Reset to map centre‬"
+
+# machine: pseudo
+msgid "Radius: {r} m"
+msgstr "‮Radius: {r} m‬"
+
+# machine: pseudo
+msgid "Area: {km2} km²"
+msgstr "‮Area: {km2} km²‬"
 
 # machine: pseudo
 msgid "Sphere of Influence — Settings"
@@ -12265,12 +13898,36 @@ msgid "Exit Snowglobe"
 msgstr "‮Exit Snowglobe‬"
 
 # machine: pseudo
+msgid "Area  {km2} km²"
+msgstr "‮Area  {km2} km²‬"
+
+# machine: pseudo
+msgid "Wind PBI  {kinetic} MW · {wind_ms} m/s"
+msgstr "‮Wind PBI  {kinetic} MW · {wind_ms} m/s‬"
+
+# machine: pseudo
+msgid "Wind PBI  {kinetic} kW · {wind_ms} m/s"
+msgstr "‮Wind PBI  {kinetic} kW · {wind_ms} m/s‬"
+
+# machine: pseudo
 msgid "📡 Disable Live Mode"
 msgstr "‮📡 Disable Live Mode‬"
 
 # machine: pseudo
+msgid "{battery_kwh_stored} / {battery_capacity_kwh} kWh stored"
+msgstr "‮{battery_kwh_stored} / {battery_capacity_kwh} kWh stored‬"
+
+# machine: pseudo
+msgid "⚡ Power · CSV playback {csv_indicators}"
+msgstr "‮⚡ Power · CSV playback {csv_indicators}‬"
+
+# machine: pseudo
 msgid "⚡ Power · CSV playback"
 msgstr "‮⚡ Power · CSV playback‬"
+
+# machine: pseudo
+msgid "⚡ Power · Live {ha_indicators}"
+msgstr "‮⚡ Power · Live {ha_indicators}‬"
 
 # machine: pseudo
 msgid "⚡ Power · Live"
@@ -12283,6 +13940,42 @@ msgstr "‮⚡ Power · Simulating ahead‬"
 # machine: pseudo
 msgid "⚡ Power Scoreboard"
 msgstr "‮⚡ Power Scoreboard‬"
+
+# machine: pseudo
+msgid "⚡ Power · Home Assistant {ha_indicators}"
+msgstr "‮⚡ Power · Home Assistant {ha_indicators}‬"
+
+# machine: pseudo
+msgid "Shed{load_linked}"
+msgstr "‮Shed{load_linked}‬"
+
+# machine: pseudo
+msgid "{shown_kw}  peak {load_peak_show_w}{load_linked}"
+msgstr "‮{shown_kw}  peak {load_peak_show_w}{load_linked}‬"
+
+# machine: pseudo
+msgid "Full {weather_icon}"
+msgstr "‮Full {weather_icon}‬"
+
+# machine: pseudo
+msgid "Full — solar throttled {weather_icon}"
+msgstr "‮Full — solar throttled {weather_icon}‬"
+
+# machine: pseudo
+msgid "Low battery {weather_icon}"
+msgstr "‮Low battery {weather_icon}‬"
+
+# machine: pseudo
+msgid "Charging {weather_icon}"
+msgstr "‮Charging {weather_icon}‬"
+
+# machine: pseudo
+msgid "Discharging {weather_icon}"
+msgstr "‮Discharging {weather_icon}‬"
+
+# machine: pseudo
+msgid "Idle {weather_icon}"
+msgstr "‮Idle {weather_icon}‬"
 
 # machine: pseudo
 msgid ""
@@ -12301,6 +13994,16 @@ msgid "Waiting for the sun"
 msgstr "‮Waiting for the sun‬"
 
 # machine: pseudo
+msgid ""
+"{gen} kWh generated − {daily_load_consumed_kwh} kWh consumed since midnight"
+msgstr ""
+"‮{gen} kWh generated − {daily_load_consumed_kwh} kWh consumed since midnight‬"
+
+# machine: pseudo
+msgid "{kwh} kWh since midnight"
+msgstr "‮{kwh} kWh since midnight‬"
+
+# machine: pseudo
 msgid "SOLAR & LOAD (24h) 📂"
 msgstr "‮SOLAR & LOAD (24h) 📂‬"
 
@@ -12309,12 +14012,44 @@ msgid "SOLAR OUTPUT (24h) 📡"
 msgstr "‮SOLAR OUTPUT (24h) 📡‬"
 
 # machine: pseudo
+msgid ""
+"🔗 Historical data from: {history_source}\n"
+"Click to change energy sensor"
+msgstr ""
+"‮🔗 Historical data from: {history_source}‬\n"
+"‮Click to change energy sensor‬"
+
+# machine: pseudo
 msgid "SOLAR OUTPUT (24h) ⏳"
 msgstr "‮SOLAR OUTPUT (24h) ⏳‬"
 
 # machine: pseudo
+msgid ""
+"🔗 Loading history from: {history_source}\n"
+"Click to change energy sensor"
+msgstr ""
+"‮🔗 Loading history from: {history_source}‬\n"
+"‮Click to change energy sensor‬"
+
+# machine: pseudo
 msgid "SOLAR OUTPUT (24h)"
 msgstr "‮SOLAR OUTPUT (24h)‬"
+
+# machine: pseudo
+msgid ""
+"🔗 Energy sensor: {ha_solar_energy_entity}\n"
+"Click to change"
+msgstr ""
+"‮🔗 Energy sensor: {ha_solar_energy_entity}‬\n"
+"‮Click to change‬"
+
+# machine: pseudo
+msgid ""
+"Using power sensor for history: {ha_solar_entity}\n"
+"Click to link dedicated energy sensor"
+msgstr ""
+"‮Using power sensor for history: {ha_solar_entity}‬\n"
+"‮Click to link dedicated energy sensor‬"
 
 # machine: pseudo
 msgid ""
@@ -12323,6 +14058,14 @@ msgid ""
 msgstr ""
 "‮Click to link HA solar energy sensor for historical data‬\n"
 "‮(or uses linked power sensor automatically)‬"
+
+# machine: pseudo
+msgid "Peak: {peak} kW (solar/load)"
+msgstr "‮Peak: {peak} kW (solar/load)‬"
+
+# machine: pseudo
+msgid "Peak: {peak} kW"
+msgstr "‮Peak: {peak} kW‬"
 
 # machine: pseudo
 msgid "Click to collapse or expand the power panel"
@@ -12471,6 +14214,10 @@ msgid "How strongly this venue pulls people when it is open (0–1)"
 msgstr "‮How strongly this venue pulls people when it is open (0–1)‬"
 
 # machine: pseudo
+msgid "draw {draw} — click to remove this set"
+msgstr "‮draw {draw} — click to remove this set‬"
+
+# machine: pseudo
 msgid "Set starts (hour)"
 msgstr "‮Set starts (hour)‬"
 
@@ -12495,6 +14242,14 @@ msgid "Add this time window to the venue's programme"
 msgstr "‮Add this time window to the venue's programme‬"
 
 # machine: pseudo
+msgid "{count_spin} on the graph"
+msgstr "‮{count_spin} on the graph‬"
+
+# machine: pseudo
+msgid "Design set to {label}"
+msgstr "‮Design set to {label}‬"
+
+# machine: pseudo
 msgid "No main scene"
 msgstr "‮No main scene‬"
 
@@ -12505,6 +14260,10 @@ msgstr "‮System graph not found‬"
 # machine: pseudo
 msgid "Graph model missing"
 msgstr "‮Graph model missing‬"
+
+# machine: pseudo
+msgid "Re-seeded the graph: {value} × {w}"
+msgstr "‮Re-seeded the graph: {value} × {w}‬"
 
 # machine: pseudo
 msgid "Re-seed failed"
@@ -12677,6 +14436,10 @@ msgid "Ring over the top"
 msgstr "‮Ring over the top‬"
 
 # machine: pseudo
+msgid "{kind} Ø{od_mm} × {h_mm} at {z_mm}"
+msgstr "‮{kind} Ø{od_mm} × {h_mm} at {z_mm}‬"
+
+# machine: pseudo
 msgid "Nozzles"
 msgstr "‮Nozzles‬"
 
@@ -12713,8 +14476,30 @@ msgid "Remove nozzle"
 msgstr "‮Remove nozzle‬"
 
 # machine: pseudo
+msgid ""
+"{parts} · {clamps} · {open_ports} open\n"
+"{bb} × {y} × {z} mm · {mass_kg} kg · holds {volume_l} L"
+msgstr ""
+"‮{parts} · {clamps} · {open_ports} open‬\n"
+"‮{bb} × {y} × {z} mm · {mass_kg} kg · holds {volume_l} L‬"
+
+# machine: pseudo
 msgid "Clamp size"
 msgstr "‮Clamp size‬"
+
+# machine: pseudo
+msgid "{size} tube ({od} mm OD, {flange} mm clamp face)"
+msgstr "‮{size} tube ({od} mm OD, {flange} mm clamp face)‬"
+
+# machine: pseudo
+msgid ""
+"{designation}\n"
+"{why}\n"
+"Shift-click the sandbox to place several."
+msgstr ""
+"‮{designation}‬\n"
+"‮{why}‬\n"
+"‮Shift-click the sandbox to place several.‬"
 
 # machine: pseudo
 msgid ""
@@ -12747,6 +14532,26 @@ msgid "Summary"
 msgstr "‮Summary‬"
 
 # machine: pseudo
+msgid "Nozzle {nid} · {angle_deg}° · {r_mm}"
+msgstr "‮Nozzle {nid} · {angle_deg}° · {r_mm}‬"
+
+# machine: pseudo
+msgid "{label} · {designation} · drag to move"
+msgstr "‮{label} · {designation} · drag to move‬"
+
+# machine: pseudo
+msgid "Open end {id} · click to pick it, then a part to join there"
+msgstr "‮Open end {id} · click to pick it, then a part to join there‬"
+
+# machine: pseudo
+msgid "{size} clamp joint · roll {roll_deg}°"
+msgstr "‮{size} clamp joint · roll {roll_deg}°‬"
+
+# machine: pseudo
+msgid "Molecules in {name_cv} · {cv_t} °C"
+msgstr "‮Molecules in {name_cv} · {cv_t} °C‬"
+
+# machine: pseudo
 msgid "1 · Before"
 msgstr "‮1 · Before‬"
 
@@ -12765,6 +14570,18 @@ msgstr "‮Working out the whole batch first…‬"
 # machine: pseudo
 msgid "A placed reactor's node runs a fixed guess until you use a run here."
 msgstr "‮A placed reactor's node runs a fixed guess until you use a run here.‬"
+
+# machine: pseudo
+msgid ""
+"Batch {batch_h} h at {watts}: {feed_kg} kg in → {char_kg} kg char, {gas_nm3} m³ gas at {gas_lhv_mj_nm3} MJ/m³, {vinegar_l} L wood vinegar, {tar_kg} kg tar. {where}{is_empty}"
+msgstr ""
+"‮Batch {batch_h} h at {watts}: {feed_kg} kg in → {char_kg} kg char, {gas_nm3} m³ gas at {gas_lhv_mj_nm3} MJ/m³, {vinegar_l} L wood vinegar, {tar_kg} kg tar. {where}{is_empty}‬"
+
+# machine: pseudo
+msgid ""
+"Copied, and saved as {file}. Paste it into Home Assistant's automations.yaml once the board is added."
+msgstr ""
+"‮Copied, and saved as {file}. Paste it into Home Assistant's automations.yaml once the board is added.‬"
 
 # machine: pseudo
 msgid "Run the process on the lab's clock (Space)"
@@ -12841,6 +14658,10 @@ msgstr "‮Gas‬"
 # machine: pseudo
 msgid "Wall"
 msgstr "‮Wall‬"
+
+# machine: pseudo
+msgid "Running the batch… {end} %"
+msgstr "‮Running the batch… {end} %‬"
 
 # machine: pseudo
 msgid "Process"
@@ -12985,6 +14806,14 @@ msgid "by hand, from this moment"
 msgstr "‮by hand, from this moment‬"
 
 # machine: pseudo
+msgid ""
+"{key}\n"
+"Flipping it changes the run from this moment on."
+msgstr ""
+"‮{key}‬\n"
+"‮Flipping it changes the run from this moment on.‬"
+
+# machine: pseudo
 msgid "Sensors"
 msgstr "‮Sensors‬"
 
@@ -13057,6 +14886,10 @@ msgstr ""
 "‮The rules as automations.yaml. They name the board's entities, so they run as they are once the board is flashed and added to Home Assistant.‬"
 
 # machine: pseudo
+msgid "On the controller board ({note})"
+msgstr "‮On the controller board ({note})‬"
+
+# machine: pseudo
 msgid "Flooded"
 msgstr "‮Flooded‬"
 
@@ -13091,6 +14924,10 @@ msgstr "‮Now‬"
 # machine: pseudo
 msgid "What this step grows"
 msgstr "‮What this step grows‬"
+
+# machine: pseudo
+msgid "Step {step_sel} · {own}"
+msgstr "‮Step {step_sel} · {own}‬"
 
 # machine: pseudo
 msgid "Really delete?"
@@ -13135,6 +14972,18 @@ msgstr "‮Rate m/s‬"
 # machine: pseudo
 msgid "Flood pits"
 msgstr "‮Flood pits‬"
+
+# machine: pseudo
+msgid "Ground {gy} m · edited {d} m"
+msgstr "‮Ground {gy} m · edited {d} m‬"
+
+# machine: pseudo
+msgid "Ground {gy} m"
+msgstr "‮Ground {gy} m‬"
+
+# machine: pseudo
+msgid "Lvl {level_m} / spill {spill_m} m · {stock_l} L ({fill_frac}%){rate}"
+msgstr "‮Lvl {level_m} / spill {spill_m} m · {stock_l} L ({fill_frac}%){rate}‬"
 
 # machine: pseudo
 msgid "Starting …"
@@ -13469,6 +15318,10 @@ msgid "Remove this pin"
 msgstr "‮Remove this pin‬"
 
 # machine: pseudo
+msgid "Offset: {ee} m E, {nn} m N"
+msgstr "‮Offset: {ee} m E, {nn} m N‬"
+
+# machine: pseudo
 msgid "Advanced terrain size"
 msgstr "‮Advanced terrain size‬"
 
@@ -13489,6 +15342,12 @@ msgstr ""
 # machine: pseudo
 msgid "Hi-res DEM/imagery"
 msgstr "‮Hi-res DEM/imagery‬"
+
+# machine: pseudo
+msgid ""
+"Width of the hi-res elevation + imagery patch in the middle, edge to edge. The sharpest imagery layers stay inside it. 1 m USGS lidar (US sites, key required) needs {usgs1m_max_side_m} or less."
+msgstr ""
+"‮Width of the hi-res elevation + imagery patch in the middle, edge to edge. The sharpest imagery layers stay inside it. 1 m USGS lidar (US sites, key required) needs {usgs1m_max_side_m} or less.‬"
 
 # machine: pseudo
 msgid ""
@@ -13519,6 +15378,10 @@ msgid ""
 "Small enough to attempt 1 m USGS lidar, using your OpenTopography key from Settings -> Keys. That dataset needs an ACADEMIC-tier key though -- an ordinary key falls back to 10 m (see below)."
 msgstr ""
 "‮Small enough to attempt 1 m USGS lidar, using your OpenTopography key from Settings -> Keys. That dataset needs an ACADEMIC-tier key though -- an ordinary key falls back to 10 m (see below).‬"
+
+# machine: pseudo
+msgid "Over {cap} -- the hi-res patch uses the 10 m DEM"
+msgstr "‮Over {cap} -- the hi-res patch uses the 10 m DEM‬"
 
 # machine: pseudo
 msgid "📡 Live Mode (sync with real time)"
@@ -13681,6 +15544,10 @@ msgstr "‮{risk} · {line} · not yet simulated‬"
 # machine: pseudo
 msgid "Now: no weather data for this site yet."
 msgstr "‮Now: no weather data for this site yet.‬"
+
+# machine: pseudo
+msgid "Now: wind {mph} mph, {rain} → {verdict}{ground}"
+msgstr "‮Now: wind {mph} mph, {rain} → {verdict}{ground}‬"
 
 # machine: pseudo
 msgid "API Keys  (optional — improve data accuracy)"
@@ -14952,6 +16819,12 @@ msgstr "‮Now: no people simulated on this map.‬"
 
 # machine: pseudo
 msgid ""
+"Now: {heroes} (budget {budget}) · {over} · {crowd} light crowd{light_crowd} · {frames_per_second} fps"
+msgstr ""
+"‮Now: {heroes} (budget {budget}) · {over} · {crowd} light crowd{light_crowd} · {frames_per_second} fps‬"
+
+# machine: pseudo
+msgid ""
 "Turn a number up and watch the frame rate here (or F3). The full simulation and the full figures cost CPU; the crowd figures and their reach cost GPU. 0 / far left = Auto."
 msgstr ""
 "‮Turn a number up and watch the frame rate here (or F3). The full simulation and the full figures cost CPU; the crowd figures and their reach cost GPU. 0 / far left = Auto.‬"
@@ -15479,6 +17352,14 @@ msgid "Cancel this burn"
 msgstr "‮Cancel this burn‬"
 
 # machine: pseudo
+msgid ""
+"Site deployment schedule — set a time on the timeline when the crews build every structure and camp, or pack it all up.\n"
+"{line}"
+msgstr ""
+"‮Site deployment schedule — set a time on the timeline when the crews build every structure and camp, or pack it all up.‬\n"
+"‮{line}‬"
+
+# machine: pseudo
 msgid "Site deployment needs a loaded world with a systems graph."
 msgstr "‮Site deployment needs a loaded world with a systems graph.‬"
 
@@ -15513,6 +17394,14 @@ msgstr "‮Clear the schedule‬"
 # machine: pseudo
 msgid "Site deployment"
 msgstr "‮Site deployment‬"
+
+# machine: pseudo
+msgid ""
+"{action} now, with no crew — {value} swap at once.\n"
+"The crews' work in flight is cancelled."
+msgstr ""
+"‮{action} now, with no crew — {value} swap at once.‬\n"
+"‮The crews' work in flight is cancelled.‬"
 
 # machine: pseudo
 msgid "Deployment schedule cleared."
@@ -15601,6 +17490,10 @@ msgid "Import datastream CSV"
 msgstr "‮Import datastream CSV‬"
 
 # machine: pseudo
+msgid "LinkageLab import: {model_id}"
+msgstr "‮LinkageLab import: {model_id}‬"
+
+# machine: pseudo
 msgid "Editable design detected"
 msgstr "‮Editable design detected‬"
 
@@ -15646,6 +17539,10 @@ msgstr "‮Finishing the MP4 (ffmpeg)…‬"
 # machine: pseudo
 msgid "Warming up the renderer…"
 msgstr "‮Warming up the renderer…‬"
+
+# machine: pseudo
+msgid "Frame {done} / {total} ({prog}%)"
+msgstr "‮Frame {done} / {total} ({prog}%)‬"
 
 # machine: pseudo
 msgid "Load video: no projection canvas on this map."
@@ -15720,6 +17617,10 @@ msgid "Challenges — click to pick a mission"
 msgstr "‮Challenges — click to pick a mission‬"
 
 # machine: pseudo
+msgid "{title} — {elapsed_h} / {dur} h elapsed · click for missions"
+msgstr "‮{title} — {elapsed_h} / {dur} h elapsed · click for missions‬"
+
+# machine: pseudo
 msgid "NWS ALERT"
 msgstr "‮NWS ALERT‬"
 
@@ -15728,8 +17629,16 @@ msgid "National Weather Service Watch/Warning/Advisory"
 msgstr "‮National Weather Service Watch/Warning/Advisory‬"
 
 # machine: pseudo
+msgid "{title} · +{value} more"
+msgstr "‮{title} · +{value} more‬"
+
+# machine: pseudo
 msgid "Click to open"
 msgstr "‮Click to open‬"
+
+# machine: pseudo
+msgid "+{value} UP"
+msgstr "‮+{value} UP‬"
 
 # machine: pseudo
 msgid "Bag"
@@ -15864,12 +17773,20 @@ msgid "Delete this road / zone (Del)"
 msgstr "‮Delete this road / zone (Del)‬"
 
 # machine: pseudo
+msgid "Zone offers / camp needs: {fid}"
+msgstr "‮Zone offers / camp needs: {fid}‬"
+
+# machine: pseudo
 msgid "Cut now"
 msgstr "‮Cut now‬"
 
 # machine: pseudo
 msgid "— pick a camp —"
 msgstr "‮— pick a camp —‬"
+
+# machine: pseudo
+msgid "{title} tools"
+msgstr "‮{title} tools‬"
 
 # machine: pseudo
 msgid "Tools"
@@ -15890,12 +17807,16 @@ msgid "Close the toolbar (Esc)"
 msgstr "‮Close the toolbar (Esc)‬"
 
 # machine: pseudo
-msgid "Back into its bundle"
-msgstr "‮Back into its bundle‬"
+msgid "Lane {lane} of {lanes}"
+msgstr "‮Lane {lane} of {lanes}‬"
 
 # machine: pseudo
 msgid "Click a run to change its kind, size and look."
 msgstr "‮Click a run to change its kind, size and look.‬"
+
+# machine: pseudo
+msgid "Back into its bundle"
+msgstr "‮Back into its bundle‬"
 
 # machine: pseudo
 msgid "Back in its bundle"
@@ -15996,6 +17917,10 @@ msgid ""
 "Drag a run up or down: the height it prefers. Snaps to floor, knee, bench and head height."
 msgstr ""
 "‮Drag a run up or down: the height it prefers. Snaps to floor, knee, bench and head height.‬"
+
+# machine: pseudo
+msgid "{conduit_style} · {length_m} · bends {bend_radius_m} mm"
+msgstr "‮{conduit_style} · {length_m} · bends {bend_radius_m} mm‬"
 
 # machine: pseudo
 msgid "Style…"
@@ -16205,6 +18130,30 @@ msgid "Re-carving every channel…"
 msgstr "‮Re-carving every channel…‬"
 
 # machine: pseudo
+msgid ""
+"Major radius {r}, minor radius {r_2}, centre {hc} up · ground cut {ground_deg} below the equator · throat Ø {throat_r_m}"
+msgstr ""
+"‮Major radius {r}, minor radius {r_2}, centre {hc} up · ground cut {ground_deg} below the equator · throat Ø {throat_r_m}‬"
+
+# machine: pseudo
+msgid ""
+"{sectors} sectors · pieces {units} × {units_2} · {sheets} sheets · folds {fold}"
+msgstr ""
+"‮{sectors} sectors · pieces {units} × {units_2} · {sheets} sheets · folds {fold}‬"
+
+# machine: pseudo
+msgid ""
+"{count} panels · {total_w} kW · {series}S × {parallel}P · string Voc {string_voc} V, Vmp {string_vmp} V"
+msgstr ""
+"‮{count} panels · {total_w} kW · {series}S × {parallel}P · string Voc {string_voc} V, Vmp {string_vmp} V‬"
+
+# machine: pseudo
+msgid ""
+"{mass_kg} · {tube_m} of tube in {stock_pieces} stock lengths ({waste_pct} % waste) · {fittings} fittings{sheets}{panels}"
+msgstr ""
+"‮{mass_kg} · {tube_m} of tube in {stock_pieces} stock lengths ({waste_pct} % waste) · {fittings} fittings{sheets}{panels}‬"
+
+# machine: pseudo
 msgid "Section"
 msgstr "‮Section‬"
 
@@ -16239,6 +18188,11 @@ msgid "Origami canopy"
 msgstr "‮Origami canopy‬"
 
 # machine: pseudo
+msgid "{spec} · {height_m} high · {floor_area_m2} floor · {count} · {mass_kg}"
+msgstr ""
+"‮{spec} · {height_m} high · {floor_area_m2} floor · {count} · {mass_kg}‬"
+
+# machine: pseudo
 msgid "e.g. 17, 19"
 msgstr "‮e.g. 17, 19‬"
 
@@ -16271,6 +18225,10 @@ msgid ""
 "Tension lines are wire rope with a turnbuckle and an eye clamp at each end; braces are straight tube on swivel clamps."
 msgstr ""
 "‮Tension lines are wire rope with a turnbuckle and an eye clamp at each end; braces are straight tube on swivel clamps.‬"
+
+# machine: pseudo
+msgid "Bracing {value}"
+msgstr "‮Bracing {value}‬"
 
 # machine: pseudo
 msgid "Remove this bracing"
@@ -16313,6 +18271,10 @@ msgstr "‮Re-read this level's briefing‬"
 # machine: pseudo
 msgid "Leave the bootcamp — your real graph comes back untouched"
 msgstr "‮Leave the bootcamp — your real graph comes back untouched‬"
+
+# machine: pseudo
+msgid "🎓  Level {index} — {title}"
+msgstr "‮🎓  Level {index} — {title}‬"
 
 # machine: pseudo
 msgid "🎓  New here? Learn solar from the battery up"
@@ -16441,6 +18403,10 @@ msgstr ""
 "‮Vegetation paint needs a location map (press V when TerrainLoader is present).‬"
 
 # machine: pseudo
+msgid "Opened Tune look ({species_hint})"
+msgstr "‮Opened Tune look ({species_hint})‬"
+
+# machine: pseudo
 msgid "Tune look needs a location map."
 msgstr "‮Tune look needs a location map.‬"
 
@@ -16453,8 +18419,16 @@ msgid "No scene to place into"
 msgstr "‮No scene to place into‬"
 
 # machine: pseudo
+msgid "Could not start placement: {error}"
+msgstr "‮Could not start placement: {error}‬"
+
+# machine: pseudo
 msgid "System graph missing from scene"
 msgstr "‮System graph missing from scene‬"
+
+# machine: pseudo
+msgid "Spawned {label} on the graph"
+msgstr "‮Spawned {label} on the graph‬"
 
 # machine: pseudo
 msgid "Could not spawn graph preset"
@@ -16469,6 +18443,10 @@ msgid ""
 "Nothing placed — area may be excluded, too steep, or the tree budget is spent"
 msgstr ""
 "‮Nothing placed — area may be excluded, too steep, or the tree budget is spent‬"
+
+# machine: pseudo
+msgid "Planted {placed} (cleared {removed})"
+msgstr "‮Planted {placed} (cleared {removed})‬"
 
 # machine: pseudo
 msgid "Cleared"
@@ -16603,6 +18581,10 @@ msgid "— presets —"
 msgstr "‮— presets —‬"
 
 # machine: pseudo
+msgid "Saved {species} default"
+msgstr "‮Saved {species} default‬"
+
+# machine: pseudo
 msgid "Type a name first…"
 msgstr "‮Type a name first…‬"
 
@@ -16625,6 +18607,20 @@ msgstr "‮Stand age‬"
 # machine: pseudo
 msgid "OSM → tree type"
 msgstr "‮OSM → tree type‬"
+
+# machine: pseudo
+msgid ""
+"Preview: {n_trees} and {n_under} on {area_ha} ha (≈ {area_ha_2} trees / ha)"
+msgstr ""
+"‮Preview: {n_trees} and {n_under} on {area_ha} ha (≈ {area_ha_2} trees / ha)‬"
+
+# machine: pseudo
+msgid "Apply to map ({pending})"
+msgstr "‮Apply to map ({pending})‬"
+
+# machine: pseudo
+msgid "{pending} slider{pending_2} changed since the last apply"
+msgstr "‮{pending} slider{pending_2} changed since the last apply‬"
 
 # machine: pseudo
 msgid "Map matches this preview"
@@ -16670,6 +18666,18 @@ msgstr "‮Give back to species‬"
 # machine: pseudo
 msgid "Remove this tree's own look so it follows its species again"
 msgstr "‮Remove this tree's own look so it follows its species again‬"
+
+# machine: pseudo
+msgid "One {label} · {src} · {height_m} m tall{is_empty}"
+msgstr "‮One {label} · {src} · {height_m} m tall{is_empty}‬"
+
+# machine: pseudo
+msgid "All {label} in this world ({thousands})"
+msgstr "‮All {label} in this world ({thousands})‬"
+
+# machine: pseudo
+msgid "All {label} in every world (species default)"
+msgstr "‮All {label} in every world (species default)‬"
 
 # machine: pseudo
 msgid "The plant family, or the mixed woodland the Mix brush paints"
@@ -16768,8 +18776,28 @@ msgid "+ Add a tree…"
 msgstr "‮+ Add a tree…‬"
 
 # machine: pseudo
+msgid "{iid} · click to select, drag to move, R turns it"
+msgstr "‮{iid} · click to select, drag to move, R turns it‬"
+
+# machine: pseudo
+msgid "{e} on the {face} · click to select, drag to move"
+msgstr "‮{e} on the {face} · click to select, drag to move‬"
+
+# machine: pseudo
+msgid "The {face}"
+msgstr "‮The {face}‬"
+
+# machine: pseudo
+msgid "{value} on it. Click one in the preview to edit it."
+msgstr "‮{value} on it. Click one in the preview to edit it.‬"
+
+# machine: pseudo
 msgid "Remove it (Del or Backspace)"
 msgstr "‮Remove it (Del or Backspace)‬"
+
+# machine: pseudo
+msgid "{value} inside. With the skin off, click one to edit it."
+msgstr "‮{value} inside. With the skin off, click one to edit it.‬"
 
 # machine: pseudo
 msgid "Along"
@@ -16784,8 +18812,22 @@ msgid "Type how far it drives one way to see what getting it there costs."
 msgstr "‮Type how far it drives one way to see what getting it there costs.‬"
 
 # machine: pseudo
+msgid "There and back: {mi}, {kwh} kWh, ${cost}. Range {range_km}."
+msgstr "‮There and back: {mi}, {kwh} kWh, ${cost}. Range {range_km}.‬"
+
+# machine: pseudo
+msgid "There and back: {mi}, {litres}, ${cost}. Range {range_km} a tank."
+msgstr "‮There and back: {mi}, {litres}, ${cost}. Range {range_km} a tank.‬"
+
+# machine: pseudo
 msgid "Towed: its fuel is the tow vehicle's."
 msgstr "‮Towed: its fuel is the tow vehicle's.‬"
+
+# machine: pseudo
+msgid ""
+"Your vehicles already have a design called \"{nm}\". Replace it with this one?"
+msgstr ""
+"‮Your vehicles already have a design called \"{nm}\". Replace it with this one?‬"
 
 # machine: pseudo
 msgid "None (parametric)"
@@ -16823,6 +18865,10 @@ msgstr ""
 # machine: pseudo
 msgid "By vehicle type"
 msgstr "‮By vehicle type‬"
+
+# machine: pseudo
+msgid "Start over from the built-in {label} (Ctrl+Z undoes)"
+msgstr "‮Start over from the built-in {label} (Ctrl+Z undoes)‬"
 
 # machine: pseudo
 msgid "Hide the body's skin and look at the inside"
@@ -17022,9 +19068,25 @@ msgstr "‮Arm an item, then click where it goes on the preview.‬"
 
 # machine: pseudo
 msgid ""
+"{tip}\n"
+"Shift-click to place several · Esc stops"
+msgstr ""
+"‮{tip}‬\n"
+"‮Shift-click to place several · Esc stops‬"
+
+# machine: pseudo
+msgid ""
 "Arm a piece, then click the floor (the skin comes off). Drag to move, R turns it. Everything needs a 50 cm way in from a door."
 msgstr ""
 "‮Arm a piece, then click the floor (the skin comes off). Drag to move, R turns it. Everything needs a 50 cm way in from a door.‬"
+
+# machine: pseudo
+msgid ""
+"{tip}\n"
+"Shift-click to place several · R turns it · Esc stops"
+msgstr ""
+"‮{tip}‬\n"
+"‮Shift-click to place several · R turns it · Esc stops‬"
 
 # machine: pseudo
 msgid "Your vehicle's model"
@@ -17059,6 +19121,10 @@ msgstr "‮Turn it round‬"
 # machine: pseudo
 msgid "Add a model…"
 msgstr "‮Add a model…‬"
+
+# machine: pseudo
+msgid "Copy a .glb / .gltf into {model_dir} and use it"
+msgstr "‮Copy a .glb / .gltf into {model_dir} and use it‬"
 
 # machine: pseudo
 msgid "The trip to site"
@@ -17101,6 +19167,18 @@ msgid "Active weather source"
 msgstr "‮Active weather source‬"
 
 # machine: pseudo
+msgid "{rain_mmh}mm"
+msgstr "‮{rain_mmh}mm‬"
+
+# machine: pseudo
+msgid "{rain_24h}mm"
+msgstr "‮{rain_24h}mm‬"
+
+# machine: pseudo
+msgid "{rpm} rpm · λ {lam} · {p_elec}"
+msgstr "‮{rpm} rpm · λ {lam} · {p_elec}‬"
+
+# machine: pseudo
 msgid ""
 "A rotor clamped to the generator turns it 1 : 1 — set Mount to its own shaft and bearings to gear it."
 msgstr ""
@@ -17131,6 +19209,10 @@ msgstr ""
 # machine: pseudo
 msgid "Could not write the part."
 msgstr "‮Could not write the part.‬"
+
+# machine: pseudo
+msgid "Sheet {idx} of {sheets} — {sheet}, {label}{sheets_2}"
+msgstr "‮Sheet {idx} of {sheets} — {sheet}, {label}{sheets_2}‬"
 
 # machine: pseudo
 msgid "Turbines"
@@ -17228,6 +19310,20 @@ msgid "Take the mean wind from the world's weather data (a year at 10 m)"
 msgstr "‮Take the mean wind from the world's weather data (a year at 10 m)‬"
 
 # machine: pseudo
+msgid "{spec} · {p_elec} at {design_wind_ms} m/s · {aep_kwh} a year"
+msgstr "‮{spec} · {p_elec} at {design_wind_ms} m/s · {aep_kwh} a year‬"
+
+# machine: pseudo
+msgid ""
+"Designing {name} on the graph — Apply writes this design's power curve onto it."
+msgstr ""
+"‮Designing {name} on the graph — Apply writes this design's power curve onto it.‬"
+
+# machine: pseudo
+msgid "About ${cost} and {kg}."
+msgstr "‮About ${cost} and {kg}.‬"
+
+# machine: pseudo
 msgid "Blade, printed solid (small rotors)"
 msgstr "‮Blade, printed solid (small rotors)‬"
 
@@ -17314,6 +19410,10 @@ msgid "Open a world first; F11 there opens the view."
 msgstr "‮Open a world first; F11 there opens the view.‬"
 
 # machine: pseudo
+msgid "Slot {value}"
+msgstr "‮Slot {value}‬"
+
+# machine: pseudo
 msgid "Portrait"
 msgstr "‮Portrait‬"
 
@@ -17323,9 +19423,19 @@ msgstr "‮Screen‬"
 
 # machine: pseudo
 msgid ""
+"Row spans {span} m; whole wall covers {wall_fov}° horizontally; per monitor {per}."
+msgstr ""
+"‮Row spans {span} m; whole wall covers {wall_fov}° horizontally; per monitor {per}.‬"
+
+# machine: pseudo
+msgid ""
 "No viewpoint saved for this map — the view will open where the player stands."
 msgstr ""
 "‮No viewpoint saved for this map — the view will open where the player stands.‬"
+
+# machine: pseudo
+msgid "Saved: {describe}{is_empty}"
+msgstr "‮Saved: {describe}{is_empty}‬"
 
 # machine: pseudo
 msgid "Window wall"
@@ -17368,6 +19478,10 @@ msgid "Could not write the SVG."
 msgstr "‮Could not write the SVG.‬"
 
 # machine: pseudo
+msgid "Wrote {path}"
+msgstr "‮Wrote {path}‬"
+
+# machine: pseudo
 msgid "Wiring diagram"
 msgstr "‮Wiring diagram‬"
 
@@ -17408,6 +19522,10 @@ msgid "Nobody is on the roster."
 msgstr "‮Nobody is on the roster.‬"
 
 # machine: pseudo
+msgid "{label} · {chore_hours} h · crew {crew} · {start_h}–{end_h} · {drec}"
+msgstr "‮{label} · {chore_hours} h · crew {crew} · {start_h}–{end_h} · {drec}‬"
+
+# machine: pseudo
 msgid "Edit this duty in the form below"
 msgstr "‮Edit this duty in the form below‬"
 
@@ -17418,6 +19536,10 @@ msgstr "‮Remove this duty (its future slots go with it)‬"
 # machine: pseudo
 msgid "Not on the rota this day"
 msgstr "‮Not on the rota this day‬"
+
+# machine: pseudo
+msgid "{aid} did not show inside the hold — {covered} stepped in"
+msgstr "‮{aid} did not show inside the hold — {covered} stepped in‬"
 
 # machine: pseudo
 msgid "Done — a finished slot cannot be traded"
@@ -17434,8 +19556,20 @@ msgid "Click, then click another name to trade shifts"
 msgstr "‮Click, then click another name to trade shifts‬"
 
 # machine: pseudo
+msgid "Swap refused — {refusal}."
+msgstr "‮Swap refused — {refusal}.‬"
+
+# machine: pseudo
 msgid "Rename this role"
 msgstr "‮Rename this role‬"
+
+# machine: pseudo
+msgid "{members} member{members_2} ▾"
+msgstr "‮{members} member{members_2} ▾‬"
+
+# machine: pseudo
+msgid "{mem} member{mem_2} ▾"
+msgstr "‮{mem} member{mem_2} ▾‬"
 
 # machine: pseudo
 msgid "Only people with this skill respond"
@@ -17562,6 +19696,10 @@ msgid "Back to the full roster (Routines & chores)"
 msgstr "‮Back to the full roster (Routines & chores)‬"
 
 # machine: pseudo
+msgid "Work Planner — {value}"
+msgstr "‮Work Planner — {value}‬"
+
+# machine: pseudo
 msgid "Seed common chores"
 msgstr "‮Seed common chores‬"
 
@@ -17578,6 +19716,10 @@ msgstr "‮＋ Add a chore…‬"
 # machine: pseudo
 msgid "New chores are authored in Routines & chores"
 msgstr "‮New chores are authored in Routines & chores‬"
+
+# machine: pseudo
+msgid "Active: {workflow_id}  step {step_index}  [{status}]"
+msgstr "‮Active: {workflow_id}  step {step_index}  [{status}]‬"
 
 # machine: pseudo
 msgid "No active workflow"
@@ -17638,20 +19780,66 @@ msgstr ""
 "‮Close the open dialog and try again — a visible embedded window blocks native windows‬"
 
 # machine: pseudo
+msgid "SIMbiogenesis — window {slot}"
+msgstr "‮SIMbiogenesis — window {slot}‬"
+
+# machine: pseudo
 msgid "another mode"
 msgstr "‮another mode‬"
+
+# machine: pseudo
+msgid "Screen {k}"
+msgstr "‮Screen {k}‬"
 
 # machine: pseudo
 msgid "Window wall is off — enable it in Settings → Multi-Monitor"
 msgstr "‮Window wall is off — enable it in Settings → Multi-Monitor‬"
 
 # machine: pseudo
+msgid "Solar Array · {value} panels"
+msgstr "‮Solar Array · {value} panels‬"
+
+# machine: pseudo
 msgid "Place it here"
 msgstr "‮Place it here‬"
 
 # machine: pseudo
+msgid "Keep scrolling out to leave {title}  {dots}"
+msgstr "‮Keep scrolling out to leave {title}  {dots}‬"
+
+# machine: pseudo
+msgid "Groundwater · {y} m below the water table"
+msgstr "‮Groundwater · {y} m below the water table‬"
+
+# machine: pseudo
+msgid "{key} · {depth} down · water table {water_y} m below"
+msgstr "‮{key} · {depth} down · water table {water_y} m below‬"
+
+# machine: pseudo
+msgid ""
+"Site stores only. Camps and vehicles ({islands}) keep their own: open one to see its tanks."
+msgstr ""
+"‮Site stores only. Camps and vehicles ({islands}) keep their own: open one to see its tanks.‬"
+
+# machine: pseudo
 msgid "No settlement yet — enable Population on a habitat"
 msgstr "‮No settlement yet — enable Population on a habitat‬"
+
+# machine: pseudo
+msgid "👥 {count} people · {morale_avg}"
+msgstr "‮👥 {count} people · {morale_avg}‬"
+
+# machine: pseudo
+msgid ""
+"🔧 Work: {work_h_week} per person a week ({value}){planned} · leisure {leisure_h_day} a day"
+msgstr ""
+"‮🔧 Work: {work_h_week} per person a week ({value}){planned} · leisure {leisure_h_day} a day‬"
+
+# machine: pseudo
+msgid ""
+"Measured over the last {days} while the clock ran. Up to {sustainable_h_week} a week (the ATUS adult's paid work and housework) is sustainable, past {overloaded_h_week} overloaded. The Community schedule's Balance tab has the whole day."
+msgstr ""
+"‮Measured over the last {days} while the clock ran. Up to {sustainable_h_week} a week (the ATUS adult's paid work and housework) is sustainable, past {overloaded_h_week} overloaded. The Community schedule's Balance tab has the whole day.‬"
 
 # machine: pseudo
 msgid "Whole festival"
@@ -17666,8 +19854,20 @@ msgid "Stores"
 msgstr "‮Stores‬"
 
 # machine: pseudo
+msgid "Add {text}"
+msgstr "‮Add {text}‬"
+
+# machine: pseudo
 msgid "Worst first"
 msgstr "‮Worst first‬"
+
+# machine: pseudo
+msgid "All {worst} on the board"
+msgstr "‮All {worst} on the board‬"
+
+# machine: pseudo
+msgid "🏠 Your system: {soc} % · {pv_kw} kW solar  ›"
+msgstr "‮🏠 Your system: {soc} % · {pv_kw} kW solar  ›‬"
 
 # machine: pseudo
 msgid "⚡ LIVE POWER"
@@ -17748,6 +19948,32 @@ msgid "Battery —"
 msgstr "‮Battery —‬"
 
 # machine: pseudo
+msgid "{solar_kw} kW"
+msgstr "‮{solar_kw} kW‬"
+
+# machine: pseudo
+msgid "{aux_kw} kW"
+msgstr "‮{aux_kw} kW‬"
+
+# machine: pseudo
+msgid "{load_kw} kW"
+msgstr "‮{load_kw} kW‬"
+
+# machine: pseudo
+msgid "{net_kw} kW"
+msgstr "‮{net_kw} kW‬"
+
+# machine: pseudo
+msgid "{stored} / {cap} kWh"
+msgstr "‮{stored} / {cap} kWh‬"
+
+# machine: pseudo
+msgid ""
+"Driest week: {mm} mm of rain. Closure and battery hours are the score. Jump back returns to where you were."
+msgstr ""
+"‮Driest week: {mm} mm of rain. Closure and battery hours are the score. Jump back returns to where you were.‬"
+
+# machine: pseudo
 msgid "Bootcamp sandbox"
 msgstr "‮Bootcamp sandbox‬"
 
@@ -17762,6 +19988,10 @@ msgstr "‮Component‬"
 # machine: pseudo
 msgid "What is wrong"
 msgstr "‮What is wrong‬"
+
+# machine: pseudo
+msgid "+{row_limit} more (filter to narrow the list)"
+msgstr "‮+{row_limit} more (filter to narrow the list)‬"
 
 # machine: pseudo
 msgid "Flows · torus"
@@ -17869,6 +20099,10 @@ msgstr ""
 "‮Classic draws the old thin wires; touch any knob to start from Sankey.‬"
 
 # machine: pseudo
+msgid "{preset}, {sp} changed (amber rows)"
+msgstr "‮{preset}, {sp} changed (amber rows)‬"
+
+# machine: pseudo
 msgid "Flow style"
 msgstr "‮Flow style‬"
 
@@ -17951,6 +20185,10 @@ msgid "Nothing to fix on this drawing."
 msgstr "‮Nothing to fix on this drawing.‬"
 
 # machine: pseudo
+msgid "and {checks} more"
+msgstr "‮and {checks} more‬"
+
+# machine: pseudo
 msgid "Acknowledge all"
 msgstr "‮Acknowledge all‬"
 
@@ -17965,6 +20203,10 @@ msgstr "‮Disarm‬"
 # machine: pseudo
 msgid "Hardware…"
 msgstr "‮Hardware…‬"
+
+# machine: pseudo
+msgid "ARMED  ·  {value} driving real devices"
+msgstr "‮ARMED  ·  {value} driving real devices‬"
 
 # machine: pseudo
 msgid "The last screen stays."
@@ -18007,6 +20249,10 @@ msgstr "‮Bend moved: the run is routed through it‬"
 # machine: pseudo
 msgid "That bend is the router's own: drag it to make it a bend point"
 msgstr "‮That bend is the router's own: drag it to make it a bend point‬"
+
+# machine: pseudo
+msgid "Show the {lay} lines in this picture."
+msgstr "‮Show the {lay} lines in this picture.‬"
 
 # machine: pseudo
 msgid "As built"
@@ -18118,8 +20364,16 @@ msgid "Percolation channels (flowing)"
 msgstr "‮Percolation channels (flowing)‬"
 
 # machine: pseudo
+msgid "depths drawn ×{k} for legibility"
+msgstr "‮depths drawn ×{k} for legibility‬"
+
+# machine: pseudo
 msgid "Soil profile of the cutaway — click to collapse"
 msgstr "‮Soil profile of the cutaway — click to collapse‬"
+
+# machine: pseudo
+msgid "{people} ppl"
+msgstr "‮{people} ppl‬"
 
 # machine: pseudo
 msgid "Ctrl+F to search"
@@ -18187,6 +20441,10 @@ msgstr "‮Reset connector‬"
 # machine: pseudo
 msgid "Overload"
 msgstr "‮Overload‬"
+
+# machine: pseudo
+msgid "{ratio}× rating"
+msgstr "‮{ratio}× rating‬"
 
 # machine: pseudo
 msgid "Simulate losses"
@@ -18307,8 +20565,20 @@ msgstr ""
 "‮A placeholder for a machine nobody has built yet: it takes what comes in, delivers what it is asked as far as the elements allow, and measures it.‬"
 
 # machine: pseudo
+msgid ""
+"Show machines that would close the {kind} loop here, as ghosts on the graph (Tab accepts, Esc dismisses)."
+msgstr ""
+"‮Show machines that would close the {kind} loop here, as ghosts on the graph (Tab accepts, Esc dismisses).‬"
+
+# machine: pseudo
 msgid "What can separate this?"
 msgstr "‮What can separate this?‬"
+
+# machine: pseudo
+msgid ""
+"The machines and kinds of process that pull water, nitrogen, phosphorus, potassium or carbon out of {kind}."
+msgstr ""
+"‮The machines and kinds of process that pull water, nitrogen, phosphorus, potassium or carbon out of {kind}.‬"
 
 # machine: pseudo
 msgid "Site Plan (meters)"
@@ -18329,6 +20599,10 @@ msgstr ""
 # machine: pseudo
 msgid "Reset size to type default"
 msgstr "‮Reset size to type default‬"
+
+# machine: pseudo
+msgid "Restore {def_w} × {def_h} for this node type"
+msgstr "‮Restore {def_w} × {def_h} for this node type‬"
 
 # machine: pseudo
 msgid ""
@@ -18413,6 +20687,10 @@ msgstr "‮Open Inventory…‬"
 # machine: pseudo
 msgid "Live Extrusion"
 msgstr "‮Live Extrusion‬"
+
+# machine: pseudo
+msgid "{extruded_length_m} m ({extrude_fill_fraction}% of cut)"
+msgstr "‮{extruded_length_m} m ({extrude_fill_fraction}% of cut)‬"
 
 # machine: pseudo
 msgid "Population Simulation"
@@ -18543,6 +20821,10 @@ msgstr ""
 "‮No beam feedstock yet — cut beams on the PP Beam Extruder (or load beams labeled “Recycled Plastic Beam”).‬"
 
 # machine: pseudo
+msgid "↩ Reclaim {bs_n} as beam stock"
+msgstr "‮↩ Reclaim {bs_n} as beam stock‬"
+
+# machine: pseudo
 msgid ""
 "If these came from the beam extruder (not the trash printer), convert them back to CNC feedstock."
 msgstr ""
@@ -18579,22 +20861,22 @@ msgstr ""
 "‮Update this component's library preset with the current settings, and apply them to every other instance on the canvas.‬"
 
 # machine: pseudo
-msgid "Process Recipe"
-msgstr "‮Process Recipe‬"
-
-# machine: pseudo
 msgid ""
 "Sunlight factor is 3D site shade (1.0 = unshaded). Place the panel on the Site Plan to enable per-node shading."
 msgstr ""
 "‮Sunlight factor is 3D site shade (1.0 = unshaded). Place the panel on the Site Plan to enable per-node shading.‬"
 
 # machine: pseudo
-msgid "(none — continuous)"
-msgstr "‮(none — continuous)‬"
+msgid "Process Recipe"
+msgstr "‮Process Recipe‬"
 
 # machine: pseudo
 msgid "Cost"
 msgstr "‮Cost‬"
+
+# machine: pseudo
+msgid "(none — continuous)"
+msgstr "‮(none — continuous)‬"
 
 # machine: pseudo
 msgid "Legacy batch cycle"
@@ -18603,6 +20885,10 @@ msgstr "‮Legacy batch cycle‬"
 # machine: pseudo
 msgid "Site / Area"
 msgstr "‮Site / Area‬"
+
+# machine: pseudo
+msgid "Waiting: {recipe_waiting}"
+msgstr "‮Waiting: {recipe_waiting}‬"
 
 # machine: pseudo
 msgid "Start recipe"
@@ -18816,8 +21102,16 @@ msgstr ""
 "‮Link a sensor to any of these values. At 1× (Live) the node follows it; at any speed the reading is recorded so you can compare it with the simulation.‬"
 
 # machine: pseudo
+msgid "Linked to {eid}. Click to change or unlink."
+msgstr "‮Linked to {eid}. Click to change or unlink.‬"
+
+# machine: pseudo
 msgid "Link a sensor…"
 msgstr "‮Link a sensor…‬"
+
+# machine: pseudo
+msgid "Pick a Home Assistant entity for {label}."
+msgstr "‮Pick a Home Assistant entity for {label}.‬"
 
 # machine: pseudo
 msgid "Circuit Switch Controls"
@@ -18918,6 +21212,22 @@ msgstr "‮■  Stop calibration‬"
 # machine: pseudo
 msgid "Recording..."
 msgstr "‮Recording...‬"
+
+# machine: pseudo
+msgid "Time remaining: {remaining_s}   ({samples})"
+msgstr "‮Time remaining: {remaining_s}   ({samples})‬"
+
+# machine: pseudo
+msgid "Live: {current_w} W"
+msgstr "‮Live: {current_w} W‬"
+
+# machine: pseudo
+msgid "Average: {avg_w} W"
+msgstr "‮Average: {avg_w} W‬"
+
+# machine: pseudo
+msgid "Peak: {peak_w} W"
+msgstr "‮Peak: {peak_w} W‬"
 
 # machine: pseudo
 msgid "Calibration complete."
@@ -19102,6 +21412,12 @@ msgid "Provision"
 msgstr "‮Provision‬"
 
 # machine: pseudo
+msgid ""
+"How many days of water, food and firewood to stock (and waste tanks to size) for {value} people"
+msgstr ""
+"‮How many days of water, food and firewood to stock (and waste tanks to size) for {value} people‬"
+
+# machine: pseudo
 msgid "Stock up"
 msgstr "‮Stock up‬"
 
@@ -19272,6 +21588,14 @@ msgid "Place the 3D model in the world"
 msgstr "‮Place the 3D model in the world‬"
 
 # machine: pseudo
+msgid "Packs to: {packed} · {packed_2}{source}"
+msgstr "‮Packs to: {packed} · {packed_2}{source}‬"
+
+# machine: pseudo
+msgid "🌍  In the world, not on the graph ({total})  {world_open}"
+msgstr "‮🌍  In the world, not on the graph ({total})  {world_open}‬"
+
+# machine: pseudo
 msgid "Add all"
 msgstr "‮Add all‬"
 
@@ -19298,6 +21622,10 @@ msgstr "‮Dismissed. Close loops… still lists it.‬"
 # machine: pseudo
 msgid "Experiments need a world. Load one first."
 msgstr "‮Experiments need a world. Load one first.‬"
+
+# machine: pseudo
+msgid "Other options ({index} of {count})"
+msgstr "‮Other options ({index} of {count})‬"
 
 # machine: pseudo
 msgid "Could not write the brief."
@@ -19358,6 +21686,10 @@ msgid "Import graph"
 msgstr "‮Import graph‬"
 
 # machine: pseudo
+msgid "☀ Add OSM Solar ({pending} · {panels} pv)"
+msgstr "‮☀ Add OSM Solar ({pending} · {panels} pv)‬"
+
+# machine: pseudo
 msgid "Solar Array"
 msgstr "‮Solar Array‬"
 
@@ -19394,6 +21726,10 @@ msgid "Explode compound"
 msgstr "‮Explode compound‬"
 
 # machine: pseudo
+msgid "Go to another {kind_vehicle} at this level"
+msgstr "‮Go to another {kind_vehicle} at this level‬"
+
+# machine: pseudo
 msgid "📊  System Review"
 msgstr "‮📊  System Review‬"
 
@@ -19406,8 +21742,20 @@ msgid "⌨  Keyboard & Mouse Shortcuts"
 msgstr "‮⌨  Keyboard & Mouse Shortcuts‬"
 
 # machine: pseudo
+msgid "Loading last {history_hours_back} h…"
+msgstr "‮Loading last {history_hours_back} h…‬"
+
+# machine: pseudo
 msgid "HA HISTORY PLAYBACK"
 msgstr "‮HA HISTORY PLAYBACK‬"
+
+# machine: pseudo
+msgid "Loading {loaded} / {total}"
+msgstr "‮Loading {loaded} / {total}‬"
+
+# machine: pseudo
+msgid "🌐 SoI {r} m · {km2} km²"
+msgstr "‮🌐 SoI {r} m · {km2} km²‬"
 
 # machine: pseudo
 msgid "🌐 SoI · —"
@@ -19426,8 +21774,28 @@ msgid "Make Array"
 msgstr "‮Make Array‬"
 
 # machine: pseudo
+msgid "Systems by {mode}"
+msgstr "‮Systems by {mode}‬"
+
+# machine: pseudo
 msgid "Stop colouring systems"
 msgstr "‮Stop colouring systems‬"
+
+# machine: pseudo
+msgid "{no_data} with no data shown grey"
+msgstr "‮{no_data} with no data shown grey‬"
+
+# machine: pseudo
+msgid "+{alerts_rail_max} more on the board"
+msgstr "‮+{alerts_rail_max} more on the board‬"
+
+# machine: pseudo
+msgid ""
+"{name} needs attention: {reason}\n"
+"Click to fly there."
+msgstr ""
+"‮{name} needs attention: {reason}‬\n"
+"‮Click to fly there.‬"
 
 # machine: pseudo
 msgid "Dismiss (it comes back if it gets worse)"
@@ -19450,6 +21818,10 @@ msgstr "‮Got it‬"
 # machine: pseudo
 msgid "Show everything again"
 msgstr "‮Show everything again‬"
+
+# machine: pseudo
+msgid "{hidden} hidden  ✕"
+msgstr "‮{hidden} hidden  ✕‬"
 
 # machine: pseudo
 msgid "⚡ Review"

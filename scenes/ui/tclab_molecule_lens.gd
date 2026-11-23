@@ -585,7 +585,7 @@ func _frame_camera() -> void:
 
 func _refresh_text() -> void:
 	var name_cv := str(sim.net["cvs"][cv].get("label", "volume"))
-	title_label.text = "Molecules in %s · %.0f °C" % [name_cv, _cv_t() - 273.15]
+	title_label.text = I18n.f("Molecules in {name_cv} · {cv_t} °C", {"name_cv": name_cv, "cv_t": "%.0f" % (_cv_t() - 273.15)})
 	_story_label.text = str(_scene.get("title", ""))
 	caption.text = str(_scene.get("text", ""))
 	var bits: Array = []

@@ -99,10 +99,11 @@ func refresh() -> void:
 	if sgv != null and sgv.has_method("get_active_workflow"):
 		active = sgv.call("get_active_workflow") as Dictionary
 	if not active.is_empty() and str(active.get("status", "")) != "idle":
-		_status.text = "Active: %s  step %d  [%s]" % [
-			str(active.get("workflow_id", "")),
-			int(active.get("step_index", 0)),
-			str(active.get("status", ""))]
+		_status.text = I18n.f("Active: {workflow_id}  step {step_index}  [{status}]", {
+			"workflow_id": str(active.get("workflow_id", "")),
+			"step_index": "%d" % (int(active.get("step_index", 0))),
+			"status": str(active.get("status", "")),
+		})
 	else:
 		_status.text = "No active workflow"
 	for w: Dictionary in WorkflowRecipeCatalog.all_workflows():

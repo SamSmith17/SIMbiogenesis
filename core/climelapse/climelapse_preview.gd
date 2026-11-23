@@ -144,11 +144,12 @@ func _apply_instant() -> void:
 		_scrub_sync = false
 	if _label != null:
 		var vid_s := _vt
-		_label.text = "Preview  ·  %s  ·  %s / %s of video%s" % [
-			ClimelapseExportOptions.timecode_at(_t),
-			ClimelapseExportOptions.duration_label(vid_s),
-			ClimelapseExportOptions.duration_label(total_s),
-			"  ·  paused" if _paused else ""]
+		_label.text = I18n.f("Preview  ·  {t}  ·  {vid_s} / {total_s} of video{paused}", {
+			"t": ClimelapseExportOptions.timecode_at(_t),
+			"vid_s": ClimelapseExportOptions.duration_label(vid_s),
+			"total_s": ClimelapseExportOptions.duration_label(total_s),
+			"paused": "  ·  paused" if _paused else "",
+		})
 
 
 func toggle_pause() -> void:

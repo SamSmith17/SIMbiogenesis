@@ -145,7 +145,7 @@ func set_radius(r: float) -> void:
 	(_rows["basalt"] as Label).text = "Columnar basalt  from ~%s" % _m(r * 0.46)
 	(_rows["water"] as Label).text = "Water table  −%s below the centre" % _m(r * WATER_FRAC)
 	(_rows["channel"] as Label).text = "Percolation channels (flowing)"
-	_note.text = "depths drawn ×%.1f for legibility" % k if k > 1.01 else "true-scale depths"
+	_note.text = I18n.f("depths drawn ×{k} for legibility", {"k": "%.1f" % k}) if k > 1.01 else "true-scale depths"
 
 
 static func _m(v: float) -> String:

@@ -958,7 +958,7 @@ func _update_hover(local_pos: Vector2) -> void:
 			if mh < 0:
 				_sel_hud.text = ""
 			else:
-				_sel_hud.text = "Rack %d — click to edit it, drag to move it (Alt: no snap)" % (mh + 1)
+				_sel_hud.text = I18n.f("Rack {mh} — click to edit it, drag to move it (Alt: no snap)", {"mh": "%d" % ((mh + 1))})
 	if mh >= 0:
 		if _vp_container != null:
 			_vp_container.mouse_default_cursor_shape = Control.CURSOR_MOVE
@@ -1211,9 +1211,11 @@ func _update_manip(local_pos: Vector2) -> void:
 				var along := _ray_face_along(local_pos, str(_manip_start.get("face", "")))
 				if not is_nan(along):
 					el["at_ft"] = snappedf(along - float(_manip_start["grab_ft"]), 0.5)
-			_sel_hud.text = "%s at %s along the %s face  (snaps to 6\" • drag round a corner to change face)" % [
-				PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"),
-				PalletRackBuilder.fmt_ft(float(el["at_ft"])), str(el.get("face", ""))]
+			_sel_hud.text = I18n.f("{type} at {at_ft} along the {face} face  (snaps to 6\" • drag round a corner to change face)", {
+				"type": PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"),
+				"at_ft": PalletRackBuilder.fmt_ft(float(el["at_ft"])),
+				"face": str(el.get("face", "")),
+			})
 			_queue_rebuild(true, true)
 			return
 	_update_manip_hud()
@@ -1230,17 +1232,17 @@ func _update_manip_hud() -> void:
 		"deck_move":
 			var cov: Dictionary = _spec.get("cell_overrides", {})
 			var h := float((cov.get(key, {}) as Dictionary).get("height_ft", 0.0))
-			_sel_hud.text = "Deck height: %s  (snaps to 1\" on release)" % _fmt_ft_in(h)
+			_sel_hud.text = I18n.f("Deck height: {h}  (snaps to 1\" on release)", {"h": _fmt_ft_in(h)})
 		"beam_move":
 			var bov: Dictionary = _spec.get("beam_overrides", {})
 			var dy := float((bov.get(key, {}) as Dictionary).get("dy_in", 0.0))
-			_sel_hud.text = "Beam offset: %+.1f\"  (snaps to 1\" on release)" % dy
+			_sel_hud.text = I18n.f("Beam offset: {dy}\"  (snaps to 1\" on release)", {"dy": "%+.1f" % dy})
 		"deck_resize":
 			var cov2: Dictionary = _spec.get("cell_overrides", {})
 			var du := int((cov2.get(key, {}) as Dictionary).get("depth_units", 0))
 			var depth_ft := du * PalletRackBuilder.HALF_PANEL_FT if du > 0 \
 				else _strip_full_depth_ft(id)
-			_sel_hud.text = "Deck depth: %d ft" % int(round(depth_ft))
+			_sel_hud.text = I18n.f("Deck depth: {depth_ft} ft", {"depth_ft": "%d" % int(round(depth_ft))})
 
 
 ## Feet → e.g. "8' 3\"" using whole inches.
@@ -1722,8 +1724,10 @@ func _update_sel_hud() -> void:
 		_sel_hud.text = "Step tool: click a cell to drop steps  (Esc to exit)"
 		return
 	if not _tool.is_empty():
-		_sel_hud.text = "%s: %s  (Shift-click to place several • Esc to stop)" % [
-			_tool_label(), _tool_prompt()]
+		_sel_hud.text = I18n.f("{tool}: {tool_prompt}  (Shift-click to place several • Esc to stop)", {
+			"tool": _tool_label(),
+			"tool_prompt": _tool_prompt(),
+		})
 		return
 	if _sel_nodes.is_empty():
 		_sel_hud.text = "" if _ctx.is_empty() else \
@@ -1731,9 +1735,9 @@ func _update_sel_hud() -> void:
 		return
 	var el := _element_by_id(_selected_element_id())
 	if not el.is_empty() and _sel_nodes.size() == 1:
-		_sel_hud.text = "Selected: %s  (drag to move • Del remove • Ctrl+D duplicate)" % \
-			PalletRackBuilder.element_label(el, _spec) if DRAG_TYPES.has(str(el.get("type", ""))) \
-			else "Selected: %s  (Del remove • Ctrl+D duplicate)" % PalletRackBuilder.element_label(el, _spec)
+		_sel_hud.text = I18n.f("Selected: {spec}  (drag to move • Del remove • Ctrl+D duplicate)", {
+			"spec": PalletRackBuilder.element_label(el, _spec),
+		}) if DRAG_TYPES.has(str(el.get("type", ""))) else "Selected: %s  (Del remove • Ctrl+D duplicate)" % PalletRackBuilder.element_label(el, _spec)
 		if _node_has_children(str(_sel_nodes[0])):
 			_sel_hud.text = _sel_hud.text.trim_suffix(")") + " • double-click to open)"
 		return
@@ -1744,7 +1748,7 @@ func _update_sel_hud() -> void:
 		tips.append("double-click to open")
 	tips.append("Shift-click to add")
 	tips.append("Del remove")
-	_sel_hud.text = "Selected: %s  (%s)" % [what, " • ".join(tips)]
+	_sel_hud.text = I18n.f("Selected: {what}  ({tips})", {"what": what, "tips": " • ".join(tips)})
 
 
 func _build_studio_world() -> void:
@@ -3209,7 +3213,7 @@ func _refresh_crumbs() -> void:
 	if _show_hidden_btn != null:
 		var n := _hidden_under(_ctx.slice(_ctx.size() - 1) if not _ctx.is_empty() else []).size()
 		_show_hidden_btn.visible = n > 0
-		_show_hidden_btn.text = "Show %s" % UiText.count(n, "hidden part")
+		_show_hidden_btn.text = I18n.f("Show {value}", {"value": UiText.count(n, "hidden part")})
 
 
 ## Default colours the card's swatch starts from (the builder's materials).
@@ -3873,11 +3877,14 @@ func _on_plan_build() -> void:
 	var tl := PalletRackBuildSite.plan_for(_full_spec(), int(_crew_spin.value))
 	var blocked: Array = tl["blocked"]
 	if not blocked.is_empty():
-		_crew_lbl.text = "This crew can't finish it: %s can't start (too few hands to hold the frames while the beams go on)." % UiText.count(blocked.size(), "job")
+		_crew_lbl.text = I18n.f("This crew can't finish it: {blocked} can't start (too few hands to hold the frames while the beams go on).", {"blocked": UiText.count(blocked.size(), "job")})
 		return
-	_crew_lbl.text = "%s: about %s, %s. The longest chain of steps alone takes %s." % [
-		UiText.count(int(tl["crew"]), "person", "people"), UiText.duration(float(tl["makespan"]) / 3600.0),
-		UiText.count((tl["jobs"] as Array).size(), "job"), UiText.duration(PalletRackBuildPlan.critical_path(tl) / 3600.0)]
+	_crew_lbl.text = I18n.f("{crew}: about {makespan}, {jobs}. The longest chain of steps alone takes {tl}.", {
+		"crew": UiText.count(int(tl["crew"]), "person", "people"),
+		"makespan": UiText.duration(float(tl["makespan"]) / 3600.0),
+		"jobs": UiText.count((tl["jobs"] as Array).size(), "job"),
+		"tl": UiText.duration(PalletRackBuildPlan.critical_path(tl) / 3600.0),
+	})
 	if Time.get_ticks_msec() - t0 > 400:
 		_crew_lbl.text += " (planned in %.1f s)" % ((Time.get_ticks_msec() - t0) / 1000.0)
 
@@ -4160,9 +4167,11 @@ func _preview_el_bays(local_pos: Vector2) -> void:
 	el["face"] = face
 	el["seg_from"] = from
 	el["seg_to"] = from + span
-	_sel_hud.text = "%s on the %s face, %s  (drag onto another face to move it there)" % [
-		PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"), face,
-		("bay %d" % (from + 1)) if span == 0 else ("bays %d–%d" % [from + 1, from + span + 1])]
+	_sel_hud.text = I18n.f("{type} on the {face} face, {span}  (drag onto another face to move it there)", {
+		"type": PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"),
+		"face": face,
+		"span": ("bay %d" % (from + 1)) if span == 0 else ("bays %d–%d" % [from + 1, from + span + 1]),
+	})
 	_queue_rebuild(true, true)
 
 
@@ -4206,11 +4215,16 @@ func _preview_el_cell(local_pos: Vector2) -> void:
 		el["bay"] = b
 		el["col"] = c
 	if c < 0:
-		_sel_hud.text = "%s at bay %d" % [
-			PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"), b + 1]
+		_sel_hud.text = I18n.f("{type} at bay {b}", {
+			"type": PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"),
+			"b": "%d" % (b + 1),
+		})
 	else:
-		_sel_hud.text = "%s at bay %d, column %d" % [
-			PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"), b + 1, c + 1]
+		_sel_hud.text = I18n.f("{type} at bay {b}, column {c}", {
+			"type": PalletRackBuilder.ELEMENT_LABELS.get(str(el.get("type", "")), "Element"),
+			"b": "%d" % (b + 1),
+			"c": "%d" % (c + 1),
+		})
 	_queue_rebuild(true, true)
 
 
@@ -4245,8 +4259,10 @@ func _preview_cell_move(local_pos: Vector2) -> void:
 		_sel_hud.text = "Drag onto another bay to move it there  (Alt-drag raises or lowers)"
 	else:
 		var tb := str(_manip_start["anchor"]).split(",")
-		_sel_hud.text = "Move to bay %d, column %d  (release to drop; what is there swaps in)" % [
-			int(tb[0]) + dlt.x + 1, int(tb[1]) + dlt.y + 1]
+		_sel_hud.text = I18n.f("Move to bay {dlt}, column {y}  (release to drop; what is there swaps in)", {
+			"dlt": "%d" % (int(tb[0]) + dlt.x + 1),
+			"y": "%d" % (int(tb[1]) + dlt.y + 1),
+		})
 
 
 ## Move deck cells: `mapping` "b,c,li" -> "b,c,li". The cells displaced from
@@ -4327,7 +4343,7 @@ func _preview_seg_swap(local_pos: Vector2) -> void:
 		var c := _comp_by_id("el:%s:%d" % [str(el["id"]), j])
 		if not c.is_empty():
 			_ghost_comps = [c]
-		_sel_hud.text = "Swap bay %d with bay %d  (release to swap their coverings)" % [src + 1, j + 1]
+		_sel_hud.text = I18n.f("Swap bay {src} with bay {j}  (release to swap their coverings)", {"src": "%d" % (src + 1), "j": "%d" % (j + 1)})
 	else:
 		_sel_hud.text = "Drag onto another bay of the slope to swap them"
 	_refresh_highlight()
@@ -4476,9 +4492,9 @@ func _preview_mod_move(local_pos: Vector2) -> void:
 	st["shared"] = shared
 	_set_module_xfs(PalletRackBuilder.move_module(xfs, i, cand * start.affine_inverse()), st["root"])
 	if shared >= 2:
-		_sel_hud.text = "Rack %d: %s meet another rack's  (Alt: no snap)" % [i + 1, UiText.count(shared, "upright")]
+		_sel_hud.text = I18n.f("Rack {value}: {shared} meet another rack's  (Alt: no snap)", {"value": "%d" % (i + 1), "shared": UiText.count(shared, "upright")})
 	else:
-		_sel_hud.text = "Rack %d: not touching another rack  (Alt: no snap)" % (i + 1)
+		_sel_hud.text = I18n.f("Rack {value}: not touching another rack  (Alt: no snap)", {"value": "%d" % ((i + 1))})
 	_queue_rebuild(true, true)
 
 

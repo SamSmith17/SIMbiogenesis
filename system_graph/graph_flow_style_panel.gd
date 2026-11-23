@@ -307,8 +307,10 @@ func _sync() -> void:
 		if classic:
 			_status.text = "Classic draws the old thin wires; touch any knob to start from Sankey."
 		elif custom:
-			_status.text = "%s, %s changed (amber rows)" % [GraphFlowStyle.PRESET_LABELS[preset],
-				UiText.count(sp.size() - 1, "setting")]
+			_status.text = I18n.f("{preset}, {sp} changed (amber rows)", {
+				"preset": GraphFlowStyle.PRESET_LABELS[preset],
+				"sp": UiText.count(sp.size() - 1, "setting"),
+			})
 		else:
 			_status.text = str(GraphFlowStyle.PRESET_TIPS.get(preset, ""))
 	if _preview != null:

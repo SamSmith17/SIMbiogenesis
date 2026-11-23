@@ -155,7 +155,7 @@ func _replan() -> void:
 		l.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		_plan_box.add_child(l)
 	_apply_btn.disabled = _plan.is_empty()
-	_apply_btn.text = "Make %s" % UiText.count(_plan.size(), "link") if not _plan.is_empty() else "Make these links"
+	_apply_btn.text = I18n.f("Make {plan}", {"plan": UiText.count(_plan.size(), "link")}) if not _plan.is_empty() else "Make these links"
 
 
 func _apply() -> void:

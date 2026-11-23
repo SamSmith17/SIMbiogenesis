@@ -162,8 +162,11 @@ func _build_recipe_card(recipe: Dictionary, inv: PartInventory) -> Control:
 			total_s += float((ph as Dictionary).get("work_s", 0.0))
 			max_crew = maxi(max_crew, int((ph as Dictionary).get("max_workers", 1)))
 		var lab_line := Label.new()
-		lab_line.text = "👷 ~%.1f person-h · crew up to %d · %s" % [
-			total_s / 3600.0, max_crew, UiText.count(phases.size(), "phase")]
+		lab_line.text = I18n.f("👷 ~{total_s} person-h · crew up to {max_crew} · {phases}", {
+			"total_s": "%.1f" % (total_s / 3600.0),
+			"max_crew": "%d" % max_crew,
+			"phases": UiText.count(phases.size(), "phase"),
+		})
 		lab_line.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		lab_line.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 		v.add_child(lab_line)

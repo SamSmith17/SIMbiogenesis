@@ -288,4 +288,4 @@ func _on_fill() -> void:
 func _on_yaml() -> void:
 	var nm := str((owner_modal.call("motors_source") as Dictionary).get("name", "concentrator"))
 	DisplayServer.clipboard_set(CspLabActuators.ha_yaml(nm, _last_chans))
-	_status_lbl.text = "Copied: input_number helpers for %d drives and an example automation." % _last_chans.size()
+	_status_lbl.text = I18n.f("Copied: input_number helpers for {chans} drives and an example automation.", {"chans": "%d" % _last_chans.size()})

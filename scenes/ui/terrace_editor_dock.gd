@@ -348,7 +348,7 @@ func _sync_step_edit() -> void:
 	_syncing = true
 	var ss := TerraceField.step_setting(r, _step_sel)
 	var own := (TerraceField.resolve(r)["steps"] as Dictionary).has(str(_step_sel))
-	_step_title.text = "Step %d · %s" % [_step_num(_step_sel), "its own crop" if own else "as the field"]
+	_step_title.text = I18n.f("Step {step_sel} · {own}", {"step_sel": "%d" % _step_num(_step_sel), "own": "its own crop" if own else "as the field"})
 	for i in _step_crop.item_count:
 		if str(_step_crop.get_item_metadata(i)) == str(ss["crop"]):
 			_step_crop.select(i)

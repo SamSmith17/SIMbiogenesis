@@ -744,7 +744,7 @@ func _refresh() -> void:
 	if not _active or _bridge == null:
 		return
 	var count := _roster_ids().size()
-	_title.text = "Work Planner — %s" % UiText.count(count, "person", "people")
+	_title.text = I18n.f("Work Planner — {value}", {"value": UiText.count(count, "person", "people")})
 	var nobody := count == 0 and _board() == null
 	if _empty != null:
 		_empty.visible = nobody
@@ -883,14 +883,13 @@ func _refresh_chores() -> void:
 		var orphaned := str(ch.get("orphaned_from", ""))
 		if not covered.is_empty():
 			var cov := _small("→ %s" % _name_for(covered), UITheme.C_OK)
-			cov.tooltip_text = "Covering%s" % (
-				" for %s" % _name_for(who) if not who.is_empty() else "")
+			cov.tooltip_text = I18n.f("Covering{is_empty}", {"is_empty": ( " for %s" % _name_for(who) if not who.is_empty() else "")})
 			row.add_child(cov)
 		elif not who.is_empty():
 			row.add_child(_small("→ %s" % _name_for(who)))
 		elif not orphaned.is_empty():
 			var orp := _small("anyone (was %s — left)" % _name_for(orphaned), C_DIM)
-			orp.tooltip_text = "%s was assigned but left the settlement" % _name_for(orphaned)
+			orp.tooltip_text = I18n.f("{orphaned} was assigned but left the settlement", {"orphaned": _name_for(orphaned)})
 			row.add_child(orp)
 		var badge: Array = NpcChoreBoard.system_badge(ch, prj_ids)
 		if not badge.is_empty():
@@ -1284,10 +1283,14 @@ func _refresh_schedule() -> void:
 		dl.custom_minimum_size.x = 96
 		dl.clip_text = true
 		var dw: Dictionary = drec.get("window", {})
-		dl.tooltip_text = "%s · %.1f h · crew %d · %02d–%02d · %s" % [
-			str(drec.get("label", "?")), float(drec.get("chore_hours", 1.0)),
-			int(drec.get("crew", 1)), int(dw.get("start_h", 0)),
-			int(dw.get("end_h", 24)), _repeat_text(drec)]
+		dl.tooltip_text = I18n.f("{label} · {chore_hours} h · crew {crew} · {start_h}–{end_h} · {drec}", {
+			"label": str(drec.get("label", "?")),
+			"chore_hours": "%.1f" % (float(drec.get("chore_hours", 1.0))),
+			"crew": "%d" % (int(drec.get("crew", 1))),
+			"start_h": "%02d" % (int(dw.get("start_h", 0))),
+			"end_h": "%02d" % (int(dw.get("end_h", 24))),
+			"drec": _repeat_text(drec),
+		})
 		name_cell.add_child(dl)
 		if _frameable(drec.get("target", {}) as Dictionary):
 			name_cell.add_child(_look_btn(drec.get("target", {}) as Dictionary))
@@ -1338,8 +1341,10 @@ func _slot_cell(duty: NpcDutyRoster, board: NpcChoreBoard,
 		var struck := not covered.is_empty() and aid == str(chore.get("assigned_to", ""))
 		btn.text = _name_for(aid) + ("  → " + _name_for(covered) if struck else "")
 		if struck:
-			btn.tooltip_text = "%s did not show inside the hold — %s stepped in" % [
-				_name_for(aid), _name_for(covered)]
+			btn.tooltip_text = I18n.f("{aid} did not show inside the hold — {covered} stepped in", {
+				"aid": _name_for(aid),
+				"covered": _name_for(covered),
+			})
 		var selected := int(_swap_sel.get("day", -1)) == cell_day \
 			and str(_swap_sel.get("duty_id", "")) == did \
 			and str(_swap_sel.get("agent", "")) == aid
@@ -1394,7 +1399,7 @@ func _on_slot_name(day: int, duty_id: String, agent: String) -> void:
 		str(_swap_sel["agent"]), day, duty_id, agent, _skills())
 	if not refusal.is_empty():
 		if _swap_lbl != null:
-			_swap_lbl.text = "Swap refused — %s." % refusal
+			_swap_lbl.text = I18n.f("Swap refused — {refusal}.", {"refusal": refusal})
 			_swap_lbl.add_theme_color_override("font_color", UITheme.C_WARN)
 			_swap_lbl.visible = true
 		return
@@ -1655,8 +1660,10 @@ func _refresh_oncall() -> void:
 		# would swallow the row.
 		var members_btn := MenuButton.new()
 		var members: Array = role.get("members", []) as Array
-		members_btn.text = "%d member%s ▾" % [members.size(),
-			"" if members.size() == 1 else "s"]
+		members_btn.text = I18n.f("{members} member{members_2} ▾", {
+			"members": "%d" % members.size(),
+			"members_2": "" if members.size() == 1 else "s",
+		})
 		UITheme.style_button(members_btn)
 		var pop := members_btn.get_popup()
 		for i in ids.size():
@@ -1679,8 +1686,7 @@ func _refresh_oncall() -> void:
 			else:
 				mem.append(aid)
 				pop.set_item_checked(idx, true)
-			members_btn.text = "%d member%s ▾" % [mem.size(),
-				"" if mem.size() == 1 else "s"]
+			members_btn.text = I18n.f("{mem} member{mem_2} ▾", {"mem": "%d" % mem.size(), "mem_2": "" if mem.size() == 1 else "s"})
 			_persist()
 			# Re-sync, never invalidate: invalidating here freed the open
 			# popup on the next 0.5 s tick, so a second member could never
@@ -1823,9 +1829,13 @@ func _refresh_person() -> void:
 			bar0.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			bar0.size_flags_stretch_ratio = hrs
 			strip0.add_child(bar0)
-		strip0.tooltip_text = "sleep %.1f h · needs %.1f h · chores %.1f h · free %.1f h%s" % [
-			sleep_h, need_h, chore_h, free_h,
-			"  ⚠ OVER-SCHEDULED by %.1f h" % over_h if over_h > 0.01 else ""]
+		strip0.tooltip_text = I18n.f("sleep {sleep_h} h · needs {need_h} h · chores {chore_h} h · free {free_h} h{over_h}", {
+			"sleep_h": "%.1f" % sleep_h,
+			"need_h": "%.1f" % need_h,
+			"chore_h": "%.1f" % chore_h,
+			"free_h": "%.1f" % free_h,
+			"over_h": "  ⚠ OVER-SCHEDULED by %.1f h" % over_h if over_h > 0.01 else "",
+		})
 
 	# The week strip: seven bars, today rightmost.
 	_person_box.add_child(_section("The week"))

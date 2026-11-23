@@ -848,14 +848,19 @@ func _refresh_header() -> void:
 	if not _name_edit.has_focus():
 		_name_edit.text = str(_spec["name"])
 	var p: Dictionary = _design["perf"]
-	_subtitle.text = "%s · %d rpm · %s" % [PeltonLabSpec.describe(_spec), int(round(float(p["rpm"]))),
-		UiText.num(float(p["p_elec_w"]), "W")]
+	_subtitle.text = I18n.f("{spec} · {rpm} rpm · {p_elec_w}", {
+		"spec": PeltonLabSpec.describe(_spec),
+		"rpm": "%d" % int(round(float(p["rpm"]))),
+		"p_elec_w": UiText.num(float(p["p_elec_w"]), "W"),
+	})
 	_apply_btn.visible = not _turbine_id.is_empty()
 	var item := _turbine_item()
 	_bound_lbl.visible = not item.is_empty()
 	if not item.is_empty():
-		_bound_lbl.text = "Designing the wheel of %s — its head (%.1f m), penstock and water are the site." % [
-			str((item.get("specs", {}) as Dictionary).get("name", "the turbine")), float(_spec["site"]["gross_head_m"])]
+		_bound_lbl.text = I18n.f("Designing the wheel of {name} — its head ({gross_head_m} m), penstock and water are the site.", {
+			"name": str((item.get("specs", {}) as Dictionary).get("name", "the turbine")),
+			"gross_head_m": "%.1f" % float(_spec["site"]["gross_head_m"]),
+		})
 
 
 ## The speed / power sweeps for the Performance tab: the wheel's overall Ø at
@@ -937,7 +942,7 @@ func _refresh_bom() -> void:
 		_bom_box.remove_child(c)
 		c.queue_free()
 	var t := PeltonLabDesign.bom_total(_design)
-	_bom_lbl.text = "About $%.0f and %s, built from stock parts." % [float(t["cost"]), PeltonLabSpec.fmt_kg(float(t["kg"]))]
+	_bom_lbl.text = I18n.f("About ${cost} and {kg}, built from stock parts.", {"cost": "%.0f" % float(t["cost"]), "kg": PeltonLabSpec.fmt_kg(float(t["kg"]))})
 	for r in _design["bom"]:
 		var l := Label.new()
 		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

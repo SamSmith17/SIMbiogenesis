@@ -188,7 +188,7 @@ func _on_frame(fr: Dictionary) -> void:
 		return
 	var g := LinkageBuildSteps.group_of(steps, i)
 	var rep := " (%d of %d alike)" % [int(g["position"]) + 1, int(g["count"])] if int(g["count"]) > 1 else ""
-	_step_lbl.text = "Step %d / %d%s — %s" % [i + 1, steps.size(), rep, str(steps[i].get("title", ""))]
+	_step_lbl.text = I18n.f("Step {value} / {steps}{rep} — {title}", {"value": "%d" % (i + 1), "steps": "%d" % steps.size(), "rep": rep, "title": str(steps[i].get("title", ""))})
 	_sum_lbl.text = str(fr.get("summary", "")) + ("   ·   workbench" if bool(fr.get("bench", false)) else "")
 	# The Lab's FOLD readout follows the step's pose (without re-applying it).
 	var fs := _lab.get("_fold_slider") as HSlider
@@ -473,8 +473,12 @@ func _mark_dirty() -> void:
 func _update_status() -> void:
 	var steps: Array = _bs.get("steps", [])
 	var secs := float(LinkageBuildSteps.total_duration_ms(_bs)) / 1000.0 if not steps.is_empty() else 0.0
-	_status_lbl.text = "%s · %d shown · %.0f s%s" % [UiText.count(steps.size(), "step"),
-		LinkageBuildSteps.representative_steps(steps).size(), secs, "  · unsaved" if _dirty else ""]
+	_status_lbl.text = I18n.f("{steps} · {steps_2} shown · {secs} s{dirty}", {
+		"steps": UiText.count(steps.size(), "step"),
+		"steps_2": "%d" % LinkageBuildSteps.representative_steps(steps).size(),
+		"secs": "%.0f" % secs,
+		"dirty": "  · unsaved" if _dirty else "",
+	})
 	if _save_btn != null:
 		_save_btn.disabled = not _dirty
 

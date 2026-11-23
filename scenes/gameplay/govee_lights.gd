@@ -1044,7 +1044,7 @@ func _create_color_menu() -> void:
 	
 	# Brightness section
 	var brightness_label = Label.new()
-	brightness_label.text = "Brightness: %d%%" % int(float(brightness) / 255.0 * 100)
+	brightness_label.text = I18n.f("Brightness: {brightness}%", {"brightness": "%d" % (int(float(brightness) / 255.0 * 100))})
 	brightness_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
 	vbox.add_child(brightness_label)
 	
@@ -1123,7 +1123,7 @@ func _on_menu_toggle_pressed(btn: Button) -> void:
 
 func _on_brightness_changed(value: float, label: Label) -> void:
 	brightness = int(value)
-	label.text = "Brightness: %d%%" % int(float(brightness) / 255.0 * 100)
+	label.text = I18n.f("Brightness: {brightness}%", {"brightness": "%d" % (int(float(brightness) / 255.0 * 100))})
 	_apply_visual_state()
 	brightness_changed.emit(brightness)
 	

@@ -309,7 +309,7 @@ func _build_left() -> void:
 		b.clip_text = true
 		b.name = "type_%s" % t
 		b.set_meta("type", t)
-		b.tooltip_text = "Start over from the built-in %s (Ctrl+Z undoes)" % str(VehicleCatalog.type_info(t)["label"]).to_lower()
+		b.tooltip_text = I18n.f("Start over from the built-in {label} (Ctrl+Z undoes)", {"label": str(VehicleCatalog.type_info(t)["label"]).to_lower()})
 		b.pressed.connect(_on_type_pressed.bind(t))
 		_type_box.add_child(b)
 	_build_thumb_studio()
@@ -658,7 +658,7 @@ func _build_right() -> void:
 			var t := VehicleExterior.type_info(str((pd["element"] as Dictionary)["type"]))
 			var b3 := Button.new()
 			b3.text = str(pd.get("label", t["label"]))
-			b3.tooltip_text = "%s\nShift-click to place several · Esc stops" % str(t.get("tip", ""))
+			b3.tooltip_text = I18n.f("{tip}\nShift-click to place several · Esc stops", {"tip": str(t.get("tip", ""))})
 			b3.toggle_mode = true
 			b3.name = "tool_%s" % str(pd["id"])
 			UITheme.style_button(b3)
@@ -698,7 +698,7 @@ func _build_right() -> void:
 		preset["id"] = "in_" + str(td["id"])
 		var b4 := Button.new()
 		b4.text = str(td["label"])
-		b4.tooltip_text = "%s\nShift-click to place several · R turns it · Esc stops" % str(td.get("tip", ""))
+		b4.tooltip_text = I18n.f("{tip}\nShift-click to place several · R turns it · Esc stops", {"tip": str(td.get("tip", ""))})
 		b4.toggle_mode = true
 		b4.name = "tool_%s" % str(preset["id"])
 		UITheme.style_button(b4)
@@ -724,7 +724,7 @@ func _build_right() -> void:
 		func(on): _set_glb("flip", on), "If the model drives backwards", "vl_glb_flip"))
 	var add_model := Button.new()
 	add_model.text = "Add a model…"
-	add_model.tooltip_text = "Copy a .glb / .gltf into %s and use it" % MODEL_DIR
+	add_model.tooltip_text = I18n.f("Copy a .glb / .gltf into {model_dir} and use it", {"model_dir": MODEL_DIR})
 	UITheme.style_button(add_model)
 	add_model.pressed.connect(func() -> void: _model_dialog.popup_centered())
 	mb.add_child(add_model)
@@ -1403,17 +1403,19 @@ func _on_studio_hover(pos: Vector2) -> void:
 	if _cutaway:
 		var iid := VehicleInterior.pick(_design, r["origin"], r["dir"])
 		if not iid.is_empty():
-			_hover_lbl.text = "%s · click to select, drag to move, R turns it" % VehicleInterior.label_of(_in_resolved(iid))
+			_hover_lbl.text = I18n.f("{iid} · click to select, drag to move, R turns it", {"iid": VehicleInterior.label_of(_in_resolved(iid))})
 			return
 	var id := VehicleExterior.pick(_design, r["origin"], r["dir"])
 	if not id.is_empty():
 		for e in _design.get("exterior", []):
 			if str((e as Dictionary)["id"]) == id:
-				_hover_lbl.text = "%s on the %s · click to select, drag to move" % [VehicleExterior.label_of(e),
-					VehicleExterior.face_word(str(e["face"]))]
+				_hover_lbl.text = I18n.f("{e} on the {face} · click to select, drag to move", {
+					"e": VehicleExterior.label_of(e),
+					"face": VehicleExterior.face_word(str(e["face"])),
+				})
 				return
 	var hit := VehicleExterior.face_hit(_design, r["origin"], r["dir"])
-	_hover_lbl.text = "The %s" % VehicleExterior.face_word(str(hit["face"])) if not hit.is_empty() else ""
+	_hover_lbl.text = I18n.f("The {face}", {"face": VehicleExterior.face_word(str(hit["face"]))}) if not hit.is_empty() else ""
 
 
 func _remove_selected() -> void:
@@ -1456,8 +1458,9 @@ func _refresh_items() -> void:
 	var count := ((_spec.get("exterior", {}) as Dictionary).get("elements", []) as Array).size()
 	if el.is_empty():
 		var l := Label.new()
-		l.text = "%s on it. Click one in the preview to edit it." % UiText.count(count, "item") if count > 0 \
-			else "Nothing on the roof or sides yet."
+		l.text = I18n.f("{value} on it. Click one in the preview to edit it.", {
+			"value": UiText.count(count, "item"),
+		}) if count > 0 else "Nothing on the roof or sides yet."
 		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		l.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 		_item_box.add_child(l)
@@ -1649,8 +1652,9 @@ func _refresh_inside() -> void:
 	if el.is_empty():
 		var l := Label.new()
 		var n := (_design.get("interior", []) as Array).size()
-		l.text = "%s inside. With the skin off, click one to edit it." % UiText.count(n, "piece") if n > 0 \
-			else "Nothing inside yet."
+		l.text = I18n.f("{value} inside. With the skin off, click one to edit it.", {
+			"value": UiText.count(n, "piece"),
+		}) if n > 0 else "Nothing inside yet."
 		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		l.add_theme_color_override("font_color", UITheme.C_TEXT_S)
 		_in_box.add_child(l)
@@ -1764,11 +1768,19 @@ func _refresh_summary() -> void:
 	if float(t["mi"]) <= 0.0:
 		_trip_lbl.text = "Type how far it drives one way to see what getting it there costs."
 	elif str(t["fuel"]) == "electric":
-		_trip_lbl.text = "There and back: %s, %.0f kWh, $%.0f. Range %s." % [UnitsPref.dist_mi(float(t["mi"])),
-			float(t["kwh"]), float(t["cost"]), UnitsPref.dist_m(float(t["range_km"]) * 1000.0)]
+		_trip_lbl.text = I18n.f("There and back: {mi}, {kwh} kWh, ${cost}. Range {range_km}.", {
+			"mi": UnitsPref.dist_mi(float(t["mi"])),
+			"kwh": "%.0f" % float(t["kwh"]),
+			"cost": "%.0f" % float(t["cost"]),
+			"range_km": UnitsPref.dist_m(float(t["range_km"]) * 1000.0),
+		})
 	elif float(t["gallons"]) > 0.0:
-		_trip_lbl.text = "There and back: %s, %s, $%.0f. Range %s a tank." % [UnitsPref.dist_mi(float(t["mi"])),
-			UnitsPref.fuel_l(float(t["litres"])), float(t["cost"]), UnitsPref.dist_m(float(t["range_km"]) * 1000.0)]
+		_trip_lbl.text = I18n.f("There and back: {mi}, {litres}, ${cost}. Range {range_km} a tank.", {
+			"mi": UnitsPref.dist_mi(float(t["mi"])),
+			"litres": UnitsPref.fuel_l(float(t["litres"])),
+			"cost": "%.0f" % float(t["cost"]),
+			"range_km": UnitsPref.dist_m(float(t["range_km"]) * 1000.0),
+		})
 	else:
 		_trip_lbl.text = "Towed: its fuel is the tow vehicle's."
 	for c in _checks_box.get_children():
@@ -2003,7 +2015,7 @@ func _on_save_design() -> void:
 	var nm := str(_spec.get("name", ""))
 	for s in _library:
 		if str((s as Dictionary).get("name", "")) == nm:
-			_replace_dialog.dialog_text = "Your vehicles already have a design called \"%s\". Replace it with this one?" % nm
+			_replace_dialog.dialog_text = I18n.f("Your vehicles already have a design called \"{nm}\". Replace it with this one?", {"nm": nm})
 			_replace_dialog.popup_centered()
 			return
 	_save_design(false)

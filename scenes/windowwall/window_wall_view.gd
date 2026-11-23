@@ -327,7 +327,7 @@ func _spawn_window(slot: int) -> Window:
 	var borderless_size := Vector2i(rect_size.x, maxi(rect_size.y - 1, 1))
 	var w := Window.new()
 	w.name = "WallWindow%d" % slot
-	w.title = "SIMbiogenesis — window %d" % (slot + 1)
+	w.title = I18n.f("SIMbiogenesis — window {slot}", {"slot": "%d" % ((slot + 1))})
 	w.own_world_3d = false
 	w.world_3d = get_viewport().world_3d
 	w.borderless = true
@@ -612,7 +612,7 @@ static func identify_screens(tree: SceneTree, seconds: float = 3.0) -> void:
 	for k in DisplayServer.get_screen_count():
 		await tree.process_frame
 		var w := Window.new()
-		w.title = "Screen %d" % k
+		w.title = I18n.f("Screen {k}", {"k": "%d" % k})
 		w.borderless = true
 		w.always_on_top = true
 		w.unresizable = true

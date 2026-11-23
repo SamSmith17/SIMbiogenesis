@@ -2131,7 +2131,7 @@ func _show_pop_hint(push: int) -> void:
 	var dots := ""
 	for i in POP_PUSH_NOTCHES:
 		dots += "●" if i < push else "○"
-	_pop_hint.text = "Keep scrolling out to leave %s  %s" % [title, dots]
+	_pop_hint.text = I18n.f("Keep scrolling out to leave {title}  {dots}", {"title": title, "dots": dots})
 	_pop_hint.reset_size()
 	# Above the bottom row of portal pills (the scope's output ports).
 	_pop_hint.position = Vector2((size.x - _pop_hint.size.x) * 0.5, size.y - _pop_hint.size.y - 96.0)
@@ -9726,12 +9726,13 @@ func _draw_elev_soil_probe(origin: Vector2, r_px: float, r_m: float, center3: Ve
 	var water_y := center3.y - r_m * GraphSoilLegend.WATER_FRAC
 	var text := ""
 	if key == "water":
-		text = "Groundwater · %.0f m below the water table" % maxf(water_y - y, 0.0)
+		text = I18n.f("Groundwater · {y} m below the water table", {"y": "%.0f" % (maxf(water_y - y, 0.0))})
 	else:
-		text = "%s · %s down · water table %.0f m below" % [
-				str(GraphSoilLegend.NAMES.get(key, key)),
-				("%.1f m" % depth) if depth < 10.0 else ("%.0f m" % depth),
-				maxf(y - water_y, 0.0)]
+		text = I18n.f("{key} · {depth} down · water table {water_y} m below", {
+			"key": str(GraphSoilLegend.NAMES.get(key, key)),
+			"depth": ("%.1f m" % depth) if depth < 10.0 else ("%.0f m" % depth),
+			"water_y": "%.0f" % (maxf(y - water_y, 0.0)),
+		})
 	var p := _elev_probe_px
 	var swatch: Color = GraphSoilLegend.COLORS.get(key, Color.WHITE) as Color
 	draw_circle(p, 4.0, Color(0, 0, 0, 0.55))
