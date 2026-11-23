@@ -451,6 +451,10 @@ var _load_progress: TerrainLoadProgress = null
 var _load_ui_active := false
 var _load_hint := ""
 var _load_fast_path := false
+var _from_globe_transition := false
+var _osm_prefetched_for_build := false
+var _footing_rev := 0
+var _buildings_built_sig := ""
 var _detail_img_resolved := false
 var _detail_img_retry_zoom := -1
 var _refresh_pending: Dictionary = {}
@@ -629,7 +633,7 @@ func _push_snow_to_mesh(mi: MeshInstance3D, snow: float, depth_m: float) -> void
 		if sm.shader == null:
 			continue
 		var p := sm.shader.resource_path
-		if not (p.ends_with("terrain_detail.gdshader")
+		if not (TerrainBuilder.is_terrain_detail_shader(sm)
 				or p.ends_with("building_wall.gdshader")
 				or p.ends_with("building_roof.gdshader")):
 			continue
@@ -650,9 +654,7 @@ func _push_litter_to_mesh(mi: MeshInstance3D, strength: float) -> void:
 	if mi == null:
 		return
 	var sm := mi.material_override as ShaderMaterial
-	if sm == null or sm.shader == null:
-		return
-	if not sm.shader.resource_path.ends_with("terrain_detail.gdshader"):
+	if not TerrainBuilder.is_terrain_detail_shader(sm):
 		return
 	if _litter_tex == null:
 		sm.set_shader_parameter("litter_extent_m", 0.0)
@@ -959,6 +961,7 @@ func _resolve_location() -> void:
 	_imagery_saved_tier = -1
 	_imagery_fallback_tier = -1
 	_imagery_sharp = ImagerySources.SHARP_SHARPEST
+	_from_globe_transition = false
 	_history_rec = {}
 	_history_deferred = false
 	if _shoreline != null and is_instance_valid(_shoreline):
@@ -975,6 +978,7 @@ func _resolve_location() -> void:
 		_lon = float(d["longitude"])
 		_starter_kit_pending = bool(d.get("starter_kit", false)) and not bool(d.get("from_resume", false))
 		_tour_pending = bool(d.get("tour_on_load", false))
+		_from_globe_transition = bool(d.get("from_globe_transition", false))
 		var ti: Dictionary = d.get("terrain_imagery", {})
 		_imagery_saved_tier = clampi(int(ti.get("saved_tier", -1)), -1, QUALITY_TIER_COUNT - 1)
 		_imagery_mode = "saved" if str(ti.get("mode", "local")) == "saved" and _imagery_saved_tier >= 0 else "local"
@@ -1215,7 +1219,8 @@ func _settle_gpu(frames: int = SETTLE_FRAMES) -> void:
 	var tree := get_tree()
 	if tree == null:
 		return
-	for _i in frames:
+	var count := 1 if (_load_fast_path or GlobeLaunchTransition.is_active()) else frames
+	for _i in maxi(count, 1):
 		await tree.process_frame
 
 
@@ -1241,6 +1246,7 @@ func _run_load_sequence() -> void:
 	var img_svc := get_node_or_null("/root/ImageryService")
 	if img_svc != null and img_svc.has_method("reset_session"):
 		img_svc.reset_session()
+	_kickoff_parallel_cache_prewarm()
 	_hyper_half_m = 0.0
 	_site_half_m = 0.0
 	_hyper_drape_half = 0.0
@@ -1297,6 +1303,22 @@ func _run_load_sequence() -> void:
 	else:
 		_apply_imagery_fallback("base")
 
+	# 3b. When OSM vectors are already cached on disk, pull them BEFORE
+	# _build_terrain() so road/landuse flattening is baked into the initial
+	# heightfield + 164+ edit-tile meshes once, instead of rebuilding the entire
+	# world heightfield, colliders and placed props a second time in step 6.
+	_osm_prefetched_for_build = false
+	var bs_early := get_node_or_null("/root/BuildingService")
+	var bypass_osm := _force_refetch or not TerrainCacheSettings.cache_enabled()
+	if bs_early != null and not bypass_osm:
+		var cfg_early := _terrain_config()
+		var osm_key := BuildingService._cache_key(_lat, _lon, _osm_half_extent, bool(cfg_early.flatten_landuse))
+		var osm_path := "%s/%s.json" % [BuildingService.CACHE_DIR, osm_key]
+		if FileAccess.file_exists(osm_path):
+			_phase_begin("osm_map")
+			bs_early.request_osm_vectors(_lat, _lon, _osm_half_extent, bool(cfg_early.flatten_landuse), false)
+			_osm_prefetched_for_build = await _phase_await(15.0)
+
 	# 4. Build terrain from composed base+detail heightfield.
 	_update_load_ui("Merging elevation layers …")
 	_build_terrain()
@@ -1352,12 +1374,63 @@ func _run_load_sequence() -> void:
 	_on_shoreline_changed_for_veg.call_deferred()
 	if _starter_kit_pending:
 		_starter_kit_pending = false
-		call_deferred("_seed_starter_site")
+		call_deferred("_run_starter_after_transition")
 	if _tour_pending:
 		_tour_pending = false
-		var main_t := get_tree().current_scene
-		if main_t != null and main_t.has_method("start_feature_tour"):
-			main_t.call_deferred("start_feature_tour")
+		call_deferred("_run_tour_after_transition")
+
+
+## Start worker-thread decode/deserialization of cached layers concurrently so
+## non-Globe launches (2D picker, harness, reload) also avoid serial disk/decode waits.
+func _kickoff_parallel_cache_prewarm() -> void:
+	if _force_refetch or not TerrainCacheSettings.cache_enabled():
+		return
+	var es := get_node_or_null("/root/ElevationService")
+	if es != null and es.has_method("prewarm_elevation"):
+		es.prewarm_elevation(_lat, _lon, _half_extent,
+			ElevationService.base_grid_n_for_extent(_half_extent), "base")
+		es.prewarm_elevation(_lat, _lon, _detail_half_extent,
+			ElevationService.DETAIL_GRID_N, "detail")
+	var img := get_node_or_null("/root/ImageryService")
+	if img != null and img.has_method("prewarm_imagery"):
+		img.prewarm_imagery(_lat, _lon, _half_extent, _base_imagery_target_px(), "base", 17)
+		var dtier := _tier_for_tag("detail")
+		img.prewarm_imagery(_lat, _lon, _detail_half_extent, _detail_target_px(dtier),
+			"detail", DETAIL_MAX_ZOOM)
+		var htier := _tier_for_tag("hyper")
+		var chain := ImagerySources.chain_for(_lat, _lon, _imagery_sharp)
+		img.prewarm_imagery(_lat, _lon, _hyper_half_extent(htier), _hyper_target_px(htier),
+			"hyper", HYPER_MAX_ZOOM, chain, false)
+		var stier := _tier_for_tag("site")
+		var shalf := _site_half_extent(stier)
+		if shalf > 0.0:
+			var sz := ImagerySources.native_zoom(chain, _lat)
+			img.prewarm_imagery(_lat, _lon, shalf, SITE_TARGET_PX, "site", sz, chain, true)
+	var cfg := _terrain_config()
+	var bs := get_node_or_null("/root/BuildingService")
+	if bs != null and bs.has_method("prewarm_osm_vectors"):
+		bs.prewarm_osm_vectors(_lat, _lon, _osm_half_extent, bool(cfg.flatten_landuse))
+	if bool(cfg.show_auto_vegetation):
+		var vs := get_node_or_null("/root/VegetationService")
+		if vs != null and vs.has_method("prewarm_vegetation"):
+			vs.prewarm_vegetation(_lat, _lon, _osm_half_extent)
+
+
+func _run_starter_after_transition() -> void:
+	while is_inside_tree() and GlobeLaunchTransition.is_active():
+		await get_tree().process_frame
+	if is_inside_tree():
+		_seed_starter_site()
+
+
+func _run_tour_after_transition() -> void:
+	while is_inside_tree() and GlobeLaunchTransition.is_active():
+		await get_tree().process_frame
+	if not is_inside_tree() or get_tree() == null:
+		return
+	var main_t := get_tree().current_scene
+	if main_t != null and main_t.has_method("start_feature_tour"):
+		main_t.call_deferred("start_feature_tour")
 
 
 ## "Start here (guided)": the starter site on the graph (a habitat, its tanks,
@@ -1451,8 +1524,8 @@ func _run_post_terrain_sequence(include_vegetation: bool = true) -> void:
 		_request_detail_imagery()
 		if not await _phase_await(180.0):
 			push_warning("TerrainLoader: detail imagery phase timed out — applying if ready")
-		if _detail_drape != null:
-			_apply_detail()
+			if _detail_drape != null:
+				_apply_detail()
 		_resolve_detail_imagery()
 		_request_hyper_imagery()
 	else:
@@ -1461,12 +1534,14 @@ func _run_post_terrain_sequence(include_vegetation: bool = true) -> void:
 
 	# 6–7. OSM vectors -> buildings, then water.
 	var bs := get_node_or_null("/root/BuildingService")
-	if bs != null:
+	if _osm_prefetched_for_build:
+		await _apply_osm_overlays(true)
+	elif bs != null:
 		_phase_begin("osm_map")
 		var cfg := _terrain_config()
 		bs.request_osm_vectors(_lat, _lon, _osm_half_extent, cfg.flatten_landuse, bypass)
 		if await _phase_await(180.0):
-			await _apply_osm_overlays()
+			await _apply_osm_overlays(false)
 		else:
 			_load_progress_mark_done("osm_map")
 	else:
@@ -1677,11 +1752,11 @@ func _recover_detail_dem_from_cache() -> bool:
 
 
 ## Attach buildings + water after OSM vectors arrive (sequential load phase 6–7).
-func _apply_osm_overlays() -> void:
+func _apply_osm_overlays(already_in_heightfield: bool = false) -> void:
 	if not _built:
 		return
 	var cfg := _terrain_config()
-	if cfg.flatten_roads or cfg.flatten_landuse:
+	if not already_in_heightfield and (cfg.flatten_roads or cfg.flatten_landuse):
 		await _rebuild_heightfield_staggered(false)
 	else:
 		_attach_buildings(false)
@@ -5004,7 +5079,23 @@ func _attach_buildings(enable_shadows: bool = true) -> void:
 	print("TerrainLoader: extruded %d OSM buildings (%d styled) in %d ms (hi-res drape=%s)" % [
 		visible_buildings.size(), styled.size(), Time.get_ticks_msec() - t0,
 		"yes" if _detail_drape != null else "base only"])
+	_buildings_built_sig = _buildings_attach_signature(enable_shadows)
 	_apply_cached_geometry_visibility()
+
+
+func _buildings_attach_signature(enable_shadows: bool = false) -> String:
+	if _main != null and _main.has_method("get_building_shadows_enabled"):
+		enable_shadows = _main.get_building_shadows_enabled()
+	var excl: Array = _placed_prop_layer.get_replaced_building_indices().duplicate() if _placed_prop_layer != null else []
+	excl.sort()
+	var styled_keys: Array = _styled_building_indices().keys()
+	styled_keys.sort()
+	var d_id := _drape.get_instance_id() if _drape != null else 0
+	var dd_id := _detail_drape.get_instance_id() if _detail_drape != null else 0
+	return "%d|%s|%s|%s|%d|%d|%d|%d" % [
+		_footing_rev, _sink_signature(), str(excl), str(styled_keys),
+		d_id, dd_id, int(enable_shadows), _buildings_data.size()
+	]
 
 
 ## idx -> stable tag for every building carrying a style override. Prop-replaced
@@ -7075,19 +7166,15 @@ func _build_terrain() -> void:
 	if _main != null:
 		_main.add_child(terrain)
 
+	_migrate_legacy_edits_to_tiles()
 	if not _detail_surface_grid.is_empty():
-		var mesh_grid := _detail_surface_grid
-		var mesh_res := _detail_elev_cols
-		TerrainBuilder.upsert_detail_patch(
-			terrain, mesh_grid, mesh_res, _detail_extent_m(), center_elev,
-			_drape, null, extent, _seam_feather_m)
+		_rebuild_detail_patch(terrain)
 	if _built_collision_grid.size() == _built_grid.size():
 		TerrainBuilder.update_terrain_collision(
 			terrain, _built_collision_grid, MESH_RES, extent, center_elev)
 	_stamp_drape_mercator_bboxes(terrain)
-	_migrate_legacy_edits_to_tiles()
 	_ensure_height_field(terrain)
-	# Saved edits need the DetailGround sunk beneath their tiles from frame one.
+	# No-op when _rebuild_detail_patch above already baked the current sink.
 	_refresh_detail_sink()
 
 	# Temp floor stays until _finalize_spawn_actors seats the player on composed ground.
@@ -8698,11 +8785,34 @@ func _push_near_field_detail_recursive(node: Node, on: bool) -> void:
 	var mi := node as MeshInstance3D
 	if mi != null:
 		var sm := mi.material_override as ShaderMaterial
-		if sm != null and sm.shader != null \
-				and sm.shader.resource_path.ends_with("terrain_detail.gdshader"):
+		if TerrainBuilder.is_terrain_detail_shader(sm):
 			sm.set_shader_parameter("near_detail_enabled", on)
 	for child in node.get_children():
 		_push_near_field_detail_recursive(child, on)
+
+
+## Settings → Lighting → "SDFGI on terrain": swaps existing Ground / DetailGround /
+## sculpt-tile ShaderMaterials between `terrain_detail.gdshader` and
+## `terrain_detail_no_sdfgi.gdshader` while preserving every bound drape texture
+## and uniform (both shaders share `terrain_detail_body.gdshaderinc`).
+func set_sdfgi_on_terrain(on: bool) -> void:
+	TerrainBuilder.sdfgi_on_terrain = on
+	if _main == null:
+		return
+	var terrain := _main.get_node_or_null("Terrain") as Node3D
+	if terrain == null:
+		return
+	_push_sdfgi_on_terrain_recursive(terrain, TerrainBuilder.active_detail_shader())
+
+
+func _push_sdfgi_on_terrain_recursive(node: Node, want_shader: Shader) -> void:
+	var mi := node as MeshInstance3D
+	if mi != null:
+		var sm := mi.material_override as ShaderMaterial
+		if TerrainBuilder.is_terrain_detail_shader(sm) and sm.shader != want_shader:
+			sm.shader = want_shader
+	for child in node.get_children():
+		_push_sdfgi_on_terrain_recursive(child, want_shader)
 
 
 ## Show/hide DEM + OSM world geometry (Ground, buildings, water, camps, veg).
@@ -9022,6 +9132,7 @@ func _compose_detail_surface(apply_user_edits: bool = true) -> PackedFloat32Arra
 
 
 func _compose_terrain_grids(apply_user_edits: bool = true) -> Dictionary:
+	_footing_rev += 1
 	var coarse_foot := _compose_base_footing_grid(apply_user_edits)
 	_detail_vertical_offset = 0.0
 	_seam_feather_m = TerrainBuilder.DEFAULT_FEATHER_M
@@ -9261,10 +9372,13 @@ func _seat_world_content_for_play() -> void:
 	if not _built:
 		return
 	_reground_placed_props()
-	# Re-extrude OSM so skirts/floors use the composed footing (deferred prop
-	# rebuild can race the first attach; this is the authoritative pass).
+	# Re-extrude OSM only when buildings haven't been built yet or when footing /
+	# drapes / prop-replaced building indices changed since _apply_osm_overlays().
 	if not _buildings_data.is_empty():
-		_attach_buildings(false)
+		var need_buildings := _buildings_root == null or not is_instance_valid(_buildings_root) \
+			or _buildings_built_sig != _buildings_attach_signature(false)
+		if need_buildings:
+			_attach_buildings(false)
 
 
 func _actors_off_ground() -> bool:
@@ -9487,9 +9601,7 @@ func _push_floor_moss() -> void:
 		if mi == null:
 			continue
 		var sm := mi.material_override as ShaderMaterial
-		if sm == null or sm.shader == null:
-			continue
-		if not sm.shader.resource_path.ends_with("terrain_detail.gdshader"):
+		if not TerrainBuilder.is_terrain_detail_shader(sm):
 			continue
 		if _floor_moss.is_empty():
 			sm.set_shader_parameter("moss_strength", 0.0)
@@ -9987,7 +10099,13 @@ func _auto_veg_scatter_async(regen_for_exclusions: bool) -> void:
 	print("TerrainLoader: scattering vegetation from OSM (background) …")
 	var ctx := _auto_veg_ctx()
 	var state := AutoVegetationGenerator.prepare_context(_auto_veg_data, ctx)
+	var slice_start_us := Time.get_ticks_usec()
 	while AutoVegetationGenerator.scatter_batch(state, SCATTER_BATCH_POLYS):
+		# While GlobeLaunchTransition covers the view, allow up to ~5.5 ms per
+		# frame before yielding so small/medium maps finish 4x faster while
+		# keeping the Globe animation locked at 60 fps.
+		if GlobeLaunchTransition.is_active() and Time.get_ticks_usec() - slice_start_us < 5500:
+			continue
 		var ratio := state.progress_ratio()
 		var pct := int(round(ratio * 100.0))
 		_load_hint = "Scattering vegetation… %d%%" % pct
@@ -9998,6 +10116,7 @@ func _auto_veg_scatter_async(regen_for_exclusions: bool) -> void:
 			_load_progress.set_partial("osm_veg", ratio)
 			_update_load_ui()
 		await get_tree().process_frame
+		slice_start_us = Time.get_ticks_usec()
 		if not _built:
 			_mark_auto_veg_ready()
 			return
@@ -13502,8 +13621,12 @@ func _setup_placed_props() -> void:
 	_setup_toroidlab_ui()
 	_setup_pvlab_ui()
 	_setup_gantrylab_ui()
-	# Unified library lives on Main (all maps); bind this loader when opening.
-	call_deferred("_rebuild_placed_props")
+	# During _run_load_sequence(), _seat_world_content_for_play() runs
+	# _reground_placed_props() -> _rebuild_placed_props() once on the final
+	# composed footing; skipping the early deferred build avoids building and
+	# tearing down every placed prop + placed light twice on load.
+	if not _load_sequence_active:
+		call_deferred("_rebuild_placed_props")
 	call_deferred("_consume_design_context")
 
 
@@ -13691,15 +13814,20 @@ func rebuild_placed_props() -> void:
 func _reground_placed_props() -> void:
 	if _placed_prop_layer == null or _main == null:
 		return
+	var any_moved := false
 	for item in _placed_prop_layer.props:
 		if not (item is Dictionary):
 			continue
 		var d: Dictionary = item
-		d["ground_y"] = _ground_height_at(float(d.get("x", 0.0)), float(d.get("z", 0.0)))
+		var gy := _ground_height_at(float(d.get("x", 0.0)), float(d.get("z", 0.0)))
+		if not d.has("ground_y") or absf(float(d.get("ground_y", NAN)) - gy) > 1e-4:
+			any_moved = true
+		d["ground_y"] = gy
 	_rebuild_placed_props()
 	# Never overwrite the user's saved props after a fresh/no-cache launch that
-	# intentionally left the in-memory layer empty.
-	if not _user_overlays_ephemeral:
+	# intentionally left the in-memory layer empty, and skip disk I/O when every
+	# prop's ground_y already matched.
+	if not _user_overlays_ephemeral and any_moved:
 		_placed_prop_layer.save(_lat, _lon)
 
 
@@ -13707,6 +13835,7 @@ func _reground_placed_props() -> void:
 ## duplicates when _attach_buildings runs more than once per frame — get_node only
 ## finds the first child and later copies stack at different footing heights.
 func _clear_building_nodes(terrain: Node) -> void:
+	_buildings_built_sig = ""
 	if terrain == null:
 		_buildings_root = null
 		_custom_buildings_root = null
@@ -16333,9 +16462,34 @@ func _begin_load_ui() -> void:
 	var title := "Loading %s" % SitePrivacy.place(_map_label, "map") if not _map_label.is_empty() else "Loading map"
 	_load_overlay.setup(title)
 	_load_overlay.dismissed.connect(_on_load_overlay_dismissed)
+	if _from_globe_transition or GlobeLaunchTransition.is_active():
+		_load_overlay.enter_compact_mode()
+		_load_overlay.visible = false
 	if _load_fast_path:
 		_load_overlay.set_progress(0.0, "Loading from cache", "Previously fetched data on this PC")
 	_update_load_ui()
+
+
+## Live progress snapshot for GlobeLaunchTransition's unified descent HUD.
+func load_progress_state() -> Dictionary:
+	return {
+		"fraction": _load_progress.fraction() if _load_progress != null else (1.0 if load_completed else 0.0),
+		"stage": _load_progress.active_label() if _load_progress != null else ("Ready" if load_completed else ""),
+		"hint": _load_hint,
+		"built": _built,
+		"load_completed": load_completed,
+		"auto_veg_ready": auto_veg_ready,
+	}
+
+
+func on_globe_transition_finished() -> void:
+	_from_globe_transition = false
+	if _load_overlay != null and is_instance_valid(_load_overlay):
+		if not _load_ui_active:
+			_load_overlay.dismiss_now()
+		else:
+			_load_overlay.enter_compact_mode()
+			_load_overlay.visible = true
 
 
 func _on_load_overlay_dismissed() -> void:
@@ -16386,7 +16540,10 @@ func _check_load_complete() -> void:
 	_update_load_ui()
 	if _load_progress.is_complete():
 		_load_ui_active = false
-		_load_overlay.show_map_loaded(_load_fast_path)
+		if _from_globe_transition or GlobeLaunchTransition.is_active():
+			_load_overlay.dismiss_now()
+		else:
+			_load_overlay.show_map_loaded(_load_fast_path)
 		print("TerrainLoader: map loaded")
 		_log_load_mem("map loaded")
 		if _auto_veg_scatter_pending:

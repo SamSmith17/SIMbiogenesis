@@ -190,8 +190,4 @@ static func _quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector
 
 
 static func _concrete(c: Color) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = c
-	m.roughness = 0.9
-	m.cull_mode = BaseMaterial3D.CULL_DISABLED
-	return m
+	return ParametricMaterialLibrary.make("concrete", c, {"world_triplanar": true})

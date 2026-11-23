@@ -32,8 +32,10 @@ const AISLE_SIDE := 30.0      # between laid-down rows facing each other (busbar
 const PLATE_T := 10.0         # compression end plate (aluminium)
 const ROD_D := 8.0            # M8 threaded rod
 const STUD_H := 4.0
-const HARNESS_UP := 22.0      # harness plane above the busbars
+const HARNESS_UP := 22.0      # the BMS shelf's clearance over the busbars
+const HARNESS_Y := 4.0        # the balance wires run this far over the bars
 const LEAD_UP := 12.0
+const LEAD_STACK_GAP := 3.0   # between the − lead's plane and the + lead's
 ## Leads whose ends are closer than this (in plan) hop across at their own
 ## height.
 const LEAD_HOP_MM := 160.0
@@ -647,7 +649,7 @@ static func _finish(L: Dictionary, spec: Dictionary, cell: Dictionary, bms: Dict
 	# Harness: each tap up to the harness plane, along to the connector.
 	var harness: Array = []
 	if protected:
-		var yh := top + HARNESS_UP * 0.6
+		var yh := top + HARNESS_Y
 		var conn: Vector3 = bms_box["conn"]
 		for t in (L["taps"] as Array):
 			var a: Vector3 = t["pos"]
@@ -674,6 +676,13 @@ static func _finish(L: Dictionary, spec: Dictionary, cell: Dictionary, bms: Dict
 			sensors.append({"id": "ntc_%d" % i, "kind": "sensor",
 				"c": Vector3(gb.get_center().x, gb.end.y + 2.0, gb.get_center().z + gb.size.z * 0.25),
 				"s": Vector3(8.0, 3.0, 12.0), "explode": Vector3(0, 0.45, 0)})
+	# The main leads run over the bars: the lid must clear the higher one.
+	var lw := BattElectrical.wire_for(amps)
+	if not single_block and form != "automotive":
+		var lead_top := lead_plane(top, lw, true) + lead_thickness(lw) * 0.5 + 4.0
+		if lead_top > content.end.y:
+			content = content.merge(AABB(Vector3(cells_box.position.x, lead_top - 1.0, cells_box.position.z),
+				Vector3(cells_box.size.x, 1.0, cells_box.size.z)))
 	# Enclosure.
 	var wall := wall_t(spec)
 	var material := str(en.get("material", ""))
@@ -738,11 +747,13 @@ static func _finish(L: Dictionary, spec: Dictionary, cell: Dictionary, bms: Dict
 		term["neg_out"] = term["neg"]
 	# Main leads.
 	var leads: Array = L["leads"]
-	var lw := BattElectrical.wire_for(amps)
 	var ends: Array = L["ends"]
 	var neg_tap: Vector3 = (ends[0] as Dictionary)["tap"]
 	var pos_tap: Vector3 = (ends[1] as Dictionary)["tap"]
-	var via_y := top + LEAD_UP
+	# The − lead runs clear of the harness, the + lead a cable higher, so the
+	# two never share a plane and cross through each other.
+	var via_y := lead_plane(top, lw, false)
+	var via_pos := lead_plane(top, lw, true)
 	if not single_block:
 		var tneg: Vector3 = term["neg"]
 		var tpos: Vector3 = term["pos"]
@@ -760,10 +771,10 @@ static func _finish(L: Dictionary, spec: Dictionary, cell: Dictionary, bms: Dict
 		else:
 			leads.append(_lead("lead_neg", neg_tap, tneg, via_y, lw, "black"))
 		if term.has("breaker_in"):
-			leads.append(_lead("lead_pos_breaker", pos_tap, term["breaker_in"], via_y, lw, "red"))
-			leads.append(_lead("lead_breaker_term", term["breaker_out"], tpos, via_y, lw, "red"))
+			leads.append(_lead("lead_pos_breaker", pos_tap, term["breaker_in"], via_pos, lw, "red"))
+			leads.append(_lead("lead_breaker_term", term["breaker_out"], tpos, via_pos, lw, "red"))
 		else:
-			leads.append(_lead("lead_pos", pos_tap, tpos, via_y, lw, "red"))
+			leads.append(_lead("lead_pos", pos_tap, tpos, via_pos, lw, "red"))
 	L["bms"] = bms_box
 	L["harness"] = harness
 	L["sensors"] = sensors
@@ -796,6 +807,25 @@ static func _finish(L: Dictionary, spec: Dictionary, cell: Dictionary, bms: Dict
 	L["cells_box"] = _aabb_of(L["cells"])
 	# The harness and main-lead plane, in the finished frame (top + the shift).
 	L["wire_y"] = top + shift.y
+
+
+## The height a main lead runs at over the top of the cells and bars: the −
+## lead clear of the balance wires by its own radius, the + lead one cable
+## (and a gap) above it.
+static func lead_plane(top: float, w: Dictionary, positive: bool) -> float:
+	var th := lead_thickness(w)
+	var y := top + HARNESS_Y + 2.0 + th * 0.5
+	return y + th + LEAD_STACK_GAP if positive else y
+
+
+## How tall a main lead is where it runs flat: a round cable's diameter, a
+## flexible busbar's (the builder draws leads of 21 mm² and up as flat
+## braid) thickness.
+static func lead_thickness(w: Dictionary) -> float:
+	var mm2 := float(w.get("mm2", 0.0))
+	if mm2 >= 21.0:
+		return float(BattWire.flex_stack(mm2)["th"])
+	return BattWire.od_mm(str(w.get("name", "")), mm2)
 
 
 static func _lead(id: String, a: Vector3, b: Vector3, via_y: float, w: Dictionary, color: String) -> Dictionary:
@@ -1226,7 +1256,8 @@ static func _rebuild_main_leads(L: Dictionary, bms_row: Dictionary, amps: float)
 	var lw := BattElectrical.wire_for(amps)
 	var neg_tap: Vector3 = (ends[0] as Dictionary)["tap"]
 	var pos_tap: Vector3 = (ends[1] as Dictionary)["tap"]
-	var via_y := float(L["wire_y"]) + LEAD_UP
+	var via_y := lead_plane(float(L["wire_y"]), lw, false)
+	var via_pos := lead_plane(float(L["wire_y"]), lw, true)
 	var tneg: Vector3 = term["neg"]
 	var tpos: Vector3 = term["pos"]
 	var protected := not (L["bms"] as Dictionary).is_empty()
@@ -1242,10 +1273,10 @@ static func _rebuild_main_leads(L: Dictionary, bms_row: Dictionary, amps: float)
 	else:
 		leads.append(_lead("lead_neg", neg_tap, tneg, via_y, lw, "black"))
 	if term.has("breaker_in"):
-		leads.append(_lead("lead_pos_breaker", pos_tap, term["breaker_in"], via_y, lw, "red"))
-		leads.append(_lead("lead_breaker_term", term["breaker_out"], tpos, via_y, lw, "red"))
+		leads.append(_lead("lead_pos_breaker", pos_tap, term["breaker_in"], via_pos, lw, "red"))
+		leads.append(_lead("lead_breaker_term", term["breaker_out"], tpos, via_pos, lw, "red"))
 	else:
-		leads.append(_lead("lead_pos", pos_tap, tpos, via_y, lw, "red"))
+		leads.append(_lead("lead_pos", pos_tap, tpos, via_pos, lw, "red"))
 	L["leads"] = leads
 	L["lead_wire"] = lw
 

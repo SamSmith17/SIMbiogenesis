@@ -174,6 +174,9 @@ var _range_goal := -1.0
 var _zoom_toward := Vector3.ZERO
 var _zoom_toward_t := 0.0
 var _fly := {}
+## Optional destination [lat, lon] whose tile zoom spine (coarse -> z17) is
+## pre-staged ahead of a descending flight so tiles never cancel mid-zoom.
+var _prestage_ll := PackedFloat64Array()
 
 
 func _ready() -> void:
@@ -494,19 +497,31 @@ func look_at_point(lat: float, lon: float, range_r: float = -1.0) -> void:
 	_apply_camera()
 
 
-## Animated flight: rises in the middle when the hop is long (a simplified
-## van Wijk & Nuij 2003 path) and keeps heading / tilt.
+## Animated flight: rises in the middle when a low-altitude hop is long (a
+## simplified van Wijk & Nuij 2003 path), descends steadily from orbit without
+## zooming backward first, and smoothly aligns tilt + optional heading.
 func fly_to(lat: float, lon: float, range_r: float = -1.0, duration_s: float = -1.0,
-		tilt_end: float = -1.0) -> void:
+		tilt_end: float = -1.0, heading_end: float = NAN) -> void:
 	var to := GlobeMath.to_unit(lat, lon)
 	var r1 := clampf(range_r if range_r > 0.0 else cam_range, MIN_RANGE, _max_range())
 	var ang := acos(clampf(_target.dot(to), -1.0, 1.0))
+	var hop_peak := maxf(r1, ang * (0.65 if cam_range > 0.25 and r1 < 0.01 else 1.3))
 	var peak := maxf(maxf(cam_range, r1), ang * 1.3)
 	var dur := duration_s if duration_s > 0.0 else clampf(0.8 + ang * 0.9 + absf(log(r1 / cam_range)) * 0.12, 0.8, 3.2)
-	_fly = {"from": _target, "to": to, "r0": cam_range, "r1": r1, "peak": peak, "t": 0.0, "dur": dur,
-		"tilt0": cam_tilt, "tilt1": tilt_end}
+	_fly = {"from": _target, "to": to, "r0": cam_range, "r1": r1, "peak": peak,
+		"hop_peak": hop_peak, "t": 0.0, "dur": dur,
+		"tilt0": cam_tilt, "tilt1": tilt_end, "h0": cam_heading, "h1": heading_end,
+		"dest_lat": lat, "dest_lon": lon}
 	_spin_rate = 0.0
 	_range_goal = -1.0
+
+
+func set_prestage_target(lat: float, lon: float) -> void:
+	_prestage_ll = PackedFloat64Array([lat, lon])
+
+
+func clear_prestage_target() -> void:
+	_prestage_ll = PackedFloat64Array()
 
 
 func is_flying() -> bool:
@@ -941,20 +956,36 @@ func _process(dt: float) -> void:
 
 func _step_motion(dt: float) -> void:
 	if not _fly.is_empty():
-		_fly.t = float(_fly.t) + dt
+		var step_dt := minf(dt, 0.18) if GlobeLaunchTransition.is_active() else dt
+		_fly.t = float(_fly.t) + step_dt
 		var u := clampf(float(_fly.t) / float(_fly.dur), 0.0, 1.0)
 		var e := u * u * (3.0 - 2.0 * u)
-		_target = GlobeMath.slerp_dir(_fly.from, _fly.to, e)
-		var lr0 := log(float(_fly.r0))
-		var lr1 := log(float(_fly.r1))
-		var lp := log(float(_fly.peak))
-		var base := lerpf(lr0, lr1, e)
+		var r0 := float(_fly.r0)
+		var r1 := float(_fly.r1)
+		var deep_dive := r0 > 0.08 and r1 < 0.005
+		# On a deep orbital-to-site descent, finish centring the lateral target
+		# early (first 55% of the flight) so the lower half descends straight
+		# down the pre-staged tile column instead of sweeping sideways across
+		# uncached z14-z17 tiles, and use `hop_peak` (not `r0`) so starting from
+		# orbit descends steadily from frame 1 instead of zooming backward first.
+		var e_pan := smoothstep(0.0, 0.55, u) if deep_dive else e
+		_target = GlobeMath.slerp_dir(_fly.from, _fly.to, e_pan)
+		var lr0 := log(r0)
+		var lr1 := log(r1)
+		var lp := log(float(_fly.get("hop_peak", _fly.peak)) if deep_dive else float(_fly.peak))
+		var e_zoom := lerpf(u, e, 0.38) if deep_dive else e
+		var base := lerpf(lr0, lr1, e_zoom)
 		var bump := maxf(0.0, lp - lerpf(lr0, lr1, 0.5))
-		cam_range = exp(base + bump * sin(PI * e))
+		cam_range = exp(base + bump * sin(PI * e_zoom))
+		var h1 := float(_fly.get("h1", NAN))
+		if is_finite(h1):
+			var h0 := float(_fly.get("h0", cam_heading))
+			var dh := wrapf(h1 - h0, -180.0, 180.0)
+			cam_heading = fposmod(h0 + dh * smoothstep(0.18, 0.92, u), 360.0)
 		if float(_fly.tilt1) >= 0.0:
-			# Level out over the hop, then lean into the landing.
-			cam_tilt = lerpf(float(_fly.tilt0) * (1.0 - smoothstep(0.0, 0.4, e)),
-				float(_fly.tilt1), smoothstep(0.55, 1.0, e))
+			# Level out over the hop, then lean smoothly into the landing.
+			cam_tilt = lerpf(float(_fly.tilt0) * (1.0 - smoothstep(0.0, 0.35, e)),
+				float(_fly.tilt1), smoothstep(0.45, 1.0, e))
 		else:
 			cam_tilt = float(_fly.tilt0) * (1.0 - sin(PI * e))
 		_cam_dirty = true
@@ -1167,18 +1198,57 @@ func _request_and_bind() -> void:
 				_fetcher.want(base_layer, Vector3i(2, x, y), -9.5)
 			if night_lights:
 				_fetcher.want("night", Vector3i(2, x, y), -9.0)
+	_prestage_flight_pyramid()
 	var view_dir := _target
 	for k in _selected:
 		var c: Vector3 = (_patches[k] as MeshInstance3D).position
 		var prio := float(k.x) * 0.25 + c.distance_to(view_dir) * 6.0
 		var bz := mini(k.x, _fetcher.max_zoom(base_layer))
 		_fetcher.want(base_layer, GlobeMath.ancestor(k, bz), prio)
-		if bz > 6:
-			_fetcher.want(base_layer, GlobeMath.ancestor(k, bz - 3), prio - 1.0)
+		if bz > 4:
+			_fetcher.want(base_layer, GlobeMath.ancestor(k, maxi(bz - 2, 3)), prio - 1.2)
+		if bz > 8:
+			_fetcher.want(base_layer, GlobeMath.ancestor(k, bz - 5), prio - 2.0)
 		var nk := GlobeMath.ancestor(k, mini(k.x, _fetcher.max_zoom("night")))
 		if night_lights:
 			_fetcher.want("night", nk, prio + 0.5)
 		_bind(k)
+
+
+## Keeps the destination zoom spine (z3 -> z17, coarse-first) in `_wanted`
+## throughout a deep flight so `_drop_unwanted` never cancels intermediate or
+## landing tiles as `_selected` steps through zoom levels.
+func _prestage_flight_pyramid() -> void:
+	if _body != "earth":
+		return
+	var la := NAN
+	var lo := NAN
+	if _prestage_ll.size() == 2:
+		la = _prestage_ll[0]
+		lo = _prestage_ll[1]
+	elif not _fly.is_empty() and float(_fly.get("r1", 1.0)) < 0.02 and _fly.has("dest_lat"):
+		la = float(_fly.dest_lat)
+		lo = float(_fly.dest_lon)
+	if not is_finite(la) or not is_finite(lo) or absf(la) >= GlobeMath.MERCATOR_MAX_LAT:
+		return
+	var z_cap := mini(max_zoom, _fetcher.max_zoom(base_layer))
+	for z in range(3, z_cap + 1):
+		var kt := GlobeMath.tile_at(la, lo, z)
+		# Coarse-to-fine priority (-8.5 up to -1.5) so intermediate rungs always
+		# arrive before finer ones, ahead of peripheral tiles.
+		var base_prio := -8.8 + float(z) * 0.42
+		_fetcher.want(base_layer, kt, base_prio)
+		if z == 8 or z == 11 or z == 13 or z == 15 or z == 16 or z == 17:
+			var n_tiles := 1 << z
+			for dy in range(-1, 2):
+				var ty := kt.z + dy
+				if ty < 0 or ty >= n_tiles:
+					continue
+				for dx in range(-1, 2):
+					if dx == 0 and dy == 0:
+						continue
+					var tx := (kt.y + dx + n_tiles) % n_tiles
+					_fetcher.want(base_layer, Vector3i(z, tx, ty), base_prio + 0.35)
 
 
 func _bind(k: Vector3i) -> void:
@@ -1710,6 +1780,8 @@ func _fetch_moon() -> void:
 
 
 func _on_moon_tex(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	if not is_inside_tree() or _moon_http == null or not _moon_http.is_inside_tree():
+		return
 	var img := Image.new()
 	if result != HTTPRequest.RESULT_SUCCESS or code != 200 or img.load_jpg_from_buffer(body) != OK:
 		if not _moon_small_tried:

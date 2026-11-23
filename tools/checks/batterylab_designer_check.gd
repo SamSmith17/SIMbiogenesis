@@ -136,11 +136,26 @@ func run(main: Node, harness: Node) -> Dictionary:
 	_ok(bld2.get_explode() > 0.8, "dragging the slider explodes the pack (%.2f)" % bld2.get_explode())
 	studio.viewport.get_texture().get_image().save_png("%s/exploded.png" % dir)
 	ui.call("set_explode", 0.0)
-	# --- Click a cell in the 3D view.
-	var cell := bld2.part("cell_0_0")
-	_ok(not cell.is_empty(), "the pack has a first cell")
+	# --- Click a cell in the 3D view: the first cell whose middle is in the
+	# clear from this camera (a lead runs over some of them, and a click on
+	# a lead picks the lead, as it should).
 	ui.call("set_cutaway", true)
 	await _settle(tree, 4)
+	var cell := {}
+	for pc in (bld2.get_meta("parts") as Array):
+		if str(pc["kind"]) != "cell":
+			continue
+		var wc := bld2.global_transform * (pc["aabb"] as AABB).get_center()
+		var ac := studio.camera.unproject_position(wc)
+		var rc := studio.pick_ray_local(bld2, ac * (studio.container.size / Vector2(studio.viewport.size)))
+		if rc.is_empty():
+			continue
+		# Cells stand shoulder to shoulder, so a slanted ray at one's middle
+		# may enter its neighbour first: a cell, either way.
+		if str(bld2.pick(rc["origin"], rc["dir"]).get("kind", "")) == "cell":
+			cell = pc
+			break
+	_ok(not cell.is_empty(), "a cell is in the clear (%s)" % str(cell.get("id", "none")))
 	if not cell.is_empty():
 		var bb: AABB = cell["aabb"]
 		var w := bld2.global_transform * bb.get_center()
@@ -220,6 +235,15 @@ func run(main: Node, harness: Node) -> Dictionary:
 			fg = HarnessInput.find_button(sh.get_tree().root, "Forget")
 		_ok(fg != null, "the Forget button")
 		if fg != null:
+			var fr := fg.get_global_rect()
+			var sc := fg.get_parent()
+			while sc != null and not (sc is ScrollContainer):
+				sc = sc.get_parent()
+			print("batterylab: Forget at %s, visible %s, scroll %s" % [fr, fg.is_visible_in_tree(),
+				(sc as Control).get_global_rect() if sc != null else "none"])
+			if sc != null:
+				(sc as ScrollContainer).ensure_control_visible(fg)
+				await _settle(tree, 3)
 			await HarnessInput.click(vp, HarnessInput.center_of(fg))
 		await _settle(tree, 6)
 		_ok(int(ui.call("entry_count")) == n0, "Forget removes it")

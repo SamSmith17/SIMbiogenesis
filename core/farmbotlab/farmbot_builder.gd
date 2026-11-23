@@ -610,20 +610,16 @@ func _commit(sts: Dictionary, over: Dictionary, metal_wall: bool) -> ArrayMesh:
 	for key in sts.keys():
 		var st: SurfaceTool = sts[key]
 		st.commit(mesh)
-		var m := StandardMaterial3D.new()
-		m.albedo_color = over.get(key, COLS.get(key, Color(0.5, 0.5, 0.5)))
+		var col: Color = over.get(key, COLS.get(key, Color(0.5, 0.5, 0.5)))
+		var mat_id := "powder_coat"
 		match str(key):
-			"alu", "chrome":
-				m.metallic = 0.75
-				m.roughness = 0.35 if key == "chrome" else 0.45
-			"soil":
-				m.roughness = 0.97
-			"wall":
-				m.metallic = 0.6 if metal_wall else 0.0
-				m.roughness = 0.5 if metal_wall else 0.9
-			"black", "motor", "hose", "trough":
-				m.roughness = 0.55
-			_:
-				m.roughness = 0.6
+			"alu": mat_id = "aluminium"
+			"chrome": mat_id = "stainless"
+			"soil": mat_id = "concrete"
+			"wall": mat_id = "metal_roofing" if metal_wall else "lumber"
+			"hose": mat_id = "rubber"
+			"black", "trough": mat_id = "plastic"
+			"motor": mat_id = "powder_coat"
+		var m := ParametricMaterialLibrary.make(mat_id, col)
 		mesh.surface_set_material(mesh.get_surface_count() - 1, m)
 	return mesh

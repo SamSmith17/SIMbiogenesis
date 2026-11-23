@@ -49,6 +49,23 @@ const SHELF_STEP_MM := 160.0
 const CART_DECK_MM := 180.0
 const PER_ROW := 4
 const CABINET_W := 600.0
+## A 19" cabinet: wall thickness, the bars' clearance off the packs' sides,
+## the clear channel in front of the packs for the cables, the room behind,
+## the spare rack units over the top pack, the headroom over them.
+const CAB_WALL_MM := 18.0
+const CAB_BAR_IN_MM := 14.0
+const CAB_FRONT_MM := 140.0
+const CAB_BACK_MM := 40.0
+const CAB_SPARE_U := 2
+const CAB_HEAD_MM := 40.0
+## A string cable lands on a side bar this many bend radii above its pack's
+## terminal (plus a fuse holder's length, which hangs below the landing), so
+## it rises in an S instead of looping flat between two studs a hand's
+## width apart.
+const CAB_LAND_UP_R := 3.0
+## Side bars stand this far in front of the packs' faces: they are beside
+## the packs, so no cable has to pass between them and a pack.
+const CAB_BAR_FRONT_MM := 25.0
 ## Fuse families: interrupt kA, voltage rating V DC, sizes A, $ fuse, $ holder.
 const FUSE_TYPES := {
 	"class_t": {"label": "Class T", "ka": 20.0, "v": 160.0, "k_blow": 49.0, "t_min": 0.001,
@@ -193,7 +210,7 @@ static func _solve(b: Dictionary) -> Dictionary:
 	var r_str := BattWire.bend_r_mm(BattWire.od_mm(str(w_str["name"]), float(w_str["mm2"])), "battery")
 	var bars: Dictionary = {}
 	var bus_axis := "y" if mount == "cabinet" else "x"
-	var chan_z := front_z + maxf(70.0, r_str * 1.5)
+	var chan_z := front_z + (CAB_BAR_FRONT_MM if mount == "cabinet" else maxf(70.0, r_str * 1.5))
 	var bus_pos_line := 0.0
 	var bus_neg_line := 0.0
 	var bar_lo := 0.0
@@ -202,13 +219,35 @@ static func _solve(b: Dictionary) -> Dictionary:
 	var bw := float(bus_pick["w"])
 	var tn := float(bus_pick["t"]) * float(bus_pick["n"])
 	var sp := maxf(50.0, bw + 30.0)
-	# The − bar stands nearer the packs, the + bar outside it with its fuse
-	# holders reaching away from the packs.
-	if mount == "cabinet":
-		bus_neg_line = span_x * 0.5 + 45.0 + bw * 0.5
-		bus_pos_line = bus_neg_line + sp
+	# In a cabinet the two bars run up EITHER SIDE of the packs, in the
+	# channel in front of them: − on the left, + on the right (the side each
+	# pack's terminal is on), like the rack busbar kits. Elsewhere the − bar
+	# stands nearer the packs, the + bar outside it with its fuse holders
+	# reaching away from the packs.
+	var cab_sides := mount == "cabinet"
+	var cab_land_up := 0.0
+	var cab_land_up_pos := 0.0
+	if cab_sides:
+		# The bars' outer edges stay a hand inside a 600 mm cabinet's walls;
+		# only a pack wider than 19" pushes them (and the cabinet) out.
+		var inner_half := CABINET_W * 0.5 - CAB_WALL_MM - 12.0
+		var line := minf(span_x * 0.5 + CAB_BAR_IN_MM + bw * 0.5, inner_half - bw * 0.5)
+		# A wide bar may overlap the pack's rack ears in plan: it stands in
+		# the channel in front of them.
+		line = maxf(line, span_x * 0.5 + bw * 0.5 - 20.0)
+		bus_neg_line = -line
+		bus_pos_line = line
 		bar_lo = y0
-		bar_hi = top_y
+		# Every string cable rises the same way up its bar; on the + side the
+		# fuse holder hangs below the landing, so that landing is a holder
+		# higher.
+		cab_land_up = r_str * CAB_LAND_UP_R
+		var fuse_pre := _pick_fuse(str(b["fuse"]), float(pe["v_max"]) * float(N), 0.0, 1.0, i_string, bool(pd["lithium"]))
+		if not fuse_pre.is_empty() and str(fuse_pre["type"]) != "mrbf":
+			cab_land_up_pos = cab_land_up + float((FUSE_DIMS.get(str(fuse_pre["type"]), FUSE_DIMS["class_t"]) as Dictionary)["pitch"])
+		else:
+			cab_land_up_pos = cab_land_up
+		bar_hi = top_y + cab_land_up_pos
 	else:
 		var below := y0 - 60.0 - bw * 0.5
 		if on_top or mount == "floor" or mount == "cart" or below - sp - bw * 0.5 - FUSE_REACH_MM < 40.0:
@@ -240,14 +279,17 @@ static func _solve(b: Dictionary) -> Dictionary:
 		bars = {"kind": "busbar", "axis": bus_axis, "w": bw, "t": float(bus_pick["t"]),
 			"n": int(bus_pick["n"]), "amps": float(bus_pick["amps"]), "auto": bool(bus_pick["auto"]),
 			"pos_line": bus_pos_line, "neg_line": bus_neg_line, "lo": bar_lo, "hi": bar_hi, "z": chan_z,
-			"z_neg": chan_z, "z_pos": chan_z + tn + NEG_STEP_MM, "tn": tn}
+			"z_neg": chan_z, "z_pos": chan_z if cab_sides else chan_z + tn + NEG_STEP_MM, "tn": tn,
+			"sides": cab_sides, "land_up": cab_land_up, "land_up_pos": cab_land_up_pos}
 		bars["face_pos"] = chan_z + tn * 0.5
 		bars["face_neg"] = float(bars["z_neg"]) + tn * 0.5
 		# The board stands flush with the packs' fronts, so every cable runs in
 		# front of it; the standoffs make up the depth.
 		bars["board_z"] = minf(front_z, chan_z - tn * 0.5 - STANDOFF_MM)
-		if mount == "cabinet":
-			bus_right = bus_pos_line + bw * 0.5 + (FUSE_REACH_MM if not fuse_guess_none(b) else 0.0)
+		if cab_sides:
+			# The holders reach along the bars, so the bars' own outer edge is
+			# what the cabinet has to clear.
+			bus_right = bus_pos_line + bw * 0.5
 	# The string ends: + at its first pack, − at its last (series joins between).
 	var cables: Array = []
 	var strings: Array = []
@@ -257,9 +299,11 @@ static func _solve(b: Dictionary) -> Dictionary:
 	var term_n: Vector3 = term.get("n_out", Vector3(0, 0, 1))
 	var term_stud := float(term.get("stud", 8.0))
 	var fuse := _pick_fuse(str(b["fuse"]), float(pe["v_max"]) * float(N), 0.0, 1.0, i_string, bool(pd["lithium"]))
-	# Take-offs to the inverter: diagonal = + at the bar's high end, − at the low.
+	# Take-offs to the inverter: diagonal = + at the bar's high end, − at the
+	# low. On a cabinet's side bars both mains leave at the top (the strings
+	# land the same way up either bar, so the lengths already match).
 	var take_pos := bar_hi + TAKE_OUT_MM
-	var take_neg := (bar_lo - TAKE_OUT_MM) if str(b["wiring"]) == "diagonal" else (bar_hi + TAKE_OUT_MM)
+	var take_neg := (bar_lo - TAKE_OUT_MM) if str(b["wiring"]) == "diagonal" and not cab_sides else (bar_hi + TAKE_OUT_MM)
 	var fuses: Array = []
 	for j in M:
 		var first: Dictionary = packs[j * N]
@@ -279,19 +323,26 @@ static func _solve(b: Dictionary) -> Dictionary:
 		var land_n := _landing(bars, last["out_neg"], "neg", j)
 		var nf := _face_n(bars)
 		# The + end of the string cable: the pack's stud, or a terminal fuse on it.
-		var pa := _end(term_kind, first["out_pos"], term_n, term_stud)
-		var pb_end := _end("stud", land_p, nf, BAR_STUD_MM)
+		# On a cabinet's side bars the cable leaves the pack upward and
+		# arrives at the bar from below (an S up the channel).
+		# On a cabinet's side bars the landing is well above the terminal, so
+		# the two lugs point at each other and the cable rises diagonally.
+		var up_hint := Vector3.ZERO
+		var down_hint := Vector3.ZERO
+		var down_hint_n := Vector3.ZERO
+		var pa := _end(term_kind, first["out_pos"], term_n, term_stud, up_hint)
+		var pb_end := _end("stud", land_p, nf, BAR_STUD_MM, down_hint)
 		if not fuse.is_empty():
 			var fz := _place_fuse(j, fuse, bars, first["out_pos"], term_n, term_kind, land_p, nf)
 			fuses.append(fz)
 			if str(fz["mount"]) == "terminal":
 				pa = _end("stud", fz["in"], term_n, MRBF_STUD_MM)
 			elif str(fz["mount"]) == "bar":
-				pb_end = _end("stud", fz["in"], nf, float(fz["stud"]))
+				pb_end = _end("stud", fz["in"], nf, float(fz["stud"]), down_hint)
 		var cp := _cable("str_pos_%d" % j, "pos", pa, pb_end, w_str, i_string,
 			"red", "String %d + to the %s" % [j + 1, "distributor" if bus == "distributor" else "positive bar"])
-		var cn := _cable("str_neg_%d" % j, "neg", _end(term_kind, last["out_neg"], term_n, term_stud),
-			_end("stud", land_n, nf, BAR_STUD_MM), w_str, i_string,
+		var cn := _cable("str_neg_%d" % j, "neg", _end(term_kind, last["out_neg"], term_n, term_stud, up_hint),
+			_end("stud", land_n, nf, BAR_STUD_MM, down_hint_n), w_str, i_string,
 			"black", "String %d − to the %s" % [j + 1, "distributor" if bus == "distributor" else "negative bar"])
 		_size_for_drop(cp, v_bank)
 		_size_for_drop(cn, v_bank)
@@ -352,7 +403,7 @@ static func _solve(b: Dictionary) -> Dictionary:
 	var out_n := _take_point(bars, "neg", take_neg)
 	var nfm := _face_n(bars)
 	var away := _bar_dir(bars)
-	var away_n := -away if str(b["wiring"]) == "diagonal" and bus == "busbar" else away
+	var away_n := -away if str(b["wiring"]) == "diagonal" and bus == "busbar" and not cab_sides else away
 	var disc: Dictionary = {}
 	var main_a := _end("stud", out_p, nfm, BAR_STUD_MM, away)
 	if bool(b["disconnect"]):
@@ -361,7 +412,7 @@ static func _solve(b: Dictionary) -> Dictionary:
 			"c": out_p + away * DISCONNECT_W_MM * 0.5 + nfm * DISCONNECT_H_MM * 0.5,
 			"amps": maxf(i_bank, 1.0)}
 		main_a = _end("stud", disc["b"], nfm, BAR_STUD_MM, away)
-		bus_right = maxf(bus_right, (disc["c"] as Vector3).x + DISCONNECT_W_MM)
+		bus_right = maxf(bus_right, (disc["b"] as Vector3).x + 20.0)
 	var mp := _main_cable("main_pos", main_a, run, routed, w_main, i_bank, "red", "Main + to the inverter")
 	var mn := _main_cable("main_neg", _end("stud", out_n, nfm, BAR_STUD_MM, away_n), run, routed, w_main, i_bank,
 		"black", "Main − to the inverter")
@@ -395,7 +446,8 @@ static func _solve(b: Dictionary) -> Dictionary:
 		comms.append({"id": "comms_inverter", "a": p0, "b": p0 + Vector3(0, -120.0, 260.0), "pts": tail,
 			"len_mm": 2000.0, "addr": 0, "to_inverter": true})
 	# Frame parts for the builder and the BOM.
-	var frame := _frame(mount, span_x, top_y, pb, y0, count, ph, bus_right)
+	var frame := _frame(mount, span_x, top_y, pb, y0, count, ph, bus_right,
+		(bar_hi + TAKE_OUT_MM + (DISCONNECT_W_MM if bool(b["disconnect"]) else 0.0) + 30.0) if cab_sides else 0.0)
 	var outer := AABB(Vector3(-span_x * 0.5, 0.0, pb.position.z), Vector3(span_x, top_y, pdp))
 	for f in (frame["boxes"] as Array):
 		outer = outer.merge(f["box"] as AABB)
@@ -803,7 +855,8 @@ static func _landing(bars: Dictionary, t: Vector3, pole: String, j: int = 0) -> 
 	var line := float(bars["%s_line" % pole])
 	var fz := float(bars["face_%s" % pole])
 	if str(bars["axis"]) == "y":
-		return Vector3(line, clampf(t.y, float(bars["lo"]), float(bars["hi"])), fz)
+		var up := float(bars.get("land_up_pos" if pole == "pos" else "land_up", 0.0))
+		return Vector3(line, clampf(t.y + up, float(bars["lo"]), float(bars["hi"])), fz)
 	return Vector3(clampf(t.x, float(bars["lo"]), float(bars["hi"])), line, fz)
 
 
@@ -865,10 +918,14 @@ static func _place_fuse(j: int, fuse: Dictionary, bars: Dictionary, pack_pos: Ve
 		out["in"] = pack_pos + term_n * float(dims["h"]) + up * float(dims["pitch"])
 		out["pos"] = pack_pos + term_n * float(dims["h"]) * 0.5 + up * float(dims["pitch"]) * 0.5
 		return out
-	# Bus-mounted holder on the outer + bar, reaching away from the packs.
+	# Bus-mounted holder on the + bar, reaching away from the packs; on a
+	# cabinet's side bar there is only the wall that way, so the holder lies
+	# ALONG the bar, reaching up from the landing (down from the top one).
 	var perp := Vector3(1, 0, 0) if str(bars["axis"]) == "y" else Vector3(0, 1, 0)
 	if (pack_pos - land).dot(perp) > 0.0:
 		perp = -perp
+	if bool(bars.get("sides", false)):
+		perp = Vector3.DOWN
 	out["mount"] = "bar"
 	out["a"] = land
 	out["n"] = nf
@@ -939,19 +996,27 @@ static func _pick_fuse(want: String, v_max: float, _i_sc_string: float, i_sc: fl
 
 ## The structure the packs stand in: boxes {id, kind, box, label}.
 static func _frame(mount: String, span_x: float, top_y: float, pb: AABB, y0: float, count: int,
-		ph: float, bus_right: float = 0.0) -> Dictionary:
+		ph: float, bus_right: float = 0.0, top_clear: float = 0.0) -> Dictionary:
 	var boxes: Array = []
 	var front := pb.end.z
 	var back := pb.position.z
 	var u := 0
 	match mount:
 		"cabinet":
-			u = int(ceil((top_y - y0) / 44.45)) + 4
-			var h := y0 + float(u) * 44.45 + 60.0
-			var w := maxf(CABINET_W, 2.0 * (bus_right + 40.0))
-			var dp := maxf(800.0, (front - back) + 250.0)
-			var zc := (front + back) * 0.5 - 20.0
-			var t := 18.0
+			# As tall as the packs plus two spare units, as wide as a 19"
+			# cabinet (or the bars, if a wide pack pushes them out), as deep
+			# as the packs plus the cable channel in front.
+			u = int(ceil((top_y - y0) / 44.45)) + CAB_SPARE_U
+			var t := CAB_WALL_MM
+			var h := y0 + float(u) * 44.45 + CAB_HEAD_MM
+			if top_clear > h:
+				# The side bars run on past the top pack (the switch on the +
+				# bar's top): the cabinet is as tall as they need.
+				u = int(ceil((top_clear - y0 - CAB_HEAD_MM) / 44.45))
+				h = y0 + float(u) * 44.45 + CAB_HEAD_MM
+			var w := maxf(CABINET_W, 2.0 * (bus_right + 12.0 + t))
+			var dp := (front - back) + CAB_FRONT_MM + CAB_BACK_MM
+			var zc := back - CAB_BACK_MM + dp * 0.5
 			for side in [-1.0, 1.0]:
 				boxes.append({"id": "cab_side_%d" % int(side), "kind": "cabinet", "label": "Cabinet side",
 					"box": AABB(Vector3(side * w * 0.5 - (t if side > 0 else 0.0), 0, zc - dp * 0.5), Vector3(t, h, dp))})

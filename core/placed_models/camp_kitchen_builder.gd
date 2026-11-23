@@ -95,10 +95,10 @@ static func _counter(root: Node3D, at: Vector3, w: float, top: float) -> void:
 
 
 static func _mat(c: Color) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = c
-	m.roughness = 0.75
-	return m
+	if absf(c.r - c.b) < 0.08 and c.r > 0.55:
+		return ParametricMaterialLibrary.make("stainless", c)
+	var mat_id := StructureMaterials.infer_id(c, 0.0, 0.75, c.a)
+	return ParametricMaterialLibrary.make(mat_id, c)
 
 
 static func _box(root: Node3D, size: Vector3, at: Vector3, c: Color) -> MeshInstance3D:

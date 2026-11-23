@@ -121,7 +121,7 @@ func _build() -> void:
 		parts.append({"id": str(cb["id"]), "kind": "cable",
 			"label": "%s · %s, %.2f m, %.0f A, %.2f %% drop%s" % [cb["label"], cb["gauge"], float(cb["len_mm"]) * 0.001,
 				float(cb["amps"]), float(cb["drop_pct"]), (" · bent tighter than %.0f mm" % float(cb["r_bend"])) if bool(cb.get("tight", false)) else ""],
-			"aabb": bx.grow(g.x * MM * 0.5)})
+			"aabb": bx.grow(g.x * MM * 0.5), "path": BattBuilder._path_m(path), "rad": (float(cb["od"]) * 0.5 + 4.0) * MM})
 	if not cg.is_empty():
 		var cab := MeshInstance3D.new()
 		cab.name = "Cables"
@@ -249,20 +249,25 @@ func _draw_bus(g: BattParts.Geo, d: Dictionary, parts: Array) -> void:
 	var zn := Vector3(0, 0, 1)
 	var board_z := float(bars["board_z"])
 	var lines := [float(bars["pos_line"]), float(bars["neg_line"])]
-	# The board behind both bars.
-	var l_lo := minf(lines[0], lines[1]) - w * 0.5 - 25.0
-	var l_hi := maxf(lines[0], lines[1]) + w * 0.5 + 25.0
-	var bc: Vector3
-	var bs: Vector3
-	if axis == "y":
-		bc = Vector3((l_lo + l_hi) * 0.5, (lo + hi) * 0.5, board_z - 4.0)
-		bs = Vector3(l_hi - l_lo, hi - lo + 40.0, 8.0)
-	else:
-		bc = Vector3((lo + hi) * 0.5, (l_lo + l_hi) * 0.5, board_z - 4.0)
-		bs = Vector3(hi - lo + 40.0, l_hi - l_lo, 8.0)
-	BattParts.abox(g, bc, bs, C_BOARD, "board")
-	parts.append({"id": "bus_board", "kind": "bus", "label": "Insulating bus board",
-		"aabb": AABB((bc - bs * 0.5) * MM, bs * MM)})
+	# The board behind both bars; bars on opposite sides of a cabinet each
+	# get their own strip.
+	var strips: Array = [[minf(lines[0], lines[1]), maxf(lines[0], lines[1])]]
+	if bool(bars.get("sides", false)):
+		strips = [[lines[0], lines[0]], [lines[1], lines[1]]]
+	for si in strips.size():
+		var l_lo: float = float(strips[si][0]) - w * 0.5 - 25.0
+		var l_hi: float = float(strips[si][1]) + w * 0.5 + 25.0
+		var bc: Vector3
+		var bs: Vector3
+		if axis == "y":
+			bc = Vector3((l_lo + l_hi) * 0.5, (lo + hi) * 0.5, board_z - 4.0)
+			bs = Vector3(l_hi - l_lo, hi - lo + 40.0, 8.0)
+		else:
+			bc = Vector3((lo + hi) * 0.5, (l_lo + l_hi) * 0.5, board_z - 4.0)
+			bs = Vector3(hi - lo + 40.0, l_hi - l_lo, 8.0)
+		BattParts.abox(g, bc, bs, C_BOARD, "board")
+		parts.append({"id": "bus_board" if si == 0 else "bus_board_%d" % si, "kind": "bus",
+			"label": "Insulating bus board", "aabb": AABB((bc - bs * 0.5) * MM, bs * MM)})
 	# The landings and take-offs on each bar (for bolt holes).
 	var holes := {"pos": [], "neg": []}
 	for cb in (d["cables"] as Array):
@@ -457,10 +462,16 @@ func pick(origin: Vector3, dir: Vector3) -> Dictionary:
 	var best := {}
 	var best_t := INF
 	for p in (get_meta("parts", []) as Array):
-		var hit: Variant = (p["aabb"] as AABB).intersects_ray(origin, dir)
-		if hit == null:
-			continue
-		var t := ((hit as Vector3) - origin).length()
+		var t: float
+		if p.has("path"):
+			t = BattBuilder.ray_path_t(origin, dir, p["path"], float(p.get("rad", 0.01)))
+			if t == INF:
+				continue
+		else:
+			var hit: Variant = (p["aabb"] as AABB).intersects_ray(origin, dir)
+			if hit == null:
+				continue
+			t = ((hit as Vector3) - origin).length()
 		# Small things win over the packs and the frame they sit on.
 		if str(p["kind"]) in ["pack", "cabinet", "shelf", "cart", "rail"]:
 			t += 0.03

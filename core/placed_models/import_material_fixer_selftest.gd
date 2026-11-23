@@ -226,6 +226,8 @@ func _test_mercator_series() -> void:
 		and absf(TerrainBuilder.mercator_v_relative(1.0, 48.33, 48.32) - 1.0) < 1e-12)
 	# The shader form and the GDScript mirror must not drift: same constants.
 	var sh := FileAccess.get_file_as_string("res://core/terrain/terrain_detail.gdshader")
+	if sh.contains("terrain_detail_body.gdshaderinc"):
+		sh += "\n" + FileAccess.get_file_as_string("res://core/terrain/terrain_detail_body.gdshaderinc")
 	var roof := FileAccess.get_file_as_string("res://core/terrain/building_roof.gdshader")
 	var term := "tan0 * (5.0 * sec0 * sec0 + tan0 * tan0) * d * d * d / 24.0"
 	_ok("terrain shader uses the centre-relative series", sh.contains(term) and not sh.contains("_asinh(tan(radians(lat)))"))

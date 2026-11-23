@@ -78,6 +78,8 @@ var _glow_enabled: CheckBox
 var _ssao_enabled: CheckBox
 var _ssil_enabled: CheckBox
 var _sdfgi_enabled: CheckBox
+var _sdfgi_strength: HSlider
+var _sdfgi_terrain: CheckBox
 var _volumetric_fog: CheckBox
 var _fog_amount: HSlider
 var _tonemap_mode: OptionButton
@@ -1988,15 +1990,18 @@ func _build_lighting_tab(tabs: TabContainer) -> void:
 	_ssao_enabled = _add_check(v, "SSAO (ambient occlusion)", _on_ssao_enabled)
 	_ssil_enabled = _add_check(v, "SSIL (indirect light)", _on_ssil_enabled)
 	_sdfgi_enabled = _add_check(v, "SDFGI (global illumination)", _on_sdfgi_enabled)
-	# SDFGI voxelises a handful of cascades CENTRED ON THE CAMERA — roughly 400 m
-	# across at the default cell size. On a 120 km terrain that is a small box that
-	# follows the player: ground inside it picks up bounced light, ground outside it
-	# gets none, and the seam reads as a lit square around the camera that fades out
-	# as a drone climbs past the cascade. It is worst at night, and worst of all with
-	# "Ambient x" at 0, where SDFGI is then the ONLY thing lighting that square.
-	# Off by default for that reason; the lighting model (DaylightModel) already
-	# carries direct beam + skylight on its own.
-	_sdfgi_enabled.tooltip_text = "Bounced-light GI. Not recommended at this world scale: SDFGI only covers a ~400 m box centred on the camera, so it lights a square patch of ground that follows you and stops at a hard edge — very visible at night, especially with Ambient × turned down."
+	_sdfgi_enabled.tooltip_text = "Bounced-light global illumination for interiors, shade structures and camps. Calibrated to DaylightModel with wider outdoor cascades and a smooth fade at survey-drone altitudes."
+	_sdfgi_strength = _add_slider(v, "SDFGI strength ×", 0.0, 3.0, 0.05, _on_sdfgi_energy_mult)
+	_sdfgi_strength.tooltip_text = "Scales SDFGI indirect light relative to the calibrated outdoor baseline (1.0 matches the surrounding sky ambient; raise for stronger indoor/wall bounce)."
+	_sdfgi_terrain = _add_check(v, "SDFGI on terrain", _on_sdfgi_terrain_enabled)
+	_sdfgi_terrain.tooltip_text = "When off, only 3D structures, vehicles and props receive SDFGI while terrain uses smooth sky ambient (sunlight still bounces off the ground onto walls). Eliminates any cascade seam on open ground even if SDFGI strength × is boosted."
+	var mat_lib_btn := Button.new()
+	mat_lib_btn.name = "open_parametric_materials"
+	mat_lib_btn.text = "Parametric materials & textures…"
+	mat_lib_btn.tooltip_text = "Fine-tune roughness, normals, grain and clearcoat across all parametric structures, or upload custom PBR textures."
+	UITheme.style_button(mat_lib_btn)
+	mat_lib_btn.pressed.connect(_on_open_material_library)
+	v.add_child(mat_lib_btn)
 	_volumetric_fog = _add_check(v, "Volumetric fog", _on_volumetric_fog_enabled)
 	_volumetric_fog.tooltip_text = "How thick it is follows Environment → Atmospheric haze → Fog amount."
 	_tonemap_mode = _add_option(v, "Tonemap", ["Linear", "Reinhard", "Filmic", "ACES", "AgX"], _on_tonemap_mode)
@@ -2684,6 +2689,10 @@ func _sync_advanced_from_snapshot(snap: Dictionary) -> void:
 		_ssil_enabled.button_pressed = snap.get("ssil_enabled", true)
 	if _sdfgi_enabled:
 		_sdfgi_enabled.button_pressed = snap.get("sdfgi_enabled", false)
+	if _sdfgi_strength:
+		_sdfgi_strength.value = snap.get("sdfgi_energy_mult", 1.0)
+	if _sdfgi_terrain:
+		_sdfgi_terrain.button_pressed = snap.get("sdfgi_terrain_enabled", true)
 	if _volumetric_fog:
 		_volumetric_fog.button_pressed = snap.get("volumetric_fog_enabled", false)
 	if _fog_amount:
@@ -3094,6 +3103,21 @@ func _on_ssil_enabled(on: bool) -> void:
 func _on_sdfgi_enabled(on: bool) -> void:
 	if _syncing: return
 	SimSettingsController.apply_sdfgi_enabled(on)
+
+func _on_sdfgi_energy_mult(v: float) -> void:
+	if _syncing: return
+	SimSettingsController.apply_sdfgi_energy_mult(v)
+
+func _on_sdfgi_terrain_enabled(on: bool) -> void:
+	if _syncing: return
+	SimSettingsController.apply_sdfgi_terrain_enabled(on)
+
+func _on_open_material_library() -> void:
+	var main := get_tree().current_scene if get_tree() != null else null
+	if main != null and main.has_method("open_material_library"):
+		if has_method("toggle") and is_open():
+			toggle()
+		main.call("open_material_library", {})
 
 func _on_volumetric_fog_enabled(on: bool) -> void:
 	if _syncing: return

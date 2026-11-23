@@ -592,11 +592,10 @@ static func _window_mesh(win: Dictionary) -> ArrayMesh:
 	st.set_normal(Vector3.BACK)
 	for v in [a, c, b, a, dd, c]:
 		st.add_vertex(v)
-	var m := StandardMaterial3D.new()
-	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.albedo_color = Color(0.75, 0.82, 0.88, 0.22)
-	m.roughness = 0.08
-	m.metallic_specular = 0.8
+	var m := ParametricMaterialLibrary.make("pmma", Color(0.75, 0.82, 0.88, 0.22), {
+		"cull_mode": BaseMaterial3D.CULL_BACK,
+		"transparency": BaseMaterial3D.TRANSPARENCY_ALPHA,
+	})
 	var am := st.commit()
 	am.surface_set_material(0, m)
 	return am

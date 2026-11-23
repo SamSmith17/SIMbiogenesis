@@ -760,6 +760,26 @@ var sdfgi_user_enabled : bool = false :
 		sdfgi_user_enabled = value
 		_apply_advanced_rendering_toggles()
 
+## Multiplier over the DaylightModel-calibrated SDFGI baseline (1.0 = matches
+## open-sky ambient outside the cascade; 0 = off; >1 boosts indoor/wall bounce).
+var sdfgi_energy_mult : float = 1.0 :
+	set( value ) :
+		sdfgi_energy_mult = clampf( value, 0.0, 4.0 ) if is_finite( value ) else 1.0
+		_update_sdfgi_state( 0.0, false )
+
+## When false ("SDFGI on terrain" unchecked), Ground/DetailGround/sculpt tiles
+## use `terrain_detail_no_sdfgi.gdshader` (`ambient_light_disabled` + sky-matched
+## `terrain_sky_ambient`) so only 3D structures/props/vehicles receive SDFGI.
+var sdfgi_terrain_enabled : bool = true :
+	set( value ) :
+		sdfgi_terrain_enabled = value
+		TerrainBuilder.sdfgi_on_terrain = value
+		if is_inside_tree() :
+			var loader = get_node_or_null( "TerrainLoader" )
+			if loader != null and loader.has_method( "set_sdfgi_on_terrain" ) :
+				loader.set_sdfgi_on_terrain( value )
+		_update_sdfgi_state( 0.0, false )
+
 var volumetric_fog_user_enabled : bool = false :
 	set( value ) :
 		volumetric_fog_user_enabled = value
@@ -841,6 +861,15 @@ var _dust_layer_ground_xz : Vector2 = Vector2.INF
 var _fog_sky_light : float = 1.0
 ## Last value pushed to the `npc_night` global shader uniform (glow sticks).
 var _npc_night_pushed : float = -1.0
+## Cached ground elevation under the active camera + baseline ambient for SDFGI matching.
+var _sdfgi_ground_y : float = NAN
+var _sdfgi_ground_xz : Vector2 = Vector2.INF
+var _sdfgi_prev_agl_m : float = 1.7
+var _base_env_ambient_energy : float = 0.30
+var _sdfgi_env_mod_mult : float = 1.0
+var _last_moon_ambient : float = 0.0
+var _last_night_amount : float = 0.0
+var _terrain_sky_ambient_pushed : Vector3 = Vector3( -1.0, -1.0, -1.0 )
 
 const CLOUDS_SPEED_BASE : float = 2.0
 const CIRRUS_SPEED_BASE : float = 1.0
@@ -946,6 +975,8 @@ var batterylab_ui : Control = null
 const BATTERYLAB_MODAL_SCRIPT := preload( "res://scenes/ui/batterylab_modal.gd" )
 var ctrllab_ui : Control = null
 const CTRLLAB_MODAL_SCRIPT := preload( "res://scenes/ui/ctrllab_modal.gd" )
+var material_library_ui : Control = null
+const MATERIAL_LIBRARY_MODAL_SCRIPT := preload( "res://scenes/ui/material_library_modal.gd" )
 const NPC_ANIM_EDITOR_SCRIPT := preload( "res://scenes/ui/npc_anim_editor.gd" )
 const LINKAGE_HARDWARE_SCRIPT := preload( "res://scenes/ui/linkage_hardware_modal.gd" )
 var scad_store_ui : Control = null
@@ -1079,6 +1110,10 @@ func _ready() -> void :
 	call_deferred( "_setup_challenge_runner" )
 	# Spawn fire extinguisher pickups at strategic locations
 	call_deferred( "_spawn_fire_extinguisher_pickups" )
+	TerrainBuilder.sdfgi_on_terrain = sdfgi_terrain_enabled
+	var tl_sdfgi := get_node_or_null( "TerrainLoader" )
+	if tl_sdfgi != null and tl_sdfgi.has_method( "set_sdfgi_on_terrain" ) :
+		tl_sdfgi.set_sdfgi_on_terrain( sdfgi_terrain_enabled )
 	_apply_advanced_rendering_toggles()
 	_apply_tonemap_settings()
 	_apply_msaa_level()
@@ -1829,6 +1864,18 @@ func set_sdfgi_enabled( on: bool ) -> void :
 func get_sdfgi_enabled() -> bool :
 	return sdfgi_user_enabled
 
+func set_sdfgi_energy_mult( value: float ) -> void :
+	sdfgi_energy_mult = value
+
+func get_sdfgi_energy_mult() -> float :
+	return sdfgi_energy_mult
+
+func set_sdfgi_terrain_enabled( on: bool ) -> void :
+	sdfgi_terrain_enabled = on
+
+func get_sdfgi_terrain_enabled() -> bool :
+	return sdfgi_terrain_enabled
+
 func set_volumetric_fog_enabled( on: bool ) -> void :
 	volumetric_fog_user_enabled = on
 
@@ -2233,7 +2280,7 @@ func _apply_advanced_rendering_toggles() -> void :
 	var env : Environment = environment.environment
 	env.ssao_enabled = ssao_user_enabled
 	env.ssil_enabled = ssil_user_enabled
-	env.sdfgi_enabled = sdfgi_user_enabled
+	_update_sdfgi_state( 0.0, not is_finite( _sdfgi_prev_agl_m ) )
 	# God rays ride on the volumetric fog pass, so enable it when either the plain
 	# volumetric-fog toggle OR the god-rays toggle is on.
 	# Skip shafts while the graph Elevation CT SubViewport owns the shared world —
@@ -2600,6 +2647,8 @@ func _apply_graphics_quality() -> void :
 	var tl : Node = ServiceLocator.terrain_loader()
 	if tl != null and tl.has_method( "on_graphics_quality_changed" ) :
 		tl.call( "on_graphics_quality_changed", graphics_quality )
+	if sdfgi_user_enabled :
+		_update_sdfgi_state( 0.0, true )
 
 func _get_shadow_profile() -> Dictionary :
 	return RenderProfile.shadow_profile( shadow_quality )
@@ -3112,6 +3161,9 @@ func _process( delta: float ) -> void :
 			_update()
 		_graph_view_was_visible = graph_visible
 
+		if sdfgi_user_enabled and ( not graph_visible or _graph_soi_preview_active() ) :
+			_update_sdfgi_state( delta, false )
+
 		# Run env updates when the graph is closed, OR when its live SoI
 		# SubViewport backdrop needs sun/sky to keep ticking.
 		if not graph_visible or _graph_soi_preview_active() :
@@ -3611,6 +3663,7 @@ func _update_environment() -> void :
 		moon_ambient_contribution = minf( moon_ambient_contribution, 0.008 )
 	
 	# Dynamic ambient light - brighter during day, dimmer at night but with moon contribution
+	_last_moon_ambient = moon_ambient_contribution
 	var day_ambient : float = 0.3
 	var night_ambient : float = 0.003 + moon_ambient_contribution
 	var ambient := lerpf( night_ambient, day_ambient, sky_light ) * ambient_energy_mult
@@ -3635,11 +3688,91 @@ func _update_environment() -> void :
 	# a hazard still thickens the air the style has cleared.
 	_apply_render_style_env()
 	_apply_hazard_atmosphere( night_amount, sun_height )
+	_last_night_amount = night_amount
+	_base_env_ambient_energy = environment.environment.ambient_light_energy
+	_sdfgi_env_mod_mult = clampf( _base_env_ambient_energy / maxf( ambient, 1e-4 ), 0.0, 4.0 ) if ambient > 1e-4 else 1.0
 	# Volumetric fog AFTER the hazard pass: _apply_hazard_atmosphere refreshes
 	# _hazard_vol, which this reads. Called before it, the dust wall always ran
 	# one environment update behind the storm.
 	_apply_advanced_rendering_toggles()
+	_push_terrain_sky_ambient( night_amount )
 	_push_horizon_color()
+
+
+func _sample_camera_agl_m() -> float :
+	var vp := get_viewport()
+	if vp == null :
+		return 1.7
+	var cam := vp.get_camera_3d()
+	if cam == null or not is_instance_valid( cam ) :
+		return 1.7
+	var p := cam.global_position
+	var xz := Vector2( p.x, p.z )
+	if is_nan( _sdfgi_ground_y ) or xz.distance_to( _sdfgi_ground_xz ) > 6.0 :
+		_sdfgi_ground_y = TerrainSurfaceQuery.ground_height_at( self, p.x, p.z )
+		_sdfgi_ground_xz = xz
+	var gy := _sdfgi_ground_y if is_finite( _sdfgi_ground_y ) else 0.0
+	return maxf( 0.0, p.y - gy )
+
+
+func _update_sdfgi_state( _delta: float, _immediate: bool = false ) -> void :
+	if not is_instance_valid( environment ) or environment.environment == null :
+		return
+	var env : Environment = environment.environment
+	if not sdfgi_user_enabled or sdfgi_energy_mult <= 0.0 or _graph_soi_section_preview_active() or globe_mode_open() :
+		if env.sdfgi_enabled :
+			env.sdfgi_enabled = false
+		env.sdfgi_energy = 0.0
+		env.ambient_light_sky_contribution = ambient_sky_contribution
+		if is_finite( _base_env_ambient_energy ) :
+			env.ambient_light_energy = _base_env_ambient_energy
+			_vegetation_ambient_energy = _base_env_ambient_energy
+		_push_terrain_sky_ambient( _last_night_amount )
+		return
+	var prof := SdfgiPolicy.apply_cascade_profile( env, graphics_quality )
+	var agl := _sample_camera_agl_m()
+	_sdfgi_prev_agl_m = agl
+	var gi_energy := SdfgiPolicy.calibrated_energy(
+		_fog_sky_light,
+		_last_moon_ambient,
+		sdfgi_energy_mult,
+		_sdfgi_env_mod_mult
+	)
+	# Match outside fallback (and survey-altitude landscape) to the SAME sky cubemap
+	# irradiance as open ground inside the SDFGI cascade, so `mix(outside, sdfgi, blend)`
+	# has zero brightness or hue step across the cascade boundary AND zero brightness
+	# shift when SDFGI suspends above `suspend_agl_m`.
+	var matched_amb := SdfgiPolicy.matched_sky_ambient_energy( gi_energy, _fog_sky_light )
+	env.ambient_light_sky_contribution = 1.0
+	env.ambient_light_energy = matched_amb
+	_vegetation_ambient_energy = matched_amb
+	var want_on := SdfgiPolicy.should_enable_at_agl(
+		agl,
+		float( prof.get( "suspend_agl_m", 210.0 ) ),
+		env.sdfgi_enabled
+	)
+	env.sdfgi_energy = gi_energy if want_on else 0.0
+	if env.sdfgi_enabled != want_on :
+		env.sdfgi_enabled = want_on
+	_push_terrain_sky_ambient( _last_night_amount )
+
+
+func _push_terrain_sky_ambient( night_amount: float ) -> void :
+	if not is_instance_valid( environment ) or environment.environment == null :
+		return
+	var env : Environment = environment.environment
+	var rgb := SdfgiPolicy.terrain_custom_ambient_color(
+		env.ambient_light_energy,
+		_fog_sky_light,
+		night_amount,
+		env.fog_light_color,
+		env.ambient_light_sky_contribution,
+		env.ambient_light_color
+	)
+	if rgb.distance_squared_to( _terrain_sky_ambient_pushed ) < 1e-7 :
+		return
+	_terrain_sky_ambient_pushed = rgb
+	RenderingServer.global_shader_parameter_set( "terrain_sky_ambient", rgb )
 
 
 ## The sky below the horizon line. Matched to the FINAL haze colour (after the
@@ -5420,6 +5553,36 @@ func open_ctrllab( opts: Dictionary = {} ) -> Control :
 		return null
 	ctrllab_ui.call( "open", opts )
 	return ctrllab_ui
+
+
+func _setup_material_library_ui() -> void :
+	var ui_layer := get_node_or_null( "UILayer" )
+	if ui_layer == null :
+		return
+	var existing_layer := ui_layer.get_node_or_null( "MaterialLibraryLayer" )
+	if existing_layer != null :
+		material_library_ui = existing_layer.get_node_or_null( "MaterialLibraryModal" ) as Control
+		return
+	var layer := CanvasLayer.new()
+	layer.name = "MaterialLibraryLayer"
+	layer.layer = UITheme.LAYER_MODAL + 1
+	ui_layer.add_child( layer )
+	var ui := Control.new()
+	ui.name = "MaterialLibraryModal"
+	ui.set_anchors_and_offsets_preset( Control.PRESET_FULL_RECT )
+	ui.set_script( MATERIAL_LIBRARY_MODAL_SCRIPT )
+	layer.add_child( ui )
+	material_library_ui = ui
+
+
+## Open the Parametric Materials Studio. opts: {material_id}.
+func open_material_library( opts: Dictionary = {} ) -> Control :
+	if not is_instance_valid( material_library_ui ) :
+		_setup_material_library_ui()
+	if not is_instance_valid( material_library_ui ) :
+		return null
+	material_library_ui.call( "open", opts )
+	return material_library_ui
 
 
 ## Open the solar concentrator designer. opts: {spec, prop_id}.

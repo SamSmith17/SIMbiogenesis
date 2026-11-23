@@ -55,7 +55,7 @@ vec2 drape_uv(vec3 n, vec2 c, vec3 k, vec4 box) {
 
 float drape_w(vec2 uv) {
 	float e = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
-	return smoothstep(0.0, 0.035, e);
+	return smoothstep(0.0, 0.09, e);
 }
 uniform float gray_lo = 0.30;
 uniform float gray_hi = 0.66;
@@ -101,15 +101,16 @@ void fragment() {
 	} else if (has_day) {
 		day = texture(day_tex, day_rect.xy + UV * day_rect.zw).rgb;
 	}
+	float cam_d_drape = length(CAMERA_POSITION_WORLD - w_pos);
 	if (has_d0) {
 		vec2 uv0 = drape_uv(n, d0_c, d0_k, d0_box);
 		vec3 c0 = texture(d0_tex, clamp(uv0, 0.0, 1.0)).rgb;
-		day = mix(day, c0, drape_w(uv0));
+		day = mix(day, c0, drape_w(uv0) * smoothstep(0.032, 0.012, cam_d_drape));
 	}
 	if (has_d1) {
 		vec2 uv1 = drape_uv(n, d1_c, d1_k, d1_box);
 		vec3 c1 = texture(d1_tex, clamp(uv1, 0.0, 1.0)).rgb;
-		day = mix(day, c1, drape_w(uv1));
+		day = mix(day, c1, drape_w(uv1) * smoothstep(0.012, 0.0045, cam_d_drape));
 	}
 	float ndl = dot(n, normalize(sun_dir));
 	float lit = smoothstep(-0.14, 0.20, ndl);

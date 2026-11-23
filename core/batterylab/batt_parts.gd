@@ -99,12 +99,19 @@ static var _mats: Dictionary = {}
 static func material(finish: String) -> StandardMaterial3D:
 	if _mats.has(finish):
 		return _mats[finish]
-	var f: Array = FINISH.get(finish, [0.0, 0.6])
-	var m := StandardMaterial3D.new()
-	m.vertex_color_use_as_albedo = true
-	m.albedo_color = Color.WHITE
-	m.metallic = float(f[0])
-	m.roughness = float(f[1])
+	var mat_id := "plastic"
+	match finish:
+		"metal": mat_id = "aluminium"
+		"tin": mat_id = "galvanised"
+		"copper": mat_id = "copper"
+		"brass": mat_id = "brass_bronze"
+		"rubber": mat_id = "rubber"
+		"board": mat_id = "powder_coat"
+		"jacket", "shrink", "plastic": mat_id = "plastic"
+	var m := ParametricMaterialLibrary.make(mat_id, Color.WHITE, {
+		"vertex_color": true,
+		"cull_mode": BaseMaterial3D.CULL_BACK,
+	})
 	_mats[finish] = m
 	return m
 

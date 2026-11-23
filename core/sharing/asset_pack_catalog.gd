@@ -42,6 +42,7 @@ const LIBRARY_GROUPS := [
 	["machines", "Machines and print jobs", "Machine profiles, G-code jobs, prints", ["machines"]],
 	["scad", "Parametric parts", "Parts rendered in the SCAD store", ["scad_parts"]],
 	["facades", "Facade textures", "Wall textures for styled buildings", ["maps/facade_textures"]],
+	["materials", "Parametric materials", "Material tuning and uploaded PBR textures", ["materials"]],
 	["photocards", "Tree photocards", "Photo cards for vegetation species", ["veg_photocards"]],
 	["starmap", "Custom star map", "An uploaded sky texture", ["starmaps"]],
 ]

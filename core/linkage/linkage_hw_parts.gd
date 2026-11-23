@@ -78,37 +78,26 @@ static func material_for(type: String) -> StandardMaterial3D:
 static func _material(kind: String) -> StandardMaterial3D:
 	if _materials.has(kind):
 		return _materials[kind]
-	var m := StandardMaterial3D.new()
+	var m: StandardMaterial3D
 	match kind:
-		"bolt":
-			m.albedo_color = COL_BOLT
+		"bolt", "thread":
+			m = ParametricMaterialLibrary.make("hardware_steel", COL_BOLT if kind == "bolt" else COL_THREAD, {"cull_mode": BaseMaterial3D.CULL_BACK})
 		"bronze":
-			m.albedo_color = COL_BRONZE
+			m = ParametricMaterialLibrary.make("brass_bronze", COL_BRONZE, {"cull_mode": BaseMaterial3D.CULL_BACK})
 		"copper":
-			m.albedo_color = COL_COPPER
+			m = ParametricMaterialLibrary.make("copper", COL_COPPER, {"cull_mode": BaseMaterial3D.CULL_BACK})
 		"zinc":
-			m.albedo_color = COL_ZINC
-		"thread":
-			m.albedo_color = COL_THREAD
+			m = ParametricMaterialLibrary.make("galvanised", COL_ZINC, {"cull_mode": BaseMaterial3D.CULL_BACK})
 		"wood":
-			m.albedo_color = COL_WOOD
+			var wc := COL_WOOD
+			wc.a = 0.38
+			m = ParametricMaterialLibrary.make("lumber", wc, {
+				"cull_mode": BaseMaterial3D.CULL_BACK,
+				"transparency": BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS,
+			})
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 		_:
-			m.albedo_color = COL_STEEL
-	if kind == "wood":
-		m.metallic = 0.0
-		m.roughness = 0.85
-		# The member is CONTEXT, not the subject: ghost it (0.38, the web's
-		# opacity) so the stack of hardware running through it stays readable.
-		# DEPTH PRE-PASS, not plain alpha: without a depth pass every internal
-		# face of the drilled mesh stacks up and the beam renders as a milky
-		# mess of facets — the exact confusion the old no-depth-write version
-		# shipped. Backface culling stays ON; the drilled slab is watertight.
-		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
-		m.albedo_color.a = 0.38
-		m.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	else:
-		m.metallic = 0.75
-		m.roughness = 0.4
+			m = ParametricMaterialLibrary.make("hardware_steel", COL_STEEL, {"cull_mode": BaseMaterial3D.CULL_BACK})
 	_materials[kind] = m
 	return m
 

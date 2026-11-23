@@ -736,6 +736,10 @@ static func kind_for_look(look: String) -> int:
 		"corten": return StructureMaterials.Kind.WEATHERING_STEEL
 		"ply": return StructureMaterials.Kind.PLYWOOD
 		"glazing": return StructureMaterials.Kind.GLAZING
+		"pmma": return StructureMaterials.Kind.PMMA
+		"copper": return StructureMaterials.Kind.COPPER
+		"corrugated": return StructureMaterials.Kind.CORRUGATED_METAL
+		"reflector": return StructureMaterials.Kind.REFLECTOR
 		"fabric": return StructureMaterials.Kind.FABRIC
 	return StructureMaterials.Kind.PLASTIC
 
@@ -773,14 +777,9 @@ static func _material_for(key: String, d: Dictionary, ghost: bool) -> Material:
 			if own_a < 0.99 and col.a > 0.99:
 				col.a = own_a
 			m = StructureMaterials.make(kind_for_look(look), col)
-			if look == "ply":
-				# The shared plywood grain is sized for rack decking; on a
-				# metre-wide panel it read as soft cloud blotches.
-				m.uv1_scale = Vector3(5.0, 5.0, 5.0)
-				m.normal_scale = 0.05
 			if col.a < 0.99:
 				m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
-			if look == "glazing":
+			if look in ["glazing", "pmma"]:
 				# Both faces of a clear sheet catch the light.
 				m.cull_mode = BaseMaterial3D.CULL_DISABLED
 		"hub":

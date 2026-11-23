@@ -14,7 +14,7 @@ extends SceneTree
 ## Run: Godot.exe.exe --headless --path . --import   (once, new class_names)
 ##      Godot.exe.exe --headless --path . --script core/globe/globe_selftest.gd
 
-const EXPECTED_CHECKS := 221
+const EXPECTED_CHECKS := 231
 
 var _fails := 0
 var _checks := 0
@@ -43,6 +43,7 @@ func _initialize() -> void:
 	_test_labels_and_climate()
 	_test_aurora()
 	_test_globe_improvements()
+	_test_launch_transition_and_fast_cache()
 	if _checks != EXPECTED_CHECKS:
 		_fails += 1
 		push_error("FAIL: ran %d checks, expected %d (a test function aborted?)" % [_checks, EXPECTED_CHECKS])
@@ -842,6 +843,90 @@ func _test_globe_improvements() -> void:
 		parsed_ll.size() == 2 and absf(parsed_ll[0] - 33.3560) < 1e-6 and absf(parsed_ll[1] + 115.7266) < 1e-6)
 	_check("coords: out-of-range latitude is rejected",
 		GlobeMode._parse_coords("95.0, -115.0").is_empty())
+
+
+func _test_launch_transition_and_fast_cache() -> void:
+	var rec := {"id": "w_test", "map": {"scene_path": MapDefinition.GENERATED_SCENE,
+		"lat": 48.3252, "lon": -122.2469, "half_extent_m": 5000.0}}
+	# Player standing 120 m East (+X), 80 m North (-Z) facing West (yaw = +PI/2 -> heading 270°).
+	var snap := {
+		"player": {
+			"position": {"x": 120.0, "y": 12.0, "z": -80.0},
+			"rotation": {"x": 0.0, "y": PI * 0.5, "z": 0.0},
+		},
+		"main": {
+			"latitude": 48.3252, "longitude": -122.2469,
+			"year": 2026, "month": 6, "day": 21, "day_time": 14.5,
+			"auto_dst": true, "manual_dst": false,
+		},
+	}
+	var tgt := WorldPrewarmer.launch_camera_target(rec, snap)
+	var mpd := GeoMath.meters_per_deg(48.3252)
+	var dx_m := (float(tgt.lon) - (-122.2469)) * float(mpd.x)
+	var dz_m := (48.3252 - float(tgt.lat)) * float(mpd.y)
+	_check("launch target: saved player XZ maps to exact target lat/lon",
+		absf(dx_m - 120.0) < 1e-3 and absf(dz_m + 80.0) < 1e-3, "%.4f, %.4f" % [dx_m, dz_m])
+	_check("launch target: saved player yaw +PI/2 (West) maps to 270 deg globe heading",
+		bool(tgt.has_heading) and absf(float(tgt.heading_deg) - 270.0) < 1e-3, str(tgt.heading_deg))
+	var clk := CelestialClock.new()
+	clk.latitude = 48.3252
+	clk.longitude = -122.2469
+	clk.auto_dst = true
+	clk.year = 2026
+	clk.month = 6
+	clk.day = 21
+	clk.day_time = 14.5
+	_check("launch target: saved clock JD matches CelestialClock.get_julian_day_utc()",
+		bool(tgt.has_jd) and absf(float(tgt.jd_utc) - clk.get_julian_day_utc()) < 1e-7)
+
+	# Local tangent pose isomorphism: heading 270° (West = -X) at tilt 60° puts
+	# the camera East (+X) of the look target, looking West (-X) and down (-Y).
+	var pose := WorldPrewarmer.local_pose_for_globe_camera(
+		float(tgt.lat), float(tgt.lon), 0.0002, 270.0, 60.0, 48.3252, -122.2469, 15.0)
+	var xf: Transform3D = pose.transform
+	var fwd := -xf.basis.z.normalized()
+	var horiz_fwd := Vector3(fwd.x, 0.0, fwd.z).normalized()
+	_check("arrival pose: horizontal forward matches West (-X) for heading 270",
+		horiz_fwd.distance_to(Vector3(-1.0, 0.0, 0.0)) < 1e-4, str(horiz_fwd))
+	_check("arrival pose: pitch below horizon is 90 - tilt (30 deg)",
+		absf(rad_to_deg(asin(clampf(-fwd.y, -1.0, 1.0))) - 30.0) < 0.05)
+	_check("arrival pose: distance to ground target == cam_range * Earth radius",
+		absf((pose.pos as Vector3).distance_to(pose.look as Vector3) - 0.0002 * WorldPrewarmer.EARTH_RADIUS_M) < 0.1)
+
+	# TerrainFastCache round-trip & automatic invalidation when JSON changes.
+	var tmp_dir := "user://__fastcache_selftest"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(tmp_dir))
+	var jp := "%s/dem_v4_detail_x_48.3252_-122.2469_1500_4.json" % tmp_dir
+	var grid := PackedFloat32Array([10.5, 11.25, 12.0, 13.75, 14.0, 15.5, 16.0, 17.25,
+		18.0, 19.5, 20.0, 21.25, 22.0, 23.5, 24.0, 25.75])
+	var jf := FileAccess.open(jp, FileAccess.WRITE)
+	jf.store_string('{"cols":4,"rows":4}')
+	jf.close()
+	TerrainFastCache.write_dem(jp, 4, 4, grid)
+	var rd := TerrainFastCache.read_dem(jp)
+	_check("fast cache: DEM float32 round-trip is bit-exact",
+		int(rd.get("cols", 0)) == 4 and (rd.get("grid", PackedFloat32Array()) as PackedFloat32Array) == grid)
+	var jf2 := FileAccess.open(jp, FileAccess.WRITE)
+	jf2.store_string('{"cols":4,"rows":4,"edited":true}')
+	jf2.close()
+	_check("fast cache: modified JSON invalidates binary DEM sidecar",
+		TerrainFastCache.read_dem(jp).is_empty())
+	var osm_p := "%s/osm_v6_48.3252_-122.2469_1500.json" % tmp_dir
+	var of := FileAccess.open(osm_p, FileAccess.WRITE)
+	of.store_string('{"v":6}')
+	of.close()
+	var sample_payload := {"buildings": [{"idx": 0, "points": PackedVector2Array([Vector2(1.5, -2.5), Vector2(4.0, 8.0)])}]}
+	TerrainFastCache.write_payload(osm_p, sample_payload)
+	var ro := TerrainFastCache.read_payload(osm_p)
+	var bpts: PackedVector2Array = ((ro.get("buildings", [{}]) as Array)[0] as Dictionary).get("points", PackedVector2Array())
+	_check("fast cache: OSM PackedVector2Array payload round-trips",
+		bpts.size() == 2 and bpts[0].distance_to(Vector2(1.5, -2.5)) < 1e-5)
+	TerrainFastCache.invalidate_token("48.3252_-122.2469")
+	_check("fast cache: invalidate_token removes site binaries",
+		TerrainFastCache.read_payload(osm_p).is_empty())
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(jp))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(osm_p))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp_dir))
 
 
 ## A point at magnetic latitude `ml` on the magnetic midnight meridian.

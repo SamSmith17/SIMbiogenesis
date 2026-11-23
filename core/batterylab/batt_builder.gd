@@ -81,17 +81,27 @@ static func _mat(color: Color, metal: float = 0.0, rough: float = 0.7, vcol: boo
 	var key := "%s|%.2f|%.2f|%s|%.2f|%.2f" % [color.to_html(), metal, rough, vcol, emit, alpha]
 	if _mat_cache.has(key):
 		return _mat_cache[key]
-	var m := StandardMaterial3D.new()
-	m.albedo_color = color
-	m.metallic = metal
-	m.roughness = rough
-	if vcol:
-		m.vertex_color_use_as_albedo = true
-		m.albedo_color = Color.WHITE
+	var m: StandardMaterial3D
 	if emit > 0.0:
+		m = StandardMaterial3D.new()
+		m.albedo_color = color
+		m.metallic = metal
+		m.roughness = rough
+		if vcol:
+			m.vertex_color_use_as_albedo = true
+			m.albedo_color = Color.WHITE
 		m.emission_enabled = true
 		m.emission = color
 		m.emission_energy_multiplier = emit
+	else:
+		var mat_id := StructureMaterials.infer_id(color, metal, rough, alpha)
+		var base_c := Color.WHITE if vcol else color
+		base_c.a = alpha
+		m = ParametricMaterialLibrary.make(mat_id, base_c, {
+			"vertex_color": vcol,
+			"cull_mode": BaseMaterial3D.CULL_BACK,
+			"transparency": BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS,
+		})
 	if alpha < 1.0:
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
 		m.albedo_color.a = alpha
@@ -320,7 +330,8 @@ func _build() -> void:
 		elif k == "link":
 			var path := _link_cable(_geo("LinkCables", Vector3(0, 0.3, 0)), lk, washer_rows, bolt_rows)
 			parts.append({"id": lk["id"], "kind": "link", "label": "Link cable" + _link_words(lk),
-				"aabb": _path_aabb(path)})
+				"aabb": _path_aabb(path), "path": _path_m(path),
+				"rad": (BattWire.od_mm(str(lk.get("wire", "")), float(lk["area_mm2"])) * 0.5 + 3.0) * MM})
 	# Leads.
 	for ld in (L["leads"] as Array):
 		var col := C_RED if str(ld.get("color", "red")) == "red" else C_BLACK
@@ -331,11 +342,13 @@ func _build() -> void:
 		if flex:
 			how = "paralleled flexible busbars" if int(BattWire.flex_stack(float(ld["mm2"]))["n"]) == 2 else "flexible busbar"
 		parts.append({"id": ld["id"], "kind": "lead", "label": "%s %s, %s, %.0f mm" % [
-			"Positive" if col == C_RED else "Negative", how, ld["wire"], float(ld["len_mm"])], "aabb": _path_aabb(lr["path"])})
+			"Positive" if col == C_RED else "Negative", how, ld["wire"], float(ld["len_mm"])], "aabb": _path_aabb(lr["path"]),
+			"path": _path_m(lr["path"]), "rad": (maxf(float(lr.get("od", 8.0)), float(BattWire.flex_stack(float(ld["mm2"]))["w"]) if flex else 0.0) * 0.5 + 3.0) * MM})
 	# Harness: 22 AWG silicone, soldered to a tab on its joint, bent at
 	# three diameters, into the BMS connector.
+	var n_taps := (L["harness"] as Array).size()
 	for h in (L["harness"] as Array):
-		var col := C_BLACK if int(h["i"]) == 0 else Color(0.92, 0.92, 0.9)
+		var col := harness_color(int(h["i"]), n_taps)
 		var hg := _geo("Harness", h.get("explode", Vector3(0, 0.5, 0)))
 		var hpts := PackedVector3Array(h["pts"])
 		var od := BattWire.od_mm("22 AWG")
@@ -347,7 +360,7 @@ func _build() -> void:
 			BattParts.plate(hg, hpts[0] - tdir * 3.0, hpts[0] + tdir * 4.0, n0, 6.0, 5.0, 0.4, C_NICKEL, "tin")
 			BattParts.disc(hg, hpts[0], n0, 1.8, 1.0, Color(0.7, 0.72, 0.74), "tin", 10)
 		parts.append({"id": h["id"], "kind": "tap", "label": "Balance lead B%d, %.0f mm" % [int(h["i"]), float(h["len_mm"])],
-			"aabb": _path_aabb(bent["path"])})
+			"aabb": _path_aabb(bent["path"]), "path": _path_m(bent["path"]), "rad": 0.004})
 	if not washer_rows.is_empty():
 		_multi("Washers", _unit("washer"), _mat(Color.WHITE, 0.85, 0.3, true), washer_rows)
 	if not bolt_rows.is_empty():
@@ -449,6 +462,21 @@ func _case_color(sp: Dictionary) -> Color:
 	if c.size() >= 3:
 		return Color(float(c[0]), float(c[1]), float(c[2]))
 	return CASE.get(str(sp["form"]), Color(0.2, 0.2, 0.22))
+
+
+## A balance harness's wire colours: B0 black, the pack's + red, the taps
+## between on a maker's loom palette, so neighbours can be told apart.
+const HARNESS_PALETTE := [Color(0.95, 0.8, 0.15), Color(0.2, 0.55, 0.9), Color(0.25, 0.7, 0.3),
+	Color(0.92, 0.92, 0.9), Color(0.93, 0.45, 0.1), Color(0.6, 0.35, 0.8), Color(0.55, 0.35, 0.2),
+	Color(0.5, 0.52, 0.55)]
+
+
+static func harness_color(i: int, n_taps: int) -> Color:
+	if i == 0:
+		return C_BLACK
+	if i >= n_taps - 1:
+		return C_RED
+	return HARNESS_PALETTE[(i - 1) % HARNESS_PALETTE.size()]
 
 
 static func _wire_d(mm2: float) -> float:
@@ -718,6 +746,43 @@ static func _axis_snap(v: Vector3) -> Vector3:
 	return Vector3(signf(v.x), 0, 0)
 
 
+## How far along a ray it first passes within `rad` of a polyline (metres);
+## INF when it never does. The closest points of the ray and each segment.
+static func ray_path_t(origin: Vector3, dir: Vector3, path: PackedVector3Array, rad: float) -> float:
+	var best := INF
+	var rr := dir.dot(dir)
+	if rr < 1e-12:
+		return INF
+	for i in range(path.size() - 1):
+		var a := path[i]
+		var s := path[i + 1] - a
+		var w := origin - a
+		var rs := dir.dot(s)
+		var ss := s.dot(s)
+		var rw := dir.dot(w)
+		var sw := s.dot(w)
+		var den := rr * ss - rs * rs
+		var u := 0.0
+		if den > 1e-12:
+			u = clampf((rr * sw - rs * rw) / den, 0.0, 1.0)
+		var t := (rs * u - rw) / rr
+		if t < 0.0:
+			continue
+		var d := (origin + dir * t) - (a + s * u)
+		if d.length() <= rad and t < best:
+			best = t
+	return best
+
+
+## A path in millimetres as metres, for a part's own pick.
+static func _path_m(path: PackedVector3Array) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	out.resize(path.size())
+	for i in path.size():
+		out[i] = path[i] * MM
+	return out
+
+
 static func _path_aabb(path: PackedVector3Array) -> AABB:
 	if path.is_empty():
 		return AABB()
@@ -851,7 +916,8 @@ func _cable_geo(g: BattParts.Geo, corners: PackedVector3Array, od: float, r: flo
 		_flex_ribbon(g, bent["path"], flex_mm2, col)
 	else:
 		BattParts.tube(g, bent["path"], od, col, "jacket", 12)
-	var lug_col := Color(0.78, 0.79, 0.8) if flex_mm2 >= 21.0 else col
+	# A flexible busbar's ends are bare tinned braid: no heat-shrink boot.
+	var lug_col := Color(0, 0, 0, 0) if flex_mm2 >= 21.0 else col
 	for e in ends:
 		var lg: Dictionary = e["lug"]
 		if lg.is_empty():
@@ -1324,7 +1390,9 @@ func cell_count() -> int:
 	return _cells_mmi.multimesh.instance_count
 
 
-## The part under a ray in local metres (nearest AABB hit), {} for none.
+## The part under a ray in local metres, {} for none: a cable by its own
+## path (a lead's box covers the cells it runs over), everything else by
+## its box.
 func pick(origin: Vector3, dir: Vector3) -> Dictionary:
 	var best := {}
 	var best_t := INF
@@ -1332,10 +1400,16 @@ func pick(origin: Vector3, dir: Vector3) -> Dictionary:
 		var b: AABB = p["aabb"]
 		if _cutaway and str(p["kind"]) == "case" and (str(p["id"]) in ["case_lid", "case_front", "case_right"]):
 			continue
-		var hit: Variant = b.intersects_ray(origin, dir)
-		if hit == null:
-			continue
-		var t := ((hit as Vector3) - origin).length()
+		var t: float
+		if p.has("path"):
+			t = ray_path_t(origin, dir, p["path"], float(p.get("rad", 0.008)))
+			if t == INF:
+				continue
+		else:
+			var hit: Variant = b.intersects_ray(origin, dir)
+			if hit == null:
+				continue
+			t = ((hit as Vector3) - origin).length()
 		# Prefer what is inside the case over the case itself.
 		if str(p["kind"]) == "case":
 			t += 0.02

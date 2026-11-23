@@ -116,10 +116,9 @@ static func build_node(spec_in: Dictionary, node_name: String = "EspBoard") -> N
 
 
 static func _mat(c: Color, rough: float) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = c
-	m.roughness = rough
-	return m
+	var metal := 0.75 if rough < 0.35 else 0.05
+	var mat_id := StructureMaterials.infer_id(c, metal, rough, c.a)
+	return ParametricMaterialLibrary.make(mat_id, c)
 
 
 static func _box(root: Node3D, name: String, size: Vector3, at: Vector3, c: Color, rough: float) -> MeshInstance3D:

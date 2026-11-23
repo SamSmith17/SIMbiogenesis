@@ -46,9 +46,9 @@ static func build(holes: Array) -> Dictionary:
 	return {"tex": tex, "rects": rects, "count": images.size()}
 
 
-## Push onto one terrain material (only terrain_detail.gdshader has the uniforms).
+## Push onto one terrain material (only terrain_detail*.gdshader has the uniforms).
 static func push(sm: ShaderMaterial, mask: Dictionary) -> void:
-	if sm == null or sm.shader == null or not sm.shader.resource_path.ends_with("terrain_detail.gdshader"):
+	if not TerrainBuilder.is_terrain_detail_shader(sm):
 		return
 	var n := int(mask.get("count", 0))
 	sm.set_shader_parameter("hole_count", n)

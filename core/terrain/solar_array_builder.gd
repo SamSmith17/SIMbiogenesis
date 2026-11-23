@@ -318,17 +318,8 @@ static func _attach_rack_posts(root: Node3D, panels: Array, base_y: float,
 
 
 static func _panel_material() -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.04, 0.06, 0.16)
-	mat.metallic = 0.35
-	mat.metallic_specular = 0.6
-	mat.roughness = 0.28
-	return mat
+	return ParametricMaterialLibrary.make("pv_cell", Color(0.04, 0.06, 0.16))
 
 
 static func _rack_material() -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.45, 0.48, 0.52)
-	mat.metallic = 0.75
-	mat.roughness = 0.4
-	return mat
+	return ParametricMaterialLibrary.make("galvanised", Color(0.45, 0.48, 0.52))

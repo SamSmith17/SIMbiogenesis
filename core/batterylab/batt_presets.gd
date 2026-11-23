@@ -169,24 +169,47 @@ static func load_library(path: String = LIBRARY_FILE) -> Dictionary:
 	return {}
 
 
-static func save_to_library(id: String, spec: Dictionary, path: String = LIBRARY_FILE) -> bool:
+## The bank fields (series, parallel, mount, bus, fuse …) saved with each
+## design, by id; {} for a design saved before banks were kept.
+static func load_library_banks(path: String = LIBRARY_FILE) -> Dictionary:
+	if not FileAccess.file_exists(path):
+		return {}
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return {}
+	var v: Variant = JSON.parse_string(f.get_as_text())
+	if v is Dictionary and (v as Dictionary).get("banks") is Dictionary:
+		return v["banks"]
+	return {}
+
+
+## Save a design (and, when given, the bank round it: everything but the
+## pack) under `id`. Designs saved before banks were kept are unchanged.
+static func save_to_library(id: String, spec: Dictionary, path: String = LIBRARY_FILE, bank: Dictionary = {}) -> bool:
 	var lib := load_library(path)
+	var banks := load_library_banks(path)
 	lib[id] = BattSpec.resolve(spec)
+	if not bank.is_empty():
+		var b := bank.duplicate(true)
+		b.erase("pack")
+		banks[id] = b
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
 		return false
-	f.store_string(JSON.stringify({"designs": lib}, "\t"))
+	f.store_string(JSON.stringify({"designs": lib, "banks": banks}, "\t"))
 	return true
 
 
 static func forget(id: String, path: String = LIBRARY_FILE) -> void:
 	var lib := load_library(path)
-	if not lib.has(id):
+	var banks := load_library_banks(path)
+	if not lib.has(id) and not banks.has(id):
 		return
 	lib.erase(id)
+	banks.erase(id)
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f != null:
-		f.store_string(JSON.stringify({"designs": lib}, "\t"))
+		f.store_string(JSON.stringify({"designs": lib, "banks": banks}, "\t"))
 
 
 ## "51.2 V · 105 Ah · 5.4 kWh" for a gallery row.

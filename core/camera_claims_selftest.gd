@@ -33,6 +33,7 @@ func _initialize() -> void:
 	_test_the_snowglobe_over_capture_bug()
 	_test_exclusive()
 	_test_value_falls_through()
+	_test_excluding()
 	_test_signal()
 	if _fails == 0:
 		print("CAMERA CLAIMS SELFTEST PASS  (%d checks)" % _checks)
@@ -136,6 +137,20 @@ func _test_value_falls_through() -> void:
 	c.release("zoom_tuning")
 	_check("and reverts on release",
 			absf(float(c.value_or("prop_cull_scale_m", 0.0))) < 0.001)
+
+
+func _test_excluding() -> void:
+	var c := CameraClaims.new()
+	c.claim("globe_arrival", {"camera_id": GLOBE_CAM})
+	_check("excluding sole claimant falls back to base 0",
+			c.effective_camera_id_excluding("globe_arrival") == 0)
+	c.release("globe_arrival")
+	c.claim("settlement", {"camera_id": SETTLEMENT_CAM})
+	c.claim("globe_arrival", {"camera_id": GLOBE_CAM})
+	_check("excluding top claimant sees the underlying settlement camera",
+			c.effective_camera_id_excluding("globe_arrival") == SETTLEMENT_CAM)
+	_check("the live camera is still globe_arrival",
+			c.effective_camera_id() == GLOBE_CAM)
 
 
 func _test_signal() -> void:

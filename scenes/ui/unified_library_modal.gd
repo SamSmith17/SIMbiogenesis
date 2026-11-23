@@ -320,6 +320,8 @@ func _populate() -> void:
 			"Vans, buses, RVs, trucks and trailers people live in. Place and drive.", "vehiclelab_van", "truck"),
 		_designer("mud_building", "Mud buildings",
 			"Sketch a wall plan; the gantry prints it in mud.", "", "house"),
+		_designer("materials", "Parametric materials",
+			"Tune plywood, lumber, powder coat, metals, glass and plastics, or upload your own PBR textures.", "", "layers"),
 	]
 	_entries["Designers"] = designers
 
@@ -726,6 +728,13 @@ func _activate(e: Dictionary, force_place: bool) -> void:
 				main_cl.call("open_ctrllab", {})
 			else:
 				_status.text = "The Controller Lab needs a world."
+		"materials":
+			var main_ml := get_tree().current_scene if get_tree() != null else null
+			if main_ml != null and main_ml.has_method("open_material_library"):
+				close()
+				main_ml.call("open_material_library", {})
+			else:
+				_status.text = "Parametric materials studio needs a world."
 		"farmbotlab":
 			# Hosted by Main, so it opens on every map.
 			var main_fb := get_tree().current_scene if get_tree() != null else null

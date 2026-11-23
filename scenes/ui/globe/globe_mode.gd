@@ -167,10 +167,15 @@ var _hub_settings: Control = null
 var _overlay_tex: Texture2D
 var _overlay_task := -1
 var _closing := false
+var _launching_world := false
+var _bg_rect: ColorRect = null
 var _site_info: Dictionary = {}
 var _drape_files := PackedStringArray()
 var _drape_world := ""
 var _drape_task := -1
+var _drape_loading_key := ""
+var _preloaded_drapes := {}   # "lat,lon" -> Array[{slot, tex, params}]
+var _preloaded_site := PackedFloat64Array()
 var _fly_then := Callable()
 var _fly_wait := 0.0
 var _here_selected := false
@@ -208,6 +213,7 @@ func _ready() -> void:
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
+	_bg_rect = bg
 	globe = GlobeView.new()
 	globe.name = "GlobeView"
 	globe.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -289,7 +295,22 @@ func close() -> void:
 		queue_free()
 
 
+## Detach from an outgoing scene host when GlobeLaunchTransition takes over
+## `GlobeModeLayer` on `/root` across `change_scene_to_packed`.
+func prepare_for_world_launch() -> void:
+	_launching_world = true
+	_host_parent = null
+	closed.emit()
+
+
+func hide_opaque_backdrop_for_crossfade() -> void:
+	if _bg_rect != null and is_instance_valid(_bg_rect):
+		_bg_rect.visible = false
+
+
 func _unhandled_key_input(ev: InputEvent) -> void:
+	if _launching_world:
+		return
 	var k := ev as InputEventKey
 	if k == null or not k.pressed or k.echo:
 		return
@@ -2149,6 +2170,8 @@ func _on_create_guided() -> void:
 
 
 func _launch_new_world(base_opts: Dictionary) -> void:
+	if _launching_world:
+		return
 	var nm := _name_edit.text.strip_edges() if _name_edit != null else ""
 	if _sel_builtin != null:
 		var map_ref := WorldStore.map_ref_from_definition(_sel_builtin, "")
@@ -2168,16 +2191,14 @@ func _launch_new_world(base_opts: Dictionary) -> void:
 	var opts := base_opts.duplicate()
 	if _refetch_chk != null and _refetch_chk.visible and _refetch_chk.button_pressed:
 		opts["force_refetch"] = true
-	fly_in(lat, lon, func() -> void:
-		_status.text = "Creating the world…"
-		var err := WorldLauncher.create_world_at(get_tree(), lat, lon, label, nm, opts, prefer)
-		if err != OK:
-			_status.text = "Could not create the world (error %d)." % err
-			return
-		close())
+	var map := WorldLauncher.register_map(lat, lon, label, prefer)
+	var new_rec := WorldStore.create(map, nm)
+	_start_world_transition(new_rec, opts)
 
 
 func _on_play() -> void:
+	if _launching_world:
+		return
 	if _here_selected:
 		fly_in(_here[0], _here[1], close)
 		return
@@ -2187,6 +2208,8 @@ func _on_play() -> void:
 
 
 func _play_world_record(rec: Dictionary, opts: Dictionary = {}) -> void:
+	if _launching_world:
+		return
 	var ll := WorldLauncher.world_latlon(rec)
 	if ll.size() != 2:
 		var err0 := WorldLauncher.play(get_tree(), rec, opts)
@@ -2197,15 +2220,26 @@ func _play_world_record(rec: Dictionary, opts: Dictionary = {}) -> void:
 		return
 	var is_here := _here.size() == 2 \
 		and GlobeMath.great_circle_km(ll[0], ll[1], _here[0], _here[1]) < 0.05
-	fly_in(ll[0], ll[1], func() -> void:
-		if is_here and opts.is_empty():
+	if is_here and opts.is_empty():
+		fly_in(ll[0], ll[1], close)
+		return
+	_start_world_transition(rec, opts)
+
+
+func _start_world_transition(rec: Dictionary, opts: Dictionary = {}) -> void:
+	if _launching_world:
+		return
+	if DisplayServer.get_name() == "headless":
+		var err_h := WorldLauncher.play(get_tree(), rec, opts)
+		if err_h == OK:
 			close()
-			return
-		var err := WorldLauncher.play(get_tree(), rec, opts)
-		if err != OK:
-			_status.text = "Could not open that world (error %d)." % err
-			return
-		close())
+		return
+	var trans := GlobeLaunchTransition.new()
+	var err := trans.begin(self, rec, opts)
+	if err != OK:
+		trans.queue_free()
+		_launching_world = false
+		_status.text = "Could not open that world (error %d)." % err
 
 
 func _on_continue_pressed() -> void:
@@ -2325,17 +2359,21 @@ func _layout_floating_panels() -> void:
 	_sync_search_popup()
 
 
-## Flies down to a place (about 1.5 km up, leaning toward the horizon), then
-## runs `then` once the flight has landed and the photos had a moment.
+## Flies down to a place (about 1.2 km up, leaning toward the horizon), pre-staging
+## the destination zoom-tile spine + cached world drapes so imagery stays crisp,
+## then runs `then` once the flight has landed.
 func fly_in(lat: float, lon: float, then: Callable) -> void:
 	_status.text = "Flying in…"
 	_fly_then = then
-	_fly_wait = 0.8
-	globe.fly_to(lat, lon, 0.00024, maxf(2.2, 1.2 + globe.altitude_km() / 4000.0), 58.0)
+	_fly_wait = 0.45
+	preload_drapes_for_site(lat, lon)
+	globe.set_prestage_target(lat, lon)
+	var dur := clampf(2.8 + log(maxf(globe.altitude_km(), 1.0)) * 0.28, 3.0, 5.6)
+	globe.fly_to(lat, lon, 0.00022, dur, 58.0)
 
 
 func is_flying_in() -> bool:
-	return _fly_then.is_valid()
+	return _fly_then.is_valid() or _launching_world
 
 
 ## "You are here": the world itself, its weather in the sim and the GFS's.
@@ -2410,11 +2448,31 @@ static func square_points(lat: float, lon: float, half_m: float) -> PackedFloat6
 
 # --- World drapes -------------------------------------------------------------
 
+## Pre-decodes a target site's cached terrain drapes on a worker thread right
+## away (even while the camera is still in orbit) so they bind in 0 ms the
+## moment the descending camera crosses DRAPE_SHOW_KM / DRAPE_CLEAR_KM.
+func preload_drapes_for_site(lat: float, lon: float) -> void:
+	_preloaded_site = PackedFloat64Array([lat, lon])
+	if _drape_files.is_empty() and DirAccess.dir_exists_absolute(GlobeDrape.CACHE_DIR):
+		_drape_files = DirAccess.get_files_at(GlobeDrape.CACHE_DIR)
+	var key := "%.4f,%.4f" % [lat, lon]
+	if _preloaded_drapes.has(key):
+		tick_launch_drapes()
+		return
+	if _drape_task >= 0:
+		return
+	_start_drape_worker(lat, lon, key)
+
+
+func tick_launch_drapes() -> void:
+	if globe == null or globe.primary_body() != "earth":
+		return
+	_update_drapes()
+
+
 ## Near a world (camera low, centre within DRAPE_NEAR_KM), its cached photos
 ## go on the globe; high up they come off again.
 func _update_drapes() -> void:
-	if _drape_task >= 0:
-		return
 	var alt := globe.altitude_km()
 	if alt > DRAPE_CLEAR_KM:
 		if not _drape_world.is_empty():
@@ -2422,7 +2480,8 @@ func _update_drapes() -> void:
 			globe.set_drape(0, null)
 			globe.set_drape(1, null)
 		return
-	if alt > DRAPE_SHOW_KM:
+	var show_ceiling := DRAPE_CLEAR_KM if (_launching_world or _fly_then.is_valid()) else DRAPE_SHOW_KM
+	if alt > show_ceiling:
 		return
 	var c := globe.center_latlon()
 	var best := PackedFloat64Array()
@@ -2432,7 +2491,11 @@ func _update_drapes() -> void:
 		sites.append(WorldLauncher.world_latlon(rec))
 	if _here.size() == 2:
 		sites.append(_here)
+	if _preloaded_site.size() == 2:
+		sites.append(_preloaded_site)
 	for ll: PackedFloat64Array in sites:
+		if ll.size() != 2:
+			continue
 		var d := GlobeMath.great_circle_km(c[0], c[1], ll[0], ll[1])
 		if d < best_d:
 			best_d = d
@@ -2442,8 +2505,18 @@ func _update_drapes() -> void:
 	var key := "%.4f,%.4f" % [best[0], best[1]]
 	if key == _drape_world:
 		return
+	if _preloaded_drapes.has(key):
+		_drape_world = key
+		_apply_ready_drapes(_preloaded_drapes[key] as Array)
+		return
+	if _drape_task >= 0:
+		return
 	_drape_world = key
-	var pick := GlobeDrape.pick(GlobeDrape.drapes_for(best[0], best[1], _drape_files))
+	_start_drape_worker(best[0], best[1], key)
+
+
+func _start_drape_worker(lat: float, lon: float, key: String) -> void:
+	var pick := GlobeDrape.pick(GlobeDrape.drapes_for(lat, lon, _drape_files))
 	var jobs: Array = []
 	for slot in 2:
 		var d: Dictionary = pick["wide" if slot == 0 else "fine"]
@@ -2451,9 +2524,11 @@ func _update_drapes() -> void:
 			jobs.append({"slot": slot, "d": d, "path": ProjectSettings.globalize_path(
 				"%s/%s" % [GlobeDrape.CACHE_DIR, str(d.file)]), "max_px": 2048 if slot == 0 else 4096})
 	if jobs.is_empty():
-		globe.set_drape(0, null)
-		globe.set_drape(1, null)
+		if key == _drape_world:
+			globe.set_drape(0, null)
+			globe.set_drape(1, null)
 		return
+	_drape_loading_key = key
 	_drape_task = WorkerThreadPool.add_task(func() -> void:
 		var out: Array = []
 		for j in jobs:
@@ -2475,13 +2550,31 @@ func _drapes_loaded(key: String, out: Array) -> void:
 	if _drape_task >= 0:
 		WorkerThreadPool.wait_for_task_completion(_drape_task)
 		_drape_task = -1
-	if _closing or key != _drape_world:
+	_drape_loading_key = ""
+	if _closing:
 		return
-	var shown := [false, false]
+	var ready_entries: Array = []
 	for r in out:
 		var slot := int(r.slot)
-		globe.set_drape(slot, ImageTexture.create_from_image(r.img),
-			GlobeDrape.shader_params("d%d_" % slot, r.d))
+		ready_entries.append({
+			"slot": slot,
+			"tex": ImageTexture.create_from_image(r.img),
+			"params": GlobeDrape.shader_params("d%d_" % slot, r.d),
+		})
+	if _preloaded_drapes.size() >= 4:
+		_preloaded_drapes.erase(_preloaded_drapes.keys()[0])
+	_preloaded_drapes[key] = ready_entries
+	if key == _drape_world and globe.altitude_km() <= DRAPE_CLEAR_KM:
+		_apply_ready_drapes(ready_entries)
+	elif globe.altitude_km() <= DRAPE_CLEAR_KM:
+		_update_drapes()
+
+
+func _apply_ready_drapes(entries: Array) -> void:
+	var shown := [false, false]
+	for e in entries:
+		var slot := int(e.slot)
+		globe.set_drape(slot, e.tex as Texture2D, e.params as Dictionary)
 		shown[slot] = true
 	for slot in 2:
 		if not shown[slot]:
@@ -2562,16 +2655,20 @@ func _on_hit_chosen(i: int) -> void:
 # --- Weather and time ---------------------------------------------------------
 
 func _process(dt: float) -> void:
-	if _fly_then.is_valid() and not globe.is_flying():
-		_fly_wait -= dt
-		if _fly_wait <= 0.0:
-			var cb := _fly_then
-			_fly_then = Callable()
-			cb.call()
-			if _closing:
-				return
-			if _status.text.begins_with("Flying"):
-				_status.text = ""
+	if _fly_then.is_valid():
+		if globe.primary_body() == "earth":
+			_update_drapes()
+		if not globe.is_flying():
+			_fly_wait -= dt
+			if _fly_wait <= 0.0:
+				globe.clear_prestage_target()
+				var cb := _fly_then
+				_fly_then = Callable()
+				cb.call()
+				if _closing:
+					return
+				if _status.text.begins_with("Flying"):
+					_status.text = ""
 	if _play_h_per_s != 0.0 and not _time_dragging:
 		var nxt := clampf(_time_offset_h + _play_h_per_s * dt, -TIME_SPAN_H, TIME_SPAN_H)
 		if absf(nxt - _time_offset_h) < 1e-5:

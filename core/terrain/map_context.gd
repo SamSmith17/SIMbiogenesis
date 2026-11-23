@@ -31,6 +31,9 @@ var terrain_imagery: Dictionary = {}
 var starter_kit: bool = false
 ## "Show me around": run the feature tour on this world once it has loaded.
 var tour_on_load: bool = false
+## True while GlobeLaunchTransition is covering the screen and driving its own
+## descent/progress UI, so TerrainLoader skips its full-screen blocker card.
+var from_globe_transition: bool = false
 
 
 func set_pending(lat: float, lon: float, place_label: String,
@@ -48,6 +51,7 @@ func set_pending(lat: float, lon: float, place_label: String,
 	terrain_imagery = {}
 	starter_kit = false
 	tour_on_load = false
+	from_globe_transition = false
 	has_pending = true
 
 
@@ -64,12 +68,14 @@ func consume() -> Dictionary:
 		"terrain_imagery": terrain_imagery.duplicate(),
 		"starter_kit": starter_kit,
 		"tour_on_load": tour_on_load,
+		"from_globe_transition": from_globe_transition,
 		"has_pending": has_pending,
 	}
 	has_pending = false
 	from_resume = false
 	starter_kit = false
 	tour_on_load = false
+	from_globe_transition = false
 	force_refetch = false
 	terrain_imagery = {}
 	return d

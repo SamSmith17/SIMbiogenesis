@@ -228,6 +228,8 @@ func get_state_snapshot() -> Dictionary:
 		"ssao_enabled": _main_bool("get_ssao_enabled", true),
 		"ssil_enabled": _main_bool("get_ssil_enabled", true),
 		"sdfgi_enabled": _main_bool("get_sdfgi_enabled", false),
+		"sdfgi_energy_mult": _main_float("get_sdfgi_energy_mult", 1.0),
+		"sdfgi_terrain_enabled": _main_bool("get_sdfgi_terrain_enabled", true),
 		"volumetric_fog_enabled": _main_bool("get_volumetric_fog_enabled", false),
 		"tonemap_mode": _main_int("get_tonemap_mode", Environment.TONE_MAPPER_ACES),
 		"msaa_level": _main_int("get_msaa_level", 0),
@@ -464,6 +466,18 @@ func apply_sdfgi_enabled(on: bool) -> void:
 	var main := _valid_main()
 	if main != null and main.has_method("set_sdfgi_enabled"):
 		main.call("set_sdfgi_enabled", on)
+
+
+func apply_sdfgi_energy_mult(value: float) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_sdfgi_energy_mult"):
+		main.call("set_sdfgi_energy_mult", value)
+
+
+func apply_sdfgi_terrain_enabled(on: bool) -> void:
+	var main := _valid_main()
+	if main != null and main.has_method("set_sdfgi_terrain_enabled"):
+		main.call("set_sdfgi_terrain_enabled", on)
 
 
 func apply_volumetric_fog_enabled(on: bool) -> void:
@@ -1040,6 +1054,10 @@ func persist_settings() -> void:
 		cfg.set_value("rendering_adv", "ssao_enabled", main_node.call("get_ssao_enabled"))
 		cfg.set_value("rendering_adv", "ssil_enabled", main_node.call("get_ssil_enabled"))
 		cfg.set_value("rendering_adv", "sdfgi_enabled", main_node.call("get_sdfgi_enabled"))
+		if main_node.has_method("get_sdfgi_energy_mult"):
+			cfg.set_value("rendering_adv", "sdfgi_energy_mult", main_node.call("get_sdfgi_energy_mult"))
+		if main_node.has_method("get_sdfgi_terrain_enabled"):
+			cfg.set_value("rendering_adv", "sdfgi_terrain_enabled", main_node.call("get_sdfgi_terrain_enabled"))
 		cfg.set_value("rendering_adv", "volumetric_fog_enabled", main_node.call("get_volumetric_fog_enabled"))
 		cfg.set_value("rendering_adv", "tonemap_mode", main_node.call("get_tonemap_mode"))
 		cfg.set_value("rendering_adv", "msaa_level", main_node.call("get_msaa_level"))
@@ -1159,6 +1177,10 @@ func _load_rendering_adv(cfg: ConfigFile) -> void:
 		apply_ssil_enabled(bool(cfg.get_value("rendering_adv", "ssil_enabled")))
 	if cfg.has_section_key("rendering_adv", "sdfgi_enabled"):
 		apply_sdfgi_enabled(bool(cfg.get_value("rendering_adv", "sdfgi_enabled")))
+	if cfg.has_section_key("rendering_adv", "sdfgi_energy_mult"):
+		apply_sdfgi_energy_mult(float(cfg.get_value("rendering_adv", "sdfgi_energy_mult")))
+	if cfg.has_section_key("rendering_adv", "sdfgi_terrain_enabled"):
+		apply_sdfgi_terrain_enabled(bool(cfg.get_value("rendering_adv", "sdfgi_terrain_enabled")))
 	if cfg.has_section_key("rendering_adv", "volumetric_fog_enabled"):
 		apply_volumetric_fog_enabled(bool(cfg.get_value("rendering_adv", "volumetric_fog_enabled")))
 	if cfg.has_section_key("rendering_adv", "tonemap_mode"):

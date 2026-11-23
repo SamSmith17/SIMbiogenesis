@@ -14,10 +14,12 @@ extends Node
 signal tile_ready(layer: String, key: Vector3i)
 
 const CACHE_ROOT := "user://globe_cache"
-const POOL_SIZE := 6
+const POOL_SIZE := 10
 const TIMEOUT_S := 20.0
 const MAX_TEXTURES := 900
-const DECODES_PER_FRAME := 6
+const DECODES_PER_FRAME := 8
+const MAX_DECODES_BURST := 24
+const DECODE_BUDGET_USEC := 3500
 const RETRY_S := 30.0
 
 ## id -> {url: "%d/%d/%d" in z, y, x order, ext, max_zoom, attribution}.
@@ -183,9 +185,12 @@ func _sorted(d: Dictionary) -> Array:
 
 
 func _decode_from_disk() -> void:
+	if _disk_pending.is_empty():
+		return
+	var start_us := Time.get_ticks_usec()
 	var n := 0
 	for job in _sorted(_disk_pending):
-		if n >= DECODES_PER_FRAME:
+		if n >= DECODES_PER_FRAME and (n >= MAX_DECODES_BURST or Time.get_ticks_usec() - start_us >= DECODE_BUDGET_USEC):
 			break
 		n += 1
 		var ks := key_str(job.layer, job.key)

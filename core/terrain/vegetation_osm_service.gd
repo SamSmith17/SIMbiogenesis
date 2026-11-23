@@ -30,11 +30,20 @@ var _http: HTTPRequest = null
 var _busy: bool = false
 var _job: Dictionary = {}
 var _pending: Dictionary = {}
+var _warm_cache: Dictionary = {}
+var _prewarm_tasks: Dictionary = {}
+var _prewarm_seq := 0
 
 
 func _ready() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(CACHE_DIR))
 	_ensure_http()
+
+
+func _exit_tree() -> void:
+	for tid in _prewarm_tasks.values():
+		WorkerThreadPool.wait_for_task_completion(int(tid))
+	_prewarm_tasks.clear()
 
 
 func _ensure_http() -> void:
@@ -71,19 +80,29 @@ func _start_veg_job(req: Dictionary) -> void:
 	var force_refetch: bool = bool(req.get("force_refetch", false))
 	var key := _cache_key(lat, lon, half_extent_m)
 	var cache_path := "%s/%s.json" % [CACHE_DIR, key]
-	if not force_refetch and TerrainCacheSettings.cache_enabled() \
-			and FileAccess.file_exists(cache_path):
-		if _cache_file_too_large(cache_path):
-			push_warning("VegetationService: rejecting oversized cache %s — refetching"
-				% cache_path.get_file())
-			DirAccess.remove_absolute(ProjectSettings.globalize_path(cache_path))
-		else:
-			var parsed: Variant = _load_cache(cache_path)
-			if parsed is Dictionary:
-				var payload := deserialize_payload(parsed as Dictionary)
-				payload = cap_polygons(payload)
-				_emit_veg_deferred(key, payload)
-				return
+	if not force_refetch and TerrainCacheSettings.cache_enabled():
+		if _warm_cache.has(key):
+			var warm: Dictionary = _warm_cache[key]
+			_warm_cache.erase(key)
+			_emit_veg_deferred(key, warm)
+			return
+		if FileAccess.file_exists(cache_path):
+			if _cache_file_too_large(cache_path):
+				push_warning("VegetationService: rejecting oversized cache %s — refetching"
+					% cache_path.get_file())
+				DirAccess.remove_absolute(ProjectSettings.globalize_path(cache_path))
+			else:
+				var fast := TerrainFastCache.read_payload(cache_path)
+				if not fast.is_empty():
+					_emit_veg_deferred(key, fast)
+					return
+				var parsed: Variant = _load_cache(cache_path)
+				if parsed is Dictionary:
+					var payload := deserialize_payload(parsed as Dictionary)
+					payload = cap_polygons(payload)
+					TerrainFastCache.write_payload(cache_path, payload)
+					_emit_veg_deferred(key, payload)
+					return
 	var bbox := GeoMath.bbox_for(lat, lon, half_extent_m)
 	var s := float(bbox["south"])
 	var w := float(bbox["west"])
@@ -276,6 +295,42 @@ static func _save_cache(path: String, payload: Dictionary) -> void:
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f != null:
 		f.store_string(JSON.stringify(_serialize_payload(payload)))
+		f.close()
+		TerrainFastCache.write_payload(path, payload)
+
+
+## Background prewarm of cached OSM vegetation on a worker thread during Globe fly-in.
+func prewarm_vegetation(lat: float, lon: float, half_extent_m: float) -> void:
+	if not TerrainCacheSettings.cache_enabled():
+		return
+	var key := _cache_key(lat, lon, half_extent_m)
+	if _warm_cache.has(key):
+		return
+	var cache_path := "%s/%s.json" % [CACHE_DIR, key]
+	if not FileAccess.file_exists(cache_path) or _cache_file_too_large(cache_path):
+		return
+	_prewarm_seq += 1
+	var seq := _prewarm_seq
+	var task := func() -> void:
+		var payload := TerrainFastCache.read_payload(cache_path)
+		if payload.is_empty():
+			var parsed: Variant = _load_cache(cache_path)
+			if parsed is Dictionary:
+				payload = cap_polygons(deserialize_payload(parsed as Dictionary))
+				TerrainFastCache.write_payload(cache_path, payload)
+		_on_prewarm_done.call_deferred(seq, key, payload)
+	_prewarm_tasks[seq] = WorkerThreadPool.add_task(task, false, "osm_veg_prewarm")
+
+
+func _on_prewarm_done(seq: int, key: String, payload: Dictionary) -> void:
+	if _prewarm_tasks.has(seq):
+		WorkerThreadPool.wait_for_task_completion(int(_prewarm_tasks[seq]))
+		_prewarm_tasks.erase(seq)
+	if payload.is_empty():
+		return
+	if _warm_cache.size() >= 3:
+		_warm_cache.erase(_warm_cache.keys()[0])
+	_warm_cache[key] = payload
 
 
 ## --- serialization (PackedVector2Array <-> [[x, y], …]) ---------------------

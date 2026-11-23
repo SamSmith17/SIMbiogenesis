@@ -443,8 +443,7 @@ static func _cyl(radius: float, length: float, mat: Material) -> MeshInstance3D:
 
 
 static func _mat(col: Color, rough: float, metal: float) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = col
-	m.roughness = rough
-	m.metallic = metal
-	return m
+	if metal >= 0.40:
+		return ParametricMaterialLibrary.make("metal_roofing", col)
+	var mat_id := StructureMaterials.infer_id(col, metal, rough, col.a)
+	return ParametricMaterialLibrary.make(mat_id, col)

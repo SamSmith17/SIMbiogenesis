@@ -36,7 +36,9 @@ static func coord_token(lat: float, lon: float) -> String:
 
 
 static func invalidate_dem(lat: float, lon: float) -> int:
-	return _delete_matching(DEM_DIR, coord_token(lat, lon), "dem_")
+	var tok := coord_token(lat, lon)
+	TerrainFastCache.invalidate_token(tok, "dem__")
+	return _delete_matching(DEM_DIR, tok, "dem_")
 
 
 static func save_meta_extents(lat: float, lon: float, half_m: float, detail_m: float, osm_m: float,
@@ -74,11 +76,15 @@ static func invalidate_imagery(lat: float, lon: float) -> int:
 
 
 static func invalidate_osm_vectors(lat: float, lon: float) -> int:
-	return _delete_matching(OSM_DIR, coord_token(lat, lon), "osm_")
+	var tok := coord_token(lat, lon)
+	TerrainFastCache.invalidate_token(tok, "osm_vectors__")
+	return _delete_matching(OSM_DIR, tok, "osm_")
 
 
 static func invalidate_osm_vegetation(lat: float, lon: float) -> int:
-	return _delete_matching(OSM_VEG_DIR, coord_token(lat, lon), "osmveg_")
+	var tok := coord_token(lat, lon)
+	TerrainFastCache.invalidate_token(tok, "osm_vegetation__")
+	return _delete_matching(OSM_VEG_DIR, tok, "osmveg_")
 
 
 static func invalidate_all(lat: float, lon: float) -> int:

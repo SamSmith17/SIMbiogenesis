@@ -16,7 +16,7 @@ extends SceneTree
 ## JSON, graph specs read back by BatteryChemistry, the builder's parts,
 ## cutaway and picking.
 
-const EXPECTED_CHECKS := 2532
+const EXPECTED_CHECKS := 2541
 
 var _pass := 0
 var _fail := 0
@@ -53,6 +53,7 @@ func _initialize() -> void:
 	_test_bank_bus_and_route()
 	_test_bank_wiring()
 	_test_bank_sim()
+	_test_library()
 	var total := _pass + _fail
 	print("batterylab selftest: %d passed, %d failed (%d checks)" % [_pass, _fail, total])
 	if EXPECTED_CHECKS > 0 and total != EXPECTED_CHECKS:
@@ -564,10 +565,12 @@ func _pack_pos(d: Dictionary, id: String) -> Vector3:
 	return Vector3.INF
 
 
+## Where a cable's first lug sits (its stud): a cable's lug stays on the
+## terminal it is bolted to, while its route re-aims at the bar.
 func _cable_pt(d: Dictionary, id: String) -> Vector3:
 	for cb in (d["cables"] as Array):
 		if str(cb["id"]) == id:
-			return (cb["pts"] as Array)[0]
+			return (cb["ends"][0] as Dictionary)["p"]
 	return Vector3.INF
 
 
@@ -966,6 +969,34 @@ func _test_sim() -> void:
 	_ok(Time.get_ticks_msec() - t0 < 1000, "10 h of lab time runs in under a second")
 
 
+## The player's library on a TEMP path: a design saved with its bank comes
+## back with it, a design saved alone keeps the bank it had, forget drops both.
+func _test_library() -> void:
+	var path := OS.get_user_data_dir().path_join("batterylab_library_selftest.json")
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	var spec := BattPresets.builtin("rack_48v_105")
+	spec["name"] = "Library test"
+	var bank := BankSpec.of_pack(spec, 1, 3, "Library test x3")
+	bank["mount"] = "shelf"
+	bank["fuse"] = "anl"
+	_ok(BattPresets.save_to_library("bl_test", spec, path, bank), "a design saves with its bank")
+	var lib := BattPresets.load_library(path)
+	var banks := BattPresets.load_library_banks(path)
+	_ok(lib.has("bl_test") and BattSpec.key_of(lib["bl_test"]) == BattSpec.key_of(spec), "the design reads back")
+	var bk: Dictionary = banks.get("bl_test", {})
+	_ok(int(bk.get("parallel", 0)) == 3 and str(bk.get("mount", "")) == "shelf" and str(bk.get("fuse", "")) == "anl"
+		and not bk.has("pack"), "its bank fields read back without the pack")
+	_ok(BattPresets.save_to_library("bl_test", spec, path), "saving the design alone")
+	_ok(int((BattPresets.load_library_banks(path).get("bl_test", {}) as Dictionary).get("parallel", 0)) == 3,
+		"keeps the bank it had")
+	BattPresets.forget("bl_test", path)
+	_ok(not BattPresets.load_library(path).has("bl_test") and not BattPresets.load_library_banks(path).has("bl_test"),
+		"forget drops the design and its bank")
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+
+
 func _bank(pid: String, s: int, p: int, patch: Dictionary = {}) -> Dictionary:
 	var b := BankSpec.of_pack(BattPresets.builtin(pid), s, p, "Test bank")
 	for k in patch:
@@ -1276,9 +1307,26 @@ func _test_bank_wiring() -> void:
 	var cab := _bank("rack_48v_105", 1, 4)
 	_ok(str((cab["fuses"] as Array)[0]["mount"]) == "bar", "Class T holders bolt to the + bar")
 	var bars: Dictionary = cab["bars"]
-	_ok(float(bars["z_pos"]) > float(bars["z_neg"]), "the + bar stands in front of the − bar")
+	_ok(float(bars["neg_line"]) < 0.0 and float(bars["pos_line"]) > 0.0, "in a cabinet the − bar runs up the left side and the + bar up the right")
+	var cab_w := 0.0
+	for fb in (cab["frame"]["boxes"] as Array):
+		if str(fb["id"]) == "cab_top":
+			cab_w = (fb["box"] as AABB).size.x
+	_ok(cab_w <= BankDesign.CABINET_W + 0.5 and float(bars["pos_line"]) + float(bars["w"]) * 0.5 < cab_w * 0.5 - BankDesign.CAB_WALL_MM,
+		"the bars fit inside a 600 mm cabinet (%.0f mm wide)" % cab_w)
+	var cab_u := int(cab["frame"]["u"])
+	var cab_h := 0.0
+	for fb2 in (cab["frame"]["boxes"] as Array):
+		if str(fb2["id"]) == "cab_top":
+			cab_h = (fb2["box"] as AABB).end.y
+	_ok(cab_u >= int(ceil((4.0 * 177.0 + 3.0 * BankDesign.RACK_GAP_MM) / 44.45)) + BankDesign.CAB_SPARE_U
+		and cab_u <= 30 and cab_h > float(bars["hi"]) + BankDesign.DISCONNECT_W_MM,
+		"four 4U packs get a cabinet a little taller than the + bar and its switch (%dU)" % cab_u)
 	var f0: Dictionary = (cab["fuses"] as Array)[0]
-	_ok(((f0["in"] as Vector3) - (f0["a"] as Vector3)).x > 0.0, "the holder reaches away from the packs")
+	_ok(absf(((f0["in"] as Vector3) - (f0["a"] as Vector3)).y) > 0.0 and absf(((f0["in"] as Vector3) - (f0["a"] as Vector3)).x) < 0.5,
+		"the holder lies along the side bar, never into the wall")
+	var flr := _bank("rack_48v_105", 1, 3, {"mount": "floor", "bus": "busbar"})
+	_ok(float(flr["bars"]["z_pos"]) > float(flr["bars"]["z_neg"]), "on a floor bank the + bar stands in front of the − bar")
 	var dist := _bank("rack_48v_105", 1, 3, {"bus": "distributor", "mount": "floor"})
 	_ok(str((dist["fuses"] as Array)[0]["mount"]) == "distributor", "a distributor's fuses are inside it")
 	_ok((dist["bars"]["pos_studs"] as Array).size() == 4, "a distributor has a stud per string and one for the mains")

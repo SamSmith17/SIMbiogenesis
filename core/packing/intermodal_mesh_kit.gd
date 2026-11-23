@@ -101,13 +101,12 @@ func commit(mesh: ArrayMesh, color: Color, metallic: float = 0.0,
 	if _count == 0:
 		return
 	st.commit(mesh)
-	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(color.r, color.g, color.b, alpha)
-	m.metallic = metallic
-	m.roughness = rough
-	if alpha < 1.0:
-		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
-		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var c := Color(color.r, color.g, color.b, alpha)
+	var mat_id := StructureMaterials.infer_id(c, metallic, rough, alpha)
+	var m := ParametricMaterialLibrary.make(mat_id, c, {
+		"cull_mode": BaseMaterial3D.CULL_DISABLED if alpha < 1.0 else BaseMaterial3D.CULL_BACK,
+		"transparency": BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS,
+	})
 	mesh.surface_set_material(mesh.get_surface_count() - 1, m)
 
 

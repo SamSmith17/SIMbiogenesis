@@ -1261,15 +1261,9 @@ static func _mat(kind: String) -> Material:
 			_mats[kind] = sm
 			return sm
 		"backing":
-			m.albedo_color = Color(0.5, 0.52, 0.55)
-			m.metallic = 0.3
-			m.roughness = 0.6
+			m = ParametricMaterialLibrary.make("aluminium", Color(0.5, 0.52, 0.55))
 		"glass":
-			m.albedo_color = Color(0.72, 0.9, 0.96, 0.3)
-			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			m.roughness = 0.04
-			m.metallic_specular = 0.9
-			m.cull_mode = BaseMaterial3D.CULL_DISABLED
+			m = ParametricMaterialLibrary.make("glass", Color(0.72, 0.9, 0.96, 0.3))
 		"water":
 			m.albedo_color = Color(0.3, 0.58, 0.85, 0.45)
 			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -1277,20 +1271,13 @@ static func _mat(kind: String) -> Material:
 			m.metallic_specular = 0.8
 			m.cull_mode = BaseMaterial3D.CULL_DISABLED
 		"steel":
-			m.albedo_color = Color(0.42, 0.44, 0.47)
-			m.metallic = 0.6
-			m.roughness = 0.45
+			m = ParametricMaterialLibrary.make("hardware_steel", Color(0.42, 0.44, 0.47))
 		"drive":
-			m.albedo_color = Color(0.2, 0.26, 0.34)
-			m.metallic = 0.4
-			m.roughness = 0.5
+			m = ParametricMaterialLibrary.make("powder_coat", Color(0.2, 0.26, 0.34))
 		"concrete":
-			m.albedo_color = Color(0.62, 0.61, 0.58)
-			m.roughness = 0.95
+			m = ParametricMaterialLibrary.make("concrete", Color(0.62, 0.61, 0.58))
 		"counterweight":
-			m.albedo_color = Color(0.17, 0.17, 0.18)
-			m.metallic = 0.5
-			m.roughness = 0.7
+			m = ParametricMaterialLibrary.make("hardware_steel", Color(0.17, 0.17, 0.18))
 		"receiver":
 			m.albedo_color = Color(0.07, 0.07, 0.07)
 			m.roughness = 0.5

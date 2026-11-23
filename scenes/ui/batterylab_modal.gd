@@ -17,6 +17,9 @@ extends Control
 ## place in their group, or by how far up the string they sit.
 
 const MODAL_NAME := "batterylab_designer"
+## What the Lab was last left at (the design, the bank round it, the tab
+## and the view), so opening it again carries on where it was.
+const DRAFT_FILE := "user://batterylab_draft.json"
 const WANT := Vector2(1640, 980)
 const UNDO_LIMIT := 60
 const REBUILD_DELAY := 0.2
@@ -150,6 +153,18 @@ func open(opts: Dictionary = {}) -> void:
 		_bank = _bank_fields(rb)
 	else:
 		_bank = _bank_fields(BankSpec.empty())
+	# Opened on nothing in particular: carry on from the last design.
+	var draft := _load_draft()
+	if spec.is_empty() and draft.get("spec") is Dictionary:
+		spec = draft["spec"]
+		if bank.is_empty() and draft.get("bank") is Dictionary:
+			_bank = _bank_fields(BankSpec.resolve(draft["bank"]))
+		if not opts.has("mode") and str(draft.get("mode", "")) in ["pack", "test", "bank"]:
+			start_mode = str(draft["mode"])
+	if not draft.is_empty():
+		_colour = str(draft.get("colour", _colour))
+		_explode = clampf(float(draft.get("explode", _explode)), 0.0, 1.0)
+		_cutaway = bool(draft.get("cutaway", _cutaway))
 	if spec.is_empty():
 		spec = BattPresets.builtin("rack_48v_105")
 	_spec = BattSpec.resolve(spec)
@@ -169,6 +184,9 @@ func open(opts: Dictionary = {}) -> void:
 	_studio.viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	_refresh_design_list()
 	_bank_panel.call("set_bound", not _bound_prop_id.is_empty() or not _bound_graph_id.is_empty())
+	set_explode(_explode)
+	set_cutaway(_cutaway)
+	set_colour(_colour)
 	_rebuild_now()
 	set_mode(start_mode)
 	_refresh_chain()
@@ -179,6 +197,7 @@ func close() -> void:
 		return
 	if not _drag.is_empty():
 		_finish_drag()
+	_save_draft()
 	_active = false
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -190,6 +209,40 @@ func close() -> void:
 
 func is_open() -> bool:
 	return _active
+
+
+## The draft: the design and the bank fields being worked on, the tab and
+## the view. Written on close (a bound bank keeps its own record, so only
+## the view is written then) and read by the next open.
+func _save_draft() -> void:
+	var d := _load_draft()
+	d["v"] = 1
+	d["colour"] = _colour
+	d["explode"] = _explode
+	d["cutaway"] = _cutaway
+	if _bound_prop_id.is_empty() and _bound_graph_id.is_empty():
+		d["spec"] = _spec.duplicate(true)
+		d["bank"] = _bank.duplicate(true)
+		d["mode"] = _mode
+	var f := FileAccess.open(DRAFT_FILE, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(d, "\t"))
+
+
+static func _load_draft() -> Dictionary:
+	if not FileAccess.file_exists(DRAFT_FILE):
+		return {}
+	var f := FileAccess.open(DRAFT_FILE, FileAccess.READ)
+	if f == null:
+		return {}
+	var v: Variant = JSON.parse_string(f.get_as_text())
+	return v if v is Dictionary else {}
+
+
+## Forget the draft (a check starts from nothing).
+static func clear_draft() -> void:
+	if FileAccess.file_exists(DRAFT_FILE):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(DRAFT_FILE))
 
 
 func spec() -> Dictionary:
@@ -1345,12 +1398,13 @@ func _shop_rows(raw: Array) -> Array:
 	return rows
 
 
-func _add_shop_row(label: String, facts: Dictionary, spec: Dictionary, builtin: bool, id: String, tip: String) -> void:
+func _add_shop_row(label: String, facts: Dictionary, spec: Dictionary, builtin: bool, id: String, tip: String,
+		bank: Dictionary = {}) -> void:
 	_gallery.add_item(label)
 	var i := _gallery.item_count - 1
 	_gallery.set_item_shop(i, str(facts["price"]), str(facts["per"]), str(facts["detail"]))
 	_gallery.set_item_tooltip(i, tip)
-	_entries.append({"spec": spec, "builtin": builtin, "id": id})
+	_entries.append({"spec": spec, "builtin": builtin, "id": id, "bank": bank})
 
 
 func _refresh_design_list() -> void:
@@ -1365,17 +1419,23 @@ func _refresh_design_list() -> void:
 		var facts: Dictionary = row["facts"]
 		_add_shop_row(str(bd["label"]), facts, bd["spec"], true, str(bd["id"]), str(bd.get("blurb", "")))
 	var lib := BattPresets.load_library()
+	var banks := BattPresets.load_library_banks()
 	var saved: Array = []
 	for id2 in lib.keys():
 		var s2: Dictionary = lib[id2]
-		saved.append({"spec": s2, "id": str(id2), "name": str(s2.get("name", id2))})
+		saved.append({"spec": s2, "id": str(id2), "name": str(s2.get("name", id2)),
+			"bank": banks.get(id2, {})})
 	for row2 in _shop_rows(saved):
 		var mine: Dictionary = row2["src"]
 		var facts2: Dictionary = row2["facts"]
 		var tip := str(mine["name"])
 		if bool(facts2["about"]):
 			tip += "\nParts estimate, not a street price"
-		_add_shop_row("★ " + str(mine["name"]), facts2, mine["spec"], false, str(mine["id"]), tip)
+		var bk: Dictionary = mine.get("bank", {})
+		if not bk.is_empty():
+			tip += "\nSaved with its bank: %d × %d, %s" % [int(bk.get("series", 1)), int(bk.get("parallel", 1)),
+				str(BankSpec.MOUNT_WORDS.get(str(bk.get("mount", "auto")), "")).to_lower()]
+		_add_shop_row("★ " + str(mine["name"]), facts2, mine["spec"], false, str(mine["id"]), tip, bk)
 	if keep.is_empty():
 		return
 	for i in _entries.size():
@@ -1396,15 +1456,22 @@ func entry_count() -> int:
 func _on_design_activated(idx: int) -> void:
 	if idx < 0 or idx >= _entries.size():
 		return
-	set_spec(((_entries[idx] as Dictionary)["spec"] as Dictionary).duplicate(true))
+	var e: Dictionary = _entries[idx]
+	var bk: Dictionary = e.get("bank", {})
+	if not bk.is_empty():
+		# A saved design brings its bank back with it (set before the
+		# rebuild, which lays the bank out in bank mode).
+		_push_undo()
+		_bank = _bank_fields(BankSpec.resolve(bk))
+	set_spec((e["spec"] as Dictionary).duplicate(true))
 
 
 func _on_save_design() -> void:
 	var nm := str(_spec["name"])
 	var id := "bl_" + nm.to_lower().replace(" ", "_").left(40)
-	if BattPresets.save_to_library(id, _spec):
+	if BattPresets.save_to_library(id, _spec, BattPresets.LIBRARY_FILE, _bank):
 		_refresh_design_list()
-		_status("Saved “%s” to your library." % nm)
+		_status("Saved “%s” and its bank to your library." % nm)
 	else:
 		_status("Could not write the library file.")
 

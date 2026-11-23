@@ -31,6 +31,7 @@ func _initialize() -> void:
 	_test_veg_profiles()
 	_test_veg_monotonic()
 	_test_npc_profiles()
+	_test_sdfgi_profiles()
 	if _fails == 0:
 		print("RENDER PROFILE SELFTEST PASS  (%d checks)" % _checks)
 	else:
@@ -257,3 +258,26 @@ func _test_npc_profiles() -> void:
 		RenderProfile.npc_profile(99) == RenderProfile.npc_profile(RenderProfile.QUALITY_HIGH))
 	_check("High hero budget is 40 (the pinned default)",
 		int(RenderProfile.npc_profile(RenderProfile.QUALITY_HIGH)["hero_max"]) == 40)
+
+
+func _test_sdfgi_profiles() -> void:
+	var tiers := [RenderProfile.QUALITY_LOW, RenderProfile.QUALITY_MEDIUM,
+		RenderProfile.QUALITY_HIGH, RenderProfile.QUALITY_ULTRA]
+	var prev_reach := 0.0
+	var prev_cascades := 0
+	var prev_cell := INF
+	for q in tiers:
+		var p := RenderProfile.sdfgi_profile(q)
+		var reach := SdfgiPolicy.max_distance_m(p)
+		var vert := SdfgiPolicy.vertical_half_extent_m(p)
+		_check("sdfgi_profile(%d) cascades increase" % q, int(p["cascades"]) > prev_cascades)
+		_check("sdfgi_profile(%d) reach increases (%.1f m)" % [q, reach], reach > prev_reach)
+		_check("sdfgi_profile(%d) min_cell_size refines" % q, float(p["min_cell_size"]) < prev_cell)
+		_check("sdfgi_profile(%d) suspend AGL below vertical half-extent (%.1f < %.1f)" % [
+			q, float(p["suspend_agl_m"]), vert], float(p["suspend_agl_m"]) < vert)
+		prev_reach = reach
+		prev_cascades = int(p["cascades"])
+		prev_cell = float(p["min_cell_size"])
+	_check("sdfgi_profile unknown falls back to High",
+		RenderProfile.sdfgi_profile(99) == RenderProfile.sdfgi_profile(RenderProfile.QUALITY_HIGH))
+

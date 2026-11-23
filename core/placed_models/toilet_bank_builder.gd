@@ -320,15 +320,14 @@ static func _box(size: Vector3, at: Vector3, mat: Material) -> MeshInstance3D:
 
 
 static func _mat(col: Color, rough: float, metal: float) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = col
-	m.roughness = rough
-	m.metallic = metal
-	return m
+	var mat_id := StructureMaterials.infer_id(col, metal, rough, col.a)
+	return ParametricMaterialLibrary.make(mat_id, col)
 
 
 static func _flag_mat(col: Color) -> StandardMaterial3D:
-	var m := _mat(col, 0.4, 0.0)
+	var m := StandardMaterial3D.new()
+	m.albedo_color = col
+	m.roughness = 0.4
 	m.emission_enabled = true
 	m.emission = col
 	m.emission_energy_multiplier = 0.6

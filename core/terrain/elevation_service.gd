@@ -99,11 +99,22 @@ var _openmeteo_daily_exhausted := false
 ## it was armed for is still the current one (a stale timer used to re-send
 ## the NEW job's request on a busy HTTPRequest and fail it).
 var _job_seq := 0
+## Pre-warmed DEM grids decoded on a background worker during Globe fly-in,
+## keyed by cache key -> {grid, cols, rows}. Bounded to 4 entries.
+var _warm_cache: Dictionary = {}
+var _prewarm_tasks: Dictionary = {}   # seq -> WorkerThreadPool task id
+var _prewarm_seq := 0
 
 
 func _ready() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(CACHE_DIR))
 	_ensure_pool()
+
+
+func _exit_tree() -> void:
+	for tid in _prewarm_tasks.values():
+		WorkerThreadPool.wait_for_task_completion(int(tid))
+	_prewarm_tasks.clear()
 
 
 ## Base DEM grid N from terrain_config.cfg (default 64²).
@@ -336,6 +347,14 @@ func _start_next() -> void:
 	var cache_path := "%s/%s.json" % [CACHE_DIR, key]
 	var use_cache := not force_refetch and TerrainCacheSettings.cache_enabled()
 	if use_cache:
+		if _warm_cache.has(key):
+			var warm: Dictionary = _warm_cache[key]
+			_warm_cache.erase(key)
+			print("ElevationService: '%s' DEM served from prewarmed memory (%s) — no download" % [tag, key])
+			elevation_ready.emit.call_deferred(key,
+				warm["grid"], int(warm["cols"]), int(warm["rows"]), tag)
+			_start_next()
+			return
 		var cached := _load_cache(cache_path)
 		if cached.is_empty():
 			# Prefer a prior CACHE_VERSION file over a multi-minute OpenTopo refetch.
@@ -1510,11 +1529,13 @@ static func _legacy_dem_cache_path(current_path: String) -> String:
 func _save_cache(key: String, grid: PackedFloat32Array, cols: int, rows: int) -> void:
 	if not TerrainCacheSettings.cache_enabled():
 		return
-	var f := FileAccess.open("%s/%s.json" % [CACHE_DIR, key], FileAccess.WRITE)
+	var path := "%s/%s.json" % [CACHE_DIR, key]
+	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
 		return
 	f.store_string(JSON.stringify({"cols": cols, "rows": rows, "grid": Array(grid)}))
 	f.close()
+	TerrainFastCache.write_dem(path, cols, rows, grid)
 
 
 func _load_cache(path: String) -> Dictionary:
@@ -1522,6 +1543,9 @@ func _load_cache(path: String) -> Dictionary:
 
 
 static func _load_cache_file(path: String) -> Dictionary:
+	var fast := TerrainFastCache.read_dem(path)
+	if not fast.is_empty():
+		return fast
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
 		return {}
@@ -1541,7 +1565,52 @@ static func _load_cache_file(path: String) -> Dictionary:
 		push_warning("ElevationService: rejecting unusable cached DEM %s" % path)
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 		return {}
+	TerrainFastCache.write_dem(path, cols, rows, grid)
 	return {"grid": grid, "cols": cols, "rows": rows}
+
+
+## Background prewarm of an on-disk DEM during Globe fly-in so neither JSON
+## parsing nor disk I/O runs on the main thread when the world scene boots.
+func prewarm_elevation(lat: float, lon: float, half_extent_m: float,
+		grid_n: int = DEFAULT_GRID_N, tag: String = "base") -> void:
+	if not TerrainCacheSettings.cache_enabled():
+		return
+	var ladder := source_ladder(lat, lon, tag, half_extent_m, has_opentopo_key(),
+		_usgs1m_known_missing(lat, lon))
+	if ladder.is_empty():
+		return
+	var first: Dictionary = ladder[0]
+	var effective_n := rung_grid_n(first, grid_n, tag)
+	var key := _cache_key(lat, lon, half_extent_m, effective_n, tag, str(first["cache_source"]))
+	if _warm_cache.has(key):
+		return
+	var cache_path := "%s/%s.json" % [CACHE_DIR, key]
+	var fallback_path := _cached_fallback_path(lat, lon, tag, half_extent_m, grid_n, ladder)
+	var legacy_path := _legacy_dem_cache_path(cache_path)
+	var allow_any := str(first["kind"]) in ["openmeteo", "terrarium"]
+	_prewarm_seq += 1
+	var seq := _prewarm_seq
+	var task := func() -> void:
+		var loaded := _load_cache_file(cache_path)
+		if loaded.is_empty() and not legacy_path.is_empty():
+			loaded = _load_cache_file(legacy_path)
+		if loaded.is_empty() and allow_any:
+			loaded = find_usable_cached_dem(lat, lon, tag, half_extent_m)
+		if loaded.is_empty() and not fallback_path.is_empty():
+			loaded = _load_cache_file(fallback_path)
+		_on_prewarm_done.call_deferred(seq, key, loaded)
+	_prewarm_tasks[seq] = WorkerThreadPool.add_task(task, false, "elev_prewarm_%s" % tag)
+
+
+func _on_prewarm_done(seq: int, key: String, loaded: Dictionary) -> void:
+	if _prewarm_tasks.has(seq):
+		WorkerThreadPool.wait_for_task_completion(int(_prewarm_tasks[seq]))
+		_prewarm_tasks.erase(seq)
+	if loaded.is_empty():
+		return
+	if _warm_cache.size() >= 6:
+		_warm_cache.erase(_warm_cache.keys()[0])
+	_warm_cache[key] = loaded
 
 
 ## Open-Meteo's "Minutely API request limit exceeded" (and the hourly one):

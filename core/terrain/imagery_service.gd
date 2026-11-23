@@ -45,6 +45,11 @@ var _attrib_by_tag: Dictionary = {}
 ## and that task was never waited on (an un-waited task crashed on quit).
 var _hq_tasks: Dictionary = {}
 var _task_seq := 0
+## Pre-decoded & GPU-compressed cached drapes warmed during Globe fly-in:
+## key -> {img: Image, from: String, z: int, chain: Array}.
+var _warm_images: Dictionary = {}
+## Keys currently decoding in a prewarm worker -> Array of waiting [tag, fetch_args].
+var _prewarm_inflight: Dictionary = {}
 var _busy: bool = false
 var _job: Dictionary = {}
 ## Pending jobs (base + detail layers serialise through the single HTTPRequest).
@@ -144,6 +149,16 @@ func request_imagery(lat: float, lon: float, half_extent_m: float,
 	var chain: Array = sources.duplicate() if not sources.is_empty() else ImagerySources.default_chain()
 	var key := layer_key(lat, lon, half_extent_m, target_px, max_zoom, sources)
 	if not force_refetch and TerrainCacheSettings.cache_enabled():
+		if _warm_images.has(key):
+			var w: Dictionary = _warm_images[key]
+			_warm_images.erase(key)
+			_deliver_warm_cached.call_deferred(key, w["img"] as Image, tag,
+				str(w["from"]), int(w["z"]), w["chain"] as Array)
+			return
+		var fargs := [lat, lon, half_extent_m, target_px, tag, max_zoom, true, sources, hq]
+		if _prewarm_inflight.has(key):
+			(_prewarm_inflight[key] as Array).append([tag, fargs])
+			return
 		var cands := PackedStringArray()
 		for cand in cache_candidates(key):
 			if FileAccess.file_exists(cand):
@@ -151,8 +166,7 @@ func request_imagery(lat: float, lon: float, half_extent_m: float,
 		if not cands.is_empty():
 			# Decoded and compressed on a worker (a 7556² detail PNG was ~0.75 s
 			# to decode and ~0.4 s to mip + DXT1, all on the main thread).
-			_load_cached_async(key, cands, tag, z, chain, hq,
-				[lat, lon, half_extent_m, target_px, tag, max_zoom, true, sources, hq])
+			_load_cached_async(key, cands, tag, z, chain, hq, fargs)
 			return
 	print("ImageryService: '%s' layer not cached — fetching z%d tiles …" % [tag, z])
 
@@ -405,6 +419,82 @@ func _cached_done(key: String, img: Variant, tag: String, seq: int, from: String
 	# A pre-source-chain file is a plain ESRI mosaic.
 	_attrib_by_tag[tag] = ImagerySources.attribution_for(["esri"] if plain else _cached_sources(key, chain))
 	imagery_ready.emit(key, ImageTexture.create_from_image(img as Image), tag)
+
+
+func _deliver_warm_cached(key: String, img: Image, tag: String, from: String,
+		z: int, chain: Array) -> void:
+	var pk := plain_key(key)
+	var plain := not pk.is_empty() and (from == cache_path_for(pk)
+		or from == cache_path_for(pk).replace("img_v3_", "img_v1_"))
+	print("ImageryService: '%s' layer served from prewarmed cache (%s, z%d) — no download" % [tag, key, z])
+	_attrib_by_tag[tag] = ImagerySources.attribution_for(["esri"] if plain else _cached_sources(key, chain))
+	imagery_ready.emit(key, ImageTexture.create_from_image(img), tag)
+
+
+## Background pre-decode + mip + S3TC/BC7 compression of an on-disk drape
+## during Globe fly-in so the texture is ready in memory before TerrainLoader
+## asks for it. No-op when the layer is not cached on disk.
+func prewarm_imagery(lat: float, lon: float, half_extent_m: float,
+		target_px: int = 2048, tag: String = "base", max_zoom: int = 17,
+		sources: Array = [], hq: bool = false) -> void:
+	if not TerrainCacheSettings.cache_enabled():
+		return
+	var bbox := GeoMath.bbox_for(lat, lon, half_extent_m)
+	var z := GeoMath.pick_zoom(bbox, target_px, max_zoom)
+	var chain: Array = sources.duplicate() if not sources.is_empty() else ImagerySources.default_chain()
+	var key := layer_key(lat, lon, half_extent_m, target_px, max_zoom, sources)
+	if _warm_images.has(key) or _prewarm_inflight.has(key):
+		return
+	var cands := PackedStringArray()
+	for cand in cache_candidates(key):
+		if FileAccess.file_exists(cand):
+			cands.append(cand)
+	if cands.is_empty():
+		return
+	_prewarm_inflight[key] = []
+	_task_seq += 1
+	var seq := _task_seq
+	var task := func() -> void:
+		var img := Image.new()
+		var from := ""
+		for cand in cands:
+			if img.load(cand) == OK:
+				from = cand
+				break
+		if from.is_empty():
+			_on_prewarm_done.call_deferred(key, null, seq, "", z, chain)
+			return
+		if hq:
+			if not img.has_mipmaps():
+				img.generate_mipmaps()
+			if can_compress_bc() and img.compress(Image.COMPRESS_BPTC, Image.COMPRESS_SOURCE_SRGB) != OK:
+				img.compress(Image.COMPRESS_S3TC, Image.COMPRESS_SOURCE_GENERIC)
+		else:
+			_compress_drape(img)
+		_on_prewarm_done.call_deferred(key, img, seq, from, z, chain)
+	_hq_tasks[seq] = WorkerThreadPool.add_task(task, false, "imagery_prewarm_%s" % tag)
+
+
+func _on_prewarm_done(key: String, img: Variant, seq: int, from: String,
+		z: int, chain: Array) -> void:
+	if _hq_tasks.has(seq):
+		WorkerThreadPool.wait_for_task_completion(int(_hq_tasks[seq]))
+		_hq_tasks.erase(seq)
+	var waiters: Array = _prewarm_inflight.get(key, []) as Array
+	_prewarm_inflight.erase(key)
+	if not (img is Image):
+		for w in waiters:
+			var pair: Array = w
+			callv("request_imagery", pair[1] as Array)
+		return
+	if not waiters.is_empty():
+		for w in waiters:
+			var pair: Array = w
+			_deliver_warm_cached(key, img as Image, str(pair[0]), from, z, chain)
+		return
+	if _warm_images.size() >= 4:
+		_warm_images.erase(_warm_images.keys()[0])
+	_warm_images[key] = {"img": img, "from": from, "z": z, "chain": chain}
 
 
 ## A plain (DXT1) drape: the mipmaps and the compression on a worker thread

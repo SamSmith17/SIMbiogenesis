@@ -54,12 +54,10 @@ static func build_mesh_from_parse(parse: Dictionary) -> ArrayMesh:
 
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.62, 0.48, 0.34)
-	mat.roughness = 0.9
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	# Per-layer albedo banding (set in vertex COLOR) so layer lines read.
-	mat.vertex_color_use_as_albedo = true
+	var mat := ParametricMaterialLibrary.make("concrete", Color(0.62, 0.48, 0.34), {
+		"vertex_color": true,
+		"cull_mode": BaseMaterial3D.CULL_DISABLED,
+	})
 
 	for run: Variant in runs:
 		var rpts: PackedVector3Array = run

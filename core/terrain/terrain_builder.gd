@@ -18,6 +18,8 @@ const DEFAULT_MESH_RES := 256
 const PLAYER_SPAWN_CLEARANCE_M := 2.0
 ## Shader that blends a high-resolution centre patch over the base drape.
 const DETAIL_SHADER := preload("res://core/terrain/terrain_detail.gdshader")
+## Variant with `ambient_light_disabled` + `terrain_sky_ambient` ("SDFGI on terrain" off).
+const DETAIL_NO_SDFGI_SHADER := preload("res://core/terrain/terrain_detail_no_sdfgi.gdshader")
 ## Draw order: coarse Ground first, DetailGround on top (after centre hole discard).
 const GROUND_RENDER_PRIORITY := 0
 const DETAIL_GROUND_RENDER_PRIORITY := 1
@@ -47,6 +49,24 @@ static var _near_detail_loaded := false
 ## than a constant. Live changes also push straight onto the existing materials —
 ## see TerrainLoader.set_near_field_detail.
 static var near_detail_enabled := true
+## Player toggle ("SDFGI on terrain" in Settings → Lighting): when false, terrain
+## meshes use `DETAIL_NO_SDFGI_SHADER` (`ambient_light_disabled` + hemispherical
+## `terrain_sky_ambient`) so only 3D structures/props/vehicles receive SDFGI
+## while terrain stays GI_MODE_STATIC to keep bouncing sunlight onto walls.
+static var sdfgi_on_terrain := true
+
+
+static func active_detail_shader() -> Shader:
+	return DETAIL_SHADER if sdfgi_on_terrain else DETAIL_NO_SDFGI_SHADER
+
+
+static func is_terrain_detail_shader(sm: ShaderMaterial) -> bool:
+	if sm == null or sm.shader == null:
+		return false
+	if sm.shader == DETAIL_SHADER or sm.shader == DETAIL_NO_SDFGI_SHADER:
+		return true
+	var p := sm.shader.resource_path
+	return p.ends_with("terrain_detail.gdshader") or p.ends_with("terrain_detail_no_sdfgi.gdshader")
 
 ## Seam blending between hi-res detail patch and coarse world terrain.
 const MIN_FEATHER_M := 80.0
@@ -381,7 +401,7 @@ static func make_terrain_material(base: Texture2D, detail: Texture2D,
 		patch_mesh: bool = false, hide_detail_region: bool = false,
 		hide_centre_region: bool = false, feather_uv: float = 0.06,
 		base_bbox: Dictionary = {}, detail_bbox: Dictionary = {}) -> Material:
-	if base == null and detail == null and not hide_centre_region and not patch_mesh:
+	if base == null and detail == null and not hide_centre_region and not patch_mesh and sdfgi_on_terrain:
 		var mat := StandardMaterial3D.new()
 		mat.albedo_color = NEUTRAL_GROUND
 		mat.roughness = 1.0
@@ -390,7 +410,7 @@ static func make_terrain_material(base: Texture2D, detail: Texture2D,
 		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		return mat
 	var sm := ShaderMaterial.new()
-	sm.shader = DETAIL_SHADER
+	sm.shader = active_detail_shader()
 	sm.set_shader_parameter("base_tex", base)
 	sm.set_shader_parameter("use_base", base != null)
 	sm.set_shader_parameter("detail_tex", detail)

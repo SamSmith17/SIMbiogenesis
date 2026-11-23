@@ -7297,6 +7297,51 @@ designed numbers under their old labels; brand names in presets are
     (whole, bus, terminal, fuse; prints tight cables per case).
 - Tour stop `18p_battery_lab` (burningman, with the bench); modal audit entry
   `batterylab`.
+- **Polish pass (2026-11-22; look, cabinets, persistence).**
+  - **Cabinets are 19" cabinets.** `BankDesign._frame` makes one 600 mm
+    wide (`CABINET_W`; wider only when a pack is wider), as deep as the
+    packs plus a `CAB_FRONT_MM` 140 cable channel and `CAB_BACK_MM` 40, and
+    as tall as the packs plus `CAB_SPARE_U` 2, or as tall as the + bar and
+    its switch need. The two busbars run up EITHER SIDE of the packs in the
+    channel, `CAB_BAR_FRONT_MM` 25 in front of their faces: − up the left,
+    + up the right, the side each pack's terminal is on (`bars.sides`; the
+    builder draws a board strip per bar). A string cable lands
+    `CAB_LAND_UP_R` 3 bend radii above its terminal (+ a fuse holder's
+    pitch on the + side: the holder hangs below its landing, along the bar,
+    never into the wall), its two lugs pointing at each other, so it rises
+    diagonally and stays loose. Both mains leave at the top on side bars.
+    The old cabinet was 800 deep and ~2x the packs' height with both bars
+    stacked on the right and the fuse holders reaching sideways.
+  - **Pack leads on their own planes**: `BattLayout.lead_plane(top, wire,
+    positive)` — the − lead just over the balance harness (which now hugs
+    the bars at `HARNESS_Y` 4 mm), the + lead one cable thickness and a gap
+    above it (`lead_thickness`: a ≥ 21 mm² lead is drawn as flat braid, so
+    its 3.4 mm, not its OD); the enclosure's top clears the + lead (not on
+    an automotive case, whose group fixes it). Before, the harness and both
+    leads shared one plane 12–13 mm over the bars and ran through each
+    other. Flexible-busbar ends are bare tinned (no white boot); the balance
+    wires wear a loom palette (`BattBuilder.harness_color`: B0 black, pack
+    + red, the rest cycling).
+  - **The Lab remembers.** `user://batterylab_draft.json` (the design, the
+    bank fields, the tab, colour mode, explode, cutaway), written on close
+    and read by an open with nothing to open on: it used to reset to the
+    48 V 105 Ah rack pack every time. Save design writes the bank fields
+    beside the design (`BattPresets.save_to_library(id, spec, path, bank)`,
+    `load_library_banks`; forget drops both; an older design keeps its
+    bank), and activating a saved design brings its bank back. The modal
+    is one instance per Main, so in-session view state already carried.
+  - **Picking cables by their path.** `BattBuilder.pick` / `BankBuilder.pick`
+    test a lead, link cable, balance wire or bank cable against its own
+    polyline (`ray_path_t`, part keys `path` in metres + `rad`), not its
+    box: a lead's box covered every cell it ran over, so a click on those
+    cells picked the lead. The designer check clicks the first cell whose
+    middle picks A cell (cells stand shoulder to shoulder, so a slanted ray
+    may enter the neighbour), and scrolls the Forget button into view
+    first (it sits under a gallery taller than the column).
+  - Gates: `batterylab_selftest` (2541, with `_test_library`),
+    `batterylab_designer_check` 141/0, `batterylab_world_check` 31/0; the
+    probe `tools/diag/bank_cabinet_probe.gd` prints the cabinet's bars,
+    frame and every cable's bend.
 - Not built: cell-level effects in the live sim (pack level only, by the
   user's choice), cell spread inside a pack on the bank bench (pack-level
   cells), an inverter model to place (it is a grey box).

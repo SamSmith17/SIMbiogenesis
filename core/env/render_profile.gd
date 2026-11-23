@@ -322,3 +322,9 @@ static func npc_profile(quality: int) -> Dictionary:
 		_:
 			return {"hero_max": 40, "hero_dist_m": 60.0, "figure_dist_m": 220.0,
 				"card_dist_m": 4000.0, "crowd_lod_m": 500.0}
+
+
+## Outdoor SDFGI cascade + aerial-fade profile per graphics quality tier.
+static func sdfgi_profile(quality: int) -> Dictionary:
+	return SdfgiPolicy.cascade_profile(quality)
+

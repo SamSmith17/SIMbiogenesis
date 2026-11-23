@@ -277,7 +277,10 @@ static func launch(rec: Dictionary, opts: Dictionary = {}) -> Error:
 			ctx.set("terrain_imagery", imagery_record(rec, snap))
 			ctx.set("starter_kit", bool(opts.get("starter", false)))
 			ctx.set("tour_on_load", bool(opts.get("tour", false)))
-	return switch_scene(MapDefinition.resolve_playable_scene_path(scene), rec, cfg)
+			ctx.set("from_globe_transition", bool(opts.get("from_globe_transition", false)))
+	var packed_opt: Variant = opts.get("packed_scene", null)
+	var packed: PackedScene = packed_opt as PackedScene if packed_opt is PackedScene else null
+	return switch_scene(MapDefinition.resolve_playable_scene_path(scene), rec, cfg, packed)
 
 
 ## The world's imagery record ({"tier", "saved_tier", "mode"}): world.json's
@@ -311,7 +314,8 @@ static func exit_to_menu(main: Node) -> void:
 ## world is activated the moment the NEW scene's root enters the tree, before
 ## any of its nodes run _ready. `solar_cfg` (the world's panel config) is
 ## written at that same moment, after the old SolarUI is gone.
-static func switch_scene(scene_file: String, rec: Dictionary, solar_cfg: String = "") -> Error:
+static func switch_scene(scene_file: String, rec: Dictionary, solar_cfg: String = "",
+		packed: PackedScene = null) -> Error:
 	var t := _tree()
 	if t == null:
 		return ERR_UNCONFIGURED
@@ -319,14 +323,16 @@ static func switch_scene(scene_file: String, rec: Dictionary, solar_cfg: String 
 	var want_file := scene_file.get_file()
 	var hook := [null, false]  # [callable, arrived] — lambdas capture an Array by reference
 	hook[0] = func(n: Node) -> void:
-		if n.get_parent() != t.root or str(n.scene_file_path).get_file() != want_file:
+		var matches := str(n.scene_file_path).get_file() == want_file \
+			or (packed != null and str(n.name) == "Main")
+		if n.get_parent() != t.root or not matches:
 			return
 		if t.node_added.is_connected(hook[0]):
 			t.node_added.disconnect(hook[0])
 		hook[1] = true
 		_arrive(rec, solar_cfg)
 	t.node_added.connect(hook[0])
-	var err := t.change_scene_to_file(scene_file)
+	var err := t.change_scene_to_packed(packed) if packed != null else t.change_scene_to_file(scene_file)
 	if err != OK:
 		if t.node_added.is_connected(hook[0]):
 			t.node_added.disconnect(hook[0])

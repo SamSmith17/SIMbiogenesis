@@ -116,6 +116,19 @@ func effective_camera_id() -> int:
 	return int(value_or("camera_id", 0))
 
 
+## The camera id the stack would select if `excluded_owner` were not present
+## (0 = fall back to the base camera). Lets a transient arrival/transition
+## camera swoop directly into whatever camera sits underneath it on the stack.
+func effective_camera_id_excluding(excluded_owner: String) -> int:
+	for i in range(_claims.size() - 1, -1, -1):
+		if str(_claims[i].get("owner", "")) == excluded_owner:
+			continue
+		var vals: Dictionary = _claims[i].get("values", {}) as Dictionary
+		if vals.has("camera_id"):
+			return int(vals["camera_id"])
+	return 0
+
+
 func owners() -> Array[String]:
 	var out: Array[String] = []
 	for c: Dictionary in _claims:

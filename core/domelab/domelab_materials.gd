@@ -149,7 +149,7 @@ const STRUT_LOOK := {"emt_12": "galv", "emt_34": "galv", "emt_1": "galv", "emt_1
 	"ply_rib_18x90": "ply", "steel_bar_25x3": "paint", "alu_bar_40x3": "alu"}
 const SHEET_LOOK := {"none": "fabric", "tarp_pe": "fabric", "canvas": "fabric", "ply_6": "ply",
 	"ply_12": "ply", "polycarb_6": "glazing", "polycarb_4": "glazing", "steel_06": "paint",
-	"alu_1": "alu", "corten_2": "corten", "corten_3": "corten", "pmma_4": "glazing", "pmma_6": "glazing", "hdpe_3": "plastic", "pp_sheet_8": "plastic", "corflute_5": "plastic"}
+	"alu_1": "alu", "corten_2": "corten", "corten_3": "corten", "pmma_4": "pmma", "pmma_6": "pmma", "hdpe_3": "plastic", "pp_sheet_8": "plastic", "corflute_5": "plastic"}
 
 const STEEL_KG_M3 := 7850.0
 const ALU_KG_M3 := 2700.0

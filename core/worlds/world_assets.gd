@@ -215,6 +215,13 @@ static func restore(rec: Dictionary, root: String = WorldPaths.WORLDS_DIR) -> Di
 			WorldStore._copy_file(src, lib_path)
 			stats["restored"] += 1
 			continue
+		var expected_mt := int(info.get("mtime", -1))
+		var expected_sz := int(info.get("size", -2))
+		if expected_sz > 65536 and expected_mt > 0:
+			var cur_mt := int(FileAccess.get_modified_time(lib_path))
+			if cur_mt == expected_mt and Time.get_unix_time_from_system() - float(cur_mt) > 3.0 \
+					and _file_size(lib_path) == expected_sz:
+				continue
 		if FileAccess.get_sha256(lib_path) == str(info.get("sha256", "")):
 			continue
 		# Changed in the library since this world saved: restore OUR copy

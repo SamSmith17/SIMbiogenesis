@@ -222,16 +222,7 @@ static func _mesh_of(kits: Dictionary, paint: Dictionary, d: Dictionary, node_na
 ## Car paint: a base coat under a clear coat (the gloss that makes a panel
 ## read as a vehicle's, not a wall's). Double-sided, like every body panel.
 static func _paint(c: Color) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = c
-	m.metallic = 0.18
-	m.metallic_specular = 0.6
-	m.roughness = 0.34
-	m.clearcoat_enabled = true
-	m.clearcoat = 0.7
-	m.clearcoat_roughness = 0.12
-	m.cull_mode = BaseMaterial3D.CULL_DISABLED
-	return m
+	return ParametricMaterialLibrary.make("car_paint", c)
 
 
 ## One MeshInstance3D per part group, a surface per material.
@@ -2990,15 +2981,14 @@ static func _side_windows(k: _K, za: float, zb: float, ya: float, yb: float, wid
 
 
 static func _plain(c: Color, metallic: float, rough: float) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = c
-	m.metallic = metallic
-	m.roughness = rough
-	return m
+	var mat_id := StructureMaterials.infer_id(c, metallic, rough, c.a)
+	return ParametricMaterialLibrary.make(mat_id, c)
 
 
 static func _emissive(c: Color, energy: float) -> StandardMaterial3D:
-	var m := _plain(c, 0.0, 0.4)
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	m.roughness = 0.4
 	m.emission_enabled = true
 	m.emission = c
 	m.emission_energy_multiplier = energy
