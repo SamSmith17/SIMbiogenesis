@@ -1,0 +1,1069 @@
+{"k": "0f368e63dc7e8200", "s": ["रंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Color"}
+{"k": "5a207fb932eda252", "s": ["बंद करें (Esc)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Close (Esc)"}
+{"k": "451f71fbbea3eb4e", "s": ["देखें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Look"}
+{"k": "3440462b722c103c", "s": ["सूर्य"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sun"}
+{"k": "6071619a3605e122", "s": ["उन्नत"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Advanced"}
+{"k": "1d1ad7940841101b", "s": ["पूर्वावलोकन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Preview"}
+{"k": "ebcd28c1d3dfe65d", "s": ["MSAA"], "m": "ollama/gemma4:latest 2026-11-22", "src": "MSAA"}
+{"k": "87e3fd70d77881fe", "s": ["बादल"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Clouds"}
+{"k": "c38e77f377a0cafe", "s": ["कैमरा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Camera"}
+{"k": "a2fc7a4f917e4d51", "s": ["के लिए"], "m": "ollama/gemma4:latest 2026-11-22", "src": "for"}
+{"k": "3fc69012665b714a", "s": ["दिखावट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Appearance"}
+{"k": "b55427675a264a42", "s": ["रंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Colour"}
+{"k": "b3d55734938f5437", "s": ["बंद"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Off"}
+{"k": "0b932a54a85f2426", "s": ["सहेजें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Save"}
+{"k": "1271b7c29c4e7a05", "s": ["लोड हो रहा है…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Loading…"}
+{"k": "68ec8d4320302326", "s": ["आकार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Size"}
+{"k": "06641550b83cd8b5", "s": ["अभिविन्यास"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Orientation"}
+{"k": "2712d142e4fb3a0b", "s": ["दिखाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show"}
+{"k": "4640e45251f8286c", "s": ["त्वरण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Acceleration"}
+{"k": "de3a7df99ee7e134", "s": ["मात्रा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Volume"}
+{"k": "c8520a1c6aaf5a72", "s": ["साफ़ करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Clear"}
+{"k": "5b7d2f123182877e", "s": ["खिलाड़ी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Player"}
+{"k": "7b5bd2ca58e951d4", "s": ["एक्सपोज़र"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Exposure"}
+{"k": "a2cb9e6a3649be91", "s": ["प्रदर्शन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Performance"}
+{"k": "37265ffe23e966d3", "s": ["हमेशा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Always"}
+{"k": "720650959ef6eca9", "s": ["देखें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "View"}
+{"k": "b5ebf8fc9e787577", "s": ["छाया गुणवत्ता: उच्च"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Shadow Quality: High"}
+{"k": "825fdc7c16731493", "s": ["आपके जोखिम प्रोफ़ाइल के लिए ट्रैक किया गया; इस खतरे का सिमुलेशन अभी नहीं बना है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Tracked for your risk profile; the simulation for this hazard is not built yet."}
+{"k": "eb19f41b36d6906f", "s": ["इस साइट के लिए अलर्ट इतिहास लोड हो रहा है…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Loading alert history for this site…"}
+{"k": "5eb9ddfd7807ed4b", "s": ["इस साइट के लिए कोई NWS ज़ोन नहीं (गैर-अमेरिकी) — स्थानीय जलवायु डेटा से अनुमानित।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "No NWS zone for this site (non-US) — estimated from local climate data."}
+{"k": "b90e31706be113c1", "s": ["चरम मौसम सेवा अनुपलब्ध।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Extreme weather service unavailable."}
+{"k": "f4bc14a9384d6c95", "s": ["अभी: इस साइट के लिए कोई मौसम डेटा नहीं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Now: no weather data for this site yet."}
+{"k": "259b0f454183d26a", "s": ["कुंजियाँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Keys"}
+{"k": "5311f12904e22669", "s": ["API कुंजियाँ (वैकल्पिक — डेटा सटीकता में सुधार करें)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "API Keys  (optional — improve data accuracy)"}
+{"k": "271b845cf7f263e8", "s": ["OpenTopography: 30 मीटर DEM रिज़ॉल्यूशन सक्षम करता है (डिफ़ॉल्ट 90 मीटर के मुकाबले), साथ ही अमेरिका में 10 मीटर USGS DEM।\nयह SAME कुंजी टोपोग्राफी विकल्पों -> उन्नत भूभाग आकार में 1 मीटर USGS लिडार विकल्प को भी नियंत्रित करती है, लेकिन OpenTopography उस विशिष्ट डेटासेट को केवल अकादमिक-सत्यापित खातों तक सीमित करता है -- यहाँ एक सामान्य मुफ्त कुंजी 10 मीटर प्राप्त करती है (टोपोग्राफी विकल्प दिखाता है कि वास्तव में कौन सा लोड हुआ)।\nपोर्टल.opentopography.org पर मुफ्त कुंजी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "OpenTopography: enables 30 m DEM resolution (vs default 90 m), plus 10 m USGS DEM in the US.\nThis SAME key also gates the 1 m USGS lidar option in Terrain options -> Advanced terrain size, but OpenTopography restricts that specific dataset to academic-verified accounts -- an ordinary free key here gets 10 m instead (Terrain options shows which one actually loaded).\nFree key at portal.opentopography.org"}
+{"k": "a94d66c4c840b22a", "s": ["कुंजी दर्ज करें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Enter key…"}
+{"k": "3b22dcb388af151f", "s": ["OpenTopography API कुंजी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "OpenTopography API key"}
+{"k": "a1e9f42b1a4c9094", "s": ["Copernicus CDS: क्षेत्रीय CMIP6 जलवायु अनुमान (उच्च सटीकता)।\ncds.climate.copernicus.eu पर मुफ्त खाता\nअपना व्यक्तिगत एक्सेस टोकन पेस्ट करें, या ~/.cdsapirc से एक एकल `key: …` लाइन।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Copernicus CDS: regional CMIP6 climate projections (higher accuracy).\nFree account at cds.climate.copernicus.eu\nPaste your personal access token, or a single `key: …` line from ~/.cdsapirc."}
+{"k": "9cba596bc3fa12d5", "s": ["Copernicus CDS API कुंजी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Copernicus CDS API key"}
+{"k": "8961e7638de4f0bc", "s": ["सौर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Solar"}
+{"k": "df85d11fed3eb67b", "s": ["एरे और बैटरी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Array & Battery"}
+{"k": "7327cfa802f9950b", "s": ["पावर स्कोरबोर्ड के लिए पैनल और बैटरी पैरामीटर। परिवर्तन तुरंत लागू होते हैं और user://solar_panel_config.cfg में सहेजे जाते हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Panel and battery parameters for the power scoreboard. Changes apply instantly and save to user://solar_panel_config.cfg."}
+{"k": "e0babc8ddf0493ca", "s": ["पैनल झुकाव (°)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Panel tilt (°)"}
+{"k": "ed1ca5dbad9c6e72", "s": ["पैनल दिगंश (°)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Panel azimuth (°)"}
+{"k": "bed7e4b15d6002c3", "s": ["सिस्टम सीमाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "System Limits"}
+{"k": "80d6fe5e11d0bef2", "s": ["बैटरी (kWh)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Battery (kWh)"}
+{"k": "ac012e2af2d6844b", "s": ["इन्वर्टर अधिकतम (kW)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Inverter max (kW)"}
+{"k": "948a8ad747f962b1", "s": ["कैलिब्रेशन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Calibration"}
+{"k": "42430d36194e2582", "s": ["भौतिकी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Physics"}
+{"k": "d6f5693877024c4f", "s": ["उच्च सटीकता भौतिकी (Meeus SPA + वास्तविक GHI)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "High accuracy physics (Meeus SPA + real GHI)"}
+{"k": "064e72d57b08d1e4", "s": ["पृथ्वी पर कोई भी स्थान"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Any place on Earth"}
+{"k": "991cf6503ebf9bc7", "s": ["सर्वेक्षण ड्रोन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Survey drone"}
+{"k": "d0ba0b84cd0536e7", "s": ["तृतीय व्यक्ति"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Third person"}
+{"k": "0d36fa76023e9b5e", "s": ["समय, सूर्य और आकाश"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Time, sun and sky"}
+{"k": "4aa4f046527750b9", "s": ["वास्तविक रात्रि आकाश"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The real night sky"}
+{"k": "34f14b26263ced7e", "s": ["चंद्रमा के चरण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Moon phases"}
+{"k": "81bacf1f1a18d0c9", "s": ["एनालेमा मोड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Analemma mode"}
+{"k": "73ff9fe4ebd64a4c", "s": ["मौसम और चरम घटनाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Weather and extreme events"}
+{"k": "24b66d487c841be8", "s": ["स्थान चुनें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Choose a location"}
+{"k": "e2fc41fb3ea413b1", "s": ["ग्लोब मोड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Globe mode"}
+{"k": "32c7f4a669741a79", "s": ["भू-आकृति मूर्तिकला"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Terrain sculpting"}
+{"k": "dd9d49ad64baebdb", "s": ["वन, मौसम और विकास"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Forests, seasons and growth"}
+{"k": "76cb662add23b098", "s": ["रंगे हुए शिविर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Painted camps"}
+{"k": "029bc44fe62547c7", "s": ["धाराएँ और जल निकासी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Streams and drainage"}
+{"k": "9828ea63444436b9", "s": ["सीढ़ीदार खेत"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Terraced fields"}
+{"k": "d9304e6c3a15490a", "s": ["रखे गए सामान और प्रॉप एडिटर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Placed things and the prop editor"}
+{"k": "db262f1f3fa8087d", "s": ["इमारत निर्माता"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Building builder"}
+{"k": "39eea5122383f953", "s": ["वाहन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Vehicles"}
+{"k": "9b2d6de3534cfee0", "s": ["फोर्कलिफ्ट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Forklift"}
+{"k": "c892f1f0afbf19e8", "s": ["पैरामीट्रिक हार्डवेयर स्टोर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Parametric hardware store"}
+{"k": "ffee004d695d3c03", "s": ["कीचड़ प्रिंटर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Mud printer"}
+{"k": "5bea5aa18d93d71d", "s": ["पैलेट रैक निर्माता"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Pallet rack builder"}
+{"k": "1935bd943c77a627", "s": ["फ्लैट-पैक फर्नीचर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Flat-pack furniture"}
+{"k": "f9ae1c1e43bce620", "s": ["डोम और ज़ोम डिज़ाइनर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Dome & zome designer"}
+{"k": "9a83bc70a2fde090", "s": ["सीएनसी गैन्ट्री डिज़ाइनर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "CNC gantry designer"}
+{"k": "89e31db7e0e1509a", "s": ["टोरॉइड डिज़ाइनर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Toroid designer"}
+{"k": "f60e4c25f6702327", "s": ["सौर डिज़ाइनर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Solar designer"}
+{"k": "637e5cda41a70a1c", "s": ["पेलटन व्हील डिज़ाइनर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Pelton wheel designer"}
+{"k": "f3b73a9849c05729", "s": ["पवन टरबाइन डिज़ाइनर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Wind turbine designer"}
+{"k": "53759e5bcb9f7043", "s": ["वाहन डिज़ाइनर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Vehicle designer"}
+{"k": "83ddffc16887f8da", "s": ["अंदर कदम रखें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Step inside"}
+{"k": "8b74ac5e73d704e9", "s": ["ट्राइ-क्लैम्प डिज़ाइनर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Tri-clamp designer"}
+{"k": "643655178bdb2b22", "s": ["टीसी प्रोसेस लैब"], "m": "ollama/gemma4:latest 2026-11-22", "src": "TC Process Lab"}
+{"k": "80e37d4775216cc9", "s": ["ईएसपी बोर्ड डिज़ाइनर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "ESP board designer"}
+{"k": "818b5cfba302f7ce", "s": ["अर्थशिप और भूमिगत कमरे"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Earthships and rooms in the ground"}
+{"k": "e292a17f60290bcd", "s": ["बैटरी लैब"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Battery Lab"}
+{"k": "eef78084f25ee256", "s": ["कंट्रोलर लैब"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Controller Lab"}
+{"k": "5c8503be68c5f9cc", "s": ["सिस्टम्स ग्राफ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The systems graph"}
+{"k": "43b38f014f3ced91", "s": ["ग्राफ टूल्स: साफ़ और केवल दिखाएँ दृश्य"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Graph tools: Tidy and show-only views"}
+{"k": "dada13a45da19375", "s": ["सिमुलेशन रेंडर करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Render the simulation ahead"}
+{"k": "6bbd6d4b020f0252", "s": ["सिस्टम्स का त्योहार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "A festival of systems"}
+{"k": "25e2a889b97c7466", "s": ["3डी में रिंग: एक सेल, या एक टॉरस"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The ring in 3D: a cell, or a torus"}
+{"k": "b70fbe5a283b5a4f", "s": ["नाइट्रोजन कहाँ जाता है"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Where the nitrogen goes"}
+{"k": "f3255397c3be0429", "s": ["प्रवाह: एक सैंकी जो लूप कर सकता है"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Flows: a Sankey that can loop"}
+{"k": "2473e3a52387c3ae", "s": ["वृत्तों के अंदर वृत्त"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Circles inside circles"}
+{"k": "6a2a57e98e2d1042", "s": ["टॉरस के रूप में प्रवाह"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Flows as a torus"}
+{"k": "4edc9c5856e9439b", "s": ["प्रोसेस कंट्रोल: वाल्व, लूप, अलार्म"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Process control: valves, loops, alarms"}
+{"k": "d6f7f4eff52b38af", "s": ["साइट प्लान लेंस"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Site Plan lens"}
+{"k": "41f1b892b891fc38", "s": ["एलिवेशन लेंस"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Elevation lens"}
+{"k": "22948291f6695ab7", "s": ["ग्लोब लेंस"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Globe lens"}
+{"k": "bd53bb29e34cc527", "s": ["पूर्ण-स्क्रीन ग्लोब"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Full-screen globe"}
+{"k": "0d06725f13254095", "s": ["साइट रिपोर्ट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Site Report"}
+{"k": "10a411ee791b7bfc", "s": ["सौर बूटकैंप"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Solar Bootcamp"}
+{"k": "b739cc8cb3921a90", "s": ["बूटकैंप 2: पैनल बहुत ज़्यादा दबाव डाल रहे हैं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Bootcamp 2: Panels Push Too Hard"}
+{"k": "e78bc14b331be14f", "s": ["बूटकैंप 3: आपके पास बिजली है... कुछ हद तक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Bootcamp 3: You've Got Power… Some of It"}
+{"k": "b2dd9c76c3f39b95", "s": ["3डी पाइप और केबल रूटिंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "3D pipe and cable routing"}
+{"k": "580523dcc1fa8cae", "s": ["पवन टरबाइन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Wind turbines"}
+{"k": "ece4ab231593dae8", "s": ["सांद्रित सौर: ट्रफ और हेलियोस्टैट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Concentrated solar: troughs and heliostats"}
+{"k": "07835eebade1e666", "s": ["होम असिस्टेंट लाइव लिंक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Home Assistant live links"}
+{"k": "c9f95e64b904b019", "s": ["त्योहार मोड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Festival mode"}
+{"k": "89d154e491957972", "s": ["शिविर पहुँचना"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Arrive at camp"}
+{"k": "dd6af00b1385c261", "s": ["बस्ती दृश्य"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Settlement view"}
+{"k": "b23b8cc7a271a7c8", "s": ["द बर्न"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The burn"}
+{"k": "666bd4d626c7f4b5", "s": ["स्टारशेड: क्रू द्वारा निर्मित"], "m": "ollama/gemma4:latest 2026-11-22", "src": "StarShade: built by the crew"}
+{"k": "317b56ae2bc672a7", "s": ["पैकिंग लैब"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Packing Lab"}
+{"k": "3654aa21d22173f5", "s": ["इंटरमॉडल यूनिट्स"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Intermodal units"}
+{"k": "8fd44fc271ee23aa", "s": ["विंडो वॉल"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Window Wall"}
+{"k": "d994f84ac4747efe", "s": ["मेरी विशेषता"], "m": "ollama/gemma4:latest 2026-11-22", "src": "My feature"}
+{"k": "14f9191088ce99f5", "s": ["शिविर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Camps"}
+{"k": "6bd38d256347f12c", "s": ["स्टारशेड जोड़ें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Add StarShade"}
+{"k": "9a242d510e78b084", "s": ["लेआउट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Layout"}
+{"k": "48877996edd52914", "s": ["बंद करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Close"}
+{"k": "bb2e9c33ce54913d", "s": ["कस्टम"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Custom"}
+{"k": "6cbc54638ba90056", "s": ["सामुदायिक कार्यक्रम"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Community schedule"}
+{"k": "23ac9b2c0cb34bb0", "s": ["जोड़ें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Add"}
+{"k": "a92ce1938df77545", "s": ["मार्ग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Route"}
+{"k": "b51fc8694de90fea", "s": ["रद्द करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Cancel"}
+{"k": "b4e2c73933472c14", "s": ["तैयार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Ready"}
+{"k": "ab094575e8742b97", "s": ["⏸ रोकें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "⏸ Pause"}
+{"k": "7800f77e5ac5fb7f", "s": ["■ रोकें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "■ Stop"}
+{"k": "73c64e659bcb2df4", "s": ["▶ चलाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "▶ Play"}
+{"k": "ab89f3c3fb29f847", "s": ["रुका हुआ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Paused"}
+{"k": "eca2936d2aed132c", "s": ["रुक गया"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Stopped"}
+{"k": "45ff043021ea3c59", "s": ["तार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Wires"}
+{"k": "85d5f24679e1cd3b", "s": ["विस्फोट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Explode"}
+{"k": "1b68b04163b789c9", "s": ["रंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Colours"}
+{"k": "d9b5790f0477a766", "s": ["त्रिज्या"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Radius"}
+{"k": "763dd1bbe236295a", "s": ["आपके डिज़ाइन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Your designs"}
+{"k": "67e2ebbdbdb217fb", "s": ["EUC स्थिति"], "m": "ollama/gemma4:latest 2026-11-22", "src": " EUC STATUS"}
+{"k": "a3ea62560b177692", "s": ["बैटरी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "BATTERY"}
+{"k": "d41a705982350aeb", "s": ["ट्रिप"], "m": "ollama/gemma4:latest 2026-11-22", "src": "TRIP"}
+{"k": "121bc5073d5e54d1", "s": ["0.0 मील"], "m": "ollama/gemma4:latest 2026-11-22", "src": "0.0 mi"}
+{"k": "5e69df5e610dbcd0", "s": ["गति"], "m": "ollama/gemma4:latest 2026-11-22", "src": "SPEED"}
+{"k": "c552c8818ba540a5", "s": ["0 मील प्रति घंटा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "0 mph"}
+{"k": "0ab2bfd416d9a7e3", "s": ["दूरी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "RANGE"}
+{"k": "05dcf3c5098fc0fd", "s": ["33 मील"], "m": "ollama/gemma4:latest 2026-11-22", "src": "33 mi"}
+{"k": "d68ee00f017202c0", "s": ["1000 / 1000 Wh"], "m": "ollama/gemma4:latest 2026-11-22", "src": "1000 / 1000 Wh"}
+{"k": "3cbaa962e74592c7", "s": ["शीट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sheet"}
+{"k": "c186b44e08015401", "s": ["खेल समाप्त"], "m": "ollama/gemma4:latest 2026-11-22", "src": "GAME OVER"}
+{"k": "7ce15260074327f8", "s": ["आप डिसेंटरी से मर गए"], "m": "ollama/gemma4:latest 2026-11-22", "src": "You have died of dysentery"}
+{"k": "00f1427f70a14de3", "s": ["इस दुनिया का नाम बदलें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Rename this world"}
+{"k": "7ba6dc0c8c65b5a9", "s": ["दुनिया हटाएं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Delete world"}
+{"k": "9cd33b189a70547b", "s": ["कूड़ेदान में ले जाएं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Move to trash"}
+{"k": "cf01d008ece489c5", "s": ["अपने सबसे हाल ही में खेले गए दुनिया को फिर से शुरू करें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Resume your most recently played world."}
+{"k": "bd94691cf1b9e57e", "s": ["बाहर निकलें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Quit"}
+{"k": "5ec8ae85ce1f59f3", "s": ["दुनिया का नाम"], "m": "ollama/gemma4:latest 2026-11-22", "src": "World name"}
+{"k": "e03589dd9bf13054", "s": ["मानचित्र डेटा पुनः डाउनलोड करें (भूभाग, इमेजरी, OSM)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Re-download map data (terrain, imagery, OSM)"}
+{"k": "b17c75390a8aa474", "s": ["ग्रीनहाउस"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Greenhouses"}
+{"k": "90f36b60145e4a53", "s": ["स्थिति: डिस्कनेक्टेड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Status: Disconnected"}
+{"k": "544ce113b028c7bd", "s": ["📡 एंटिटी सब्सक्रिप्शन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "📡 Entity Subscriptions"}
+{"k": "a00924ddf638dd42", "s": ["एंटिटी आईडी (प्रति पंक्ति या अल्पविराम-पृथक):"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Entity IDs (one per line or comma-separated):"}
+{"k": "f758786ddc80e180", "s": ["एंटिटी को सब्सक्राइब करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Subscribe to Entities"}
+{"k": "7b331e5a9518f968", "s": ["होम असिस्टेंट कनेक्शन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Home Assistant Connection"}
+{"k": "4a29cf8085d05983", "s": ["🔌 कनेक्शन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "🔌 Connection"}
+{"k": "360ba809003919ee", "s": ["वेबसॉकेट यूआरएल:"], "m": "ollama/gemma4:latest 2026-11-22", "src": "WebSocket URL:"}
+{"k": "357af5e021c46ed7", "s": ["लंबे समय तक चलने वाला एक्सेस टोकन:"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Long-lived Access Token:"}
+{"k": "346382c6bef2a937", "s": ["अपना होम असिस्टेंट लंबा चलने वाला एक्सेस टोकन दर्ज करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Enter your Home Assistant long-lived access token"}
+{"k": "7382ab43e899c66a", "s": ["कनेक्ट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Connect"}
+{"k": "6d395381016d4585", "s": ["डिस्कनेक्ट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Disconnect"}
+{"k": "0ab6dedae9c83778", "s": ["लाइव लिंक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Live links"}
+{"k": "58bdd25288f420e8", "s": ["डिफ़ॉल्ट बनाएं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Make default"}
+{"k": "5114762970d073f4", "s": ["जिन दुनिया ने कोई इंस्टेंस नहीं चुना है, वे डिफ़ॉल्ट का उपयोग करेंगी।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Worlds that have not chosen an instance use the default one."}
+{"k": "abddb92a66dc75eb", "s": ["इस इंस्टेंस को भूल जाएं (इसका पता और टोकन)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Forget this instance (its address and token)"}
+{"k": "2575184ccacb0f50", "s": ["केवल इस कंप्यूटर पर सहेजा गया (user://ha_profiles.cfg)। कभी भी किसी दुनिया, साझा पैक या git में न डालें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Saved only on this computer (user://ha_profiles.cfg). Never put in a world, a shared pack or git."}
+{"k": "75385e719be864e7", "s": ["इस इंस्टेंस को सहेजें और कनेक्ट करें (किसी भी फ़ील्ड में दर्ज करना एक जैसा करता है)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Save this instance and connect (Enter in either field does the same)."}
+{"k": "7f9fc0aa17766994", "s": ["दुनिया लोड होने पर स्वचालित रूप से कनेक्ट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Connect automatically when a world loads"}
+{"k": "998f9e3c84aa0321", "s": ["केवल वह इंस्टेंस जो पहले कनेक्ट हो चुका है, स्वचालित रूप से कनेक्ट होता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Only an instance that has connected before is connected automatically."}
+{"k": "a05ccbe5183fc6ee", "s": ["यह दुनिया उपयोग करती है"], "m": "ollama/gemma4:latest 2026-11-22", "src": "This world uses"}
+{"k": "3965164f9487c2d2", "s": ["यह दुनिया किस सहेजे गए इंस्टेंस से कनेक्ट होती है। लिंक दुनिया के साथ सहेजे जाते हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Which saved instance this world connects to. Links are saved with the world."}
+{"k": "93f1f00dbae54387", "s": ["स्थिति"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Status"}
+{"k": "54f78d19ed93b8fb", "s": ["लाइव मोड बंद है: लिंक रीडिंग रिकॉर्ड करते हैं लेकिन सिमुलेशन अपने मान रखता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Live mode is off: links record readings but the simulation keeps its own values."}
+{"k": "fa2fc199768e9da8", "s": ["लाइव मोड चालू करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Turn on Live mode"}
+{"k": "0ca44fb9163d8848", "s": ["अभी से वास्तविक समय पर घड़ी चलाता है, इसलिए जुड़े मान आपके वास्तविक सिस्टम का पालन करते हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Runs the clock at real time from now, so linked values follow your real system."}
+{"k": "5ffc7c06acaed517", "s": ["लाइव लिंक खोलें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Open Live links…"}
+{"k": "2b815fb626558217", "s": ["सिमुलेशन द्वारा ट्रैक किए गए किसी भी मान के लिए अपने Home Assistant से एक सेंसर चुनें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Pick a sensor from your Home Assistant for any value the simulation tracks."}
+{"k": "de3c5d016da0d07b", "s": ["निश्चित?"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sure?"}
+{"k": "747624c53be840c2", "s": ["Home Assistant इंस्टेंस"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Home Assistant instance"}
+{"k": "61710351170bd45e", "s": ["सहेजे गए Home Assistant इंस्टेंस। प्रत्येक का अपना पता और टोकन होता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Saved Home Assistant instances. Each keeps its own address and token."}
+{"k": "dffb496068034170", "s": ["नियंत्रण और सुझाव"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Controls & Tips"}
+{"k": "c9293e16b996185e", "s": ["मुझे दिखाएं ▶"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show me around ▶"}
+{"k": "5c14d22421dbecf2", "s": ["इस दुनिया की सुविधाओं का एक निर्देशित दौरा: शीर्षक कार्ड, प्रत्येक का एक छोटा डेमो, Esc द्वारा समाप्त"], "m": "ollama/gemma4:latest 2026-11-22", "src": "A guided tour of this world's features: title cards, a short demo of each, Esc ends it"}
+{"k": "e5fb3081415e805d", "s": ["कोई कुंजी खोजें (ग्राफ, ड्रोन, रोकें…)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Find a key (graph, drone, pause…)"}
+{"k": "f7dcf40fcd1d12b8", "s": ["सुझाव"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Tips"}
+{"k": "8fc1a29065d9ea52", "s": ["लगभग हो गया"], "m": "ollama/gemma4:latest 2026-11-22", "src": "almost done"}
+{"k": "e41ddbe50b9c799a", "s": ["सिमुलेशन प्रस्तुत करना"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Rendering simulation"}
+{"k": "44b9eb166291319d", "s": ["प्रस्तुति रद्द करें (अब तक जो हुआ वह रखा जाएगा)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Cancel the render (what is done so far is kept)"}
+{"k": "21f671beb4f173a1", "s": ["शुरू हो रहा है…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "starting…"}
+{"k": "4f362288e292cfaf", "s": ["[O]"], "m": "ollama/gemma4:latest 2026-11-22", "src": "[O]"}
+{"k": "065eb34f12640cdc", "s": ["इलेक्ट्रिक यूनिसाइकिल चलाएं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Ride Electric Unicycle"}
+{"k": "bd0102d76918e09b", "s": ["शॉर्टकट और इसका उपयोग कैसे करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Shortcuts and how to use this"}
+{"k": "2c684d5f960325bd", "s": ["इसका उपयोग कैसे करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "How to use this"}
+{"k": "65528f5054ff8999", "s": ["इस श्रृंखला का वायरिंग आरेख खोलें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Open the wiring diagram of this chain"}
+{"k": "5c2ad8040b9e7301", "s": ["ग्राफ पर नहीं: इसे सौर श्रृंखला से जोड़ने के लिए रखें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Not on the graph yet: place it to join a solar chain"}
+{"k": "8c0edf06845806c7", "s": ["कोई सेटिंग खोजें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Find a setting"}
+{"k": "0a34de2b327cee6c", "s": ["हर सेक्शन खोलें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Open every section"}
+{"k": "295d359e1953ed0a", "s": ["भू-आकृति चित्रण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "TERRAIN IMAGERY"}
+{"k": "9ec1b48a8735129e", "s": ["प्रकाश स्टूडियो"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Light Studio"}
+{"k": "7c560480962406c3", "s": ["ग्राफ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Graph"}
+{"k": "48db3af19bc8dea0", "s": ["लोड करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Load"}
+{"k": "e501b8d6c22e0f40", "s": ["निष्क्रिय"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Idle"}
+{"k": "54c7675f5df339e1", "s": ["लिंकेज लैब"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Linkage Lab"}
+{"k": "10b901aa01fff102", "s": ["स्टारशेड कतारबद्ध — इसे रखने के लिए एक नक्शा बनाएं या शुरू करें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "StarShade queued — create or start a map to place it."}
+{"k": "d9854b86d450e32d", "s": ["मुख्य नहीं मिला — पहले एक विश्व खोलें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Could not find Main — open a world first."}
+{"k": "9fb695ec6d496915", "s": ["स्टारशेड प्लेसमेंट सक्रिय — पुष्टि करने के लिए निशाना लगाएं और क्लिक करें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "StarShade placement active — aim and click to confirm."}
+{"k": "fc8a55e861c753e8", "s": ["ग्रह पृथ्वी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Planet Earth"}
+{"k": "8e07e9b14d9c2c88", "s": ["स्टेलर बेसिक इनकम: प्रति दिन 4.17 बिलियन kWh"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Stellar Basic Income: 4.17 billion kWh per day"}
+{"k": "5b00b7a533299caf", "s": ["स्वागत है, अपना ऊर्जा क्षेत्र चुनें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Welcome, select your energy zone"}
+{"k": "34d44dfcb03ce742", "s": ["बहन शहर (दूसरे गोलार्ध में GHI की तुलना करने के लिए मानचित्र पर एक बिंदु चुनें)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sister city (choose a point on the map to compare GHI in the other hemisphere)."}
+{"k": "fcee3d2cb01d6b05", "s": ["[font_size=16][b]जनसंख्या डेटा लोड हो रहा है…[/b][/font_size]"], "m": "ollama/gemma4:latest 2026-11-22", "src": "[font_size=16][b]Population data loading…[/b][/font_size]"}
+{"k": "d2c2fffe7d6212f1", "s": ["विपरीत गोलार्ध के लिए संदर्भ सूची में कोई बहन शहर नहीं है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "No sister city in the reference list for the opposite hemisphere."}
+{"k": "36b23984fa8ed7e2", "s": ["इस बैंड में कोई संदर्भ शहर नहीं है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "No reference cities in this band."}
+{"k": "62ddfa387d4fbb3f", "s": ["अभी कोई विश्व नहीं — मानचित्र पर एक स्थान (या एक इनबिल्ट मानचित्र) चुनें और एक नया विश्व शुरू करें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "No worlds yet — pick a place on the map (or a built-in map) and start a new world."}
+{"k": "6c2955ebe0647cad", "s": ["ठीक वहीं से वापस कूदें जहां आपने छोड़ा था।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Jump back in exactly where you left off."}
+{"k": "74a86d700950bba3", "s": ["इस विश्व की एक स्वतंत्र प्रति बनाएं (एक चेकपॉइंट)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Make an independent copy of this world (a checkpoint)."}
+{"k": "3cdcc1de1c3b00ed", "s": ["इस विश्व (और इसकी आवश्यकता) को किसी मित्र के लिए ज़िप के रूप में निर्यात करें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Export this world (and what it needs) as a zip for a friend."}
+{"k": "441523241bf5c31d", "s": ["इस दुनिया को कूड़ेदान में ले जाएं (user://worlds/_trash)। नक्शे का इलाका कैश रखा जाएगा।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Move this world to the trash (user://worlds/_trash). The map's terrain cache is kept."}
+{"k": "c9c961b3a10a4357", "s": ["उस दुनिया को कॉपी नहीं किया जा सका।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Could not copy that world."}
+{"k": "285d9aa3c0b1687f", "s": ["अभी कोई दुनिया नहीं है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "No worlds yet."}
+{"k": "337ae06a687a5ba8", "s": ["या एक बिल्ट-इन मैप:"], "m": "ollama/gemma4:latest 2026-11-22", "src": "or a built-in map:"}
+{"k": "7e7048dc0baf9e78", "s": ["यहां से शुरू करें (निर्देशित) ▶"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Start here (guided)  ▶"}
+{"k": "d0bf29a9a93e9b82", "s": ["खाली शुरू करें ⊕"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Start empty  ⊕"}
+{"k": "1ba0d099c107ea30", "s": ["मुझे घुमाएं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show me around"}
+{"k": "271b388e95027df4", "s": ["नक्शे पर कोई जगह चुनें, पता खोजें, या निर्देशांक दर्ज करें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Pick a place on the map, search an address, or enter coordinates."}
+{"k": "a4e232bb3415ebcf", "s": ["अपनी दुनिया में से एक खेलें, या ऊर्जा नक्शे पर कोई जगह चुनें और एक नई शुरू करें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Play one of your worlds, or pick a place on the energy map and start a new one."}
+{"k": "3f81e16344b9c59a", "s": ["साझा करें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Share…"}
+{"k": "6ebc06437af6f3fb", "s": ["अपनी दुनिया, मॉडल और सेटिंग्स को किसी दोस्त के लिए ज़िप के रूप में निर्यात करें, या एक दोस्त द्वारा भेजी गई एक स्थापित करें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Export your worlds, models and settings as a zip for a friend, or install one a friend sent you."}
+{"k": "87e3e877c7fd0ea8", "s": ["ग्लोब"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Globe"}
+{"k": "8f652d76c636ff22", "s": ["सेटिंग्स — ग्राफिक्स, इंटरफ़ेस, खिलाड़ी, एनपीसी, तारे, विंडो दीवार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Settings — graphics, interface, player, NPCs, stars, window wall"}
+{"k": "25b621d4362c7087", "s": ["पृथ्वी पर कोई भी पता, निर्देशांक, या स्थान खोजें..."], "m": "ollama/gemma4:latest 2026-11-22", "src": "Search any address, coordinates, or place on Earth..."}
+{"k": "2fba71e0a2faef7c", "s": ["खोजें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Search"}
+{"k": "b1a9bed1c05e1772", "s": ["अक्षांश"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Latitude"}
+{"k": "033f7fc4cafd0b19", "s": ["देशांतर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Longitude"}
+{"k": "34b463392b861e81", "s": ["निर्देशांक का उपयोग करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Use coords"}
+{"k": "1e4d4ab9b65059e6", "s": ["अगले मैप लोड पर V1 StarShade मॉडल रखें (या इन-गेम प्लेसमेंट शुरू करें)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Place the V1 StarShade model on the next map load (or begin placement in-game)"}
+{"k": "a8998e7931dc8597", "s": ["यहां नई दुनिया ⊕"], "m": "ollama/gemma4:latest 2026-11-22", "src": "New world here  ⊕"}
+{"k": "3b22030d06cfb83d", "s": ["स्थान सेट करें ✓"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Set location  ✓"}
+{"k": "9397311b2e572f94", "s": ["चयनित दुनिया खेलें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Play selected world"}
+{"k": "c3b5c6624f330f2d", "s": ["कोई परिणाम नहीं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "No results."}
+{"k": "112dbbed93950656", "s": ["नोड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Node"}
+{"k": "b192932e4938cac6", "s": ["एक साथ खेलें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Play together"}
+{"k": "e573560e50c8cc5c", "s": ["एनपीसी एनिमेशन एडिटर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "NPC animation editor"}
+{"k": "54425de7232924d0", "s": ["विश्व"], "m": "ollama/gemma4:latest 2026-11-22", "src": "World"}
+{"k": "719d368ccbac690c", "s": ["लिंकेजलैब गेम बंडल आयात करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Import LinkageLab Game Bundle"}
+{"k": "4e398edf967149c7", "s": ["पुष्टि करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Confirm"}
+{"k": "edd62734b23799bf", "s": ["कैमरा सिंक: प्रतीक्षा कर रहा है"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Camera Sync: Waiting"}
+{"k": "fe623cdfcac86ad5", "s": ["लाइव"], "m": "ollama/gemma4:latest 2026-11-22", "src": "LIVE"}
+{"k": "52f4596ec7c38cb4", "s": ["कैमरा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "CAMERA"}
+{"k": "7fd0c617da48f3c3", "s": ["वीडियो"], "m": "ollama/gemma4:latest 2026-11-22", "src": "VIDEO"}
+{"k": "64a0119406827d40", "s": ["कोई कैमरा चयनित नहीं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "No camera selected"}
+{"k": "d794a3b2dec577b3", "s": ["ऑपरेटर व्यू के लिए यूएसबी कैमरा इनपुट।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "USB camera input for operator view."}
+{"k": "b5ff0af295a92ad7", "s": ["कैमरा इनपुट का चयन करने के लिए क्लिक करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Click to select camera input"}
+{"k": "78c59903902ed991", "s": ["फीड स्थिति: प्रतीक्षा कर रहा है"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Feed Status: Waiting"}
+{"k": "70f00d2123cd6b59", "s": ["सिमुलेशन प्ले/पॉज़ टॉगल करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Toggle simulation play/pause"}
+{"k": "21e513ca39655148", "s": ["सिमुलेशन समय को स्क्रैब करें — सिमुलेशन और वीडियो दोनों को सिंक करता है"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Scrub simulation time — syncs both sim and video"}
+{"k": "c2bd9759eb06973e", "s": ["<0xE2><0x97><0x82> धीमा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "◂ SLOWER"}
+{"k": "ff33c9e78fbb9da2", "s": ["सिमुलेशन गति एक कदम कम करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Decrease simulation speed one step"}
+{"k": "4643636037693c7a", "s": ["तेज़ ▸"], "m": "ollama/gemma4:latest 2026-11-22", "src": "FASTER ▸"}
+{"k": "5ccb4c8786a420b8", "s": ["सिमुलेशन गति एक कदम बढ़ाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Increase simulation speed one step"}
+{"k": "f7c89e6d6357fac0", "s": ["<0xE2><0x9F><0xB3> सिंक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "⟳ SYNC"}
+{"k": "a1fdb32007a8a4c3", "s": ["वीडियो प्लेहेड को वर्तमान सिमुलेशन समय पर स्नैप करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Snap video playhead to current simulation time"}
+{"k": "f69c553a5facfd77", "s": ["लाइव कैमरा इनपुट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Live Camera Input"}
+{"k": "bd4c7306dd310d03", "s": ["लाइव पैनल के लिए लाइव कैमरा फीड चुनें। उपलब्ध होने पर OBS वर्चुअल कैमरा स्वचालित रूप से चयनित होता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Choose the live camera feed for the LIVE panel. OBS Virtual Camera is selected automatically when available."}
+{"k": "caf0c290ab2db0af", "s": ["वर्तमान इनपुट: कोई नहीं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Current input: none"}
+{"k": "87d213552c73d73d", "s": ["उपलब्ध कैमरा फीड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Available camera feeds"}
+{"k": "69ec6b1a87ad095f", "s": ["फीड सूची रीफ़्रेश करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Refresh Feed List"}
+{"k": "9cce7a773b04dcea", "s": ["व्यूपोर्ट स्रोत के रूप में CameraServer फ़ीड का उपयोग करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Use CameraServer feed as viewport source"}
+{"k": "eb4f1a365174e176", "s": ["OBS वर्चुअल कैमरा शुरू करें या एक USB वेबकैम कनेक्ट करें, फिर रीफ़्रेश पर क्लिक करें। आप कभी भी इस संवाद को फिर से खोलने के लिए LIVE पैनल या INPUT बटन पर भी क्लिक कर सकते हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Start OBS Virtual Camera or connect a USB webcam, then click Refresh. You can also click the LIVE panel or INPUT button anytime to reopen this dialog."}
+{"k": "cb8df4913ac1b3f9", "s": ["फ़ीड लागू करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Apply Feed"}
+{"k": "3556e47598510aab", "s": ["वीडियो फ़ाइल चुनें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Select Video File"}
+{"k": "410c19b218eedc9a", "s": ["प्रोजेक्शन वार्पिंग के लिए गेमप्ले कैमरा का दर्पणण।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Mirrors gameplay camera for projection warping."}
+{"k": "2efde63ebb92b096", "s": ["सेव हटाएं?"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Delete save?"}
+{"k": "fed62f6125706dca", "s": ["सेव / लोड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Save / Load"}
+{"k": "965368fb124fefbb", "s": ["जारी रखें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Continue"}
+{"k": "be5b3e5d860eb001", "s": ["सेव ओवरराइट करें?"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Overwrite save?"}
+{"k": "5a25b9bc328c11c4", "s": ["सूखा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "dry"}
+{"k": "21dabaf0c0b2828a", "s": ["हाइड्रो लैब"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Hydro Lab"}
+{"k": "c00f4af48bc7891b", "s": ["📡 लाइव मोड अक्षम करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "📡 Disable Live Mode"}
+{"k": "497b758683a440d6", "s": ["⚡ पावर · CSV प्लेबैक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "⚡ Power · CSV playback"}
+{"k": "8d5d17090f85a994", "s": ["⚡ पावर · लाइव"], "m": "ollama/gemma4:latest 2026-11-22", "src": "⚡ Power · Live"}
+{"k": "16a774af6a960bc8", "s": ["⚡ पावर · आगे अनुकरण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "⚡ Power · Simulating ahead"}
+{"k": "b65413e87d59c305", "s": ["⚡ पावर स्कोरबोर्ड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "⚡ Power Scoreboard"}
+{"k": "44deb1f274e5c3fa", "s": ["अधिकतम कैप्चर: वह जो ऐरे अभी बना सकता है, बैटरी-पूर्ण क्षय और वायरिंग के वर्तमान कैप से पहले। हरा जब सौर सब कुछ लेता है; लाल जब अधिशेष काटना है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Max capture: what the array could make right now, before the battery-full taper and the wiring's current caps. Green when Solar takes all of it; red when surplus is clipped."}
+{"k": "3e48836c608f3342", "s": ["आज का सौर, आज ऐरे द्वारा बनाए जा सकने वाले के हिस्से के रूप में। अधिक स्कोर करने के लिए लोड को चालू और बैटरी को भूखा रखें जब सूरज ऊपर हो।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Today's solar as a share of what the array could have made today. Keep loads running and the battery hungry while the sun is up to score higher."}
+{"k": "4397e4f4e8f0d646", "s": ["सूरज का इंतज़ार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Waiting for the sun"}
+{"k": "779d8dd6e2e70724", "s": ["सौर और लोड (24घ) 📂"], "m": "ollama/gemma4:latest 2026-11-22", "src": "SOLAR & LOAD (24h) 📂"}
+{"k": "574d2212fa5026d2", "s": ["सौर आउटपुट (24घ) 📡"], "m": "ollama/gemma4:latest 2026-11-22", "src": "SOLAR OUTPUT (24h) 📡"}
+{"k": "7465247548928c74", "s": ["सौर आउटपुट (24घ) ⏳"], "m": "ollama/gemma4:latest 2026-11-22", "src": "SOLAR OUTPUT (24h) ⏳"}
+{"k": "06a8b55f01d97be0", "s": ["सौर आउटपुट (24घ)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "SOLAR OUTPUT (24h)"}
+{"k": "da46bd120df4d4e7", "s": ["ऐतिहासिक डेटा के लिए HA सौर ऊर्जा सेंसर को लिंक करने के लिए क्लिक करें\n(या स्वचालित रूप से लिंक किए गए पावर सेंसर का उपयोग करता है)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Click to link HA solar energy sensor for historical data\n(or uses linked power sensor automatically)"}
+{"k": "2f38acc7b85ddde2", "s": ["पावर पैनल को कोलैप्स या एक्सपैंड करने के लिए क्लिक करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Click to collapse or expand the power panel"}
+{"k": "f6d45d70a6f53ce1", "s": ["होम असिस्टेंट एंटिटी से लिंक करने के लिए क्लिक करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Click to link to Home Assistant entity"}
+{"k": "6aa40a73b2e9dcc1", "s": ["आज का सिम्युलेटेड दैनिक कुल (या लिंक होने पर HA)। होम असिस्टेंट एंटिटी से लिंक करने के लिए क्लिक करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Today's simulated daily total (or HA if linked). Click to link to Home Assistant entity"}
+{"k": "4b229fe75cffe7b8", "s": ["ऐतिहासिक डेटा के लिए होम असिस्टेंट सोलर एनर्जी सेंसर से लिंक करने के लिए क्लिक करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Click to link to Home Assistant solar energy sensor for historical data"}
+{"k": "3fdcc95f49805d56", "s": ["होम असिस्टेंट से लिंक करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Link to Home Assistant"}
+{"k": "9fbc2a8824620e93", "s": ["होम असिस्टेंट एंटिटी ID दर्ज करें:"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Enter Home Assistant entity ID:"}
+{"k": "f73545488ccc108f", "s": ["🗑 लिंक साफ़ करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "🗑 Clear Link"}
+{"k": "18ab017d3d360fca", "s": ["✓ एंटिटी लिंक करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "✓ Link Entity"}
+{"k": "25ce1bd5c0ae1c9e", "s": ["कल"], "m": "ollama/gemma4:latest 2026-11-22", "src": "YESTERDAY"}
+{"k": "6c0035cfd4d5e0d7", "s": ["सर्वश्रेष्ठ दिन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "BEST DAY"}
+{"k": "4e090d2475ea8aa9", "s": ["16.0 / 32 kWh"], "m": "ollama/gemma4:latest 2026-11-22", "src": "16.0 / 32 kWh"}
+{"k": "1d5d471abe30372d", "s": ["अभी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "NOW"}
+{"k": "f2eb023b0b6e4ab4", "s": ["सौर इन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Solar in"}
+{"k": "7ebd21a0a3a5a779", "s": ["0 W"], "m": "ollama/gemma4:latest 2026-11-22", "src": "0 W"}
+{"k": "29c2c057aca988b1", "s": ["0 Wh"], "m": "ollama/gemma4:latest 2026-11-22", "src": "0 Wh"}
+{"k": "0968c032db7fe450", "s": ["सहायक इन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Aux in"}
+{"k": "6930f98e9c7c2ad2", "s": ["अधिकतम कैप्चर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Max capture"}
+{"k": "af40eeb300a41b70", "s": ["Σ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Σ"}
+{"k": "a686ccd77fb7dde8", "s": ["उत्पन्न"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Generated"}
+{"k": "08cf2c5e0fe28ee2", "s": ["उपभोग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Consumed"}
+{"k": "0011a922f8dbb246", "s": ["नेट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Net"}
+{"k": "d5f99cb427bc32c1", "s": ["+0 W"], "m": "ollama/gemma4:latest 2026-11-22", "src": "+0 W"}
+{"k": "4a060fbe9d0d87f2", "s": ["+0 Wh"], "m": "ollama/gemma4:latest 2026-11-22", "src": "+0 Wh"}
+{"k": "0d77d37432aa2c11", "s": ["पीक: 0.0 kW"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Peak: 0.0 kW"}
+{"k": "0b932859bef0689b", "s": ["⚡ पावर स्कोरबोर्ड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "⚡ POWER SCOREBOARD"}
+{"k": "67f4039894d42737", "s": ["दैनिक सौर (kWh)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "DAILY SOLAR (kWh)"}
+{"k": "b276625b72a1fb94", "s": ["आज"], "m": "ollama/gemma4:latest 2026-11-22", "src": "TODAY"}
+{"k": "40bf1685a4090ea6", "s": ["बाहर निकलें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Exit"}
+{"k": "2170c7f54a4a2bb0", "s": ["शुरू हो रहा है …"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Starting …"}
+{"k": "ac3ed6d895ccf596", "s": ["लोड हो रहा है …"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Loading …"}
+{"k": "810272505e887918", "s": ["मानचित्र लोड हुआ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Map loaded"}
+{"k": "7950d9ccbe85eaab", "s": ["अन्वेषण के लिए तैयार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Ready to explore"}
+{"k": "0b08ac3e673176fa", "s": ["रीसेट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reset"}
+{"k": "2e7af98041a962b5", "s": ["ऊंचाई"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Elevation"}
+{"k": "81596fe56fff7e77", "s": ["📡 लाइव मोड (वास्तविक समय के साथ सिंक)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "📡 Live Mode (sync with real time)"}
+{"k": "d35873a5a526131a", "s": ["गेम समय को वास्तविक दुनिया के समय के साथ सिंक करने और लाइव Home Assistant डेटा देखने के लिए सक्षम करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Enable to sync game time with real-world time and view live Home Assistant data"}
+{"k": "56b72e5c69f4e283", "s": ["🎮 सिमुलेशन मोड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "🎮 Simulation Mode"}
+{"k": "d7f36eae4f32bec7", "s": ["🎮 सर्वाइवल मोड (स्वास्थ्य, आग, क्षति)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "🎮 Survival Mode (health, fire, damage)"}
+{"k": "334211cd4cec3d55", "s": ["गेमप्ले यांत्रिकी को चालू/बंद करें। समय तेज होने पर स्वतः अक्षम हो जाता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Toggle gameplay mechanics on/off. Auto-disables when time is accelerated."}
+{"k": "e09f2a09cd7c3377", "s": ["📅 तिथि"], "m": "ollama/gemma4:latest 2026-11-22", "src": "📅 Date"}
+{"k": "da0367bd88b39e6f", "s": ["वर्ष:"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Year:"}
+{"k": "4dde1513761ef39a", "s": ["महीना:"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Month:"}
+{"k": "b7430ecffa9b3b81", "s": ["दिन:"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Day:"}
+{"k": "e526fecc7777c9b9", "s": ["🌍 स्थान"], "m": "ollama/gemma4:latest 2026-11-22", "src": "🌍 Location"}
+{"k": "b6f59b6129daec47", "s": ["अक्षांश:"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Lat:"}
+{"k": "e4532c8b236a9e3a", "s": ["33.36° उ. (उप-उष्णकटिबंध)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "33.36° N (Subtropics)"}
+{"k": "97e95939a3280e02", "s": ["देशांतर:"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Lon:"}
+{"k": "98d92ecd6e7a8eba", "s": ["115.74° प."], "m": "ollama/gemma4:latest 2026-11-22", "src": "115.74° W"}
+{"k": "fb39ecabe53ff097", "s": ["स्वचालित DST (यूएस नियम)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Auto DST (US rules)"}
+{"k": "0dcadd5955e064c4", "s": ["यूएस नियमों के आधार पर स्वचालित रूप से DST चालू/बंद करें (मार्च का दूसरा रविवार - नवंबर का पहला रविवार)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Automatically switch DST on/off based on US rules (2nd Sunday March - 1st Sunday November)"}
+{"k": "ba81419f2da3929d", "s": ["DST सक्रिय"], "m": "ollama/gemma4:latest 2026-11-22", "src": "DST Active"}
+{"k": "831ea9dc410bb5a6", "s": ["डेलाइट सेविंग टाइम मैन्युअल रूप से सक्षम/अक्षम करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Manually enable/disable Daylight Saving Time"}
+{"k": "e764b997eea607dc", "s": ["डीएसटी: बंद (स्वचालित)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "DST: OFF (auto)"}
+{"k": "a4f0a847b5d9b86b", "s": ["☁ बादल"], "m": "ollama/gemma4:latest 2026-11-22", "src": "☁ Clouds"}
+{"k": "68c6cd27a5910c87", "s": ["बादल आवरण (0 = साफ़)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Cloud Cover (0 = clear)"}
+{"k": "22ddf36d084d4ab7", "s": ["तूफान अंधकार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Storm Darkness"}
+{"k": "bbf4fc3ee09d85f9", "s": ["☀ सूर्य और चंद्रमा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "☀ Sun & Moon"}
+{"k": "af282ef15ca8dde2", "s": ["सूर्य की चमक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sun Brightness"}
+{"k": "5592cf0d95e70960", "s": ["इमारत की छाया"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Building Shadows"}
+{"k": "7ec8f6e33bee123f", "s": ["चंद्रमा की चमक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Moon Brightness"}
+{"k": "5bf3d349e481f112", "s": ["🌑 अमावस्या"], "m": "ollama/gemma4:latest 2026-11-22", "src": "🌑 New Moon"}
+{"k": "e2a3de25dc337fc6", "s": ["☁ विश्व नियंत्रण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "☁  World Controls"}
+{"k": "037549b98f13cb4e", "s": ["⏰ समय"], "m": "ollama/gemma4:latest 2026-11-22", "src": "⏰ Time"}
+{"k": "6b40842242cc7e44", "s": ["१ जनवरी, २०२४"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Jan 1, 2024"}
+{"k": "22f4ac11a3427bdb", "s": ["सूर्य की ओर 3डी छाया किरण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "3D shadow raycast toward sun"}
+{"k": "a80a0bdfba151506", "s": ["गेमप्ले"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Gameplay"}
+{"k": "2435659769889892", "s": ["सिमुलेशन नियम"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Simulation rules"}
+{"k": "5455590e600c907c", "s": ["उत्तरजीविता यांत्रिकी सक्रिय"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Survival mechanics active"}
+{"k": "653ca846b2b9c5bc", "s": ["यादृच्छिक आग और उत्तरजीविता नियम केवल तभी चलते हैं जब समय वास्तविक समय की गति पर या उससे नीचे हो।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Random fires and survival rules run only while time is at or below realtime speed."}
+{"k": "4e9883ac3dba8501", "s": ["पौधों का विकास (वनस्पति उम्र बढ़ना)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Plant growth (vegetation aging)"}
+{"k": "1b774357ae5c6b40", "s": ["पेड़ कैलेंडर के साथ साल-दर-साल बढ़ते हैं और जीवन चक्र जीते हैं। बंद = हर पौधा पूर्ण आकार पर खींचा जाता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Trees grow year on year with the calendar and live out a life cycle. Off = every plant draws at full size."}
+{"k": "ab4af1be2d4cd970", "s": ["कनेक्टर हानि (तार/पाइप हानि + जलना)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Connector losses (wire/pipe loss + burnout)"}
+{"k": "6017c505012128e8", "s": ["अपने रूट किए गए 3डी लंबाई के आधार पर तारों/तारों में I²R वोल्टेज-ड्रॉप हानि और नली/पाइप में घर्षण हानि का अनुकरण करता है। निरंतर अधिभार एक कनेक्टर को जला सकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Simulates I²R voltage-drop losses in wires/cords and friction losses in hoses/pipes based on their routed 3D length. Sustained overload can burn out a connector."}
+{"k": "170761f83cbe3753", "s": ["नई लाइटें लोड के रूप में ग्राफ में जुड़ती हैं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "New lights join the graph as loads"}
+{"k": "5c5c336c505d1ff9", "s": ["लाइट स्टूडियो (J) में रखी गई लाइट, जब साइट में कंट्रोलर या बैटरी होती है तो ग्राफ पर एक एसी लोड बन जाती है; अन्यथा, जब तक आप इसे स्वयं नहीं जोड़ते, तब तक यह मुफ़्त में रोशन रहती है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "A light placed in the Light Studio (J) becomes an AC load on the graph when the site has a controller or battery; off, it is lit for free until you add it yourself."}
+{"k": "d6a6ba90c1af3387", "s": ["होम असिस्टेंट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Home Assistant"}
+{"k": "ce0a21c4e49c97e0", "s": ["विश्व में 3D तार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "3D wires in the world"}
+{"k": "f3f854122bf6e28e", "s": ["3D तार दिखाएँ (विश्व)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show 3D wires (world)"}
+{"k": "1990bceac4c30962", "s": ["3D तारों पर प्रवाह चमक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Flow glow on 3D wires"}
+{"k": "5c902ecc438510c5", "s": ["3D तारों पर रन लंबाई दिखाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show run lengths on 3D wires"}
+{"k": "c36312f57f917997", "s": ["डिफ़ॉल्ट रूप से 3D तार बंद हैं (टाइमलाइन चिप: “3D तार”)। प्रवाह चमक एक मार्चिंग पल्स जोड़ता है; शांत लुक के लिए बंद रखें। एक तार पर निशाना लगाएँ → शैली के लिए इंटरैक्ट करें, मार्ग पिन करने के लिए खींचें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "3D wires are off by default (timeline chip: “3D wires”). Flow glow adds a marching pulse; leave off for a quieter look. Aim a wire → Interact for style, drag to pin a route."}
+{"k": "8a634c5bee5e3f94", "s": ["सभी ऑटो-मार्ग रीसेट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reset all auto-routes"}
+{"k": "8ff2386eb7ea5505", "s": ["हर कनेक्शन पर लॉक/पुराने 3D पिन साफ़ करें और मेट्रो फिर से चलाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Clear locked / stale 3D pins on every connection and re-run metro"}
+{"k": "41419995b6daee4f", "s": ["ध्वनि"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sound"}
+{"k": "1ad7e90d69188275", "s": ["ध्वनि प्रभाव म्यूट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Mute sound effects"}
+{"k": "68d7a170b44467cc", "s": ["वायरिंग, चेतावनियों और अनलॉक के लिए UI चिरप्स, और दुनिया के प्रभाव: हवा, बारिश, धाराएँ, पक्षी, गरज, अग्निशामक (स्टेज संगीत का NPC के तहत अपना वॉल्यूम होता है)। टाइमलाइन के स्पीकर बटन पर भी। चेतावनियों को 1.5 सेकंड में एक तक सीमित भी किया जाता है ताकि बार-बार गलतियाँ मशीन गन न हों।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "UI chirps for wiring, warnings and unlocks, and the world's effects: wind, rain, streams, birds, thunder, the extinguisher (stage music has its own volume under NPCs). Also on the timeline's speaker button. Warnings are also rate-limited to one per 1.5 s so repeated mistakes don't machine-gun."}
+{"k": "88583aed36f74e8c", "s": ["स्वर्ग पथ (∞ एनालेमा)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sky paths (∞ analemma)"}
+{"k": "32bc821b47344f09", "s": ["सौर एनालेमा (माध्य सौर मध्याह्न)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Solar Analemma (Mean Solar Noon)"}
+{"k": "c8a8d562bcc5ec3b", "s": ["चंद्र एनालेमा (माध्य चंद्र मध्याह्न)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Lunar Analemma (Mean Lunar Noon)"}
+{"k": "831f6ec5c82da94d", "s": ["प्रारंभ समय (मिन)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Start time (min)"}
+{"k": "fd3a0b584f773582", "s": ["दैनिक बहाव (मिन/दिन)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Diurnal drift (min/day)"}
+{"k": "8617e478b32530b5", "s": ["प्रत्येक दिन के नमूना समय को इस संख्या में मिनट बाद स्थानांतरित करता है, मौसमी एनालेमा पर दैनिक गति की परत चढ़ाता है। 0 = निश्चित माध्य सौर मध्याह्न (क्लासिक फिगर-एट)। गैर-शून्य एक कॉर्कस्क्रू पथ का पता लगाता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Shifts each day's sample time later by this many minutes, layering diurnal motion onto the seasonal analemma. 0 = fixed mean solar noon (classic figure-eight). Non-zero traces a corkscrew path."}
+{"k": "97d3c5d302acf937", "s": ["सूर्य पथ दिखाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show sun path"}
+{"k": "d058fbdb54757b9d", "s": ["चंद्र पथ दिखाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show moon path"}
+{"k": "da327bea0d6b18eb", "s": ["ग्रह पथ दिखाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show planet paths"}
+{"k": "a3d9f17ad02c4739", "s": ["ग्रह पथ फ्रेम"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Planet path frame"}
+{"k": "a04048db23038255", "s": ["आकाश: प्रत्येक ग्रह को सूर्य (या चंद्रमा) के दैनिक क्षण पर नमूना लिया जाता है, जहाँ वह उस समय आकाश में था वहाँ खींचा जाता है — फिगर-एट के विरुद्ध तुलना करता है। तारे: तारामंडल के विरुद्ध प्रत्येक ग्रह का ट्रैक, वास्तविक समय में आकाश के साथ घुमाया जाता है — फ्रेम वास्तविक रेट्रोग्रेड-लूप कंपोजिट में दर्ज किए जाते हैं। मंगल, बृहस्पति और शनि विपक्ष के चारों ओर अपने पीछे के लूप खींचते हैं; बुध और शुक्र सूर्य के पास अपने निशान बनाते हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sky: each planet sampled at the sun's (or moon's) daily instant, drawn where it stood in the sky then — compares against the figure-eight.\nStars: each planet's track against the star field, turned with the sky in real time — the frame real retrograde-loop composites are registered in. Mars, Jupiter and Saturn draw their backward loops around opposition; Mercury and Venus trace theirs near the sun."}
+{"k": "22d8c43dd0fc0385", "s": ["दिन के उजाले में तारे"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Stars through daylight"}
+{"k": "9e33caaecf8b4cf1", "s": ["हर एनालेमा नमूना मध्याह्न पर होता है, इसलिए तारे ऊपर होते हैं लेकिन दिन के उजाले में डूब जाते हैं। यह आकाश गुंबद को मंद करता है (जमीन पर रोशनी को नहीं) और तारों, मिल्की वे, ग्रहों और राशि चक्र को गुजरने देता है, ताकि आप सूर्य के पीछे साल में एक बार तारे के क्षेत्र को घूमते हुए देख सकें। 0 = बंद।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Every analemma sample is at noon, so the stars are up but drowned in daylight. This dims the sky dome (not the lighting on the ground) and lets the stars, Milky Way, planets and zodiac through, so you can watch the star field turn once a year behind the sun. 0 = off."}
+{"k": "d7b6b7acedd64d88", "s": ["सूर्य (या चंद्रमा) पथ के समान क्षणों पर बुध, शुक्र, मंगल, बृहस्पति और शनि का पता लगाएँ। बुध और शुक्र सूर्य के फिगर-एट के चारों ओर लूप करते हैं; बाहरी ग्रह प्रति सिनोडिक अवधि आकाश को एक बार स्वीप करते हैं। रंग सेटिंग्स → तारे और ग्रह में ग्रह के रंगों का पालन करते हैं; वहां बंद किया गया ग्रह कोई पथ नहीं प्राप्त करता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Trace Mercury, Venus, Mars, Jupiter and Saturn at the same instants as the sun (or moon) path. Mercury and Venus loop around the sun's figure-eight; the outer planets sweep the sky once per synodic period. Colours follow the planet colours in Settings → Stars & Planets; a planet switched off there gets no path."}
+{"k": "ef2e82bb08e32fae", "s": ["पथ की मोटाई"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Path thickness"}
+{"k": "a588a8dd7578e735", "s": ["सौर पथ रंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Solar path color"}
+{"k": "125ef81529ee18cc", "s": ["चंद्र पथ रंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Lunar path color"}
+{"k": "78154a6b95991173", "s": ["परीक्षण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Testing"}
+{"k": "7ae87c8861b56e8b", "s": ["बल इंद्रधनुष (डीबग)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Force rainbow (debug)"}
+{"k": "6ad657c709d6696b", "s": ["बारिश की परवाह किए बिना एंटीसोलर इंद्रधनुष दिखाता है, परीक्षण के लिए। यह अभी भी केवल तभी दिखाई देता है जब सूरज कम हो (लगभग ~44° से नीचे) और आप क्षितिज के ऊपर, सूरज के विपरीत देखते हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Shows the antisolar rainbow regardless of rain, for testing. It still only appears when the sun is low (below ~44°) and you look opposite the sun, low above the horizon."}
+{"k": "ed076507a654bb7f", "s": ["इंटरफ़ेस"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Interface"}
+{"k": "39089efd293ca1ed", "s": ["पाठ और पैनल आकार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Text and panel size"}
+{"k": "0f0b6b68e93a9d0c", "s": ["यूआई स्केल"], "m": "ollama/gemma4:latest 2026-11-22", "src": "UI scale"}
+{"k": "e1f36fb94d489b46", "s": ["स्वचालित रूप से छोटे विंडो पर पाठ को पठनीय रखता है (720p पर बड़ा, 1080p और उससे ऊपर पर सामान्य)। लेआउट हमेशा स्क्रीन में फिट होता है; एक बड़ा स्केल अधिक HUD को गोलियों में पैक करता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Auto keeps text readable on small windows (larger at 720p, normal at 1080p and up). The layout always fits the screen; a larger scale tucks more of the HUD into pills."}
+{"k": "4559111d9c79cf67", "s": ["भाषा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Language"}
+{"k": "089b5a2fabf69e5d", "s": ["अनुवाद ओपन-सोर्स एआई द्वारा किए जाते हैं और उनमें गलतियाँ हो सकती हैं। जो पाठ अभी तक अनुवादित नहीं हुआ है वह अंग्रेजी में रहता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Translations are made by open-source AI and may contain mistakes. Text not translated yet stays in English."}
+{"k": "9b50ba0721dc6e65", "s": ["ड्रोन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Drone"}
+{"k": "f0428269a994a116", "s": ["उड़ान"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Flight"}
+{"k": "00e1f7fe195e0108", "s": ["अधिकतम गति m/s"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Max speed m/s"}
+{"k": "e52bf9ed76b56d32", "s": ["मंदता"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Deceleration"}
+{"k": "d76d6d8a141d65c5", "s": ["चढ़ाई गति m/s"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Climb speed m/s"}
+{"k": "28d42378a50c155a", "s": ["देखने की संवेदनशीलता"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Look sensitivity"}
+{"k": "30f1f64853ff1ba2", "s": ["ऊंचाई सीमा (AGL)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Altitude limits (AGL)"}
+{"k": "21fe7e6c499254f6", "s": ["न्यूनतम ऊंचाई m"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Min altitude m"}
+{"k": "912b567eb2c80e98", "s": ["अधिकतम ऊंचाई m"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Max altitude m"}
+{"k": "52ca951b121a3b76", "s": ["दृश्य बैंकिंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Visual banking"}
+{"k": "a3cd4d66bc7d6d8c", "s": ["झुकाव कोण °"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Tilt angle °"}
+{"k": "6faa16af1da401d3", "s": ["झुकाव प्रतिक्रिया"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Tilt response"}
+{"k": "8787972ae0cc0e1e", "s": ["ड्रोन FOV°"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Drone FOV°"}
+{"k": "91269faef76bfcc5", "s": ["मानक FPV नियंत्रण: WASD / बायाँ स्टिक = क्षैतिज रूप से उड़ें, ऊपर या Shift / ट्रिगर = चढ़ें, नीचे = उतरें (स्पेस लुक/समय टॉगल के लिए खाली रहता है), माउस / दायाँ स्टिक = देखने की दिशा। परिवर्तन तुरंत दुनिया में किसी भी ड्रोन पर लागू होते हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Standard FPV controls: WASD / left stick = fly horizontally, Shift or Up / triggers = ascend, Down = descend (Space stays free for look/time toggle), mouse / right stick = look direction. Changes apply immediately to any drone in the world."}
+{"k": "f8159daccec6b799", "s": ["वातावरण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Environment"}
+{"k": "960df0172eb629c4", "s": ["बादल आवरण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Cloud cover"}
+{"k": "6eb5b0f59817fd4d", "s": ["बादल घनत्व"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Cloud density"}
+{"k": "ed1992d1fc075780", "s": ["सिरस मात्रा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Cirrus amount"}
+{"k": "51d82960118e31ab", "s": ["सिरस तरंग पैमाना"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Cirrus wave scale"}
+{"k": "bf134bc261e459ee", "s": ["सिरस तरंग तीव्रता"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Cirrus wave intensity"}
+{"k": "89fe5cf165ad5698", "s": ["बादल की छाया"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Cloud shadows"}
+{"k": "90e795ce332822c2", "s": ["सिरस उच्च, धारीदार बादल जोड़ता है (मौसम द्वारा संचालित; स्लाइडर एक बूस्ट है)। बादल के ऊपर से गुजरने पर बादल की छाया सीधी धूप को मंद करती है — सस्ती वैश्विक रोशनी, कोई ग्राउंड प्रोजेक्शन नहीं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Cirrus adds high, streaky clouds (auto-driven by weather; slider is a boost). Cloud shadows dim the direct sun as clouds drift over — cheap global lighting, no ground projection."}
+{"k": "448aaea3346fdbdc", "s": ["भविष्य जलवायु परिदृश्य"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Future Climate Scenario"}
+{"k": "f2d631a067612722", "s": ["निम्न (+1.5 °C तक 2100 तक, SSP1-2.6)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Low (+1.5 °C by 2100, SSP1-2.6)"}
+{"k": "f773e14f92f4e1bb", "s": ["मध्यम (+2 °C, SSP2-4.5)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Moderate (+2 °C, SSP2-4.5)"}
+{"k": "dc6a22fbc067532e", "s": ["उच्च (+3–4 °C, SSP3-7.0)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "High (+3–4 °C, SSP3-7.0)"}
+{"k": "fa1b2be5c95f0239", "s": ["बहुत उच्च (+5 °C, SSP5-8.5)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Very high (+5 °C, SSP5-8.5)"}
+{"k": "05d22f2879075823", "s": ["वर्तमान वर्ष के बाद मौसम सिमुलेशन और अनुमानित रिकॉर्ड बुक कॉलम को प्रभावित करता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Affects weather simulation and projected record book columns after the current year."}
+{"k": "2fac4804ca87fad7", "s": ["क्षितिज"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Horizon"}
+{"k": "19cfa37d37d9bc6d", "s": ["क्षितिज रंग धुंध से मेल खाता है"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Horizon colour matches the haze"}
+{"k": "bd642b1f70e302d4", "s": ["क्षितिज रेखा के नीचे का आकाश धुंध द्वारा दूर की जमीन को हर घंटे जो रंग रंगता है, उस रंग को लेता है, ताकि दूर का इलाका और आकाश बिना पट्टी के मिलें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The sky below the horizon line takes the colour the haze paints distant ground, at every hour, so the far terrain and the sky meet without a stripe."}
+{"k": "c2bffcdd6b5639fd", "s": ["क्षितिज रंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Horizon colour"}
+{"k": "ed12babe058758f8", "s": ["\"धुंध से मेल खाता है\" बंद होने पर उपयोग किया जाता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Used when \"matches the haze\" is off."}
+{"k": "254e55ef2672660c", "s": ["क्षितिज ऊँचाई °"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Horizon height °"}
+{"k": "5ea10a67c78efaa8", "s": ["क्षितिज कोमलता °"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Horizon softness °"}
+{"k": "cf2e70a1d91d2a6b", "s": ["क्षितिज धुंध बैंड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Horizon haze band"}
+{"k": "ef898c5e7acad47a", "s": ["धुंध बैंड ऊँचाई °"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Haze band height °"}
+{"k": "4f134fe1c64b07dd", "s": ["ऊपर का आकाश"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sky overhead"}
+{"k": "3667ee9f1aa65e4c", "s": ["क्षितिज के पास का आकाश"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sky near horizon"}
+{"k": "9098794116bff681", "s": ["ऊंचाई आकाश की क्षितिज रेखा को ऊपर या नीचे ले जाती है (स्तर से डिग्री में) — ड्रोन के लिए उपयोगी, जहाँ इलाके का किनारा स्तर से नीचे होता है। कोमलता यह है कि आकाश को क्षितिज रंग तक पहुँचने के लिए रेखा से कितनी दूर तक जाना पड़ता है। धुंध बैंड उस रंग की चमक है जो आकाश में फीकी पड़ जाती है; यह समतल भूमि पर धुंधले दूर के जमीन को आकाश में मिलाता है। दो आकाश रंग स्पष्ट दिन के ग्रेडिएंट हैं (गोधूलि और रात उन्हें पेंट करते हैं)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Height moves the sky's horizon line up or down (degrees above level) — useful from a drone, where the terrain's edge sits below level. Softness is how far below the line the sky takes to reach the horizon colour. The haze band is a glow of that colour fading up into the sky; it is what blends hazy distant ground into the sky on flat land. The two sky colours are the clear daytime gradient (twilight and night paint over them)."}
+{"k": "2bc66168b7816c52", "s": ["वायुमंडलीय धुंध"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Atmospheric haze"}
+{"k": "afb2215d5ee10255", "s": ["कोहरा मात्रा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Fog amount"}
+{"k": "95e00a02f6376674", "s": ["धुंध घनत्व ×"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Haze density ×"}
+{"k": "61db6e981ea4de63", "s": ["धुंध आकाश रंग ×"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Haze takes sky colour ×"}
+{"k": "3c4a6fb4f0a07ac9", "s": ["सूर्य की ओर धुंध चमक ×"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Haze glow toward sun ×"}
+{"k": "b6bdfb09b13c46d7", "s": ["दिन का धुंध रंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Daytime haze colour"}
+{"k": "2959c43e8e338c02", "s": ["गोधूलि धुंध ठंडक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Dusk haze coolness"}
+{"k": "5537f796c742ddc3", "s": ["देर दिन की स्पष्टता"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Late-day clearing"}
+{"k": "359fb70b99dee4cd", "s": ["धुंध वह दूरी का कोहरा है जो दूर की जमीन को आकाश की ओर फीका करता है। घनत्व × यह मापता है कि यह दूरी के साथ कितनी जल्दी गाढ़ा होता है (कम = स्पष्ट रेगिस्तानी हवा); कोहरा मात्रा ऊपर और भी जोड़ता है और वॉल्यूमेट्रिक कोहरे की मोटाई भी सेट करता है (प्रकाश व्यवस्था)। \"आकाश रंग लेना\" यह है कि दूर की जमीन धुंध के रंग के बजाय आकाश का अपना रंग कितना उठाती है। गोधूलि ठंडक गर्म एम्बर (0) से नीले-भूरे (1) तक गोधूलि धुंध को धकेलती है। देर दिन की स्पष्टता सूर्यास्त से पहले के घंटों में धुंध को पतला करती है ताकि दूर की रिज अंधेरी बनी रहे।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The haze is the distance fog that fades far ground toward the sky. Density × scales how quickly it thickens with distance (lower = clearer desert air); Fog amount adds more on top and also sets the thickness of volumetric fog (Lighting). \"Takes sky colour\" is how much distant ground picks up the sky's own colour instead of the haze colour. Dusk coolness pushes twilight haze from warm amber (0) to blue-grey (1). Late-day clearing thins the haze in the hours before sunset so distant ridges stay dark."}
+{"k": "7d8c842ae1fc32d4", "s": ["क्षितिज और धुंध रीसेट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reset horizon & haze"}
+{"k": "dfabf22bd2e2fc5b", "s": ["हर नियंत्रण को क्षितिज और वायुमंडलीय धुंध में उसके डिफ़ॉल्ट पर वापस रखें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Put every control in Horizon and Atmospheric haze back to its default."}
+{"k": "cb70703505b0cd8d", "s": ["सूर्य ऊर्जा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sun energy"}
+{"k": "eb5c92819a106444", "s": ["सूर्य डिस्क आकार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sun disc size"}
+{"k": "4df59e2776fd1cef", "s": ["सूर्य चमक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sun glow"}
+{"k": "bc6de8db65c700ab", "s": ["सूर्य चमक आकार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sun glow size"}
+{"k": "d01b29b7dbbb89a2", "s": ["सूर्य प्रभामंडल"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sun aureole"}
+{"k": "c96d827353016147", "s": ["कम-सूर्य गर्मी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Low-sun warmth"}
+{"k": "8c7f3063d9f90db7", "s": ["सूर्य का प्रकाश वास्तविक वातावरण का अनुसरण करता है: डिस्क क्षितिज से साफ़ होने तक कोई नहीं, फिर गहरे नारंगी में दोपहर का कुछ प्रतिशत, 10° तक आधा बल, 30° तक सफेद। कम-सूर्य गर्मी क्षितिज के पास प्रत्यक्ष प्रकाश का लाल होना है (0 = सफेद)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sunlight follows the real atmosphere: none until the disc clears the horizon, then a few percent of noon in deep orange, half strength by 10°, white by 30°. Low-sun warmth is the reddening of the direct light near the horizon (0 = white)."}
+{"k": "39a04a6a6a63e9e9", "s": ["गोधूलि"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Twilight"}
+{"k": "884cf0d9b07b00bb", "s": ["गोधूलि नाटक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Twilight drama"}
+{"k": "4c0cb97e20019ecd", "s": ["गोधूलि लंबाई"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Twilight length"}
+{"k": "54c3b2048493411d", "s": ["नाटक क्षितिज अग्नि बैंड, सूर्य के प्रभामंडल और क्षितिज के पास चमक, और सूर्य के विपरीत विनेस का गुलाबी बेल्ट को स्केल करता है (1.0 = प्राकृतिक, 0 = सपाट)। लंबाई यह खींचती है कि सूर्यास्त के बाद आकाश और जमीन कितनी धीरे-धीरे फीकी पड़ते हैं (1 = प्राकृतिक, स्क्रीन के लिए संकुचित)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Drama scales the horizon fire band, the sun's aureole and glow near the horizon, and the pink Belt of Venus opposite the sun (1.0 = natural, 0 = flat). Length stretches how slowly the sky and ground fade after sunset (1 = natural, compressed for the screen)."}
+{"k": "92516c35dbd6515b", "s": ["चंद्रमा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Moon"}
+{"k": "7c69b596bd917691", "s": ["चंद्र ऊर्जा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Moon energy"}
+{"k": "d2a5eb4ffd466f26", "s": ["चंद्र डिस्क आकार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Moon disc size"}
+{"k": "3e244d613b21c01a", "s": ["चंद्र चमक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Moon glow"}
+{"k": "4af89c8674d435f7", "s": ["चांदनी आकाश"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Moonlit sky"}
+{"k": "ce36d01c71722fdf", "s": ["रात का आकाश"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Night sky"}
+{"k": "71b00691144bfb5c", "s": ["वायुदीप्ति"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Airglow"}
+{"k": "ec413e0b4c9a0f2d", "s": ["वायुदीप्ति रंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Airglow colour"}
+{"k": "d3fdee1d71381196", "s": ["प्रकाश प्रदूषण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Light pollution"}
+{"k": "33917d5b0e2d38ac", "s": ["प्रदूषण रंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Pollution colour"}
+{"k": "ffaef92d481127f5", "s": ["गहरा आकाश लगभग काला ग्रेडिएंट प्लस तीन प्रकाश स्रोत है: वायुदीप्ति (वास्तविक गहरे आकाश में नीचे की ओर हल्की हरी पट्टी), एक प्रकाश-प्रदूषण गुंबद, और चाँदनी (चंद्रमा → चांदनी आकाश)। बिना चाँद वाली रात में सब शून्य = एक बॉर्टल-1 वन्य आकाश। चमकीले आकाश हल्की तारों को धो देते हैं (तारे और ग्रह → आकाश-चमक धुलाई)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The dark sky is a near-black gradient plus three light sources: airglow (the faint green band real dark skies show low down), a light-pollution dome, and moonlight (Moon → Moonlit sky). All zero on a moonless night = a Bortle-1 wilderness sky. Bright skies wash out faint stars (Stars & Planets → Sky-glow washout)."}
+{"k": "e49d377f1f4c083f", "s": ["ग्राफिक्स गुणवत्ता (प्रदर्शन)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Graphics Quality (performance)"}
+{"k": "34804fdddd845368", "s": ["कम (सबसे तेज़)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Low (fastest)"}
+{"k": "b1084600af19a4fa", "s": ["मध्यम"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Medium"}
+{"k": "b72f0810939c89d8", "s": ["उच्च (डिफ़ॉल्ट)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "High (default)"}
+{"k": "0ce6ab1cf6bbe562", "s": ["अल्ट्रा (मज़बूत जीपीयू)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Ultra (strong GPUs)"}
+{"k": "4c93efdfbcc19d34", "s": ["प्रीसेट छाया-मानचित्र आकार, सॉफ्ट-छाया फ़िल्टरिंग, TAA, और वनस्पति टियर (विवरण-रिंग आकार, पत्ती घनत्व, पेड़ बजट) को स्केल करता है। अल्ट्रा में पेड़ की छाया और बड़े विवरण रिंग जोड़े जाते हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Presets scale shadow-map size, soft-shadow filtering, TAA, and the vegetation tier (detail-ring size, leaf density, tree budgets). Ultra adds tree shadows and bigger detail rings."}
+{"k": "007327b11c30fb87", "s": ["भूभाग विवरण (छवि रिज़ॉल्यूशन)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Terrain detail (imagery resolution)"}
+{"k": "1798f0b8682e87fc", "s": ["गुणवत्ता"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Quality"}
+{"k": "fa086fe46a900245", "s": ["अधिक विस्तृत क्षेत्र पर उच्च-ज़ूम हवाई टाइलें प्राप्त करके नज़दीकी (चलने) भूभाग को तेज़ करता है। उच्च टियर अधिक VRAM और पहले डाउनलोड (फिर कैश किया जाता है) का अधिक उपयोग करते हैं; केवल उत्पन्न स्थान मानचित्रों पर लागू होता है। मूर्तिकला गति अप्रभावित रहती है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sharpens close-up (walking) terrain by fetching higher-zoom aerial tiles over a wider area. Higher tiers use more VRAM and a longer first download (then cached); only applies to generated location maps. Sculpting speed is unaffected."}
+{"k": "13eb93786c293538", "s": ["सबसे तेज़ परत"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sharpest layer"}
+{"k": "67eca881e58847eb", "s": ["सबसे तेज़ फोटो (पुरानी हो सकती है)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sharpest photo (may be older)"}
+{"k": "bed9928dda11fcc3", "s": ["सबसे नई फोटो (मानचित्र से मेल खाती है)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Newest photo (matches the map)"}
+{"k": "c7357bd4235e363e", "s": ["यह दुनिया में ही। आपके साइट के आस-पास की नज़दीकी छवि एक तेज़ फोटो से आ सकती है जो कभी-कभी बाकी मानचित्र से सालों पुरानी होती है, इसलिए जो चीज़ें बदलती हैं (एक तटरेखा, नई इमारतें) उसके किनारे पर कूद सकती हैं। सबसे नई आस-पास के मानचित्र के समान फोटो का उपयोग करती है: हर जगह एक तारीख, नज़दीक थोड़ी नरम।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "This world only. The close-up imagery round your site can come from a sharper photo that is sometimes years older than the rest of the map, so things that change (a shoreline, new buildings) can jump at its edge. Newest uses the same photo as the map round it: one date everywhere, a little softer up close."}
+{"k": "6084cd77735dcac0", "s": ["छाया गुणवत्ता"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Shadow quality"}
+{"k": "9addc0cf416cee08", "s": ["छाया अंधकार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Shadow darkness"}
+{"k": "6c41801e95f55aec", "s": ["सूर्य, चंद्रमा, परिवेश, चमक, कोहरा, टोनमैपिंग और रात का आकाश एक दुनिया के अंदर ट्यून किए जाते हैं (टाइमलाइन पर सेटिंग्स ⚙ → प्रकाश व्यवस्था और पर्यावरण), जहाँ आप उन्हें देख सकते हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sun, moon, ambient, glow, fog, tonemapping and the night sky are tuned inside a world (Settings ⚙ on the timeline → Lighting and Environment), where you can see them."}
+{"k": "33f15225ec88dde6", "s": ["इमारत की छाया"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Building shadows"}
+{"k": "476505e93faee875", "s": ["परिवेश ×"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Ambient ×"}
+{"k": "9ca07def2c7ac1c7", "s": ["आकाश परिवेश"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sky ambient"}
+{"k": "045d20ffaf3822f6", "s": ["ग्लो / ब्लूम सक्षम"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Glow / bloom enabled"}
+{"k": "abf87755dbe42732", "s": ["ग्लो तीव्रता ×"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Glow intensity ×"}
+{"k": "730d8d462b220ae5", "s": ["SSAO (परिवेश अवरोधन)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "SSAO (ambient occlusion)"}
+{"k": "bb6164255c03c0b7", "s": ["SSIL (अप्रत्यक्ष प्रकाश)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "SSIL (indirect light)"}
+{"k": "eda4972d247ad6cd", "s": ["SDFGI (वैश्विक प्रकाश व्यवस्था)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "SDFGI (global illumination)"}
+{"k": "792156d8a8f2a70a", "s": ["आंतरिक, छाया संरचनाओं और शिविरों के लिए उछला हुआ-प्रकाश वैश्विक प्रकाश व्यवस्था। व्यापक बाहरी झरनों और सर्वेक्षण-ड्रोन ऊंचाई पर सहज फीकापन के साथ डेलाइटमॉडल के लिए कैलिब्रेट किया गया।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Bounced-light global illumination for interiors, shade structures and camps. Calibrated to DaylightModel with wider outdoor cascades and a smooth fade at survey-drone altitudes."}
+{"k": "38f82b365456701d", "s": ["SDFGI शक्ति ×"], "m": "ollama/gemma4:latest 2026-11-22", "src": "SDFGI strength ×"}
+{"k": "080131c309bc87e7", "s": ["कैलिब्रेटेड बाहरी आधार रेखा (1.0 आसपास के आकाश परिवेश से मेल खाता है; मजबूत इनडोर/दीवार उछाल के लिए बढ़ाएँ) के सापेक्ष SDFGI अप्रत्यक्ष प्रकाश को स्केल करता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Scales SDFGI indirect light relative to the calibrated outdoor baseline (1.0 matches the surrounding sky ambient; raise for stronger indoor/wall bounce)."}
+{"k": "bb273dc99c271af5", "s": ["भूभाग पर SDFGI"], "m": "ollama/gemma4:latest 2026-11-22", "src": "SDFGI on terrain"}
+{"k": "5a6ac1c484827819", "s": ["बंद होने पर, केवल 3डी संरचनाएं, वाहन और प्रॉप्स को SDFGI प्राप्त होता है जबकि भूभाग चिकना आकाश परिवेश का उपयोग करता है (सूर्य का प्रकाश अभी भी जमीन से दीवारों पर उछलता है)। खुले मैदान पर कोई भी झरना सीम समाप्त करता है भले ही SDFGI शक्ति × बढ़ाया गया हो।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "When off, only 3D structures, vehicles and props receive SDFGI while terrain uses smooth sky ambient (sunlight still bounces off the ground onto walls). Eliminates any cascade seam on open ground even if SDFGI strength × is boosted."}
+{"k": "f1e8e0917c7cd32c", "s": ["पैरामीट्रिक सामग्री और बनावट…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Parametric materials & textures…"}
+{"k": "26e806c2c0399c0d", "s": ["सभी पैरामीट्रिक संरचनाओं पर खुरदरापन, सामान्य, दाना और क्लियरकोट को फाइन-ट्यून करें, या कस्टम PBR बनावट अपलोड करें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Fine-tune roughness, normals, grain and clearcoat across all parametric structures, or upload custom PBR textures."}
+{"k": "c4d0fdc53ddfe073", "s": ["आयतन कोहरा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Volumetric fog"}
+{"k": "4bb0a12774e17488", "s": ["यह कितना घना है यह Environment → Atmospheric haze → Fog amount का पालन करता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "How thick it is follows Environment → Atmospheric haze → Fog amount."}
+{"k": "3f624099d9a3f07b", "s": ["ACES"], "m": "ollama/gemma4:latest 2026-11-22", "src": "ACES"}
+{"k": "2e06798d8a9cd47e", "s": ["AgX"], "m": "ollama/gemma4:latest 2026-11-22", "src": "AgX"}
+{"k": "1d0471f66c9731ca", "s": ["सिनेमाई"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Filmic"}
+{"k": "4e5332fcf760acf0", "s": ["रैखिक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Linear"}
+{"k": "ef90d00b0df847e9", "s": ["रेनहार्ड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reinhard"}
+{"k": "50f83562ec4fd184", "s": ["टोनमैप"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Tonemap"}
+{"k": "3223b1bef29768b2", "s": ["टोनमैप सफेद"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Tonemap white"}
+{"k": "686be75f7e09b767", "s": ["प्रीसेट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Preset's"}
+{"k": "fdf950860a77913a", "s": ["TAA के स्मूथिंग का विकल्प — तेज किनारे, हवा से हिलते पत्ते पर कोई घोस्टिंग नहीं, अधिक GPU लागत।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Alternative to TAA's smoothing — sharper edges, no ghosting on wind-animated foliage, more GPU cost."}
+{"k": "5c572dfc6cea0911", "s": ["गॉड रेज़ (वॉल्यूमेट्रिक फॉग के माध्यम से प्रकाश किरणें)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "God rays (light shafts via volumetric fog)"}
+{"k": "c4e4d19e70f8e907", "s": ["गॉड रेज़ एक पतला वॉल्यूमेट्रिक फॉग सक्षम करते हैं ताकि सूरज क्रिपस्कुलर शाफ्ट डाले, जो सूर्योदय/सूर्यास्त पर सबसे मजबूत होता है। कुछ GPU लागत जोड़ता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "God rays enable a thin volumetric fog so the sun casts crepuscular shafts, strongest at sunrise/sunset. Adds some GPU cost."}
+{"k": "55302ec72d7f875c", "s": ["दृश्य शैली"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Visual style"}
+{"k": "4cd02dc3895953d4", "s": ["दुनिया कैसे खींची जाती है। एक शैली केवल तस्वीर बदलती है: प्रकाश जो सिमुलेशन का उपयोग करता है (सौर आउटपुट, पौधे, लोग) हर शैली में समान होता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "How the world is drawn. A style changes only the picture: the light the simulation uses (solar output, plants, people) is the same in every style."}
+{"k": "c5f15010e2e38148", "s": ["0 यथार्थवादी रूप है; 1 डिज़ाइन की गई शैली है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "0 is the realistic look; 1 is the style as designed."}
+{"k": "8ab11fae48472a6f", "s": ["पास की वस्तुओं और उनकी सिलवटों के चारों ओर गहरे रेखाएँ। 1 शैली की अपनी है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Dark lines round near things and their creases. 1 is the style's own."}
+{"k": "a06f3cfc8b5bb0bc", "s": ["टेक्सचर विवरण को पेंट किए गए पैच में समतल करता है (पत्तियों को ब्रश के गुच्छों में)। 1 शैली की अपनी है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Flattens texture detail into painted patches (leaves into brush blobs). 1 is the style's own."}
+{"k": "1b56235eca621902", "s": ["प्रकाश एक सहज ग्रेडिएंट के बजाय कुछ सपाट बैंड में गिरता है। 1 शैली की अपनी है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Light falls into a few flat bands instead of a smooth gradient. 1 is the style's own."}
+{"k": "f08d003cce6b3f83", "s": ["शैली ट्यूनिंग रीसेट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reset style tuning"}
+{"k": "bcd7d3fbb9988ed3", "s": ["तारे और ग्रह"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Stars & Planets"}
+{"k": "f981af62c24d508c", "s": ["तारे"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Stars"}
+{"k": "fae0b6bb00ec06a0", "s": ["चमक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Brightness"}
+{"k": "fcbc9d3b6a51a58f", "s": ["बिंदु आकार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Point size"}
+{"k": "d1d24c2c1def8f01", "s": ["रंग संतृप्ति"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Colour saturation"}
+{"k": "33fd5d845ff1bef7", "s": ["कंट्रास्ट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Contrast"}
+{"k": "f4fb6808df42c117", "s": ["मंद-तारा कट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Faint-star cut"}
+{"k": "023ecb7eff9f635e", "s": ["टिमटिमाहट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Twinkle"}
+{"k": "beef857a72ad5d9a", "s": ["क्षितिज फीका पड़ना"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Horizon fade"}
+{"k": "205c8a716bfbd44b", "s": ["आकाश-चमक धुलाई"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sky-glow washout"}
+{"k": "9e522eb71432183e", "s": ["तारा चमक (हेलो)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Star glow (halo)"}
+{"k": "72a4fc1c3f27ccdb", "s": ["बिंदु आकार प्रत्येक तारे की डिस्क को एक टेसेल द्वारा अपरदित/विस्तारित करता है। रंग प्रत्येक डिस्क की किनारी से आता है (निर्यात कोर को सफेद तक काटता है)। धुलाई यह है कि कितना चंद्र प्रकाश और प्रकाश प्रदूषण मंद तारों को छिपाता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Point size erodes/dilates every star disc by a texel. Colour comes from each disc's fringe (the export clips cores to white). Washout is how much moonlight and light pollution hide the faint stars."}
+{"k": "48f76a007585bbff", "s": ["मिल्की वे"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Milky Way"}
+{"k": "7298c62d12523e65", "s": ["टिंट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Tint"}
+{"k": "01c144f3c5d631b4", "s": ["प्रभाव"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Effects"}
+{"k": "32fbed214463735f", "s": ["तारों का निशान (लॉन्ग एक्सपोजर)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Star trails (long exposure)"}
+{"k": "6d03657b52a3a189", "s": ["निशान की लंबाई"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Trail length"}
+{"k": "ad9313e04f232e99", "s": ["कैमरे को आकाश पर लॉक करें (खगोल स्थिर)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Lock camera to sky (astro still)"}
+{"k": "a88a7678030b42ca", "s": ["ध्रुवीय ज्योति"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Aurora"}
+{"k": "d74364a0d2e91050", "s": ["आकाश में ध्रुवीय ज्योति (वास्तविक अंतरिक्ष मौसम)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Aurora in the sky (real space weather)"}
+{"k": "d02804e482724b34", "s": ["सिम घड़ी के समय उत्तरी और दक्षिणी ध्रुवीय ज्योति, वास्तविक Kp इंडेक्स से (पिछले सप्ताह के लिए NOAA SWPC और 3-दिवसीय पूर्वानुमान, GFZ Potsdam 1932 तक) और वर्तमान के पास NOAA का OVATION नाउकास्ट। केवल अंधेरे के बाद, बादलों के पीछे दिखाई देती है; ध्रुवों से कितनी दूर तक पहुँचती है यह Kp का अनुसरण करता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The northern and southern lights at the sim clock's time, from the real Kp index (NOAA SWPC for the last week and the 3-day forecast, GFZ Potsdam back to 1932) and NOAA's OVATION nowcast near the present. Seen only after dark, behind the clouds; how far from the poles it reaches follows the Kp."}
+{"k": "373c9036158bb39e", "s": ["तारों का नक्शा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Star map"}
+{"k": "ba6f09e5beb16acc", "s": ["उच्च (16k, 128 MB VRAM)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "High (16k, 128 MB VRAM)"}
+{"k": "61d63f6478454dfa", "s": ["मानक (8k, 32 MB VRAM)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Standard (8k, 32 MB VRAM)"}
+{"k": "5ce52d97e8caff85", "s": ["टेक्सचर गुणवत्ता"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Texture quality"}
+{"k": "dd94c742ca06f624", "s": ["तारों की छवि अपलोड करें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Upload star image…"}
+{"k": "2288442c1a676567", "s": ["टेक्सचर रीसेट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reset texture"}
+{"k": "bd202f1047f31480", "s": ["पंजीकरण tools/starmap_prepare.py द्वारा मापा जाता है (छवि के बगल में साइडकार .json)। HOME संदर्भ-तारा मार्कर टॉगल करता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Registration is measured by tools/starmap_prepare.py (sidecar .json next to the image). HOME toggles reference-star markers."}
+{"k": "448d45874e8bce68", "s": ["राशि चक्र"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Zodiac"}
+{"k": "23782e57b77b3234", "s": ["राशि चक्र दिखाएं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show zodiac"}
+{"k": "c86c7536c953b02e", "s": ["तारों के साथ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "With the stars"}
+{"k": "e0b1e2efea2c29e1", "s": ["तारों के साथ: रात में, और एनालेमा मोड में जब 'दिन के उजाले में तारे' चालू हो। हमेशा: दिन के आकाश पर भी।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "With the stars: at night, and in analemma mode when 'Stars through daylight' is on. Always: over the daytime sky too."}
+{"k": "e72deceb6e73e426", "s": ["तारामंडल आकृतियाँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Constellation figures"}
+{"k": "ec86bbbd3df08dc5", "s": ["नाम"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Names"}
+{"k": "32f07f71938b90b4", "s": ["ओफियुचस (13वां)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Ophiuchus (the 13th)"}
+{"k": "e6aeee00d5f52e61", "s": ["क्रांतिवृत्त ओफियुचस को भी काटता है (IAU तारामंडल सीमाएँ, 1930): सूर्य हर साल लगभग 18 दिन वहाँ बिताता है, वृश्चिक और धनु के बीच।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The ecliptic also crosses Ophiuchus (IAU constellation boundaries, 1930): the sun spends about 18 days of each year there, between Scorpius and Sagittarius."}
+{"k": "1c92ac1689333b93", "s": ["क्रांतिवृत्त (ग्रहों का तल)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Ecliptic (the planets' plane)"}
+{"k": "84e4a30a200bcae7", "s": ["स्टेलारियम की 'आधुनिक' आकाश संस्कृति (CC BY-SA 4.0) से आकृतियाँ, तारों के नक्शे के समान पंजीकरण में।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Figures from Stellarium's 'modern' sky culture (CC BY-SA 4.0), in the same registration as the star map."}
+{"k": "20953893fbc8d31d", "s": ["ग्रह"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Planets"}
+{"k": "5f2ae8c4b8874937", "s": ["ग्रह दिखाएं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show planets"}
+{"k": "513f05ce6c32a006", "s": ["हाइलाइट पर (किसी ग्रह को देखें)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "On highlight (look at a planet)"}
+{"k": "5e23749e6faf5365", "s": ["ग्रह लेबल"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Planet labels"}
+{"k": "e8ec0ca1a8dbf61b", "s": ["स्थान"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Location"}
+{"k": "77b10c750c6dc012", "s": ["स्वचालित DST"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Auto DST"}
+{"k": "e99022f8df50df68", "s": ["मैनुअल DST (मजबूर +1 घंटा)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Manual DST (force +1 h)"}
+{"k": "f99a590480877c09", "s": ["स्थान पिकर खोलें (M)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Open location picker (M)"}
+{"k": "52ff01a918c858c3", "s": ["लाइव मोड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Live Mode"}
+{"k": "7cdc5d6992fd8b5e", "s": ["लाइव होम असिस्टेंट डेटा के लिए सिमुलेशन को दीवार घड़ी पर 1× गति पर लॉक करता है। स्क्रैब करने और समय तेज करने के लिए बंद करें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Locks simulation to wall clock at 1× speed for live Home Assistant data. Turn off to scrub and speed up time."}
+{"k": "e94a3b8a2f8ae1ad", "s": ["लाइव मोड (सिस्टम घड़ी के साथ सिंक)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Live mode (sync to system clock)"}
+{"k": "fbf674317800f8e2", "s": ["बदला गया। सेटिंग्स खोलने पर जो मान था, उसे वापस रखने के लिए क्लिक करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Changed. Click to put back the value it had when you opened Settings"}
+{"k": "5317ce7309380311", "s": ["चमक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Glow"}
+{"k": "1b35a5eaf7b5cfe6", "s": ["रेंडर रिज़ॉल्यूशन %"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Render resolution %"}
+{"k": "a5fc74fb68236da8", "s": ["मूल रिज़ॉल्यूशन से नीचे 3डी दुनिया प्रस्तुत करता है और इसे अपस्केल करता है — जीपीयू-सीमित (कम-FPS) दृश्यों के लिए सबसे बड़ा लीवर। यूआई कुरकुरा रहता है। 100% = मूल।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Renders the 3D world below native resolution and upscales it — the biggest lever for GPU-limited (low-FPS) scenes. UI stays crisp. 100% = native."}
+{"k": "c4b8d543824ac0b5", "s": ["प्रॉप ड्रॉ दूरी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Prop draw distance"}
+{"k": "be9ac8c9efd0403c", "s": ["रखे गए प्रॉप्स छाया डालते हैं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Placed props cast shadows"}
+{"k": "36e7ad9a5c9f7119", "s": ["छाया विवरण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Shadow detail"}
+{"k": "4a337cdd3d8a79ed", "s": ["पूर्ण (हर हिस्सा)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Full (every part)"}
+{"k": "d9bc46f20c3a8531", "s": ["उच्च"], "m": "ollama/gemma4:latest 2026-11-22", "src": "High"}
+{"k": "3b0c6dbf28efc9cd", "s": ["मध्यम (बारीक विवरण गिराएं)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Medium (drop fine detail)"}
+{"k": "85638b9c6e6da7a8", "s": ["निम्न (केवल मुख्य संरचना)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Low (main structure only)"}
+{"k": "a88d0204fdee49ab", "s": ["प्रदर्शन ओवरले दिखाएं (F3)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show performance overlay (F3)"}
+{"k": "75e09816c92def8d", "s": ["जीपीयू बचाने के लिए छोटे प्रॉप्स ड्रॉ दूरी से परे फीके पड़ जाते हैं; बड़े लैंडमार्क (StarShade, गुंबद, रैक) दिखाई देते रहते हैं। प्रॉप छाया बंद करने से हजारों प्रॉप्स वाले साइटों पर मदद मिलती है। F3 लाइव फ्रेम-लागत ओवरले खोलता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Small props fade out past the draw distance to save GPU; large landmarks (StarShade, domes, racks) stay visible. Turning off prop shadows helps on sites with thousands of props. F3 opens the live frame-cost overlay."}
+{"k": "21b84a807a456caa", "s": ["फ्रेम समय 22 ms से अधिक है और MSAA इस ग्राफिक्स प्रीसेट से ऊपर है। 8× एक घने जंगल पर लगभग 12 ms था। प्रीसेट की सेटिंग सस्ती है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Frame time is over 22 ms and MSAA is above this graphics preset. 8× was about 12 ms on a dense forest. Preset's is the cheaper setting."}
+{"k": "f9b3a3fc438a8b5f", "s": ["नियंत्रण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Controls"}
+{"k": "1b4daecd9622a0b4", "s": ["कुंजी बाइंडिंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Key bindings"}
+{"k": "4836f98c1a29c526", "s": ["बदलने के लिए एक कुंजी पर क्लिक करें, फिर नई कुंजी दबाएं (या माउस साइड बटन; Esc रद्द करता है)। कुंजियाँ स्थिति द्वारा याद रखी जाती हैं, इसलिए वे किसी भी कीबोर्ड लेआउट पर अपनी जगह पर रहती हैं। ↺ एक कुंजी को डिफ़ॉल्ट पर वापस लाता है। F1 मदद, ऑन-स्क्रीन प्रॉम्प्ट और टूर जो चुनते हैं वह दिखाते हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Click a key to change it, then press the new key (or a mouse side button; Esc cancels). Keys are remembered by position, so they stay put on any keyboard layout. ↺ puts a key back to the default. The F1 help, the on-screen prompts and the tour show whatever you choose."}
+{"k": "dd41ab64727eccac", "s": ["सभी को डिफ़ॉल्ट पर रीसेट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reset all to defaults"}
+{"k": "8b5dbba8675b1822", "s": ["हर कुंजी अपने डिफ़ॉल्ट पर वापस आ गई है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Every key is back to its default."}
+{"k": "f539878461f31f6d", "s": ["अन्य"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Other"}
+{"k": "194d77de7714c848", "s": ["डिफ़ॉल्ट कुंजी पर वापस"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Back to the default key"}
+{"k": "69ce12874ff84ab7", "s": ["एक कुंजी दबाएं…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Press a key…"}
+{"k": "627ff4c4977dc7b0", "s": ["उस कुंजी को बाइंड नहीं किया जा सकता।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "That key cannot be bound."}
+{"k": "79a6880c0cef09d0", "s": ["अपरिवर्तित।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Unchanged."}
+{"k": "e8b2409b464b88c9", "s": ["प्रथम पुरुष"], "m": "ollama/gemma4:latest 2026-11-22", "src": "First person"}
+{"k": "a203ae62542a6c98", "s": ["तृतीय पुरुष (फॉलो)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Third person (follow)"}
+{"k": "bf5051e91bf663ed", "s": ["F5 प्ले में उनके बीच स्विच करता है। तृतीय पुरुष एक फॉलो कैमरा है: माउस इसे ऑर्बिट करता है, आप उस दिशा में चलते हैं जिस दिशा में यह मुँह करता है और आपका शरीर उसका अनुसरण करने के लिए मुड़ता है; वाहन पर यह पीछे पीछा करता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "F5 switches between them in play. Third person is a follow camera: the mouse orbits it, you walk the way it faces and your body turns to follow; on a vehicle it chases behind."}
+{"k": "ee43f48702e8175b", "s": ["दृश्य क्षेत्र°"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Field of view°"}
+{"k": "278166833de92112", "s": ["दोनों दृश्यों में पैदल क्षैतिज दृश्य क्षेत्र। चौड़ा = अधिक परिधीय दृश्य (और अधिक लेंस विरूपण)। ड्रोन FOV ड्रोन टैब के तहत है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Horizontal field of view on foot, in both views. Wider = more peripheral view (and more lens distortion). Drone FOV is under the Drone tab."}
+{"k": "6cdd13f80c5d31a3", "s": ["फॉलो दूरी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Follow distance"}
+{"k": "428a7d8e90182093", "s": ["केंद्रित"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Centred"}
+{"k": "7e61e50d1fe2e6ec", "s": ["बाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Left"}
+{"k": "b15335be2044d9b2", "s": ["दाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Right"}
+{"k": "694af5d963a4d114", "s": ["कंधा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Shoulder"}
+{"k": "e029468e97628a85", "s": ["गाड़ी चलाते समय कैमरे को पीछे स्विंग करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Swing the camera back behind a vehicle while driving"}
+{"k": "b9aabd3b999eaedc", "s": ["पात्र"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Character"}
+{"k": "180539b8b866c5fa", "s": ["शरीर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Body"}
+{"k": "13a8371ef17523d2", "s": ["पुनः स्कैन करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Rescan"}
+{"k": "47b5d083c5218b0f", "s": ["नए चरित्र फ़ाइलें खोजें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Look for new character files"}
+{"k": "3f9de51b75f02880", "s": ["रूपरेखा रंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Outline colour"}
+{"k": "1eaf38450c6677d1", "s": ["चरित्र फ़ोल्डर खोलें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Open characters folder…"}
+{"k": "f4d95d8584a11839", "s": ["डिफ़ॉल्ट बॉडी NPC के स्टिक फिगर का विस्तृत संस्करण है। किसी अन्य चरित्र के रूप में खेलने के लिए, characters फ़ोल्डर में एक .glb, .gltf या .fbx डालें और Rescan दबाएं। इसके अपने क्लिप का उपयोग तब किया जाता है जब उनका नाम idle / walk / run होता है; एक Mixamo-रिग्ड चरित्र जिनके पास ये नहीं होते वे Remy के idle, walk और jog का उपयोग करते हैं (Player Character पैक की आवश्यकता है)। जब वह पैक स्थापित होता है तो Remy सूची में दिखाई देता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The default body is a detailed version of the NPCs' stick figure. To play as another character, drop a .glb, .gltf or .fbx into the characters folder and press Rescan. Its own clips are used when they are named idle / walk / run; a Mixamo-rigged character without them borrows Remy's idle, walk and jog (needs the Player Character pack). Remy appears in the list when that pack is installed."}
+{"k": "f1b3532bae0da638", "s": ["भीड़ का विवरण (दिखावट बनाम प्रदर्शन)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Crowd detail (look vs performance)"}
+{"k": "6b664271e1903668", "s": ["पूर्ण-विवरण आकृतियाँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Full-detail figures"}
+{"k": "c5039228aa7cb48f", "s": ["पूरी तरह से अनुकरण किया गया"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Simulated in full"}
+{"k": "01c50745aac11d4b", "s": ["भीड़ की आकृति की पहुँच"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Crowd figure reach"}
+{"k": "b10d5a72a6df4c7e", "s": ["उच्च गति पर हल्का (300× से ऊपर कम पूर्ण आकृतियाँ और पूर्ण सिमुलेशन)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Lighter at high speed (fewer full figures and full simulation above 300×)"}
+{"k": "078259810d7f5b58", "s": ["300× और उससे तेज़ पर एक पूर्ण आकृति धुंधली होती है: फ्रेम दर बनाए रखने के लिए दोनों बजट को छोटा करें (300× पर लगभग 60 %, 1000× पर 30 %)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "At 300× and faster a full figure is a blur: shrink both budgets (to about 60 % at 300×, 30 % at 1000×) to keep the frame rate up."}
+{"k": "157d9533fa56cf90", "s": ["अभी: इस मानचित्र पर कोई लोग अनुकरण नहीं किए गए हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Now: no people simulated on this map."}
+{"k": "61983d316be63473", "s": ["एक संख्या बढ़ाएँ और यहाँ फ्रेम दर देखें (या F3)। पूर्ण सिमुलेशन और पूर्ण आकृतियों से CPU की लागत आती है; भीड़ की आकृतियों और उनकी पहुँच से GPU की लागत आती है। 0 / सबसे बाएँ = स्वतः।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Turn a number up and watch the frame rate here (or F3). The full simulation and the full figures cost CPU; the crowd figures and their reach cost GPU. 0 / far left = Auto."}
+{"k": "5169d4d25a03d6e4", "s": ["NPC"], "m": "ollama/gemma4:latest 2026-11-22", "src": "NPC"}
+{"k": "5d50a59d1df8974f", "s": ["जनसंख्या"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Population"}
+{"k": "a751de40be8275bb", "s": ["NPC का अनुकरण और चित्रण करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Simulate & draw NPCs"}
+{"k": "c1d6ad22a5d5e88a", "s": ["बंद: प्रत्येक व्यक्ति फ्रीज और छिपा हुआ है, जिसमें कोई सिमुलेशन या रेंडरिंग लागत नहीं है। आवास क्लासिक स्थिर दर पर अपने बनाए गए हेडकाउंट का बिल करते हैं, इसलिए ग्राफ़ के पानी/भोजन/अपशिष्ट संख्या अभी भी मायने रखती हैं। वापस चालू करें और समुदाय वहीं से फिर से शुरू होता है जहां छोड़ा गया था (एक लंबा अंतराल सामान्य तरीके से कवर किया जाता है)। फेस्टिवल मोड इसे वापस चालू करता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Off: every person is frozen and hidden, with no simulation or rendering cost. Habitats bill their authored headcount at the classic constant rate, so the graph's water/food/waste numbers still mean something. Switch back on and the community resumes where it was left (a long gap is caught up the usual way). Festival mode switches it back on."}
+{"k": "a519ea0c2135d69f", "s": ["साइट विश्लेषण के लिए बंद करें — कोई NPC तर्क, आकृतियाँ, भीड़, चिप्स या अलार्म नहीं। लोगों को रोका गया है, हटाया नहीं गया है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Turn off for site analysis — no NPC logic, figures, crowd, chips or alarms. The people are paused, not deleted."}
+{"k": "b96b14e0b545eb7d", "s": ["एनिमेशन संपादक…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Animation editor…"}
+{"k": "e5d0a705297bbacb", "s": ["हाथ में एक उपकरण के साथ स्टिक फिगर को पोज़ और कीफ़्रेम करें — आरी चलाना, ड्रिल करना, फास्टन करना, ले जाना — और क्लिप सहेजें जो निर्माण दल बजाते हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Pose and keyframe the stick figure with a tool in its hands — sawing, drilling, fastening, carrying — and save the clips the build crews play."}
+{"k": "cc72e99ed690c979", "s": ["शरीर शैली"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Body style"}
+{"k": "136622371cfc3542", "s": ["मानवॉयड (रिग्ड)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Humanoid (rigged)"}
+{"k": "ead1204eef192e7a", "s": ["सरलीकृत (शैलीबद्ध)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Simplified (stylised)"}
+{"k": "7981ee5d3c8c4fca", "s": ["सरलीकृत को कोहनियों और घुटनों के साथ कलाबाधित स्टिक फिगर बनाता है। व्यवहार समान है — केवल दिखावट बदलती है। लोग दिखाई देने लगते हैं तो यह प्रभावी होता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Simplified draws articulated stick figures with elbows and knees. Behaviour is identical — only the look changes. Takes effect as people come back into view."}
+{"k": "5ea0ce66ae308642", "s": ["मो-कैप मसाला"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Mo-cap spice"}
+{"k": "f630a6b8cf940c43", "s": ["सरलीकृत शैली: पास का स्टिक फिगर कितनी बार एक वास्तविक मोशन-कैप क्लिप में टूट जाता है (हाँ, एक जयकार, एक नृत्य ब्रेक, एक कहानी, एक खिंचाव…) इससे पहले कि यह वापस सहज हो जाए। 0 = कभी नहीं (केवल प्रक्रियात्मक), मध्य = जैसा डिज़ाइन किया गया, दाएँ = दोगुना अक्सर। क्लिप Imported Models/NPC/mocap/<moment>/ में रहती हैं (दस्तावेज़/ASSETS.md देखें); बिना किसी पल के प्रक्रियात्मक रहता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Simplified style: how often a nearby stick figure breaks into a real motion-captured clip (FUCK YES, a cheer, a dance break, a story, a stretch…) before easing back. 0 = never (procedural only), middle = as designed, right = twice as often. Clips live in Imported Models/NPC/mocap/<moment>/ (see docs/ASSETS.md); a moment with none stays procedural."}
+{"k": "a6725e6eff795d71", "s": ["मानवॉयड चरित्र पैक स्थापित नहीं है (दस्तावेज़/ASSETS.md देखें) — सरलीकृत का उपयोग किया जाता है भले ही।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The humanoid character pack is not installed (see docs/ASSETS.md) — simplified is in use regardless."}
+{"k": "d5258e255fe8686f", "s": ["ताल पर नृत्य करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Dance to the beat"}
+{"k": "4c1c8170217f0907", "s": ["एक बजाने वाले मंच के पास नाचने वाले लोग उसकी ताल पर चलते हैं, एक ड्रॉप बनने पर अपने हाथ उठाते हैं और जब यह उतरता है तो कूदते हैं; डीजे रन-अप के दौरान एक हाथ ऊपर रखता है। एक मंच का अपना ट्रैक (उसका संगीत) लाइव विश्लेषण किया जाता है; बिना ट्रैक वाला सेट एक विशिष्ट टेम्पो पर एक मनगढ़ंत ट्रैक प्राप्त करता है। एलईडी लाइटों का लाइट स्टूडियो में अपना \"ध्वनि प्रतिक्रियाशील\" स्विच होता है (J)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "People dancing near a playing stage move on its beat, put their hands up as a drop builds and jump when it lands; the DJ holds an arm up through the run-up. A stage's own track (its Music) is analysed live; a set with no track gets a made-up one at a typical tempo. LED lights have their own \"Sound reactive\" switch in the Light Studio (J)."}
+{"k": "ee469d7d50491265", "s": ["एलेक्स, सैम, रिवर, …"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Alex, Sam, River, …"}
+{"k": "8f2c2ddfac1d6498", "s": ["नाम सूची में जोड़ें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Add to the name list"}
+{"k": "b09696daf23e3596", "s": ["एनपीसी टिंट रंग दिखाएं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show NPC tint colors"}
+{"k": "8738346eb8656f9b", "s": ["डिफ़ॉल्ट रूप से प्रत्येक व्यक्ति को एक अलग पेस्टल आउटलाइन मिलती है। सभी को सादे काले रंग में प्रस्तुत करने के लिए बंद करें - कोई व्यक्तिगत रंग नहीं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Each person gets a distinct pastel outline by default. Turn off to render everyone in plain black — no individual colors."}
+{"k": "b65238a25d9340ea", "s": ["ओवरहेड स्थिति"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Overhead status"}
+{"k": "7f2ad1a09ab368c5", "s": ["हमेशा (आस-पास)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Always (nearby)"}
+{"k": "3d1e84165a11afc3", "s": ["केवल लक्षित होने पर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Only when aimed at"}
+{"k": "234a8d1fccfa5ccb", "s": ["प्रत्येक सिर के ऊपर कार्य टैग (और, यदि नीचे सक्षम किया गया है, तो मनोबल बार)। 'हमेशा' ~30 मीटर के भीतर लोगों के लिए दिखाता है; 'बंद' स्वच्छ सिल्हूट बनाए रखता है (लक्ष्य अभी भी लोगों का नाम लेते हैं)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The task tag (and, if enabled below, the morale bar) above each head. 'Always' shows them for people within ~30 m; 'Off' keeps clean silhouettes (aiming still names people)."}
+{"k": "4ed65c9253cea3c3", "s": ["सिर के ऊपर मूड बार दिखाएं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show mood bars over heads"}
+{"k": "252e6610d2232f5a", "s": ["पीक एक्सपीरियंस टोस्ट (फक यस!!!)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Peak Experience toasts (FUCK YES!!!)"}
+{"k": "06ac2b3078a309ab", "s": ["प्रत्येक फक यस!!! के ऊपर बीकन (जहाँ यह हुआ)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Beacon over each FUCK YES!!! (where it happened)"}
+{"k": "bbb4ca3e4f9e221a", "s": ["मस्ती मीटर (भीड़ का समग्र माहौल, एक सुई गेज)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Fun Meter (the crowd's overall vibe, a needle gauge)"}
+{"k": "e5b7aba73e5d4b7e", "s": ["फक यस संदूषण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "FUCK YES contagion"}
+{"k": "158128bec97722d0", "s": ["फक यस!!! पर एक व्यक्ति कितनी मजबूती से अपने आस-पास के लोगों के मौके को बढ़ाता है। 0 = कोई प्रसार नहीं (हर शिखर अपना चिंगारी है), 1 = जैसा डिज़ाइन किया गया है, 4 = जंगल की आग।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "How strongly one person at FUCK YES!!! raises the odds of the people round them. 0 = no spread (every peak is its own spark), 1 = as designed, 4 = wildfire."}
+{"k": "82c67a66bc401fa0", "s": ["मंच संगीत की मात्रा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Stage music volume"}
+{"k": "f63331001bc7d2bd", "s": ["सेट के दौरान ट्रैक स्थल द्वारा बजाए जाने वाले ट्रैक की मात्रा (किसी स्थल के ट्रैक को उसकी Ctrl-फोकस पंक्ति में सेट करें → संगीत)। 0 = बंद।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Volume of the tracks venues play during their sets (set a venue's track in its Ctrl-focus row → Music). 0 = off."}
+{"k": "93966e6d496634cc", "s": ["परिवेश ध्वनि की मात्रा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Ambient sound volume"}
+{"k": "3cd2c5993c4983c3", "s": ["प्रथम-व्यक्ति ध्वनि बिस्तर: मौसम की हवा की गति के साथ हवा, वर्षा दर के साथ बारिश, निकटतम धारा का बहाव, जंगल में दिन के उजाले में पक्षी का गीत। घड़ी रुकने और प्रथम-व्यक्ति से दूर होने पर शांत। इन निर्मित ध्वनियों को बदलने के लिए अपनी हवा / बारिश / धारा / पक्षी .mp3, .ogg या .wav को user://ambient/ में डालें। 0 = बंद।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The first-person sound bed: wind with the weather's wind speed, rain with the rain rate, the nearest stream's rush, birdsong by daylight in the forest. Silent while the clock is paused and away from first person. Drop your own wind / rain / stream / birds .mp3, .ogg or .wav into user://ambient/ to replace the built-in sounds. 0 = off."}
+{"k": "fd7b0fc55d5e1253", "s": ["लोग इस बात से चमकते हैं कि वे कितना अच्छा समय बिता रहे हैं; एक भीड़ जो अपनी ज़रूरतों से वाइब कर रही है, फक यस!!! की ओर एक चार्ज बनाती है - एक हरी चमक जो शरीर पर बढ़ती और तेज होती है, पास के पीकर्स के साथ तेज (उनके सिर पर मीटर इसे दिखाता है, जब कोई इसे खिला रहा होता है तो ↑ के साथ) - फिर एक हरी, स्पंदित चमक और सांबा में बदल जाती है। हर कोई एक पीक एक्सपीरियंस स्कोर करता है। प्रत्येक व्यक्ति की स्थिति (फक दिस!!! … फक इट!) उनके सिर के ऊपर दिखाई देती है; बार डिफ़ॉल्ट रूप से बंद हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "People glow with how good a time they are having; a crowd that is vibing with its needs met builds a CHARGE toward FUCK YES!!! — a green shimmer that grows and quickens on the body, faster with peakers nearby (the meter over their head shows it, with ↑ while someone is feeding it) — then tips into a green, pulsing glow and the samba. Every one scores a Peak Experience. Each person's state (FUCK THIS!!! … Fuck It!) shows over their head; the bars are off by default."}
+{"k": "9a73f67a67f84c9e", "s": ["लोगों को ड्रा करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Draw people"}
+{"k": "e7c88d0777688233", "s": ["केवल होम कैंप"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Home camp only"}
+{"k": "89b6eda22352db7a", "s": ["सभी कैंप"], "m": "ollama/gemma4:latest 2026-11-22", "src": "All camps"}
+{"k": "b5fdb7925a1eb4f2", "s": ["दूरी के भीतर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Within a distance"}
+{"k": "79b24175fd0efaca", "s": ["कोई नहीं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Nobody"}
+{"k": "4bc8b827a9138e36", "s": ["'दूरी के भीतर' की पहुँच"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reach of 'Within a distance'"}
+{"k": "45bf6d911b14e478", "s": ["बिंदुओं के रूप में दूर की भीड़ (आकृति से गुज़रती हल्की भीड़)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Distant crowd as dots (the light crowd past the figure reach)"}
+{"k": "348137cb38b732a1", "s": ["त्योहार की भीड़ का दूर का क्षेत्र, जिसे 3 किमी तक बिंदुओं के रूप में दर्शाया गया है। ऑफ: कोई बिंदु नहीं — हल्की भीड़ केवल आपके पास की आकृतियों के रूप में खींची जाती है और भीड़ की आकृति की सीमा की ओर घुल जाती है। आपके पास कोई भी कभी भी किसी भी तरह से पॉप इन या पॉप आउट नहीं होता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The far field of the festival crowd, drawn as dots out to 3 km. Off: no dots — the light crowd is drawn only as figures near you and dissolves out toward the edge of the Crowd figure reach. Nobody near you ever pops in or out either way."}
+{"k": "5c1b8ddbf503f62b", "s": ["त्योहार के पैमाने पर, आप जिस कैंप में हैं वह पूर्ण शरीर रखता है; अन्य सभी कैंप दूर बिंदुओं और पास की आकृतियों के रूप में एक हल्की भीड़ होते हैं। 'केवल होम कैंप' केवल आपके कैंप को खींचता है; 'कोई नहीं' सभी को छिपाता है (सिमुलेशन और साइट प्लान चलते रहते हैं)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "At festival scale the camp you are in keeps full bodies; every other camp is a light crowd drawn as figures up close and dots far away. 'Home camp only' draws just your camp; 'Nobody' hides everyone (the simulation and the Site Plan keep running)."}
+{"k": "474846d772079e73", "s": ["परीक्षण और प्रावधान"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Testing & provisioning"}
+{"k": "6a74cb9cf9042e0e", "s": ["गार्डरेल्स बंद, चीजों को आज़माने के लिए। 'आदर्श आपूर्ति' हर ज़रूरत को पूरा करती है जैसे कि बुनियादी ढांचा उत्तम हो और वह बताती है कि उसे क्या वितरित करना होगा (इष्टतम मांग); अन्य कतारों, प्रस्थानों और अलार्म फ़ीड को रोकते हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Guardrails off, for trying things out. 'Ideal supply' meets every need as if the infrastructure were perfect and reports what it would have to deliver (the optimal demand); the others stop queues, departures and the alarm feed."}
+{"k": "3440efde01b3a3e9", "s": ["आदर्श आपूर्ति — हर ज़रूरत पूरी, कमी आयात के रूप में गिनी जाती है"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Ideal supply — every need met, shortfalls counted as imports"}
+{"k": "0c51a640f67fa261", "s": ["स्थान क्षमता को अनदेखा करें (कोई कतार नहीं)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Ignore space capacity (no queues)"}
+{"k": "c735b7fe28717e7f", "s": ["कोई नहीं कॉलोनी को छोड़ता, नष्ट नहीं करता या ढहाता"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Nobody leaves, perishes or collapses the colony"}
+{"k": "e4f6254d4d22fa04", "s": ["सेटलमेंट फ़ीड, अलार्म और टोस्ट को म्यूट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Mute the settlement feed, alarms and toasts"}
+{"k": "89be09aa397f42f6", "s": ["नए कैंप स्टॉक के लिए"], "m": "ollama/gemma4:latest 2026-11-22", "src": "New camps stocked for"}
+{"k": "44893f7cf8a049af", "s": ["एक प्लेसमेंट लॉट से स्टैम्प किया गया कैंप कितने दिनों के पानी, भोजन और जलाऊ लकड़ी से शुरू होता है (निरीक्षक का डिफ़ॉल्ट भी)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "How many days of water, food and firewood a camp stamped from a placement lot starts with (also the inspector's default)"}
+{"k": "60d2040f86bbc3fc", "s": ["त्योहार की आबादी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Festival population"}
+{"k": "38e5c757e540cf8a", "s": ["हर त्योहार कैंप में कुल लोग, प्रत्येक कैंप के पेंट किए गए आकार द्वारा विभाजित। 0 = प्रत्येक कैंप की अपनी गिनती (उसके क्षेत्र से, या आपके द्वारा टाइप की गई संख्या)। लाइव लागू होता है; रोस्टर जगह पर बढ़ते और सिकुड़ते हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Total people across every festival camp, split by each camp's painted size. 0 = each camp's own headcount (from its area, or the number you typed). Applies live; rosters grow and shrink in place."}
+{"k": "d49007c10d2f84de", "s": ["दिनचर्या"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Routines"}
+{"k": "93a1e2c2384c35f3", "s": ["दिनचर्या और काम…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Routines & chores…"}
+{"k": "49faa52d07ed672d", "s": ["निकटतम सक्रिय आवास के लिए रोस्टर, कार्यक्रम और काम बोर्ड खोलता है। ग्राफ में उस आवास के निरीक्षक पैनल से भी उपलब्ध है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Opens the roster, schedules, and chore board for the nearest active habitat. Also available from that habitat's inspector panel in the graph."}
+{"k": "edd477ec1fe078f9", "s": ["खोज सेटिंग्स…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Search settings…"}
+{"k": "c86f973ec858d460", "s": ["सेटिंग खोजने के लिए टाइप करें; एंटर में उसे वाला पहला पेज खुलता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Type to find a setting; Enter opens the first page that has it."}
+{"k": "7c429d210e8a8d45", "s": ["मल्टी-मॉनिटर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Multi-Monitor"}
+{"k": "9a2c55289620f0f9", "s": ["कोई पेज मेल नहीं खाता"], "m": "ollama/gemma4:latest 2026-11-22", "src": "No page matches"}
+{"k": "291fc345fdbb1dd2", "s": ["चरम मौसम"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Extreme Weather"}
+{"k": "866f524c32907340", "s": ["चरम मौसम की घटनाओं का अनुकरण करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Simulate extreme weather events"}
+{"k": "0cbac97f99532ac6", "s": ["जब कोई खतरा शुरू हो तो मुझे चेतावनी दें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Warn me when a hazard begins"}
+{"k": "324cbf308ffb9d8b", "s": ["नाटक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Drama"}
+{"k": "367c968226a01f36", "s": ["खतरे इस साइट के वास्तविक डेटा से ट्रिगर होते हैं — वायु गुणवत्ता रीडिंग, मौसम संग्रह, और राष्ट्रीय मौसम सेवा अलर्ट इतिहास। नाटक केवल यह दिखाता है कि खतरा कितना गंभीर दिखता है; यह कभी भी सौर आउटपुट या स्वास्थ्य के पीछे के भौतिकी को नहीं बदलता। किसी खतरे को बंद करने से वह सिमुलेशन से पूरी तरह हट जाता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Hazards are triggered from real data for this site — air-quality readings, the weather archive, and National Weather Service alert history. Drama scales only how severe a hazard LOOKS; it never changes the physics behind solar output or health. Turning a hazard off removes it from the simulation entirely."}
+{"k": "ccbf9d21a42032af", "s": ["आपकी साइट का जोखिम प्रोफ़ाइल"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Your site's risk profile"}
+{"k": "feeb32ce174863ba", "s": ["जोखिम प्रोफ़ाइल रीफ़्रेश करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Refresh risk profile"}
+{"k": "0de2125a249a4b90", "s": ["अभी तक सिमुलेट नहीं किया गया — केवल जोखिम प्रोफ़ाइल के लिए ट्रैक किया गया"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Not simulated yet — tracked for the risk profile only"}
+{"k": "e54798f2bd605bbe", "s": ["हवा से उड़ा धूल"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Wind-blown dust"}
+{"k": "3977a1597537639a", "s": ["सूखी ज़मीन हवा की गति नीचे जाने पर उड़ना शुरू हो जाती है, जब तक कि सूखे के दौरान बारिश न हुई हो। इसके ठीक बाद हल्की धुंध, लगभग 30 मील प्रति घंटे का वास्तविक धूल तूफान और लगभग 45 मील प्रति घंटे से एक दीवार। इसके लिए ऊपर धूल तूफान ख़तरा टिक होना चाहिए और सिमुलेशन चालू होना चाहिए।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Dry ground starts to blow once the wind passes the speed below, unless it rained within the dry spell. Light haze just past it, a real dust storm around 30 mph and a wall from about 45 mph. Needs the Dust Storm hazard ticked above and the simulation switched on."}
+{"k": "596e16440bf48cd0", "s": ["हवा (mph)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Wind (mph)"}
+{"k": "603c4bebdbbb7f65", "s": ["सूखा (घ)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Dry spell (h)"}
+{"k": "1f59c2cf47219751", "s": ["गीले जलवायु कम धूल उठाते हैं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Wet climates raise less dust"}
+{"k": "9abdd5ba27a113ba", "s": ["साइट की वार्षिक वर्षा के अनुसार धूल को मापता है: पूरी तरह से रेगिस्तानी ज़मीन पर (साल में 250 मिमी से कम), गीली, हरी साइट पर एक पांचवा हिस्सा (1000 मिमी और अधिक)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Scales the dust by the site's yearly rainfall: full on desert ground (under 250 mm a year), a fifth on a wet, green site (1000 mm and more)."}
+{"k": "b25ff576eb27d893", "s": ["धूल का रूप"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Dust look"}
+{"k": "3c5424625fdf1af7", "s": ["धूल तूफान कैसा दिखता है। ये केवल तस्वीर बदलते हैं: दृश्यता, सौर आउटपुट और स्वास्थ्य अभी भी वास्तविक धूल का पालन करते हैं। अपने बदलाव देखने के लिए नीचे एक धूल तूफान का पूर्वावलोकन करें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "How a dust storm looks. These change nothing but the picture: visibility, solar output and health still follow the real dust. Preview a Dust Storm below to see your changes."}
+{"k": "207c5b091dc93245", "s": ["मोटाई"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Thickness"}
+{"k": "9f402c5e681f056f", "s": ["किसी दिए गए तूफान के लिए हवा कितनी मोटी होती है। 1 से ऊपर यह मापी गई दृश्यता से अधिक बंद हो जाती है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "How thick the air gets for a given storm. Above 1 it closes in further than the measured visibility."}
+{"k": "8dbf09be59b34ad4", "s": ["आसमान छिपाता है"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Hides the sky"}
+{"k": "ea0e69cfa63b2e9c", "s": ["एक पूर्ण तूफान कितना आसमान कवर करता है, जिसमें सूरज, बादल और तारे शामिल हैं। 0 पर धूल एक निचली परत बनी रहती है और ऊपर आसमान साफ़ रहता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "How much of the sky a full storm covers, sun, clouds and stars included. At 0 the dust stays a low layer with the sky clear above it."}
+{"k": "0196e5e5170ccbdb", "s": ["परत की ऊँचाई"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Layer height"}
+{"k": "b67c001751b99a89", "s": ["धूल की परत कितनी ऊँची है, इसका मापन करता है: हल्की धूल के लिए 30 मीटर से लेकर 1 पर पूर्ण तूफान के लिए 350 मीटर तक।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Scales how tall the dust layer stands: 30 m for light dust up to 350 m for a full storm at 1."}
+{"k": "88a21d2b69f6b652", "s": ["हवा की धारियाँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Wind streaks"}
+{"k": "80ba7807f77ca89d", "s": ["हवा के साथ बैंड में धूल की धाराएँ कितनी मज़बूती से आती हैं, जिसमें नीचे की ओर झाड़ू लगाने वाली सघन झोंकें होती हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "How strongly the dust streams in bands along the wind, with denser gusts sweeping downwind."}
+{"k": "90a2ba0841d733a2", "s": ["रूप रीसेट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reset look"}
+{"k": "d38d79b92d85e190", "s": ["एक ख़तरे का पूर्वावलोकन करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Preview a hazard"}
+{"k": "d1ccf404c1ec92cd", "s": ["एक ख़तरे को मजबूर करता है ताकि आप इसे होते हुए देख सकें — यह पैनल बंद हो जाता है ताकि आप इसे वास्तव में देख सकें; स्क्रीन के शीर्ष पर बैज दिखाता है कि क्या चल रहा है (इसे जल्दी रोकने के लिए क्लिक करें)। वास्तविक घटना की तरह ऊपर और नीचे रैंप करता है। सिमुलेशन टॉगल बंद होने पर भी काम करता है, कोई सेटिंग नहीं बदलता है, और कभी सहेजा नहीं जाता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Forces a hazard on so you can watch it play out — this panel closes so you actually see it; the badge at the top of the screen shows what's running (click it to stop early). Ramps in and out like a real event. Works even with the simulation toggle off, changes no settings, and is never saved."}
+{"k": "e346c281b13eb19a", "s": ["गंभीरता"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Severity"}
+{"k": "8565992b7d4ca425", "s": ["वायु गुणवत्ता डेटा: कोपरनिकस एटमॉस्फेयर मॉनिटरिंग सर्विस (CAMS) ENSEMBLE वाया ओपन-मेटियो। अलर्ट इतिहास: NOAA/NWS वाया आयोवा एनवायर्नमेंटल मेसोनेट।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Air-quality data: Copernicus Atmosphere Monitoring Service (CAMS) ENSEMBLE via Open-Meteo. Alert history: NOAA/NWS via Iowa Environmental Mesonet."}
+{"k": "564f765fc1e1ad17", "s": ["संबंधित मान"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Linked values"}
+{"k": "812d650188c8ce1b", "s": ["प्लेहेड यहाँ कूदें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Jump the playhead here"}
+{"k": "e2aad81354d165e3", "s": ["इस जलने को रद्द करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Cancel this burn"}
+{"k": "010772bf301ef9d1", "s": ["साइट डिप्लॉयमेंट के लिए एक सिस्टम ग्राफ के साथ लोड की गई दुनिया की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Site deployment needs a loaded world with a systems graph."}
+{"k": "baf2ac2bfc324883", "s": ["इस इवेंट को हटाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Remove this event"}
+{"k": "e1f4db2bc28233ed", "s": ["निर्धारित"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Scheduled"}
+{"k": "c864b597642dad1f", "s": ["क्रू की परियोजनाएँ खोलें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Open the crew's projects…"}
+{"k": "3f1fd88377e7a882", "s": ["वह गेट सेट करें जहाँ मैं खड़ा हूँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Set the gate where I stand"}
+{"k": "5bd33fb5b45a10dc", "s": ["गेट देखें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Look at the gate"}
+{"k": "509db31628d53152", "s": ["वाहन बस यहाँ हैं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Vehicles are simply here"}
+{"k": "17accf4af8da6994", "s": ["शेड्यूल साफ़ करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Clear the schedule"}
+{"k": "67c889bbba7b6b5b", "s": ["साइट डिप्लॉयमेंट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Site deployment"}
+{"k": "584bd75e918b4ea9", "s": ["डिप्लॉयमेंट शेड्यूल साफ़ किया गया।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Deployment schedule cleared."}
+{"k": "0cfa8e76b3bdc52c", "s": ["खड़े होने के लिए कोई खिलाड़ी नहीं — गेट वहीं रहेगा।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "No player to stand at — the gate stays where it is."}
+{"k": "f75479147a20f80c", "s": ["साइट गेट यहाँ सेट किया गया, जिस दिशा में आप देख रहे हैं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Site gate set here, facing the way you look."}
+{"k": "427f5990b8b1eec0", "s": ["वाहन बस यहाँ हैं, और हर कोई भी।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The vehicles are simply here, and so is everyone."}
+{"k": "fca2fedea685e18b", "s": ["फंसा हुआ ढाँचा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "stuck structure"}
+{"k": "b19b7d308bdb7c61", "s": ["यहाँ से पूर्वावलोकन करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Preview from here"}
+{"k": "57b207aa370e9ad4", "s": ["वर्तमान दृश्य पर सेट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Set to the current view"}
+{"k": "544b454b7ae543d7", "s": ["कैमरा पथ संपादित करें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Edit camera path…"}
+{"k": "e94ff581e90e1acf", "s": ["कीफ्रेम हटाएं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Delete keyframe"}
+{"k": "039d732afdf5276c", "s": ["प्लेहेड पर वर्तमान दृश्य को की करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Key the current view at the playhead"}
+{"k": "fa51b2bf8529732b", "s": ["कीफ्रेम किए गए शॉट का पूर्वावलोकन करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Preview the keyframed shot"}
+{"k": "c80ed0d0637871cf", "s": ["कीफ्रेम वर्तमान दृश्य पर सेट किया गया।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Keyframe set to the current view."}
+{"k": "a5df4646ffa1c656", "s": ["पूर्वावलोकन शुरू नहीं हो सका (एक निर्यात या अन्य दृश्य घड़ी को रोक रहा है)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Preview could not start (an export or another view holds the clock)."}
+{"k": "f2d3a2ff110dcccf", "s": ["पूरा टाइमलाइन: हर ट्रैक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Full timeline: every track"}
+{"k": "34122efb46f80175", "s": ["टाइमलाइन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Timeline"}
+{"k": "dc6e831a18b77b75", "s": ["सिम"], "m": "ollama/gemma4:latest 2026-11-22", "src": "SIM"}
+{"k": "b00bd95cb3d08481", "s": ["खींचें: स्क्रब करें • Ctrl-खींचें: रेंडर रेंज • व्हील: ज़ूम करें • ट्रैक पर Ctrl+व्हील: लंबा/छोटा करें • Alt/MMB-खींचें: पैन करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Drag: scrub  •  Ctrl-drag: render range  •  Wheel: zoom  •  Ctrl+wheel on a track: taller / shorter  •  Alt/MMB-drag: pan"}
+{"k": "1e5b2bca47e997a6", "s": ["डेटास्ट्रीम CSV आयात करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Import datastream CSV"}
+{"k": "add161da86e26568", "s": ["संपादित डिज़ाइन का पता चला"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Editable design detected"}
+{"k": "9bbe1c3caed614c2", "s": ["इस बंडल में पूर्ण पैरामीट्रिक डिज़ाइन शामिल है। इसे लाइव-फोल्डेबल और संपादन योग्य बनाने के लिए Linkage Lab में खोलें?"], "m": "ollama/gemma4:latest 2026-11-22", "src": "This bundle includes the full parametric design. Open it in Linkage Lab to make it live-foldable and editable?"}
+{"k": "3f511d9aa3afbf25", "s": ["Linkage Lab में खोलें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Open in Linkage Lab"}
+{"k": "601ab3d87e3c0f5b", "s": ["आयातित मॉडल रखें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Keep imported model"}
+{"k": "1d01ad4d41198fca", "s": ["कैमरा कीफ्रेम के लिए स्थान मानचित्र की आवश्यकता है (इसमें कोई TerrainLoader नहीं है)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Camera keyframes need a location map (this one has no TerrainLoader)."}
+{"k": "7878556b063cf561", "s": ["कैमरा कीफ्रेम साफ़ किए गए।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Camera keyframes cleared."}
+{"k": "9bd829310af9d2d6", "s": ["वीडियो निर्यात के लिए स्थान मानचित्र की आवश्यकता है (इसमें कोई TerrainLoader नहीं है)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Video export needs a location map (this one has no TerrainLoader)."}
+{"k": "0d9594385f8436c6", "s": ["निर्यात की तैयारी कर रहा है…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Preparing export…"}
+{"k": "0aba90052151e81a", "s": ["वीडियो निर्यात कर रहा है"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Exporting video"}
+{"k": "a2079d3352c17bde", "s": ["MP4 समाप्त हो रहा है (ffmpeg)…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Finishing the MP4 (ffmpeg)…"}
+{"k": "c6eac45660e6f376", "s": ["रेंडरर को गर्म कर रहा है…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Warming up the renderer…"}
+{"k": "46f4d87d81d65eed", "s": ["वीडियो लोड करें: इस मानचित्र पर कोई प्रोजेक्शन कैनवास नहीं है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Load video: no projection canvas on this map."}
+{"k": "60a7f02ca9295307", "s": ["लाइव फ़ीड: इस मानचित्र पर कोई प्रोजेक्शन कैनवास नहीं है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Live feed: no projection canvas on this map."}
+{"k": "d536f3a3d07f2bc9", "s": ["दोपहर 12:00"], "m": "ollama/gemma4:latest 2026-11-22", "src": "12:00 PM"}
+{"k": "6a018ddf194ad8f6", "s": ["प्लेहेड पर स्थानीय समय। स्क्रब करने के लिए ऊपर ट्रैक को खींचें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Local time at the playhead. Drag the track above to scrub."}
+{"k": "e700ef5520fac1b7", "s": ["टाइम-लैप्स गति। बदलने के लिए रिवाइंड / फास्ट-फॉरवर्ड करें (1× = वास्तविक समय)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Time-lapse speed. Rewind / Fast-forward to change (1× = real time)."}
+{"k": "24dff8b8c5e722bc", "s": ["HA …"], "m": "ollama/gemma4:latest 2026-11-22", "src": "HA …"}
+{"k": "d2a96ee69039c090", "s": ["HA ✕"], "m": "ollama/gemma4:latest 2026-11-22", "src": "HA ✕"}
+{"k": "72e20e0a92437023", "s": ["सौर छाया विश्लेषण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Solar Shading Analysis"}
+{"k": "a808930831d8605c", "s": ["आरंभ हो रहा है..."], "m": "ollama/gemma4:latest 2026-11-22", "src": "Initializing..."}
+{"k": "3cc0213e01146efe", "s": ["इस दुनिया को सहेजें और अपनी दुनिया पर वापस जाना चाहते हैं?\n\nसब कुछ पहले सहेजा जाता है — प्ले आपको ठीक यहीं वापस लाता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Save this world and return to your worlds?\n\nEverything is saved first — Play puts you back exactly here."}
+{"k": "5f75ec485b03d54a", "s": ["मेनू पर वापस जाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Return to menu"}
+{"k": "ee1e38f6a4c23e9c", "s": ["मिशन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Mission"}
+{"k": "fdf35d0d6a5b9381", "s": ["चुनौतियाँ — मिशन चुनने के लिए क्लिक करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Challenges — click to pick a mission"}
+{"k": "d5ca5d9c14cd50d5", "s": ["एनडब्ल्यूएस अलर्ट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "NWS ALERT"}
+{"k": "398689ccb201b19c", "s": ["राष्ट्रीय मौसम सेवा निगरानी/चेतावनी/सलाह"], "m": "ollama/gemma4:latest 2026-11-22", "src": "National Weather Service Watch/Warning/Advisory"}
+{"k": "883fc5a665c260b6", "s": ["खोलने के लिए क्लिक करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Click to open"}
+{"k": "a390d56f76e15bae", "s": ["बैग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Bag"}
+{"k": "6024aa5ec4f258ce", "s": ["कार्य"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Chore"}
+{"k": "b6d449d47e056453", "s": ["▶ 24 घंटे चलाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "▶ Run 24 h"}
+{"k": "08f8ccfe7db4fbf6", "s": ["पूरा दिन प्री-कंप्यूट करें और चलाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Pre-compute a full day and play it back"}
+{"k": "d53f08baf514d03a", "s": ["प्लेबैक गति"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Playback speed"}
+{"k": "2070058b2e6b04d9", "s": ["छोड़ें ⏭"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Skip ⏭"}
+{"k": "785d5f41f568479c", "s": ["रन समाप्त करें और परिणाम अभी दिखाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Finish the run and show the result now"}
+{"k": "dd45bbe893da7ebf", "s": ["संक्षिप्त विवरण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Briefing"}
+{"k": "248af020771d29d4", "s": ["इस स्तर का संक्षिप्त विवरण फिर से पढ़ें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Re-read this level's briefing"}
+{"k": "44e63795203cd0a5", "s": ["बूटीकैंप छोड़ दें — आपका वास्तविक ग्राफ़ बिना छुए वापस आ जाएगा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Leave the bootcamp — your real graph comes back untouched"}
+{"k": "6f5585b4cbff1669", "s": ["लाइब्रेरी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Library"}
+{"k": "acd40a1fd45606a8", "s": ["सब कुछ खोजें (डोम, बैटरी, बस, मेपल…)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Search everything (dome, battery, bus, maple…)"}
+{"k": "e14309017ac0516b", "s": ["लाइब्रेरी बंद करें (Esc / U)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Close library (Esc / U)"}
+{"k": "b9110fa3f1167c76", "s": ["इसे दुनिया में रखें; इसका नोड ग्राफ़ से जुड़ जाता है"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Place it in the world; its node joins the graph"}
+{"k": "0a0b6fed4ad606a2", "s": ["बिल्डिंग डिज़ाइनर को स्थान मानचित्र (TerrainLoader) की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Building designer needs a location map (TerrainLoader)."}
+{"k": "2df83d66fa9274fc", "s": ["पैलेट रैक बिल्डर को स्थान मानचित्र (TerrainLoader) की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Pallet rack builder needs a location map (TerrainLoader)."}
+{"k": "627c653e7cc9b2f8", "s": ["इंटरमॉडल यूनिट डिज़ाइनर गायब है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Intermodal unit designer is missing."}
+{"k": "7795226aa347a731", "s": ["फर्नीचर डिज़ाइनर को स्थान मानचित्र (TerrainLoader) की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The furniture designer needs a location map (TerrainLoader)."}
+{"k": "1d444dc4fd4ea12a", "s": ["डोम डिज़ाइनर को स्थान मानचित्र (TerrainLoader) की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The dome designer needs a location map (TerrainLoader)."}
+{"k": "ea9014e5bd8302fa", "s": ["वाहन डिज़ाइनर को स्थान मानचित्र (TerrainLoader) की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The vehicle designer needs a location map (TerrainLoader)."}
+{"k": "381d582c5c757c03", "s": ["सौर डिज़ाइनर को स्थान मानचित्र (TerrainLoader) की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The Solar designer needs a location map (TerrainLoader)."}
+{"k": "1a4592611730436a", "s": ["पवन टरबाइन डिज़ाइनर को एक विश्व की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The wind turbine designer needs a world."}
+{"k": "f64d31556980c564", "s": ["ट्राइ-क्लैम्प डिज़ाइनर को एक विश्व की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The tri-clamp designer needs a world."}
+{"k": "cdaf736be7b623aa", "s": ["ESP बोर्ड डिज़ाइनर को एक विश्व की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The ESP board designer needs a world."}
+{"k": "d73708649c0b859a", "s": ["बैटरी लैब को एक विश्व की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The Battery Lab needs a world."}
+{"k": "008a03043afc2658", "s": ["कंट्रोलर लैब को एक विश्व की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The Controller Lab needs a world."}
+{"k": "55ca2e079c291e3e", "s": ["पैरामीट्रिक सामग्री स्टूडियो को एक विश्व की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Parametric materials studio needs a world."}
+{"k": "3fb770d8c90237c4", "s": ["फार्मबॉट डिज़ाइनर को एक विश्व की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The FarmBot designer needs a world."}
+{"k": "da9a76f6c7c2f891", "s": ["सौर संकेंद्रक डिज़ाइनर को एक विश्व की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The solar concentrator designer needs a world."}
+{"k": "49d676877921544d", "s": ["पेलटन व्हील डिज़ाइनर को एक विश्व की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The Pelton wheel designer needs a world."}
+{"k": "fa54c557656d90d2", "s": ["टोरॉइड डिज़ाइनर को स्थान मानचित्र (TerrainLoader) की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The toroid designer needs a location map (TerrainLoader)."}
+{"k": "4f63783ac46a6a0d", "s": ["गैन्ट्री डिज़ाइनर को स्थान मानचित्र (TerrainLoader) की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "The gantry designer needs a location map (TerrainLoader)."}
+{"k": "3574592ea8d4ae88", "s": ["लिंकेज लैब इस दृश्य पर अनुपलब्ध है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Linkage Lab unavailable on this scene."}
+{"k": "0a63821d07b234ef", "s": ["मड बिल्डिंग डिज़ाइनर इस दृश्य पर अनुपलब्ध है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Mud Building Designer unavailable on this scene."}
+{"k": "e2be45d216ad8998", "s": ["अज्ञात प्रविष्टि"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Unknown entry"}
+{"k": "8629ab343127c519", "s": ["बिल्डिंग टूल्स को OSM बिल्डिंग्स के साथ स्थान मानचित्र की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Building tools need a location map with OSM buildings."}
+{"k": "40c5a658264093a9", "s": ["वनस्पति पेंट को स्थान मानचित्र की आवश्यकता है (TerrainLoader मौजूद होने पर V दबाएं)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Vegetation paint needs a location map (press V when TerrainLoader is present)."}
+{"k": "d3db84da8d8c28ee", "s": ["ट्यून लुक को स्थान मानचित्र की आवश्यकता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Tune look needs a location map."}
+{"k": "c37eb1cc7fec1ecd", "s": ["मॉडल आईडी गुम"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Missing model id"}
+{"k": "8d4afe56a63d842f", "s": ["रखने के लिए कोई दृश्य नहीं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "No scene to place into"}
+{"k": "27d169aa98592740", "s": ["दृश्य से सिस्टम ग्राफ गायब"], "m": "ollama/gemma4:latest 2026-11-22", "src": "System graph missing from scene"}
+{"k": "cd6cb0d594297459", "s": ["ग्राफ प्रीसेट उत्पन्न नहीं किया जा सका"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Could not spawn graph preset"}
+{"k": "16f8266ca4ee8060", "s": ["पूर्ववत करें (Ctrl+Z)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Undo (Ctrl+Z)"}
+{"k": "a909189b435b0604", "s": ["पुनः करें (Ctrl+Y)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Redo (Ctrl+Y)"}
+{"k": "aa1a8ed5ab48ff32", "s": ["वायु तापमान (डेटा स्रोत के लिए नीचे किसी टाइल पर होवर करें)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Air temperature (hover a tile below for data provenance)"}
+{"k": "2fe15b9a16147c89", "s": ["सक्रिय मौसम स्रोत"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Active weather source"}
+{"k": "a0f5d8e016552bf9", "s": ["इस दुनिया का नाम बदलें (खाली = स्थान का नाम)।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Rename this world (empty = the location's name)."}
+{"k": "d8a611b667e7c93f", "s": ["इस दुनिया में है"], "m": "ollama/gemma4:latest 2026-11-22", "src": "This world holds"}
+{"k": "f06a4be231f056ce", "s": ["कॉपी के लिए नाम"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Name for the copy"}
+{"k": "a53c7d9e4f09ecbf", "s": ["इस सत्र को एक दुनिया के रूप में सहेजें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Save this session as a world"}
+{"k": "487f331182ed7db3", "s": ["यह सत्र सीधे खोला गया था (किसी दुनिया से नहीं)। इसे बनाएं।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "This session was opened directly (not from a world). Make it one."}
+{"k": "2ccac02efa175f24", "s": ["कोई सहेजी गई दुनिया नहीं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Not a saved world"}
+{"k": "27632188ef5dc1d1", "s": ["यह सत्र सीधे खोला गया था, इसलिए यह अभी किसी दुनिया से जुड़ा नहीं है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "This session was opened directly, so it is not tied to a world yet."}
+{"k": "922acde717d65ef6", "s": ["नाम बदला गया।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Renamed."}
+{"k": "b7d235a219ecb171", "s": ["जहाँ यह जाता है…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Where it goes…"}
+{"k": "7f96966012920432", "s": ["🆕 कस्टम कंपोनेंट बनाएं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "🆕 Create Custom Component"}
+{"k": "19ebdcf0a61a94ef", "s": ["नाम..."], "m": "ollama/gemma4:latest 2026-11-22", "src": "Name..."}
+{"k": "ae97ccd1440c9216", "s": [" बनाएं "], "m": "ollama/gemma4:latest 2026-11-22", "src": " Create "}
+{"k": "0902ab10591c8228", "s": ["कंपोनेंट्स खोजें..."], "m": "ollama/gemma4:latest 2026-11-22", "src": "Search components..."}
+{"k": "477c9136603a74a6", "s": ["नोड्स को समूहित करें, फिर इंस्पेक्टर → कंपोनेंट के रूप में सहेजें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Group nodes, then Inspector → Save as Component."}
+{"k": "2a76cd0cc0447d84", "s": ["इस नोड के लिए दुनिया में एक ग्रे-बॉक्स प्लेसहोल्डर रखें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Place a gray-box placeholder for this node in the world"}
+{"k": "8a6f08f53131adc1", "s": ["कंपोनेंट का नाम बदलें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Rename component"}
+{"k": "539ec78ed450b049", "s": ["कंपोनेंट हटाएं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Delete component"}
+{"k": "62b879f5f022ad58", "s": ["कंपोनेंट का नाम बदलें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Rename Component"}
+{"k": "e7781a6532dc7d3f", "s": ["🌍\nरखें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "🌍\nPlace"}
+{"k": "c65d5a307c3c2d81", "s": ["दुनिया में 3डी मॉडल रखें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Place the 3D model in the world"}
+{"k": "a659a34ed47804b3", "s": ["सभी जोड़ें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Add all"}
+{"k": "0909a12e1dd62f03", "s": ["इन सभी को ग्राफ़ पर रखें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Put every one of these on the graph"}
+{"k": "caa86d69492d01e0", "s": ["इसे दुनिया में दिखाएं (Esc यहाँ वापस आता है)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show it in the world (Esc comes back here)"}
+{"k": "f1ee0561083215f7", "s": ["ग्राफ पर रखें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Put it on the graph"}
+{"k": "eabb3f816b10709b", "s": ["ग्राफ रीसेट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reset graph"}
+{"k": "23e5cda9a9843fc2", "s": ["साइट निर्यात करें (.esim)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Export site (.esim)"}
+{"k": "6a40e8fc12273e1e", "s": ["साइट आयात करें (.esim) — मेरा बदलें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Import site (.esim) — replace mine"}
+{"k": "002422906fb0ccd6", "s": ["भूत के रूप में साइट पूर्वावलोकन करें (.esim)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Preview site as ghost (.esim)"}
+{"k": "22b30402be935fe8", "s": [".esim शेयर कोड पेस्ट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Paste .esim share code"}
+{"k": "66c79185ddc60467", "s": ["भूत के रूप में पूर्वावलोकन करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Preview as ghost"}
+{"k": "7bafb54a4b61ddaa", "s": ["किसी दोस्त से ESIM1:… कोड पेस्ट करें। पहले भूत ओवरले के रूप में खुलेगा।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Paste an ESIM1:… code from a friend. Opens as a ghost overlay first."}
+{"k": "1fcc44f9ca9d5223", "s": ["ESIM1:…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "ESIM1:…"}
+{"k": "85af55c77e63814a", "s": ["आयात करें (मेरा बदलें)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Import (replace mine)"}
+{"k": "df4baba600f046f0", "s": ["ग्राफ निर्यात करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Export graph"}
+{"k": "38365a349a723b70", "s": ["ग्राफ आयात करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Import graph"}
+{"k": "ef2730893f821402", "s": ["सौर सरणी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Solar Array"}
+{"k": "973e126541801bd5", "s": ["बैटरी बैंक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Battery Bank"}
+{"k": "40756f08e5aa2a26", "s": ["कार्ड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Cards"}
+{"k": "37a862602160f2a4", "s": ["पृष्ठभूमि"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Background"}
+{"k": "03a44a55e50ae0e7", "s": ["तार रंग किंवदंती"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Wire colour legend"}
+{"k": "7806bd2347335646", "s": ["साफ़ और लाइव लेआउट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Tidy and Live layout"}
+{"k": "bc2bde2c1b84c286", "s": ["प्रत्येक परत को एक लाइन पर रखें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Keep each layer on one line"}
+{"k": "17549f5e719f59a2", "s": ["अभी साफ़ करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Tidy now"}
+{"k": "fb5be424ce69a43e", "s": ["जटिल विघटित करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Explode compound"}
+{"k": "27f3ab9f19ad38b7", "s": ["📊 सिस्टम समीक्षा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "📊  System Review"}
+{"k": "619011c4a27b70a0", "s": ["सिस्टम समीक्षा बंद करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Close System Review"}
+{"k": "7f35c64e2bbc22f2", "s": ["⌨ कीबोर्ड और माउस शॉर्टकट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "⌨  Keyboard & Mouse Shortcuts"}
+{"k": "c181c7060d2cbe41", "s": ["HA इतिहास प्लेबैक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "HA HISTORY PLAYBACK"}
+{"k": "d1649f65d0868a1b", "s": ["🌐 सोआई · —"], "m": "ollama/gemma4:latest 2026-11-22", "src": "🌐 SoI · —"}
+{"k": "060368d9500d8b51", "s": ["जलविद्युत अनुभाग · ग्राफ़ पर कोई तालाब टैंक नहीं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Hydro Section · no pond tank on graph"}
+{"k": "6afa39f872cf4c40", "s": ["जलविद्युत · तालाब स्तर अनुपलब्ध (एक लाइव तालाब बांधें)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Hydro · pond level unavailable (bind a live pond)"}
+{"k": "6cf83337c41355e4", "s": ["ऐरे बनाएं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Make Array"}
+{"k": "5c5a31abb08cf293", "s": ["सिस्टम रंगना बंद करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Stop colouring systems"}
+{"k": "a752dc462507e059", "s": ["खारिज करें (अगर स्थिति बिगड़ती है तो यह वापस आ जाएगा)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Dismiss (it comes back if it gets worse)"}
+{"k": "92070b375b9163e1", "s": ["त्योहार बोर्ड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Festival board"}
+{"k": "83fe29994d47908e", "s": ["अपने सिस्टम को देखने के लिए किसी कैंप या वाहन में स्क्रॉल करें। Esc बाहर आ जाता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Scroll into a camp or vehicle to see its own system. Esc comes back out."}
+{"k": "3716b327b0137282", "s": ["समझ गया"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Got it"}
+{"k": "782d74df031b7878", "s": ["सब कुछ फिर से दिखाएं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show everything again"}
+{"k": "040bf5c9bd6bbcf8", "s": ["⚡ समीक्षा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "⚡ Review"}
+{"k": "50ff8f691c278e23", "s": ["पूर्ववत करें (Ctrl+Z)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Undo  (Ctrl+Z)"}
+{"k": "56b112fb68615e74", "s": ["दोहराएं (Ctrl+Y)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Redo  (Ctrl+Y)"}
+{"k": "c5a9cc9064a37086", "s": ["इस मानचित्र का ग्राफ़ रीसेट करें (पहले पूछता है — पूर्ववत नहीं किया जा सकता)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reset this map's graph (asks first — not undoable)"}
+{"k": "530c313afd65122a", "s": ["चुनौतियाँ — संरचित उत्तरजीविता मिशन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Challenges — structured survival missions"}
+{"k": "a454697e7d547cf6", "s": ["सौर बूटकैंप — बैटरी से ग्राफ़ सीखें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Solar Bootcamp — learn the graph from the battery up"}
+{"k": "1dd80a20bacc1d5d", "s": ["चुनौतियाँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Challenges"}
+{"k": "abfe466d03cf4f01", "s": ["बूटकैंप"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Bootcamp"}
+{"k": "4e4880e9fc438c2c", "s": ["समीक्षा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Review"}
+{"k": "9c31744d3c1b0b1e", "s": ["संयोजित करें ▾"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Combine ▾"}
+{"k": "43a7d80c229f1a54", "s": ["समूह, ऐरे, बैंक, श्रृंखला/समानांतर वायरिंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Group, arrays, banks, series/parallel wiring"}
+{"k": "7a5f64d4702727dc", "s": ["सुपर-नोड में समूह करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Group into super-node"}
+{"k": "dd655ea1e150fcf1", "s": ["सामान्य समूह को अलग करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Ungroup generic group"}
+{"k": "4df79d68f6f13358", "s": ["यौगिक को विस्फोट करें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Explode compound…"}
+{"k": "fa469cb8ac5d392d", "s": ["सौर ऐरे बनाएं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Make Solar Array"}
+{"k": "97ce9b9810891042", "s": ["बैटरी बैंक बनाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Make Battery Bank"}
+{"k": "5e7bfad15aa94af6", "s": ["पैनलों को श्रृंखला में जोड़ें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Wire panels in Series"}
+{"k": "d9bca341900e009c", "s": ["पैनलों को समानांतर में जोड़ें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Wire panels in Parallel"}
+{"k": "0a583408c973ebe0", "s": ["एरे के लिए नियंत्रक चुनें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Pick controller for array…"}
+{"k": "3fbf860931897e38", "s": ["एरे को ग्रिड के रूप में व्यवस्थित करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Arrange array as grid"}
+{"k": "986f43c6cc336268", "s": ["लेआउट ▾"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Layout ▾"}
+{"k": "a5856fb3ff73e9f7", "s": ["लेआउट व्यवस्थित करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Tidy layout"}
+{"k": "63e2f2f4a1a50139", "s": ["के रूप में व्यवस्थित करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Arrange as"}
+{"k": "68de08b17a120950", "s": ["3D में रिंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Ring in 3D"}
+{"k": "3748a3a8fe595f26", "s": ["फ्लैट रिंग"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Flat ring"}
+{"k": "4f3ed5426e2cc7cd", "s": ["फ्लैट 2D ग्राफ़ पर वापस जाएँ।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Back to the flat 2D graph."}
+{"k": "c07b704b798019c0", "s": ["मॉडल दिखाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show models"}
+{"k": "93bc8a1530f98339", "s": ["3D प्लेसमेंट रीसेट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reset 3D placements"}
+{"k": "9e97f8c913f89db4", "s": ["सिस्टम क्षेत्र दिखाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show system areas"}
+{"k": "4af3cb42f2db40c4", "s": ["लाइव लेआउट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Live layout"}
+{"k": "13e0b0a92580da1a", "s": ["चयनित पिन करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Pin selected"}
+{"k": "72a9e94c624e1aa3", "s": ["चयनित अनपिन करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Unpin selected"}
+{"k": "54b6079b59e09cef", "s": ["लेआउट सेटिंग्स…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Layout settings…"}
+{"k": "5b77f115090ddcab", "s": ["सौर पैनलों को ग्रिड में स्नैप करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Snap solar panels into grids"}
+{"k": "f97eacfaa5aa6013", "s": ["साइट के अनुसार सिस्टम व्यवस्थित करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Arrange systems by site"}
+{"k": "6ce3a566f9ac4ddb", "s": ["केवल ओवरलैप हटाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Only remove overlaps"}
+{"k": "0e552474a478d24e", "s": ["3D प्लेसहोल्डर स्पॉन करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Spawn 3D placeholder"}
+{"k": "b782a248ec5c1b95", "s": ["▸ विस्तृत करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "▸ Expand"}
+{"k": "e6adc0ee793a547f", "s": ["<0xE2><0x97><0x82> सिकोड़ें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "◂ Collapse"}
+{"k": "e6b9f16912a60c62", "s": ["चयनित सुपर-नोड खोलें (StarShade / घटक पहचान + 3D बाइंडिंग बनाए रखता है)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Open the selected super-node (keeps StarShade / component identity + 3D binding)"}
+{"k": "7db27f210422986c", "s": ["वापस पैरेंट सुपर-नोड पर सिकोड़ें (Esc)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Collapse back to the parent super-node (Esc)"}
+{"k": "f41593832aca98f5", "s": ["SoI · —"], "m": "ollama/gemma4:latest 2026-11-22", "src": "SoI · —"}
+{"k": "075b7bb1a79bd9f1", "s": ["ग्राफ़ / SoI दृश्य मोड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Graph / SoI view mode"}
+{"k": "1a1b295d3047cb4e", "s": ["निर्धारित करें ▾"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Designate ▾"}
+{"k": "24aaa0e698537cd6", "s": ["जलग्रहण (छत)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Catchment (roof)"}
+{"k": "b5e3f3245636ede1", "s": ["फसल (खेत)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Crop (field)"}
+{"k": "cd47eb140b6a0db0", "s": ["दृश्य विकल्प ▾"], "m": "ollama/gemma4:latest 2026-11-22", "src": "View options ▾"}
+{"k": "6cba249d72c3786b", "s": ["प्रदर्शन सेटिंग्स…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Display settings…"}
+{"k": "1c9d880fa4ddef1f", "s": ["प्रवाह शैली…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Flow style…"}
+{"k": "25d7a10278f7562b", "s": ["वृत्तों के रूप में नेस्टिंग…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Nesting as circles…"}
+{"k": "33db33d4f01a237e", "s": ["टैग…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Tags…"}
+{"k": "db85bb89793872fc", "s": ["SoI बबल (फ्रीफॉर्म)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "SoI bubble (freeform)"}
+{"k": "93b9357343776d84", "s": ["नोड कार्ड (कोई 3डी पूर्वावलोकन नहीं)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Node cards (no 3D previews)"}
+{"k": "56d2290203dddc30", "s": ["पूर्वावलोकन नोड लेबल"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Preview node labels"}
+{"k": "e39a7bdbc379104a", "s": ["साइट प्लान और एलिवेशन में वर्ल्ड पिन (3डी-संचालित)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "World pins in Site Plan & Elevation (3D-driven)"}
+{"k": "ff203821a7517d00", "s": ["त्रिज्या लेआउट (स्वचालित-याव)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Radial layout (auto-yaw)"}
+{"k": "acf12574f54e2b4f", "s": ["मैग्नीफायर लेबल"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Magnifier labels"}
+{"k": "a467125a5279610a", "s": ["पोर्ट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Ports"}
+{"k": "a8ab20fc84e69a27", "s": ["3डी कंड्यूट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "3D conduits"}
+{"k": "638552c527c97e02", "s": ["मेट्रो 2डी ओवरले"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Metro 2D overlay"}
+{"k": "06aa2eea76b7fbf4", "s": ["कोई नहीं (ओवरले)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "None (overlay)"}
+{"k": "bde536525cbca210", "s": ["फ्रीफॉर्म से बीज साइट…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Seed site from freeform…"}
+{"k": "9e2b00b77d901695", "s": ["गायब साइट ट्विन्स को एम्बॉड करें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Embody missing Site twins…"}
+{"k": "9290d13afb7be389", "s": ["साइट प्लान"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Site Plan"}
+{"k": "9b7d364ccd7379d1", "s": ["3डी सेक्शन (CT)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "3D section (CT)"}
+{"k": "7251c459f456b80a", "s": ["ओवरले"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Overlays"}
+{"k": "381ce67ab33f3756", "s": ["डीईएम / तालाब 2डी ओवरले"], "m": "ollama/gemma4:latest 2026-11-22", "src": "DEM / pond 2D overlay"}
+{"k": "e641d7c78535ce9b", "s": ["चिप्स (लेबल/बॉडी)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Chips (labels/bodies)"}
+{"k": "f3599e910131d1a1", "s": ["स्कीमैटिक 2डी तार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Schematic 2D wires"}
+{"k": "099d5ebf5b47d2e6", "s": ["प्रोजेक्टेड 2डी पाइप ओवरले"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Projected 2D pipe overlay"}
+{"k": "e3563b1e56c7a43d", "s": ["स्केल 1× (3डी सेक्शन 1× पर लॉक)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Scale 1× (3D section locks to 1×)"}
+{"k": "4fdd4c0e64d111f2", "s": ["स्केल 5× (2डी-केवल ऊंचाई)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Scale 5× (2D-only Elev)"}
+{"k": "dd84cc43d90529b3", "s": ["सेक्शन हेडिंग घुमाएँ +15°"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Rotate section heading +15°"}
+{"k": "91f9708eabfea4d5", "s": ["सेक्शन रीसेट (न/स · स्लाइस 0)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reset section (N/S · slice 0)"}
+{"k": "05e15ef0d2b150e3", "s": ["घिसे रास्ते दिखाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show worn paths"}
+{"k": "50765f0d585e36a3", "s": ["लाइव ट्रेल्स दिखाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show live trails"}
+{"k": "281cc64a267f4fa1", "s": ["फ़िल्टर: सभी यातायात"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Filter: all traffic"}
+{"k": "dafc7b34460bb3ad", "s": ["याद रखें: पिछला सप्ताह"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Remember: past week"}
+{"k": "b051a22bbae3fa7c", "s": ["3डी दुनिया में घिसे रास्तों को लपेटें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Drape worn paths in the 3D world"}
+{"k": "0edc469b9377e681", "s": ["इच्छा रेखाएँ रीसेट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reset desire lines"}
+{"k": "8eee2f072db75f74", "s": ["लोग और रास्ते"], "m": "ollama/gemma4:latest 2026-11-22", "src": "People & paths"}
+{"k": "a1c44bcc8dc32dd9", "s": ["स्लाइस"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Slice"}
+{"k": "05a054c160a74f0b", "s": ["सीटी स्लाइस गहराई (−आर…+आर मीटर कट नॉर्मल के साथ)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "CT slice depth (−R…+R metres along the cut normal)"}
+{"k": "7d8284d9bae20763", "s": ["0 मीटर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "0 m"}
+{"k": "0ce5ef9191095777", "s": ["हाइड्रो लैब…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Hydro Lab…"}
+{"k": "34e444c047b239c4", "s": ["त्रिज्या"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Radial"}
+{"k": "a14ba84ffba93e36", "s": ["एरे ▾"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Array ▾"}
+{"k": "767753854b8c689e", "s": ["एरे: रेखा…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Array: Line…"}
+{"k": "d764e41cee946e02", "s": ["एरे: चाप…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Array: Arc…"}
+{"k": "51c9ed555f79421f", "s": ["एरे: वृत्त…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Array: Circle…"}
+{"k": "73cdb52d516686b0", "s": ["एरे की पुष्टि करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Confirm array"}
+{"k": "9f5da575a6bdedba", "s": ["एरे रद्द करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Cancel array"}
+{"k": "307018378019b7ca", "s": ["एरे केंद्र सेट करें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Set array center…"}
+{"k": "6638f0545fa1ad43", "s": ["कस्टम केंद्र साफ़ करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Clear custom center"}
+{"k": "88292ed0d3eac3c8", "s": ["R को SoI पर रीसेट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reset R to SoI"}
+{"k": "293a62969945f013", "s": ["R"], "m": "ollama/gemma4:latest 2026-11-22", "src": "R"}
+{"k": "595b67bfd7e3aa9a", "s": ["कार्यशील त्रिज्या (m) — ब्रश-शैली; SoI का आकार नहीं बदलता"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Working radius (m) — brush-style; does not resize SoI"}
+{"k": "4a69e751995b8858", "s": ["50 m"], "m": "ollama/gemma4:latest 2026-11-22", "src": "50 m"}
+{"k": "35e626552deab1cd", "s": ["✎ साइट संपादित करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "✎ Edit site"}
+{"k": "b8f015fe9b058c06", "s": ["कैंप और कैलकुलेटर: प्रत्येक कैंप का पानी, भोजन और कचरा, इसकी आपूर्ति, इसके लूप"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Camps & calculator: each camp's water, food and waste, its supply, its loops"}
+{"k": "0cf6762592ce6171", "s": ["तार ▾"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Wire ▾"}
+{"k": "fbd84dec76a0a810", "s": ["बेज़ियर (घुमावदार)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Bezier (curved)"}
+{"k": "499689bab57b01b5", "s": ["गोल (ऑर्थोगोनल)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Rounded (orthogonal)"}
+{"k": "bf19dcffa7a1e9e6", "s": ["मेट्रो (45°)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Metro (45°)"}
+{"k": "1a3e13f6e2c50d0b", "s": ["सभी कनेक्शन पर लागू करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Apply to all connections"}
+{"k": "f82733f0073c74f6", "s": ["देखें ▾"], "m": "ollama/gemma4:latest 2026-11-22", "src": "View ▾"}
+{"k": "f998b9fc17778556", "s": ["लेजेंड, इतिहास प्लेबैक, पिन किया गया PBI बार, संकेत"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Legend, history playback, pinned PBI bar, hints"}
+{"k": "fbfb5970f52c4fdb", "s": ["तार-रंग लेजेंड"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Wire-color legend"}
+{"k": "4f2c3024919e5a8c", "s": ["🕒 इतिहास प्लेबैक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "🕒 History playback"}
+{"k": "6bb39620ae503530", "s": ["PBI बार दिखाएं (पिन किया गया)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show PBI bar (pinned)"}
+{"k": "a6c60a7ce1369827", "s": ["त्योहार बोर्ड (पूर्ण स्क्रीन)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Festival board (full screen)"}
+{"k": "fc0a491569ab309c", "s": ["साइट मैप इनसेट (फ्रीफॉर्म)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Site map inset (freeform)"}
+{"k": "c609de4a3bb51202", "s": ["संकेत और शॉर्टकट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Hints & shortcuts"}
+{"k": "0e548157aee2b72d", "s": ["दिखाएं ▾"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show ▾"}
+{"k": "1b2dd8b1d1cb9cd4", "s": ["सब कुछ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Everything"}
+{"k": "ccb573f6c9472ed3", "s": ["केवल बिजली"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Power only"}
+{"k": "185b46bc6c0b29fb", "s": ["केवल पानी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Water only"}
+{"k": "afd8d70604f727b1", "s": ["केवल भोजन और कचरा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Food & waste only"}
+{"k": "c3216503d8875b34", "s": ["केवल ईंधन और गर्मी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Fuel & heat only"}
+{"k": "f08da9ca04152b18", "s": ["उस प्रकार के बिना तार वाले नोड्स शामिल करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Include nodes with no wire of that kind"}
+{"k": "adbcceba14f8c42c", "s": ["तत्व द्वारा रंग करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Colour by element"}
+{"k": "cc5bb815b4c8e973", "s": ["कोई तत्व रंग नहीं"], "m": "ollama/gemma4:latest 2026-11-22", "src": "No element colours"}
+{"k": "615f67ae5242aaae", "s": ["लूप बंद करें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Close loops…"}
+{"k": "e8ca30f8d11dce2a", "s": ["डिज़ाइन चुनौतियाँ…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Design challenges…"}
+{"k": "3deec54370ad6d26", "s": ["☀ OSM सौर जोड़ें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "☀ Add OSM Solar"}
+{"k": "ab57c1ecb31fa513", "s": ["साझा करें ▾"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Share ▾"}
+{"k": "b6dcbc1f6d572211", "s": ["ग्राफ निर्यात करें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Export graph…"}
+{"k": "4d2f459bc5b6509a", "s": ["ग्राफ आयात करें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Import graph…"}
+{"k": "57793ad4f19c6d07", "s": ["इस मानचित्र का ग्राफ रीसेट करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Reset this map’s graph"}
+{"k": "f3aae4cbe3c993c7", "s": ["साइट पैकेज"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Site package"}
+{"k": "40643b01c41e6ecc", "s": ["साइट निर्यात करें (.esim)…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Export site (.esim)…"}
+{"k": "b8eb096dc36c3ddc", "s": ["साइट आयात करें (.esim)…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Import site (.esim)…"}
+{"k": "dfd1d9f6a3c8f88d", "s": ["भूत के रूप में साइट पूर्वावलोकन करें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Preview site as ghost…"}
+{"k": "3320583aa203bf56", "s": ["भूत पूर्वावलोकन साफ़ करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Clear ghost preview"}
+{"k": "bae8f1140ded15b6", "s": ["भूत ग्राफ लागू करें (मेरे स्थान को बदलें)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Apply ghost graph (replace mine)"}
+{"k": "005ea728cfbe0ea4", "s": ["कोड साझा करें"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Share code"}
+{"k": "ffa8ca502d2b62ea", "s": ["साझा कोड कॉपी करें (ग्राफ + SoI)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Copy share code (graph + SoI)"}
+{"k": "1084f4c7470266e6", "s": ["साझा कोड पेस्ट करें…"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Paste share code…"}
+{"k": "3286ba6312bbcbde", "s": ["प्रभाव क्षेत्र त्रिज्या (m)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Sphere of Influence radius (m)"}
+{"k": "4ec24026ff091bed", "s": ["पूर्ण स्क्रीन <0xE2><0xA4><0xA2>"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Full screen ⤢"}
+{"k": "52317465c20a4188", "s": ["📦 लाइब्रेरी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "📦 Library"}
+{"k": "c8f7765c9aa6b4cf", "s": ["🔧 इंस्पेक्टर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "🔧 Inspector"}
+{"k": "573f301d46e62fe8", "s": ["ओएसएम सोलर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "OSM Solar"}
+{"k": "a022ceb72c420152", "s": ["सौर नियंत्रक"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Solar controller"}
+{"k": "2e6d6d88d605f2d6", "s": ["चयनित से तार"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Wire to selected"}
+{"k": "60f4761904dc6f4d", "s": ["वोल्टेज फिट + कैनवास दूरी के अनुसार रैंक किया गया। एक मौजूदा नियंत्रक पसंद करें, या एक लाइब्रेरी प्रीसेट रखें।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Ranked by Voc fit + canvas distance. Prefer an existing controller, or place a library preset."}
+{"k": "f3f4c4c5ce127b99", "s": ["सेटिंग्स"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Settings"}
+{"k": "fd5c8dd003c34f1b", "s": ["NWS ज़ोन {zone} — {years} वर्षों के रिकॉर्ड किए गए अलर्ट से।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "NWS zone {zone} — from {years} years of recorded alerts."}
+{"k": "c3f9049a330ae0d8", "s": ["{risk} · {line} · अभी तक सिमुलेट नहीं किया गया"], "m": "ollama/gemma4:latest 2026-11-22", "src": "{risk} · {line} · not yet simulated"}
+{"k": "1e1e7d04e73c45ab", "s": ["कम"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Low"}
+{"k": "2a0f02959440b058", "s": ["अल्ट्रा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Ultra"}
+{"k": "5751477865e1cf4e", "s": ["छाया गुणवत्ता: {level}"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Shadow Quality: {level}"}
+{"k": "fcb2f8a55af38609", "s": ["बनावट: {name}"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Texture: {name}"}
+{"k": "cdbed4bd5a373c19", "s": ["डिफ़ॉल्ट स्टारमैप"], "m": "ollama/gemma4:latest 2026-11-22", "src": "default starmap"}
+{"k": "ebb553eef049020c", "s": ["पंजीकरण: {summary}"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Registration: {summary}"}
+{"k": "c6fe18a8062acee3", "s": ["“{action}” के लिए नई कुंजी दबाएँ — Esc रद्द करता है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Press the new key for “{action}” — Esc cancels."}
+{"k": "c2817c1d69df8c64", "s": ["{action} वापस {key} पर है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "{action} is back to {key}."}
+{"k": "b31afe568f07f4cf", "s": ["{action} अब {key} है।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "{action} is now {key}."}
+{"k": "9fd8c504d825dd88", "s": ["{key} भी फायर करता है: {actions}। दोनों उस कुंजी पर प्रतिक्रिया करेंगे।"], "m": "ollama/gemma4:latest 2026-11-22", "src": "{key} also fires: {actions}. Both will respond to that key."}
+{"k": "642b883bd68f54e2", "s": ["अंतर्निहित नामों का उपयोग करके"], "m": "ollama/gemma4:latest 2026-11-22", "src": "using the built-in names"}
+{"k": "62cac48855bea849", "s": ["सिमुलेशन सेटिंग्स"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Simulation Settings"}
+{"k": "1ad7c3fc50b994df", "s": ["सिमुलेशन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Simulation"}
+{"k": "2fc64fc79ea52d3b", "s": ["खिलाड़ी और नियंत्रण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Player & controls"}
+{"k": "734472a60ad90e03", "s": ["ग्राफिक्स और आकाश"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Graphics & sky"}
+{"k": "082150badf08db38", "s": ["साइट और हार्डवेयर"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Site & hardware"}
+{"k": "0ce01b290b9de68f", "s": ["एकीकरण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Integrations"}
+{"k": "fc3dbdbb31ac8aff", "s": ["होल्ड किया गया · {owner}"], "m": "ollama/gemma4:latest 2026-11-22", "src": "held · {owner}"}
+{"k": "5373063667111b02", "s": ["टाइमलाइन छिपाएँ ({key})"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Hide the timeline ({key})"}
+{"k": "285924e6c55ce071", "s": ["संक्षिप्त टाइमलाइन: डेटा ट्रैक छिपाएँ ({key})"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Compact timeline: hide the data tracks ({key})"}
+{"k": "e62d160ba230ee4f", "s": ["टाइमलाइन दिखाएँ ({key})"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Show the timeline ({key})"}
+{"k": "f458fd2ec43da80b", "s": ["HA · {n} लाइव"], "m": "ollama/gemma4:latest 2026-11-22", "src": "HA · {n} live"}
+{"k": "a072a5560dd9eb4a", "s": ["सूची में आपके {n} नाम", "सूची में आपके {n} नाम"], "m": "ollama/gemma4:latest 2026-11-22", "src": "{n} of your names in the list"}
+{"k": "93c4ff6ffe959cb5", "s": ["{n} पेज मिला", "{n} पेज मिले"], "m": "ollama/gemma4:latest 2026-11-22", "src": "{n} page matches"}
+{"k": "49eef2133d0ee988", "s": ["और — {n} उपकरण", "और — {n} उपकरण"], "m": "ollama/gemma4:latest 2026-11-22", "src": "More — {n} tool"}
+{"k": "373c9036158bb39e", "s": ["तारों का नक्शा"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Star map"}
+{"k": "b9aabd3b999eaedc", "s": ["पात्र"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Character"}
+{"k": "56b112fb68615e74", "s": ["पूर्ववत करें (Ctrl+Y)"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Redo  (Ctrl+Y)"}
+{"k": "c609de4a3bb51202", "s": ["संकेत और शॉर्टकट"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Hints & shortcuts"}
+{"k": "4d08782ee511bb04", "s": ["हटाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Delete"}
+{"k": "621b14b8aad50b89", "s": ["डिज़ाइन"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Designs"}
+{"k": "6489d00c62514508", "s": ["गति"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Speed"}
+{"k": "f24793b72c377ce4", "s": ["रोशनी"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Lighting"}
+{"k": "5a6c75302cba84ed", "s": ["डिज़ाइन का नाम"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Design name"}
+{"k": "7a8aa3f778edb45e", "s": ["चलाएँ"], "m": "ollama/gemma4:latest 2026-11-22", "src": "Play"}

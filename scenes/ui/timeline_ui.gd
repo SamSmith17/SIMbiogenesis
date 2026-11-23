@@ -254,8 +254,8 @@ func _refresh_bar_mode_buttons() -> void:
 	if _bar_up_btn != null:
 		_bar_up_btn.disabled = _bar_mode == BAR_FULL
 	if _bar_down_btn != null:
-		_bar_down_btn.tooltip_text = "Hide the timeline (%s)" % _bar_size_key() if _bar_mode == BAR_COMPACT \
-			else "Compact timeline: hide the data tracks (%s)" % _bar_size_key()
+		_bar_down_btn.tooltip_text = I18n.f("Hide the timeline ({key})", {"key": _bar_size_key()}) if _bar_mode == BAR_COMPACT \
+			else I18n.f("Compact timeline: hide the data tracks ({key})", {"key": _bar_size_key()})
 
 
 func _bar_size_key() -> String:
@@ -314,7 +314,7 @@ func _build_hidden_tab() -> void:
 	_bar_tab.pressed.connect(func() -> void: set_bar_mode(_bar_last_shown))
 	_bar_tab.visible = _bar_mode == BAR_HIDDEN
 	add_child(_bar_tab)
-	_bar_tab.tooltip_text = "Show the timeline (%s)" % _bar_size_key()
+	_bar_tab.tooltip_text = I18n.f("Show the timeline ({key})", {"key": _bar_size_key()})
 
 
 func _sync_scrubber_row_height() -> void:
@@ -1225,7 +1225,7 @@ func _update_hold_pill() -> void:
 	if owner.is_empty():
 		return
 	var label := str(CLOCK_HOLD_LABELS.get(owner, owner.replace("_", " ")))
-	_hold_lbl.text = "⏸ held · %s" % label
+	_hold_lbl.text = "⏸ " + I18n.f("held · {owner}", {"owner": label})
 	_hold_lbl.tooltip_text = ("The clock is paused by %s. Play and the speed buttons "
 			+ "take effect when it lets go.") % label
 
@@ -4164,7 +4164,7 @@ func _apply_fold(items: Array, count: int, overflow: MenuButton) -> void:
 			if not ic_name.is_empty():
 				pop.set_item_icon(pop.item_count - 1, UiIcons.icon(ic_name, 15))
 	overflow.visible = count > 0
-	overflow.tooltip_text = "More — %s" % UiText.count(count, "tool")
+	overflow.tooltip_text = I18n.tn("More — {n} tool", "More — {n} tools", count)
 
 
 func _on_left_overflow_id(id: int) -> void:
@@ -4524,7 +4524,7 @@ func _refresh_ha_chip() -> void:
 		HomeAssistantService.State.CONNECTED:
 			col = UITheme.C_OK
 			var live := int(ha.call("live_link_count")) if ha.has_method("live_link_count") else 0
-			text = "HA · %d live" % live if live > 0 else "HA"
+			text = I18n.f("HA · {n} live", {"n": live}) if live > 0 else "HA"
 		HomeAssistantService.State.FAILED:
 			col = UITheme.C_WARN if info.has("retry_in_s") else UITheme.C_ERROR
 			text = "HA ✕"

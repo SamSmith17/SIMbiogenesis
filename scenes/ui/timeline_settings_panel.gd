@@ -41,6 +41,7 @@ var hub_mode: bool = false
 ## The sidebar: category -> page titles, in order. A page built by a
 ## `_build_*_tab` that is not listed here lands under "Other", so it can never
 ## go missing from the nav.
+# i18n:extract (category names are translated where they are drawn)
 const CATEGORIES := [
 	["Simulation", ["Gameplay", "NPC", "Extreme Weather", "Live Mode"]],
 	["Player & controls", ["Player", "Controls", "Drone", "Interface", "Keys"]],
@@ -414,8 +415,14 @@ func _build_ui() -> void:
 	outer.add_child(tbm)
 	var title_row := HBoxContainer.new()
 	tbm.add_child(title_row)
+	var gear_lbl := Label.new()
+	gear_lbl.text = "⚙ "
+	gear_lbl.add_theme_color_override("font_color", C_TEXT)
+	gear_lbl.add_theme_font_size_override("font_size", 16)
+	title_row.add_child(gear_lbl)
 	var title_lbl := Label.new()
-	title_lbl.text = "⚙  Settings" if hub_mode else "⚙  Simulation Settings"
+	# The English source stays in `text` so a live language switch retranslates it.
+	title_lbl.text = "Settings" if hub_mode else "Simulation Settings"
 	title_lbl.add_theme_color_override("font_color", C_TEXT)
 	title_lbl.add_theme_font_size_override("font_size", 16)
 	title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -541,7 +548,8 @@ func _populate_nav() -> void:
 		if (g[1] as Array).is_empty():
 			continue
 		var hdr := Label.new()
-		hdr.text = str(g[0]).to_upper()
+		hdr.text = str(g[0])
+		hdr.uppercase = true
 		hdr.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		hdr.add_theme_color_override("font_color", UITheme.C_TEXT_M)
 		if _nav_box.get_child_count() > 0:
@@ -708,7 +716,7 @@ func _on_search_changed(q: String) -> void:
 	if _search_hits.is_empty():
 		_nav_count_lbl.text = "No page matches"
 	else:
-		_nav_count_lbl.text = "%s match" % UiText.count(_search_hits.size(), "page")
+		_nav_count_lbl.text = I18n.tn("{n} page matches", "{n} pages match", _search_hits.size())
 	if not q.is_empty() and not _search_hits.is_empty() and not (current_page() in _search_hits):
 		open_page(str(_search_hits[0]))
 	_style_nav()
@@ -1076,8 +1084,8 @@ func _refresh_extreme_weather_tab() -> void:
 		if not ready:
 			_xw_zone_lbl.text = "Loading alert history for this site…"
 		elif bool(xw.call("risk_profile_is_observed")):
-			_xw_zone_lbl.text = "NWS zone %s — from %d years of recorded alerts." % [
-				zone, Time.get_date_dict_from_system().get("year", 2026) - 1986 + 1]
+			_xw_zone_lbl.text = I18n.f("NWS zone {zone} — from {years} years of recorded alerts.", {
+				"zone": zone, "years": Time.get_date_dict_from_system().get("year", 2026) - 1986 + 1})
 		else:
 			_xw_zone_lbl.text = "No NWS zone for this site (non-US) — estimated from local climate data."
 	else:
@@ -1114,7 +1122,7 @@ func _refresh_extreme_weather_tab() -> void:
 		if HazardCatalog.is_simulated(id):
 			stat.text = "%s · %s" % [HazardCatalog.risk_label(level), line]
 		else:
-			stat.text = "%s · %s · not yet simulated" % [HazardCatalog.risk_label(level), line]
+			stat.text = I18n.f("{risk} · {line} · not yet simulated", {"risk": HazardCatalog.risk_label(level), "line": line})
 
 	_syncing = prev
 
@@ -1615,6 +1623,7 @@ func _on_sfx_muted_changed(on: bool) -> void:
 
 func _build_interface_tab(tabs: TabContainer) -> void:
 	var v := _make_tab(tabs, "Interface")
+	_build_language_section(v)
 	_add_section_lbl(v, "Text and panel size")
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
@@ -1649,6 +1658,50 @@ func _build_interface_tab(tabs: TabContainer) -> void:
 	v.add_child(hint)
 	_build_sound_section(v)
 
+
+
+## Settings → Interface → Language. Lists the languages that have a
+## translation file (I18n.available()) with how much of the game each covers;
+## Auto follows the computer's language. Switching is live.
+func _build_language_section(v: VBoxContainer) -> void:
+	_add_section_lbl(v, "Language")
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var hdr := Label.new()
+	hdr.text = "Language"
+	hdr.custom_minimum_size = Vector2(110, 0)
+	hdr.add_theme_color_override("font_color", C_TEXT_S)
+	row.add_child(hdr)
+	var opt := OptionButton.new()
+	opt.name = "language_picker"
+	opt.fit_to_longest_item = false
+	opt.custom_minimum_size = Vector2(260, 0)
+	# Language names are written in their own language: never translated.
+	opt.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	var codes := [I18n.AUTO]
+	codes.append_array(I18n.available())
+	var cur := I18n.pref()
+	for i in codes.size():
+		var c := String(codes[i])
+		var label := I18n.label_for(c)
+		if c == I18n.AUTO:
+			label = "Auto — %s" % I18nLanguages.native_name(I18n.resolve(I18n.AUTO))
+		opt.add_item(label, i)
+		opt.set_item_metadata(i, c)
+		if c == cur:
+			opt.select(i)
+	opt.item_selected.connect(func(idx: int) -> void:
+		I18n.set_pref(String(opt.get_item_metadata(idx))))
+	row.add_child(opt)
+	v.add_child(row)
+	var hint := Label.new()
+	hint.text = "Translations are made by open-source AI and may contain mistakes. Text not translated yet stays in English."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.custom_minimum_size = Vector2(420, 0)
+	hint.add_theme_color_override("font_color", C_TEXT_S)
+	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	v.add_child(hint)
+	v.add_child(HSeparator.new())
 
 
 func _build_drone_tab(tabs: TabContainer) -> void:
@@ -2527,9 +2580,10 @@ func _refresh_labels() -> void:
 		return
 	var snap: Dictionary = SimSettingsController.get_state_snapshot()
 	if _shadow_quality_lbl and _shadow_quality:
+		# i18n:extract
 		var names: Array = ["Low", "Medium", "High", "Ultra"]
 		var lvl: int = clampi(int(_shadow_quality.value), 0, 3)
-		_shadow_quality_lbl.text = "Shadow Quality: %s" % names[lvl]
+		_shadow_quality_lbl.text = I18n.f("Shadow Quality: {level}", {"level": I18n.t(str(names[lvl]))})
 	if _moon_phase_lbl:
 		_moon_phase_lbl.text = snap.get("moon_phase_text", "")
 	if _latitude and _lat_lbl:
@@ -2554,9 +2608,9 @@ func _refresh_labels() -> void:
 		_survival_status.add_theme_color_override("font_color", gp.get("color", C_TEXT_S))
 	if _star_texture_lbl:
 		var tp := str(snap.get("texture_path", ""))
-		_star_texture_lbl.text = "Texture: %s" % (tp if not tp.is_empty() else "default starmap")
+		_star_texture_lbl.text = I18n.f("Texture: {name}", {"name": tp if not tp.is_empty() else I18n.t("default starmap")})
 	if _star_reg_lbl:
-		_star_reg_lbl.text = "Registration: %s" % str(snap.get("registration_summary", "?"))
+		_star_reg_lbl.text = I18n.f("Registration: {summary}", {"summary": str(snap.get("registration_summary", "?"))})
 
 
 func _sync_gameplay_from_snapshot(snap: Dictionary) -> void:
@@ -3626,14 +3680,14 @@ func _ctl_refresh_rows() -> void:
 
 func _ctl_begin_capture(action: String) -> void:
 	_ctl_capture = action
-	_ctl_status.text = "Press the new key for \"%s\" — Esc cancels." % (_ctl_rows[action]["lbl"] as Label).text
+	_ctl_status.text = I18n.f("Press the new key for “{action}” — Esc cancels.", {"action": I18n.t((_ctl_rows[action]["lbl"] as Label).text)})
 	_ctl_conflicts.visible = false
 	_ctl_refresh_rows()
 
 
 func _ctl_reset(action: String) -> void:
 	InputOverrides.clear_binding(action)
-	_ctl_status.text = "%s is back to %s." % [(_ctl_rows[action]["lbl"] as Label).text, HarnessInput.action_label(action)]
+	_ctl_status.text = I18n.f("{action} is back to {key}.", {"action": I18n.t((_ctl_rows[action]["lbl"] as Label).text), "key": HarnessInput.action_label(action)})
 	_ctl_conflicts.visible = false
 	_ctl_refresh_rows()
 
@@ -3648,15 +3702,15 @@ func rebind(action: String, ev: InputEvent) -> bool:
 		_ctl_status.text = "That key cannot be bound."
 		return false
 	_ctl_capture = ""
-	_ctl_status.text = "%s is now %s." % [(_ctl_rows[action]["lbl"] as Label).text, HarnessInput.action_label(action)]
+	_ctl_status.text = I18n.f("{action} is now {key}.", {"action": I18n.t((_ctl_rows[action]["lbl"] as Label).text), "key": HarnessInput.action_label(action)})
 	if clash.is_empty():
 		_ctl_conflicts.visible = false
 	else:
 		var names := PackedStringArray()
 		for c in clash:
 			names.append((_ctl_rows[c]["lbl"] as Label).text if _ctl_rows.has(c) else UiText.from_id(c))
-		_ctl_conflicts.text = "⚠ %s also fires: %s. Both will respond to that key." % [
-			HarnessInput.event_label(ev), ", ".join(names)]
+		_ctl_conflicts.text = "⚠ " + I18n.f("{key} also fires: {actions}. Both will respond to that key.", {
+			"key": HarnessInput.event_label(ev), "actions": ", ".join(names)})
 		_ctl_conflicts.visible = true
 	_ctl_refresh_rows()
 	return true
@@ -3967,12 +4021,12 @@ func _build_npc_tab(tabs: TabContainer) -> void:
 	names_status.add_theme_color_override("font_color", C_TEXT_S)
 	names_status.add_theme_font_size_override("font_size", 10)
 	var n0 := NpcDisplayPrefs.custom_names().size()
-	names_status.text = "%d of your names in the list" % n0 if n0 > 0 else "using the built-in names"
+	names_status.text = I18n.tn("{n} of your names in the list", "{n} of your names in the list", n0) if n0 > 0 else I18n.t("using the built-in names")
 	names_apply.pressed.connect(func() -> void:
 		var kept := NpcDisplayPrefs.set_custom_names(NpcDisplayPrefs.parse_names(names_edit.text))
 		names_edit.text = ", ".join(kept)
-		names_status.text = "%d of your names in the list" % kept.size() if kept.size() > 0 \
-			else "using the built-in names")
+		names_status.text = I18n.tn("{n} of your names in the list", "{n} of your names in the list", kept.size()) if kept.size() > 0 \
+			else I18n.t("using the built-in names"))
 	names_clear.pressed.connect(func() -> void:
 		NpcDisplayPrefs.set_custom_names(PackedStringArray())
 		names_edit.text = ""

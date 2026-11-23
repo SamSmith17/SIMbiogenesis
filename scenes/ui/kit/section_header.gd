@@ -28,7 +28,8 @@ static func make(title: String, icon: String = "", note: String = "") -> Section
 		ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		h.add_child(ic)
 	h._label = Label.new()
-	h._label.text = title.to_upper()
+	h._label.text = title
+	h._label.uppercase = true
 	h._label.add_theme_font_override("font", UITheme.font("semibold"))
 	h._label.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	h._label.add_theme_color_override("font_color", UITheme.C_TEXT_S)

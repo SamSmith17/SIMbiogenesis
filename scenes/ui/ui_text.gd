@@ -53,16 +53,10 @@ static func count(n: float, word: String, plural_form: String = "") -> String:
 	return "%s %s" % [num_s, plural(n, word, plural_form)]
 
 
-## 1473946 -> "1,473,946".
+## 1473946 -> "1,473,946" (grouped as the player's language groups digits:
+## "1.473.946" in German, "14,73,946" in Hindi; LocaleFormat).
 static func thousands(n: int) -> String:
-	var s := str(absi(n))
-	var out := ""
-	var i := s.length()
-	while i > 3:
-		out = "," + s.substr(i - 3, 3) + out
-		i -= 3
-	out = s.substr(0, i) + out
-	return ("-" if n < 0 else "") + out
+	return LocaleFormat.integer(n)
 
 
 ## A quantity with its unit at a precision that suits its size: 3 significant
@@ -96,10 +90,7 @@ static func _sig(v: float, sig: int) -> String:
 	if av < 1e-9:
 		return "0"
 	var decimals := clampi(sig - 1 - int(floor(log(av) / log(10.0))), 0, 2)
-	var s := String.num(v, decimals)
-	if decimals > 0 and s.contains("."):
-		s = s.rstrip("0").rstrip(".")
-	return s
+	return LocaleFormat.decimal(v, decimals)
 
 
 ## Hours in, words out: "45 s", "30 min", "2.5 h", "3 days", "2 weeks".
@@ -123,7 +114,7 @@ static func duration(hours: float) -> String:
 static func pct(fraction: float, decimals: int = 0) -> String:
 	if is_nan(fraction):
 		return "—"
-	return "%s%%" % String.num(fraction * 100.0, decimals)
+	return LocaleFormat.percent(fraction, decimals)
 
 
 ## First letter upper, the rest as written ("power scoreboard" -> "Power scoreboard").

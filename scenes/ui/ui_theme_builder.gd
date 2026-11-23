@@ -446,6 +446,9 @@ static func install(root: Window) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--ui-scale="):
 			_cli_scale = clampf(a.get_slice("=", 1).to_float(), 0.5, 3.0)
+	# The player's language (Settings → Interface → Language), before any UI
+	# exists, so the first frame is already translated.
+	I18n.install()
 	# Theme propagation stops at non-Control parents: the HUD lives under
 	# Main (Node3D) → UILayer (CanvasLayer), so a theme on the root window
 	# never reaches it. Merge into the engine's DEFAULT theme instead — that is

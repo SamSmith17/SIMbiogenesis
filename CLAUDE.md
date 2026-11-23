@@ -2943,6 +2943,140 @@ from the same metadata. **A new player-facing feature gets a tour stop.**
   press through its bound event, action/event labels, find_button); the
   older captures still carry their own `_lc_*` / `_ae_*` / `_bs_*` copies.
 
+## Localization (core/i18n/ + tools/i18n/, 2026-11-22, Phase 0)
+
+Plan: `plans/LOCALIZATION_PLAN.md`. The user's choices: the AI is hybrid (a
+local open LLM for major languages, NLLB-200 / MADLAD-400 for the long tail);
+the proof of concept is Spanish, Simplified Chinese, Arabic and Hindi; review
+tooling (Weblate or PRs) is decided later.
+
+Phase 0 is in. No real language ships yet.
+
+- **gettext, English as the key.** Translations live in `locale/<code>.po`,
+  generated from `locale/simbiogenesis.pot`.
+  - Godot loads a RAW `.po` at runtime (measured: plurals, msgctxt, nothing
+    imported), from `res://locale/` or `user://locale/`. The user file
+    replaces the shipped one.
+  - `*.po` is in `build_release.py`'s GAME_INCLUDE.
+- **`I18n`** (`core/i18n/i18n.gd`) is static and autoload-free:
+  - `t(msg, ctx)`, `tn(one, many, n)` (`{n}` is filled in), `f(msg, {named})`;
+  - `install()` runs from `UiThemeBuilder.install`, `set_pref(code)` switches
+    live (`ui_prefs.cfg [ui] locale`, "" = Auto), `best_match` maps an OS
+    locale.
+  - `apply()` keeps ONLY the active language's translation on the server.
+    Godot matches by language, so a loaded `en_XA` still answered for "en".
+  - Harness runs (`--capture=` / `--run-script=`) are forced to English, since
+    their checks find buttons by English text. `--locale=xx` overrides that,
+    and `tools\tour.ps1 -Locale xx` passes it on.
+- **Languages** are listed in `I18nLanguages` (`core/i18n/languages.gd`), in
+  tier order. The picker (Settings → Interface → Language, `language_picker`)
+  lists only the languages that have a file. Pseudo-locales appear in debug
+  builds only.
+- **`LocaleFormat`** (pure) handles grouping (including India's 3-2),
+  decimal marks and percent.
+  - `UiText.thousands / _sig / pct` go through it, and English output is
+    byte-identical.
+  - ⚠ Machine text (G-code, YAML, CSV, saves, HA values) must never go through
+    `UiText` / `LocaleFormat`: keep `String.num` / `%`.
+- **Controls translate their own `text` / `tooltip_text`.** The `text`
+  PROPERTY stays the English source; what is drawn is `atr(text)`. A check that
+  reads `.text` sees English. Still to wrap: formatted strings, `draw_string`
+  canvas text, runtime popup items, text that is upper-cased before it is set
+  (section headers), and modal titles set from variables.
+- **Tools** (Python, stdlib):
+  - `python tools/i18n/update.py [--langs es,hi]` runs extract → merge →
+    (translate, Phase 1) → pseudo → check.
+  - `extract.py` collects:
+    - calls: `I18n.*` / `tr` / `tr_n`;
+    - constant `text` / `tooltip_text` / … assignments;
+    - `add_item` / `set_item_text`;
+    - prose literals passed to UI helpers (`HELPER_CALL`: `_add_slider`,
+      `_section`, `SectionHeader.make`, …);
+    - `.tscn` text.
+
+    It skips `print` / `push_*`, selftests / diags / tools, and anything marked
+    `# i18n:skip`. A `# i18n: note` comment above a line becomes a note for
+    translators.
+  - `merge.py` works like msgmerge (a changed source is marked fuzzy with
+    `#| msgid`; `reviewed` entries are never touched).
+  - `pseudo.py` writes `en_XA` (accented, +40 %, `[! … !]`) and `ar_XB`
+    (right to left).
+  - `check.py` checks placeholders, plural counts and long buttons, and writes
+    `locale/coverage.json`.
+- **Count:** 4,689 strings extracted; 636 formatted `text =` assignments still
+  need wrapping (`extract.py --report` lists them by file).
+- ⚠ The Write tool turns `"\u202e"` / `"\u00a0"` escapes into the raw
+  characters. GDScript refuses a raw direction-control character, and an NBSP
+  becomes a plain space. Put such escapes in with a script.
+- Gates:
+  - `Godot.exe.exe --headless --path . --script core/i18n/i18n_selftest.gd`
+    (47);
+  - `python tools/i18n/check.py --strict`;
+  - `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/i18n_pseudo_check.gd -Label i18n_pseudo`
+    (11: the picker, a live switch to en_XA and ar_XB, ~56 % of the visible
+    Settings text translated, English back).
+- **Phase 1 (2026-11-22): the AI step.**
+  - `translate.py` sends the empty and `fuzzy` entries (never `reviewed`) to
+    Ollama's `/api/chat` with a JSON schema, 25 strings a batch.
+    - The prompt sends the strings as a plain JSON object. Context goes in a
+      separate list (budget, screen, msgctxt, notes): with the context inline,
+      gemma4 copied it into its answers.
+    - `tidy()` strips added quotes and turns "..." back into "…". `problem()`
+      rejects an answer that changed placeholders, added lines, copied the
+      context, stayed English, or ran far too long. A rejected answer is asked
+      again once, then left empty.
+    - A plural entry asks for exactly nplurals forms, named.
+    - `--only` / `--only-file` limit the run (`locale/poc_surfaces.txt` = the
+      first-hour screens). The file is saved after every batch.
+    - Translation memory: `locale/.tm/<code>.jsonl`, committed.
+    - Names that are never translated: `locale/glossary/never_translate.txt`.
+      Per-language terms: `locale/glossary/<code>.csv`.
+  - `qa.py` back-translates a sample without the original and has the model
+    rate the meaning 1-5. A score of 2 or less is marked fuzzy; the score and
+    back-translation go in `# qa:`. `--report-only` lists flagged entries.
+    Never run it while `translate.py` writes the same file.
+  - **Models on this machine** (`ollama list`): `gemma4:latest` (8B, the
+    default) and `qwen3:14b`. Set `SIMBIO_I18N_MODEL` to change the model.
+  - **The Radeon 890M (iGPU) works through Vulkan** once
+    `OLLAMA_IGPU_ENABLE=1` is set (system variable) and Ollama is started
+    from an environment that has it (a shell opened before the variable was
+    set starts it CPU-only: "total_vram 0 B" in server.log). It lists the
+    GPU twice (Vulkan and ROCm gfx1150) and loads on Vulkan, "100% GPU".
+    Alone it writes ~19 tokens/s, the same as the CPU (an iGPU shares the
+    same memory bandwidth); four requests at once write 52 tokens/s
+    together. So `OLLAMA_NUM_PARALLEL=4` (user variable) and
+    `translate.py --jobs 4` (default; `SIMBIO_I18N_JOBS`) run four
+    languages side by side.
+  - **Fonts need no bundling on Windows.** Inter's FontFile has
+    `allow_system_fallback` on, and Han, Arabic, Devanagari, Japanese, Hangul,
+    Thai, Bengali, Tamil and Ethiopic all render shaped through the OS fonts
+    (`tools/diag/i18n_font_diag.gd`, windowed). Thai draws small. Bundled Noto
+    is for Linux / macOS (Phase 3).
+  - Wrapped so far: the Settings and timeline format strings (`I18n.f` / `tn`),
+    Settings' title, sidebar group names (`# i18n:extract` on `CATEGORIES`)
+    and SectionHeader (`I18n.t(title).to_upper()`).
+  - Gate: `tools\harness.ps1 -World mtvernon -RunScript res://tools/checks/i18n_language_check.gd -Label i18n_langs`
+    (`I18N_LANGS=es,zh_Hans,ar,hi`): the share of labels in the language per
+    page, UiAudit counts, shots.
+  - **Keep the English source in `.text`** so a live switch retranslates it:
+    an icon goes in its own label, and headers use `Label.uppercase` instead of
+    `I18n.t(x).to_upper()` (that froze the Settings title and the sidebar
+    groups in the language the panel was built in). Code matching a
+    header's text compares `.to_upper()` (DesignerColumn).
+  - `extract.py` keeps one reference per FILE (up to 12): `--only-file`
+    filters by file, and with the first 6 references kept, strings used in
+    six designers before Settings ("Lighting") were left out of the PoC.
+  - A QA-rejected entry (fuzzy, still holding the memory's answer) skips
+    translation memory, and the retry is told what the old answer read back
+    as. Retries can be worse (Hindi "Redo" came back as Undo): the per-
+    language glossaries hold the terms the model got wrong.
+  - **PoC result (2026-11-22):** es / zh_Hans / ar / hi each have 1,064
+    strings (the first-hour screens, 22.6 % of the game), 0 placeholder or
+    plural errors. QA sample of 100 each: mean 4.18-4.44 of 5, 1-4 a
+    language wrong (fixed). In game: Settings 85-92 % in the language,
+    0 UiAudit errors, Arabic mirrored. Still English: the 3D status labels
+    (e.g. a turbine's RUNNING line), visual-style names, some toasts.
+
 ## UI foundation — theme, font, icons, text, HUD layout, audit (2026-10-13)
 
 Plan: `~/.claude/plans/i-want-you-create-mutable-sonnet.md` (UI polish +

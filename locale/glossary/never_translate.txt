@@ -1,0 +1,14 @@
+# Names kept as written in every language (tools/i18n/translate.py).
+SIMbiogenesis
+Home Assistant
+ESPHome
+OpenStreetMap
+Ollama
+StarShade
+Linkage Lab
+FarmBot
+PowerSpout
+Pelton
+Earthship
+SketchUp
+SCADA

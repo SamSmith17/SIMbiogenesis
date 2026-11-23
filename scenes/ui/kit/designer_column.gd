@@ -104,7 +104,7 @@ func _fold_header(box: Control, title: String) -> void:
 	var kids := box.get_children()
 	for i in kids.size():
 		var h := kids[i] as SectionHeader
-		if h == null or h._label == null or h._label.text != want:
+		if h == null or h._label == null or h._label.text.to_upper() != want:
 			continue
 		var sec := Collapsible.make(title, false)
 		var moved: Array = []

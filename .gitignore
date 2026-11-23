@@ -146,3 +146,6 @@ __pycache__/
 
 # Temporary uid tables tools/release/build_release.py writes during a build
 /art_uids/
+
+# Localization working files (tools/i18n/)
+/locale/.extract_report.json

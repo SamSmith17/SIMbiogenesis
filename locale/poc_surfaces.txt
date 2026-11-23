@@ -1,0 +1,20 @@
+# Phase 1 (proof of concept): the screens of a player's first hour.
+# python tools/i18n/translate.py --langs es,zh_Hans,ar,hi --only-file locale/poc_surfaces.txt
+scenes/ui/location_picker/*
+scenes/ui/timeline_settings_panel.gd
+scenes/ui/timeline_ui.gd
+scenes/ui/help_overlay*
+scenes/ui/hud/*
+scenes/ui/toast*
+scenes/ui/terrain_load_overlay.gd
+scenes/ui/tutorial_hud.gd
+scenes/ui/world_panel.gd
+scenes/ui/weather_card_ui.gd
+scenes/ui/solar_ui.gd
+scenes/ui/ha_settings_tab.gd
+scenes/ui/unified_library_modal.gd
+scenes/ui/kit/*
+scenes/ui/*.tscn
+system_graph/system_graph_view.gd
+system_graph/library_panel.gd
+core/tour/stops/*

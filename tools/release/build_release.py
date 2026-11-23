@@ -102,7 +102,7 @@ GAME_EXCLUDE = [
 ]
 GAME_EXCLUDE_EXTRA = {"macos": ["res://addons/ffmpeg/*"]}
 # Loose (non-resource) files the game opens with FileAccess at runtime.
-GAME_INCLUDE = ["*.json", "*.stl", "res://CREDITS.md", "res://LICENSE"]
+GAME_INCLUDE = ["*.json", "*.stl", "*.po", "res://CREDITS.md", "res://LICENSE"]
 
 
 def log(msg: str) -> None:

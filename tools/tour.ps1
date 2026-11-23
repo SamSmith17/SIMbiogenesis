@@ -45,7 +45,10 @@ param(
 	[string]$Godot = "",
 	[int]$Timeout = 0,
 	# UI audit at every hero shot: off / report (default) / strict (errors FAIL the stop)
-	[ValidateSet("off", "report", "strict")][string]$Audit = "report"
+	[ValidateSet("off", "report", "strict")][string]$Audit = "report",
+	# The game's language for the run (locale/<code>.po), e.g. es, zh_Hans, ar, hi,
+	# or en_XA / ar_XB (pseudo-locales). Harness runs are English otherwise.
+	[string]$Locale = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -124,6 +127,7 @@ foreach ($w in $worlds) {
 	$extra = @("--tour-world=$w", "--tour-stops=$($ids -join ',')", "--tour-pace=$Pace", "--tour-intro-count=$($chosen.Count)", "--tour-audit=$Audit")
 	if ($IncludeOptional) { $extra += "--tour-include-optional" }
 	if ($NoCards) { $extra += "--tour-no-cards" }
+	if ($Locale) { $extra += "--locale=$Locale" }
 	$engine = @()
 	$movie = ""
 	if ($Mode -eq "record") {
