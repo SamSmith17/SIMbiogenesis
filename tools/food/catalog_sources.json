@@ -1,0 +1,11 @@
+{
+	"comment": "Curated Open Food Facts barcodes for the shipped catalog (plans/FOOD_WASTE_REALISM_PLAN.md Phase 2). tools/food/fetch_products.py downloads each into tools/food/cache/, then build_catalog.gd parses them with the game's own FoodProducts parser. A product entry may carry its own price_usd; otherwise tools/food/category_prices.json estimates it from the category and net weight.",
+	"products": [
+		{"code": "5449000054227", "note": "Coca-Cola 1 L PET bottle"},
+		{"code": "3017624010701", "note": "Nutella 400 g glass jar"},
+		{"code": "5000157024671", "note": "Heinz Beanz 415 g steel can"},
+		{"code": "7394376616501", "note": "Oatly Barista 1 L carton"},
+		{"code": "8076802085738", "note": "Barilla penne 500 g card box + film window"},
+		{"code": "0028400090896", "note": "Doritos 1 oz film bag"}
+	]
+}

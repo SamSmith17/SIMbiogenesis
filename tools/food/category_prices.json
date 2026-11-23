@@ -1,0 +1,17 @@
+{
+	"comment": "Rough US retail price per kg of NET food content by menu category, used by build_catalog.gd when a product has no explicit price. Rounded from BLS Average Price Data / USDA ERS retail series ballparks, 2025. ESTIMATES: the point is a plausible shopping-list total, not a price oracle; players can override any product's price in game.",
+	"src": "BLS Average Price Data / USDA ERS, rounded, est",
+	"min_price_usd": 0.5,
+	"usd_per_kg": {
+		"beverage": 1.5,
+		"dairy": 3.5,
+		"canned": 4.0,
+		"grains": 3.5,
+		"snacks": 14.0,
+		"protein": 10.0,
+		"produce": 3.0,
+		"condiments": 7.0,
+		"baking": 4.0,
+		"other": 5.0
+	}
+}

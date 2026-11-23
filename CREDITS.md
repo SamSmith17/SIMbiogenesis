@@ -283,6 +283,23 @@ usage; confirm each provider's live attribution string before release.**
   - License: `CC-BY-4.0` · Attribution: **"Kp: GFZ Potsdam (CC BY 4.0)"**
   - Status: verified
 
+- **Open Food Facts** (`data-openfoodfacts`) — real store-bought food products:
+  the shipped catalog `core/food/data/food_catalog.json` (names, net content,
+  nutrition per 100 g, structured packaging) is derived from Open Food Facts by
+  `tools/food/fetch_products.py` + `tools/food/build_catalog.gd`, and the in-game
+  product search / add-by-barcode (`OffService`) reads the same API. Packaging
+  masses/volumes and prices are the game's own cited estimates
+  (`core/food/packaging_archetypes.gd`, `tools/food/category_prices.json`), kept
+  apart from the OFF data.
+  - Source: https://world.openfoodfacts.org (API v2; fixtures in `core/food/testdata/`)
+  - License: database `ODbL-1.0` (contents DbCL-1.0) · Attribution: **"Data from
+    Open Food Facts (openfoodfacts.org), licensed under the Open Database License
+    (ODbL). © Open Food Facts contributors"** (carried in the catalog header and
+    shown by the shopping UI)
+  - Attribution required: yes · Share-alike: yes (for the database; improvements
+    should go back via their WRITE API) · Commercial OK: yes
+  - Status: verified
+
 - **Open-Meteo** — weather archive/forecast **and** no-key elevation (Copernicus DEM).
   - Source: https://open-meteo.com
   - License: data `CC-BY-4.0`; API `Apache-2.0` · Attribution: credit Open-Meteo;

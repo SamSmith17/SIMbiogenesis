@@ -1,0 +1,148 @@
+{
+	"attribution": "Data from Open Food Facts (https://openfoodfacts.org), licensed under the Open Database License (ODbL). (c) Open Food Facts contributors.",
+	"generated": "2026-11-23",
+	"license": "ODbL-1.0",
+	"products": [
+		{
+			"brand": "Doritos",
+			"carb_100g": 59.9668418639105,
+			"category": "snacks",
+			"fat_100g": 28.2196902888991,
+			"fetched": "2026-11-23",
+			"fiber_100g": 3.52746128611239,
+			"id": "0028400090896",
+			"kcal_100g": 529.119192916858,
+			"name": "Nacho Cheese",
+			"net_g": 28.349523125,
+			"packagings": [
+				{
+					"archetype_id": "film_bag",
+					"count": 1
+				}
+			],
+			"price_src": "BLS Average Price Data / USDA ERS, rounded, est",
+			"price_usd": 0.5,
+			"protein_100g": 7.05492257222477,
+			"salt_100g": 1.49917104659776,
+			"serving_g": 28.349
+		},
+		{
+			"brand": "Ferrero",
+			"carb_100g": 57.5,
+			"category": "protein",
+			"fat_100g": 30.9,
+			"fetched": "2026-11-23",
+			"id": "3017624010701",
+			"kcal_100g": 539.0,
+			"name": "Nutella",
+			"net_g": 400.0,
+			"packagings": [
+				{
+					"archetype_id": "glass_jar_400",
+					"count": 1
+				}
+			],
+			"price_src": "BLS Average Price Data / USDA ERS, rounded, est",
+			"price_usd": 4.0,
+			"protein_100g": 6.3,
+			"salt_100g": 0.1075
+		},
+		{
+			"brand": "H J Heinz Foods UK Ltd",
+			"carb_100g": 15.5,
+			"category": "canned",
+			"fat_100g": 0.4,
+			"fetched": "2026-11-23",
+			"fiber_100g": 3.9,
+			"id": "5000157024671",
+			"kcal_100g": 81.0,
+			"name": "Beanz in a rich tomato sauce",
+			"net_g": 415.0,
+			"packagings": [
+				{
+					"archetype_id": "steel_can_400",
+					"count": 1
+				}
+			],
+			"price_src": "BLS Average Price Data / USDA ERS, rounded, est",
+			"price_usd": 1.66,
+			"protein_100g": 4.8,
+			"salt_100g": 0.6,
+			"serving_g": 207.0
+		},
+		{
+			"brand": "Coca-Cola",
+			"carb_100g": 10.6,
+			"category": "beverage",
+			"fat_100g": 0.0,
+			"fetched": "2026-11-23",
+			"fiber_100g": 0.0,
+			"id": "5449000054227",
+			"kcal_100g": 42.0,
+			"name": "Coca-Cola Original Taste",
+			"net_g": 1000.0,
+			"packagings": [
+				{
+					"archetype_id": "pet_bottle_1l",
+					"count": 1
+				}
+			],
+			"price_src": "BLS Average Price Data / USDA ERS, rounded, est",
+			"price_usd": 1.5,
+			"protein_100g": 0.0,
+			"salt_100g": 0.0,
+			"serving_g": 250.0
+		},
+		{
+			"brand": "Oatly",
+			"carb_100g": 7.1,
+			"category": "beverage",
+			"fat_100g": 3.0,
+			"fetched": "2026-11-23",
+			"fiber_100g": 0.8,
+			"id": "7394376616501",
+			"kcal_100g": 61.0,
+			"name": "Haver barista edition",
+			"net_g": 1000.0,
+			"packagings": [
+				{
+					"archetype_id": "carton_1l",
+					"count": 1
+				}
+			],
+			"price_src": "BLS Average Price Data / USDA ERS, rounded, est",
+			"price_usd": 1.5,
+			"protein_100g": 1.1,
+			"salt_100g": 0.1,
+			"serving_g": 50.0
+		},
+		{
+			"brand": "Barilla",
+			"carb_100g": 71.0,
+			"category": "grains",
+			"fat_100g": 2.0,
+			"fetched": "2026-11-23",
+			"fiber_100g": 3.0,
+			"id": "8076802085738",
+			"kcal_100g": 359.0,
+			"name": "Rigatoni Penne Rigate Nº73",
+			"net_g": 500.0,
+			"packagings": [
+				{
+					"archetype_id": "card_box_small",
+					"count": 1
+				},
+				{
+					"archetype_id": "film_wrap",
+					"count": 1
+				}
+			],
+			"price_src": "BLS Average Price Data / USDA ERS, rounded, est",
+			"price_usd": 1.75,
+			"protein_100g": 13.0,
+			"salt_100g": 0.01,
+			"serving_g": 80.0
+		}
+	],
+	"version": 1
+}

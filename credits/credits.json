@@ -36,6 +36,22 @@
     },
     {
       "attribution_required": true,
+      "attribution_string": "Data from Open Food Facts (openfoodfacts.org), licensed under the Open Database License (ODbL). (c) Open Food Facts contributors",
+      "author": "Open Food Facts contributors",
+      "category": "data-source",
+      "commercial_ok": true,
+      "id": "data-openfoodfacts",
+      "license": "ODbL-1.0",
+      "local_path": "core/food/data/food_catalog.json",
+      "name": "Open Food Facts",
+      "notes": "Bundled catalog derived from the OFF API by tools/food/fetch_products.py + build_catalog.gd; per-product fetch dates recorded in the catalog. Contents DbCL-1.0. Share-back: improvements to OFF data go via their WRITE API; packaging masses and prices are the game's own cited estimates kept apart from OFF data. Raw fixture replies in core/food/testdata/.",
+      "role": "Real food products: nutrition, net content, structured packaging (shopping lists, calories, packaging waste)",
+      "share_alike": true,
+      "source": "https://world.openfoodfacts.org",
+      "status": "verified"
+    },
+    {
+      "attribution_required": true,
       "attribution_string": "use ImageryService.attribution() verbatim",
       "author": "Esri and its data partners",
       "category": "data-source",
