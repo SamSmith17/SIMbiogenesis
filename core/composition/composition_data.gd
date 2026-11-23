@@ -243,8 +243,15 @@ const KINDS := {
 		"food_mj_kg": 6.97, "src": "FAO/WHO/UNU 2007 reference day, est split", "est": true},
 	"meal": {"kg_per_unit": 0.5, "kinds": {"food": 1.0}, "family": "organic",
 		"food_mj_kg": 6.97, "src": "one meal ≈ 0.5 kg of food (Kitchen preset)"},
-	"packaged_food": {"kg_per_unit": 1.0, "kinds": {"food": 0.88, "plastic_waste": 0.04,
-		"packaging_waste": 0.08}, "family": "organic", "src": "Unpack & Sort preset shares", "est": true},
+	# Food as it arrives, packaging included (gross). The 12 % packaging is
+	# split by MATERIAL now (the typed waste kinds), echoing the shipped
+	# product catalog's basket; the old 0.04 plastic / 0.08 card+tin split
+	# lives on only in saved v1 Unpack nodes' own output rates.
+	"packaged_food": {"kg_per_unit": 1.0, "kinds": {"food": 0.88,
+		"pet_waste": 0.006, "hdpe_waste": 0.003, "film_waste": 0.006,
+		"mixed_plastic_waste": 0.006, "alu_waste": 0.003, "steel_waste": 0.017,
+		"glass_waste": 0.050, "cardboard_waste": 0.023, "paper_waste": 0.006},
+		"family": "organic", "src": "Unpack & Sort v2 shares (catalog basket), est", "est": true},
 	"food_waste": {"waste": true, "kg_per_unit": 1.0, "mix": {"carbohydrate": 0.12, "protein": 0.035, "lipid": 0.03,
 		"fibre": 0.02, "food_minerals": 0.008}, "rest": "H2O", "family": "organic",
 		"src": "Zhang et al. 2007 (TS ~22–31 %), est", "est": true},

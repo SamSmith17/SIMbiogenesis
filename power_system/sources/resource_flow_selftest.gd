@@ -88,6 +88,7 @@ func _initialize() -> void:
 	_test_urine_diversion()
 	_test_establish_ramp()
 	_test_loop_presets()
+	_test_unpack_items()
 	if _failures == 0:
 		print("RESOURCE SELFTEST PASS  (%d checks)" % _checks)
 		quit(0)
@@ -410,16 +411,23 @@ func _test_loop_presets() -> void:
 	_check("Digestate filter: water out below water in", f_water > 0.0 and f_water < f_in)
 	var up := _preset_specs("Unpack & Sort Supplies")
 	var food_out := 0.0
-	var plastic := 0.0
+	var plastic := 0.0  # all plastic kinds: the typed ones + the legacy umbrella
+	var out_sum := 0.0
 	for o3: Dictionary in (up.get("outputs", []) as Array):
-		if str(o3.get("kind", "")) == "food":
+		var ok3 := str(o3.get("kind", ""))
+		out_sum += float(o3.get("rate", 0.0))
+		if ok3 == "food":
 			food_out = float(o3.get("rate", 0.0))
-		elif str(o3.get("kind", "")) == "plastic_waste":
-			plastic = float(o3.get("rate", 0.0))
+		elif ok3 in ["plastic_waste", "pet_waste", "hdpe_waste", "film_waste", "mixed_plastic_waste"]:
+			plastic += float(o3.get("rate", 0.0))
 	_check("Unpack: all the food comes out", absf(food_out - 3.0) < 1e-6)
 	var packed_in := float(((up.get("inputs", []) as Array)[0] as Dictionary).get("rate", 0.0))
-	_check("Unpack: about 4 % of the packed supplies is plastic", packed_in > 0.0
-		and absf(plastic / packed_in - 0.04) < 0.005, "%.4f" % (plastic / maxf(packed_in, 1e-9)))
+	_check("Unpack v2 is a sorter now", str(up.get("role", "")) == "unpack")
+	_check("Unpack: the display rates are mass-exact", absf(out_sum - packed_in) < 1e-6,
+		"%.4f vs %.4f" % [out_sum, packed_in])
+	_check("Unpack: ~2 % of the packed supplies is plastic (catalog basket share)",
+		packed_in > 0.0 and absf(plastic / packed_in - 0.021) < 0.005,
+		"%.4f" % (plastic / maxf(packed_in, 1e-9)))
 	var imp := _preset_specs("Plastic Collection Run")
 	_check("Plastic Collection Run is a material import",
 		bool(imp.get("counts_as_import", false)) and bool(imp.get("material_import", false)))
@@ -3163,3 +3171,92 @@ func _test_no_head_zero_flow() -> void:
 	var q2 := float(sp2.get("live_q_lps", 0.0))
 	_check("uphill intake: reports the NOZZLE operating flow (~1.34 L/s)",
 			q2 > 1.2 and q2 < 1.5, "q=%.3f" % q2)
+
+
+## Unpack & Sort v2 (food/waste realism pass, Phase 5): whole products drawn
+## FIFO from the supply store's item ledger, real net food + typed waste
+## ITEMS out, kcal density on the pantry, all hand-pinned; then a scrub back
+## and an identical re-run (the ledger truncates with the timelines).
+## Items: 2x Coca-Cola 1 L (gross 1.038, net 1.0, pet_bottle_1l 38 g) and
+## 4x Heinz Beanz (gross 0.470, net 0.415, steel_can_400 55 g).
+func _test_unpack_items() -> void:
+	var model = GraphModel.new()
+	model.add_item({"id": "sup", "type": "resource", "specs": {"name": "Supplies",
+		"resource_kind": "packaged_food", "capacity_qty": 100.0, "capacity_unit": "kg",
+		"level": 0.03956}})
+	model.add_item({"id": "pan", "type": "resource", "specs": {"name": "Pantry",
+		"resource_kind": "food", "capacity_qty": 100.0, "capacity_unit": "kg", "level": 0.0}})
+	model.add_item({"id": "petbin", "type": "resource", "specs": {"name": "PET Bin",
+		"resource_kind": "pet_waste", "capacity_qty": 40.0, "capacity_unit": "kg", "level": 0.0}})
+	model.add_item({"id": "steelbin", "type": "resource", "specs": {"name": "Steel Cans Bin",
+		"resource_kind": "steel_waste", "capacity_qty": 80.0, "capacity_unit": "kg", "level": 0.0}})
+	var up_specs := _preset_specs("Unpack & Sort Supplies")
+	up_specs["requested_state"] = "on"
+	model.add_item({"id": "up", "type": "processor", "specs": up_specs})
+	model.add_connection({"id": "u0", "polarity": "resource", "source_item_id": "sup",
+		"source_handle_id": "output", "target_item_id": "up", "target_handle_id": "res_in_0"})
+	model.add_connection({"id": "u1", "polarity": "resource", "source_item_id": "up",
+		"source_handle_id": "res_out_0", "target_item_id": "pan", "target_handle_id": "input"})
+	model.add_connection({"id": "u2", "polarity": "resource", "source_item_id": "up",
+		"source_handle_id": "res_out_1", "target_item_id": "petbin", "target_handle_id": "input"})
+	model.add_connection({"id": "u3", "polarity": "resource", "source_item_id": "up",
+		"source_handle_id": "res_out_6", "target_item_id": "steelbin", "target_handle_id": "input"})
+	var engine = ResourceFlowEngineScript.new()
+	engine.setup(model, null)
+	engine.power_available_override = 1
+	engine.simulate_step_for_test(0.0, 0.0)
+	var kg_added: float = engine.ledger_add_items("sup", {"5449000054227": 2, "5000157024671": 4}, 0.0)
+	_check("unpack: the manifest's gross kg", absf(kg_added - 3.956) < 1e-6, "%.4f" % kg_added)
+
+	# Hour 1: 3.41 kg allowance takes both bottles then two cans (the third
+	# does not fit) = 3.016 kg gross.
+	engine.simulate_step_for_test(1.0, 1.0)
+	_check("unpack: pantry got the net food", absf(_tank_level(model, "pan") * 100.0 - 2.83) < 1e-3,
+		"%.4f" % (_tank_level(model, "pan") * 100.0))
+	_check("unpack: supplies shrank by the gross", absf(_tank_level(model, "sup") * 100.0 - 0.94) < 1e-3,
+		"%.4f" % (_tank_level(model, "sup") * 100.0))
+	_check("unpack: PET bin got two bottles' mass", absf(_tank_level(model, "petbin") * 40.0 - 0.076) < 1e-4)
+	_check("unpack: steel bin got two cans' mass", absf(_tank_level(model, "steelbin") * 80.0 - 0.110) < 1e-4)
+	_check("unpack: two cans still packed", engine.item_ledger("sup").counts_at(1.5).get("5000157024671", 0) == 2)
+	_check("unpack: the bottles are ITEMS in the PET bin",
+		engine.item_ledger("petbin").counts_at(1.5).get("pet_bottle_1l", 0) == 2)
+	_check("unpack: the cans are ITEMS in the steel bin",
+		engine.item_ledger("steelbin").counts_at(1.5).get("steel_can_400", 0) == 2)
+	# Pantry kcal density: (2x1.0x420 + 2x0.415x810) / 2.83 = 534.38 kcal/kg.
+	var d1: float = engine.item_ledger("pan").density_at(1.5, 1666.0)
+	_check("unpack: pantry kcal density from the real products", absf(d1 - 534.3816) < 0.01, "%.3f" % d1)
+
+	# Hour 2: the carried 0.394 + 3.41 allowance, but only 0.94 kg remains.
+	engine.simulate_step_for_test(2.0, 1.0)
+	_check("unpack: the last two cans unpack", absf(_tank_level(model, "pan") * 100.0 - 3.66) < 1e-3)
+	_check("unpack: steel bin holds four cans", absf(_tank_level(model, "steelbin") * 80.0 - 0.22) < 1e-4
+		and engine.item_ledger("steelbin").counts_at(2.5).get("steel_can_400", 0) == 4)
+	_check("unpack: the supply store emptied", engine.item_ledger("sup").total_count_at(2.5) == 0)
+	# Mass exact: pantry + bins == everything that came in.
+	var total: float = _tank_level(model, "pan") * 100.0 + _tank_level(model, "petbin") * 40.0 \
+		+ _tank_level(model, "steelbin") * 80.0
+	_check("unpack: mass exact (net + packaging == gross)", absf(total - 3.956) < 1e-6, "%.6f" % total)
+	# The pantry's stamped density follows the mix: (2.83x534.38 + 0.83x810)/3.66.
+	var pan_specs: Dictionary = model.get_item("pan").get("specs", {})
+	_check("unpack: pantry specs carry kcal_per_kg", absf(float(pan_specs.get("kcal_per_kg", 0.0)) - 596.885) < 0.05,
+		"%.3f" % float(pan_specs.get("kcal_per_kg", 0.0)))
+
+	# Scrub back: the ledger truncates with the timelines, and the SAME step
+	# re-runs identically (the banked allowance resets with the cut). The cut
+	# lands on a STEP BOUNDARY: inside a step the tank timelines interpolate
+	# linearly while item events are discrete at the step's end, so a
+	# mid-step cut leaves the tank mid-ramp with the items whole — a
+	# bounded, self-correcting drift (the stock cap floors the next draw),
+	# not an equality to pin.
+	engine.truncate_timelines_after(0.0)
+	_check("scrub: the packed items are back", engine.item_ledger("sup").counts_at(2.5).get("5449000054227", 0) == 2
+		and engine.item_ledger("sup").counts_at(2.5).get("5000157024671", 0) == 4)
+	# The real invalidation path replays the playhead before the next live
+	# step (SimRenderer.invalidate_from) — mirror it.
+	engine.replay_at(0.0)
+	engine.simulate_step_for_test(1.0, 1.0)
+	_check("scrub: re-running the hour lands the same pantry",
+		absf(_tank_level(model, "pan") * 100.0 - 2.83) < 1e-3,
+		"pan=%.4f sup=%.4f carry?" % [_tank_level(model, "pan") * 100.0, _tank_level(model, "sup") * 100.0])
+	_check("scrub: and the same PET bin",
+		engine.item_ledger("petbin").counts_at(1.5).get("pet_bottle_1l", 0) == 2)

@@ -347,6 +347,11 @@ func truncate_timelines_after(abs_hours: float) -> void:
 		(tl as ResourceTimeline).truncate_after(abs_hours)
 	for tr in _tracks.values():
 		(tr as CompositionTrack).truncate_after(abs_hours)
+	for led in _item_ledgers.values():
+		(led as StoreItemLedger).truncate_after(abs_hours)
+	# The unpack's banked allowance is time-local state: a replay from the
+	# cut must start it fresh or the re-run diverges from the first run.
+	_unpack_carry.clear()
 
 
 # --- what is in tracked tanks (Phase 10) ------------------------------------
@@ -363,6 +368,118 @@ func tank_make_up(iid: String) -> Dictionary:
 
 func composition_track(iid: String) -> CompositionTrack:
 	return _tracks.get(iid) as CompositionTrack
+
+
+# --- item ledgers (food/waste realism pass, Phase 5) --------------------------
+# Which discrete THINGS a store's kg are: packaged products in a supply
+# store, bottles and cans in a waste bin, and the pantry's kcal density.
+# Kg stays authoritative in the tank timelines; the ledgers are the fine
+# structure the unpack draws FIFO, the 3D bins render and the kcal rides.
+# Scrub-safe by the CompositionTrack discipline (truncate_after), carried
+# by render snapshots (internal_state_snapshot) and persisted compactly on
+# the store's specs ("item_ledger") so a reload keeps the counts.
+
+## Store kinds that may carry an item ledger. `food` carries only kcal
+## density (mix events); the typed waste kinds carry archetype counts;
+## packaged_food carries product counts. The umbrellas take items too so a
+## legacy-wired bin still renders.
+const _LEDGER_KINDS := ["packaged_food", "food", "plastic_waste", "packaging_waste",
+	"pet_waste", "hdpe_waste", "film_waste", "mixed_plastic_waste", "alu_waste",
+	"steel_waste", "glass_waste", "cardboard_waste", "paper_waste"]
+
+## Which umbrella port kind takes a typed waste kind when its own port is
+## not on the node (old saves' three-port Unpack & Sort).
+const _WASTE_UMBRELLA := {
+	"pet_waste": "plastic_waste", "hdpe_waste": "plastic_waste",
+	"film_waste": "plastic_waste", "mixed_plastic_waste": "plastic_waste",
+	"alu_waste": "packaging_waste", "steel_waste": "packaging_waste",
+	"glass_waste": "packaging_waste", "cardboard_waste": "packaging_waste",
+	"paper_waste": "packaging_waste",
+}
+
+## The v1 Unpack & Sort bulk split (Eurostat 2021-based preset shares) —
+## what a store with no item identity unpacks as.
+const _UNPACK_BULK := {"food": 0.88, "plastic_waste": 0.04, "packaging_waste": 0.08}
+
+var _item_ledgers: Dictionary = {}   # tank id -> StoreItemLedger
+var _ledger_loaded: Dictionary = {}  # tank id -> true once specs.item_ledger was read
+var _ledger_stamped: Dictionary = {} # tank id -> [rev, abs_h] of the last specs stamp
+var _unpack_carry: Dictionary = {}   # unpack proc id -> kg allowance carried
+
+
+func _ledger_eligible(kind: String) -> bool:
+	return _LEDGER_KINDS.has(ResourceKinds.normalize_kind(kind))
+
+
+## The store's ledger, created (and restored from its persisted specs state)
+## on first ask. Returns null for stores whose kind carries no items.
+func ensure_item_ledger(iid: String) -> StoreItemLedger:
+	var hit: Variant = _item_ledgers.get(iid)
+	if hit != null:
+		return hit as StoreItemLedger
+	var item := _model.get_item(iid) if _model != null else {}
+	if item.is_empty():
+		return null
+	var specs: Dictionary = item.get("specs", {})
+	if not _ledger_eligible(str(specs.get("resource_kind", ""))):
+		return null
+	var led := StoreItemLedger.new()
+	if not _ledger_loaded.has(iid) and specs.get("item_ledger") is Dictionary:
+		led.load_persisted(specs["item_ledger"])
+	_ledger_loaded[iid] = true
+	_item_ledgers[iid] = led
+	return led
+
+
+## Read-only: null when the store has never carried items.
+func item_ledger(iid: String) -> StoreItemLedger:
+	return _item_ledgers.get(iid) as StoreItemLedger
+
+
+## A delivery / shopping order lands `manifest` ({product_id: count}) in a
+## packaged store's ledger. Returns the kg added; the CALLER credits the
+## tank's level (a user edit, outside the sim bracket).
+func ledger_add_items(iid: String, manifest: Dictionary, abs_h: float) -> float:
+	var led := ensure_item_ledger(iid)
+	if led == null:
+		return 0.0
+	var kg := 0.0
+	for pid in manifest:
+		var n := int(manifest[pid])
+		if n <= 0:
+			continue
+		var p := FoodProducts.product(str(pid))
+		var unit_kg := FoodProducts.gross_g(p) / 1000.0 if not p.is_empty() else 1.0
+		led.record(abs_h, str(pid), n, unit_kg * float(n))
+		kg += unit_kg * float(n)
+	_stamp_ledger_specs(iid, abs_h, true)
+	return kg
+
+
+## Persist a store's compact ledger state onto its specs (what the graph
+## autosave carries) and, for food stores, the live kcal density. Change-
+## gated on the ledger's rev and at most every 0.25 sim-h unless forced.
+## Runs inside the engine's step (the view's sim-write bracket).
+func _stamp_ledger_specs(iid: String, abs_h: float, force: bool = false) -> void:
+	var led := _item_ledgers.get(iid) as StoreItemLedger
+	if led == null or _model == null:
+		return
+	var last: Array = _ledger_stamped.get(iid, [-1, -INF])
+	if not force and int(last[0]) == led.rev:
+		return
+	if not force and abs_h - float(last[1]) < 0.25:
+		return
+	var item := _model.get_item(iid)
+	if item.is_empty():
+		return
+	var specs: Dictionary = (item.get("specs", {}) as Dictionary).duplicate()
+	specs["item_ledger"] = led.persist_state(abs_h)
+	if ResourceKinds.normalize_kind(str(specs.get("resource_kind", ""))) == "food":
+		var d := led.density_at(abs_h, FoodProducts.FALLBACK_KCAL_PER_KG)
+		if absf(float(specs.get("kcal_per_kg", 0.0)) - d) > 0.5:
+			specs["kcal_per_kg"] = d
+	_model.update_item(iid, {"specs": specs})
+	_ledger_stamped[iid] = [led.rev, abs_h]
 
 
 ## Before tanks integrate: machines fed from a tracked tank derive their
@@ -527,7 +644,16 @@ func internal_state_snapshot() -> Dictionary:
 		"gh_last_h": _gh_last_h.duplicate(true),
 		"terrace_state": _terrace_state.duplicate(true),
 		"last_abs_hours": _last_abs_hours,
+		"item_ledgers": _ledger_snapshots(),
+		"unpack_carry": _unpack_carry.duplicate(true),
 	}
+
+
+func _ledger_snapshots() -> Dictionary:
+	var out: Dictionary = {}
+	for iid in _item_ledgers:
+		out[iid] = (_item_ledgers[iid] as StoreItemLedger).snapshot()
+	return out
 
 
 func restore_internal_state(snap: Dictionary) -> void:
@@ -544,6 +670,13 @@ func restore_internal_state(snap: Dictionary) -> void:
 	_gh_last_h = (snap.get("gh_last_h", {}) as Dictionary).duplicate(true)
 	_terrace_state = (snap.get("terrace_state", {}) as Dictionary).duplicate(true)
 	_last_abs_hours = float(snap.get("last_abs_hours", _last_abs_hours))
+	var led_snaps: Dictionary = snap.get("item_ledgers", {})
+	for iid in led_snaps:
+		var led := StoreItemLedger.new()
+		led.restore(led_snaps[iid])
+		_item_ledgers[iid] = led
+		_ledger_loaded[iid] = true
+	_unpack_carry = (snap.get("unpack_carry", {}) as Dictionary).duplicate(true)
 
 
 func _wall_tick_interval() -> float:
@@ -981,7 +1114,7 @@ func _process_pbi(item: Dictionary, _abs_hours: float) -> void:
 	# Say the RATE first: the volume is rain over the whole SoI, which no tank
 	# receives as such (ponds take their own surface + their streams).
 	specs["live_rain_mmh"] = rain_mmh
-	specs["display_value"] = ("%.1f mm/h · %.0f m³/h on SoI" % [rain_mmh, total_lph / 1000.0]) \
+	specs["display_value"] = (I18n.f("{rain_mmh} mm/h · {total_lph} m³/h on SoI", {"rain_mmh": "%.1f" % rain_mmh, "total_lph": "%.0f" % (total_lph / 1000.0)})) \
 			if total_lph > 0.0 else "dry"
 	specs["is_active"] = rain_mmh > 0.0
 	var iid := str(item.get("id", ""))
@@ -1297,13 +1430,12 @@ func _process_terrace(item: Dictionary, specs: Dictionary, net_rates: Dictionary
 		st["saved_hour"] = fhour
 	var dv := ""
 	if not bool(phase["planted"]):
-		dv = "%d %s to work" % [jobs.size(), "job" if jobs.size() == 1 else "jobs"] \
+		dv = I18n.f("{jobs} {jobs_2} to work", {"jobs": "%d" % jobs.size(), "jobs_2": "job" if jobs.size() == 1 else "jobs"}) \
 			if not jobs.is_empty() else "not planted"
 	else:
-		dv = "%s %d%% · water %d%%" % [str(cinfo["label"]), int(roundf(float(phase["f"]) * 100.0)),
-			int(roundf(wf * 100.0))]
+		dv = I18n.f("{label} {f}% · water {wf}%", {"label": str(cinfo["label"]), "f": "%d" % (int(roundf(float(phase["f"]) * 100.0))), "wf": "%d" % (int(roundf(wf * 100.0)))})
 		if not jobs.is_empty():
-			dv += " · %d %s for the crews" % [jobs.size(), "job" if jobs.size() == 1 else "jobs"]
+			dv += I18n.f(" · {jobs} {jobs_2} for the crews", {"jobs": "%d" % jobs.size(), "jobs_2": "job" if jobs.size() == 1 else "jobs"})
 	if not mjobs.is_empty() and not fuel_ok:
 		dv = "the diesel store is empty — the tractor has stopped"
 	elif not waiting.is_empty():
@@ -1409,7 +1541,7 @@ func _process_food_forest(item: Dictionary, specs: Dictionary,
 	if not bool(specs["food_in_season"]) or kg_year <= 0.0:
 		var wait := VegFoodYield.days_until_harvest(doy, start_doy, end_doy)
 		specs["biomass_kg_h"] = 0.0
-		specs["display_value"] = "harvest in %d d" % wait if kg_year > 0.0 else "no yield"
+		specs["display_value"] = I18n.f("harvest in {wait} d", {"wait": "%d" % wait}) if kg_year > 0.0 else "no yield"
 		_write_node_state(iid, specs, GraphNodeState.IDLE)
 		_model.update_item(iid, {"specs": specs})
 		return
@@ -1451,7 +1583,7 @@ func _process_food_forest(item: Dictionary, specs: Dictionary,
 
 	net_rates[bio_id] = float(net_rates.get(bio_id, 0.0)) + rate
 	specs["biomass_kg_h"] = rate
-	specs["display_value"] = "%.1f kg/h harvest" % rate
+	specs["display_value"] = I18n.f("{rate} kg/h harvest", {"rate": "%.1f" % rate})
 	_write_node_state(iid, specs, GraphNodeState.RUNNING)
 	_model.update_item(iid, {"specs": specs})
 
@@ -1824,7 +1956,7 @@ func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
 		# Strict: the output tank must hold what the plant makes (a food
 		# store for a vegetable bed, a biomass store for everything else).
 		specs["biomass_kg_h"] = 0.0
-		specs["display_value"] = "need %s tank" % out_kind
+		specs["display_value"] = I18n.f("need {out_kind} tank", {"out_kind": out_kind})
 		_write_node_state(iid, specs, GraphNodeState.BLOCKED,
 				GraphNodeState.REASON_OUTPUT_UNWIRED, [out_kind])
 		_model.update_item(iid, {"specs": specs})
@@ -1933,7 +2065,7 @@ func _process_plant(item: Dictionary, net_rates: Dictionary, dt_hours: float,
 	specs["water_lph"] = water_lph
 	specs["nutrient_kgph"] = nut_kgph
 	if rate >= 0.01:
-		specs["display_value"] = "%.2f kg/h" % rate
+		specs["display_value"] = I18n.f("{rate} kg/h", {"rate": "%.2f" % rate})
 	else:
 		specs["display_value"] = "%.1f g/h" % (rate * 1000.0)
 	_write_node_state(iid, specs, GraphNodeState.RUNNING)
@@ -3671,6 +3803,194 @@ static func _working_specs(src: Dictionary) -> Dictionary:
 	return out
 
 
+## Unpack & Sort v2 (food/waste realism pass, Phase 5). Item-driven: draws
+## WHOLE packaged products FIFO from the source store's item ledger, puts
+## their net content out as food (with its real kcal density as a mix event
+## on the pantry's ledger) and their packaging out as typed waste ITEMS
+## (archetype counts into the bins' ledgers — what the 3D bins draw). A
+## store with no item identity (old saves, a plain stocked tank) unpacks on
+## the v1 bulk split instead; mass-exact either way. A produced kind lands
+## on its own port, else the legacy umbrella port (plastic_waste /
+## packaging_waste), else the node blocks — v1's all-or-nothing contract.
+func _process_unpack(item: Dictionary, specs: Dictionary, net_rates: Dictionary,
+		dt_hours: float, abs_h: float) -> void:
+	var pid := str(item.get("id", ""))
+	var occupants: float = maxf(float(specs.get("occupants", 1.0)), 1.0)
+	var switched_on := _processor_switched_on(specs)
+	var powered := _processor_has_power(item)
+	var inputs: Array = specs.get("inputs", []) as Array
+	var outputs: Array = specs.get("outputs", []) as Array
+	var rate := 0.0
+	var in_kind := "packaged_food"
+	var in_port := 0
+	for i: int in inputs.size():
+		var inp: Dictionary = inputs[i] as Dictionary
+		if str(inp.get("kind", "")) in ["electric", "dc_electricity"]:
+			continue
+		rate = float(inp.get("rate", 0.0)) * occupants
+		in_kind = ResourceKinds.normalize_kind(str(inp.get("kind", "")))
+		in_port = i
+		break
+	var src := _tank_at_port(pid, "res_in_%d" % in_port, true)
+	if src.is_empty():
+		src = _tank_at_port(pid, "input", true)
+	var src_item := _model.get_item(src) if not src.is_empty() else {}
+	var src_specs: Dictionary = src_item.get("specs", {}) if not src_item.is_empty() else {}
+	var src_tl: ResourceTimeline = _timelines.get(src) as ResourceTimeline
+	var has_supply := not src.is_empty() and _tank_has_supply(src_specs, src_tl, abs_h)
+
+	# Where each output kind's port leads ("" = the port exists but nothing
+	# is wired to a usable tank), and which port index carries it.
+	var port_tank: Dictionary = {}
+	var port_index: Dictionary = {}
+	for i: int in outputs.size():
+		var outp: Dictionary = outputs[i] as Dictionary
+		var k := ResourceKinds.normalize_kind(str(outp.get("kind", "")))
+		if k.is_empty() or k in ["electric", "dc_electricity"]:
+			continue
+		if not port_tank.has(k) or str(port_tank[k]) == "":
+			port_tank[k] = _out_port_tank(pid, i, outp)
+			port_index[k] = i
+
+	if not switched_on:
+		if powered and has_supply:
+			_write_node_state(pid, specs, GraphNodeState.READY)
+		else:
+			_write_node_state(pid, specs, GraphNodeState.IDLE)
+		return
+	if not powered:
+		_write_node_state(pid, specs, GraphNodeState.BLOCKED, GraphNodeState.REASON_NO_POWER, [])
+		return
+	if not has_supply:
+		_write_node_state(pid, specs, GraphNodeState.BLOCKED,
+				GraphNodeState.REASON_EMPTY_INPUT, [in_kind])
+		return
+
+	# The kg allowance this step: rate-limited, carried between steps so a
+	# whole item bigger than one step's draw still processes (capped — a
+	# long stall must not bank hours of work into one burst).
+	var cap := maxf(2.0 * rate, 6.0)
+	var carry: float = minf(float(_unpack_carry.get(pid, 0.0)) + rate * dt_hours, cap)
+	var stock := INF
+	if src_tl != null:
+		stock = maxf(src_tl.level_at(abs_h), 0.0) * _effective_capacity_qty(src_specs)
+	var budget := minf(carry, stock)
+
+	var led := ensure_item_ledger(src)
+	var item_mode := led != null and led.total_count_at(abs_h) > 0
+	var taken: Array = []
+	var made: Dictionary = {}         # kind -> kg this step
+	var waste_items: Dictionary = {}  # kind -> {archetype_id: count}
+	var food_kcal_wsum := 0.0
+	var processed := 0.0
+	if item_mode:
+		taken = led.take_fifo(abs_h, budget, func(id: String) -> float:
+			var p := FoodProducts.product(id)
+			return FoodProducts.gross_g(p) / 1000.0 if not p.is_empty() else 1.0)
+		for e: Dictionary in taken:
+			var p := FoodProducts.product(str(e["id"]))
+			var count := int(e["count"])
+			var gross := float(e["kg"])
+			if p.is_empty():
+				# An unknown product unpacks on the bulk split.
+				for k in _UNPACK_BULK:
+					made[k] = float(made.get(k, 0.0)) + gross * float(_UNPACK_BULK[k])
+				food_kcal_wsum += gross * float(_UNPACK_BULK["food"]) * FoodProducts.FALLBACK_KCAL_PER_KG
+				processed += gross
+				continue
+			var net := FoodProducts.net_kg(p) * float(count)
+			made["food"] = float(made.get("food", 0.0)) + net
+			food_kcal_wsum += net * FoodProducts.kcal_per_kg(p)
+			for w: Dictionary in FoodProducts.waste_items_for(p):
+				var aid := str(w["archetype_id"])
+				var wkind := PackagingArchetypes.waste_kind(aid)
+				var n := int(w["count"]) * count
+				var wkg := PackagingArchetypes.mass_g(aid) * float(n) / 1000.0
+				made[wkind] = float(made.get(wkind, 0.0)) + wkg
+				var bucket: Dictionary = waste_items.get(wkind, {})
+				bucket[aid] = int(bucket.get(aid, 0)) + n
+				waste_items[wkind] = bucket
+			processed += gross
+	else:
+		processed = budget
+		for k in _UNPACK_BULK:
+			made[k] = processed * float(_UNPACK_BULK[k])
+		food_kcal_wsum = float(made.get("food", 0.0)) * FoodProducts.FALLBACK_KCAL_PER_KG
+	if processed <= 1e-9:
+		# Nothing fits the allowance yet (the next item outweighs it):
+		# bank the allowance and wait.
+		_unpack_carry[pid] = carry
+		_write_node_state(pid, specs, GraphNodeState.IDLE)
+		return
+
+	# Every made kind must land somewhere: its own port, else the umbrella.
+	var route: Dictionary = {}  # kind -> [tank_id, port kind]
+	for k in made:
+		if float(made[k]) <= 1e-12:
+			continue
+		var route_kind := str(k)
+		var tank := str(port_tank.get(route_kind, ""))
+		if tank.is_empty():
+			var u := str(_WASTE_UMBRELLA.get(route_kind, ""))
+			if not u.is_empty() and str(port_tank.get(u, "")) != "":
+				tank = str(port_tank[u])
+				route_kind = u
+		if tank.is_empty():
+			_unpack_carry[pid] = carry
+			_write_node_state(pid, specs, GraphNodeState.BLOCKED,
+					GraphNodeState.REASON_OUTPUT_UNWIRED, [str(k)])
+			return
+		var tank_item := _model.get_item(tank)
+		var tank_specs: Dictionary = tank_item.get("specs", {}) if not tank_item.is_empty() else {}
+		var ttl: ResourceTimeline = _timelines.get(tank) as ResourceTimeline
+		if not _tank_accepts_inflow(tank_specs, ttl, abs_h):
+			_unpack_carry[pid] = carry
+			_write_node_state(pid, specs, GraphNodeState.BLOCKED,
+					GraphNodeState.REASON_OUTPUT_FULL, [route_kind])
+			return
+		route[k] = [tank, route_kind]
+
+	# Commit: kg as rates (integrated over this step's dt), item events at
+	# this step's time, wire glow per port.
+	net_rates[src] = float(net_rates.get(src, 0.0)) - processed / dt_hours
+	for conn: Dictionary in _connections_from_handle(pid, "res_in_%d" % in_port):
+		_cache_conn_flow(str(conn.get("id", "")), processed / dt_hours, in_kind)
+	if item_mode:
+		for e: Dictionary in taken:
+			led.record(abs_h, str(e["id"]), -int(e["count"]), -float(e["kg"]))
+	for k in route:
+		var tank := str(route[k][0])
+		var route_kind := str(route[k][1])
+		var kg := float(made[k])
+		net_rates[tank] = float(net_rates.get(tank, 0.0)) + kg / dt_hours
+		var pi := int(port_index.get(route_kind, -1))
+		if pi >= 0:
+			for conn: Dictionary in _connections_from_handle(pid, "res_out_%d" % pi):
+				_cache_conn_flow(str(conn.get("id", "")), kg / dt_hours, route_kind)
+		var dest_led := ensure_item_ledger(tank)
+		if dest_led == null:
+			continue
+		if str(k) == "food":
+			var dest_item := _model.get_item(tank)
+			var dest_specs: Dictionary = dest_item.get("specs", {}) if not dest_item.is_empty() else {}
+			var dtl: ResourceTimeline = _timelines.get(tank) as ResourceTimeline
+			var kg0 := 0.0
+			if dtl != null:
+				kg0 = maxf(dtl.level_at(abs_h), 0.0) * _effective_capacity_qty(dest_specs)
+			dest_led.record_mix(abs_h, kg0, kg, food_kcal_wsum / maxf(kg, 1e-9))
+			_stamp_ledger_specs(tank, abs_h)
+		elif waste_items.has(k):
+			var bucket: Dictionary = waste_items[k]
+			for aid in bucket:
+				dest_led.record(abs_h, str(aid), int(bucket[aid]),
+						PackagingArchetypes.mass_g(str(aid)) * float(int(bucket[aid])) / 1000.0)
+			_stamp_ledger_specs(tank, abs_h)
+	if item_mode:
+		_stamp_ledger_specs(src, abs_h)
+	_unpack_carry[pid] = carry - processed
+	_write_node_state(pid, specs, GraphNodeState.RUNNING)
+
+
 func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 		abs_hours: float = -1.0) -> void:
 	var specs: Dictionary = _working_specs(item.get("specs", {}) as Dictionary)
@@ -3690,6 +4010,11 @@ func _process_processor(item: Dictionary, net_rates: Dictionary, _dt: float,
 		_prepare_flowctl(item, specs, _dt, abs_h)
 	# Siphon hydro has its own tick after culverts (_process_siphon_hydro).
 	if str(specs.get("role", "")) == "siphon_hydro":
+		return
+	# Unpack & Sort v2: item-driven sorting with the v1 bulk split as the
+	# fallback (food/waste realism pass, Phase 5).
+	if str(specs.get("role", "")) == "unpack":
+		_process_unpack(item, specs, net_rates, _dt, abs_h)
 		return
 	# Role-specific machines keep dedicated ticks (CNC / sheet / extruder / …);
 	# process-recipe batch cycles are for generic processors (+ legacy batch_mode).

@@ -1150,20 +1150,40 @@ const PROCESSORS: Array = [
 		# plastic packaging a person a year, Eurostat 2021, most of it food's,
 		# against ~550 kg of food eaten). Sorted at the bench: plastic for the
 		# shredder, card and tin for the haul to town. Passive (hands).
+		# v2 (food/waste realism pass): role "unpack" draws WHOLE products
+		# FIFO from the supply store's item ledger — real net weights, real
+		# kcal density into the pantry, real typed packaging ITEMS into the
+		# bins (what the 3D bins draw). A store with no item identity (old
+		# saves) unpacks on the v1 bulk split (0.88 / 0.04 / 0.08, Eurostat
+		# 2021: ~36 kg plastic packaging per person-year on ~550 kg of food).
+		# A typed waste kind lands on its own port, else the legacy umbrella
+		# ports at the end. Output rates here are DISPLAY estimates (the
+		# shipped catalog basket's rough shares); the engine moves the real
+		# per-item masses.
 		"type": "processor", "label": "Unpack & Sort Supplies", "icon": "📦",
-		"width": 150.0, "height": 130.0,
+		"width": 170.0, "height": 130.0,
 		"specs": {
 			"name": "Unpack & Sort Supplies", "watts": 0.0, "cost": 50.0,
 			"energy_source": "",
 			"efficiency": 1.0, "energy_wh_per_unit": 0.0,
 			"io_absolute": true,
+			"role": "unpack",
 			"unit_ops": ["sorting"],
-			"daily_note": "Packaged supplies 3.41 kg/h → 3 kg/h food + 0.136 kg/h plastic + 0.273 kg/h card and tin.",
+			"daily_note": "Packaged supplies 3.41 kg/h → food + the packaging sorted by material (per-item masses; bulk split 0.88/0.04/0.08 when the store carries no item list).",
 			"inputs": [{"kind": "packaged_food", "rate": 3.41, "unit": "kg/h"}],
 			"outputs": [
 				{"kind": "food", "rate": 3.0, "unit": "kg/h"},
-				{"kind": "plastic_waste", "rate": 0.136, "unit": "kg/h"},
-				{"kind": "packaging_waste", "rate": 0.273, "unit": "kg/h"},
+				{"kind": "pet_waste", "rate": 0.02, "unit": "kg/h"},
+				{"kind": "hdpe_waste", "rate": 0.01, "unit": "kg/h"},
+				{"kind": "film_waste", "rate": 0.02, "unit": "kg/h"},
+				{"kind": "mixed_plastic_waste", "rate": 0.02, "unit": "kg/h"},
+				{"kind": "alu_waste", "rate": 0.01, "unit": "kg/h"},
+				{"kind": "steel_waste", "rate": 0.06, "unit": "kg/h"},
+				{"kind": "glass_waste", "rate": 0.17, "unit": "kg/h"},
+				{"kind": "cardboard_waste", "rate": 0.08, "unit": "kg/h"},
+				{"kind": "paper_waste", "rate": 0.02, "unit": "kg/h"},
+				{"kind": "plastic_waste", "rate": 0.0, "unit": "kg/h"},
+				{"kind": "packaging_waste", "rate": 0.0, "unit": "kg/h"},
 			],
 		},
 	},
