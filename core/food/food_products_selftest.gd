@@ -9,7 +9,7 @@ extends SceneTree
 ## Run: Godot.exe.exe --headless --path . --script core/food/food_products_selftest.gd
 ## (--import first: FoodProducts / PackagingArchetypes are class_names.)
 
-const EXPECTED_CHECKS := 90
+const EXPECTED_CHECKS := 94
 
 const TD := "res://core/food/testdata/"
 ## The typed waste kinds Phase 4 adds; every archetype must sort into one.
@@ -47,6 +47,7 @@ func _initialize() -> void:
 	_test_composition()
 	_test_catalog()
 	_test_user_overlay()
+	_test_off_service_parsers()
 
 	if FileAccess.file_exists(FoodProducts.user_path):
 		DirAccess.remove_absolute(FoodProducts.user_path)
@@ -328,3 +329,22 @@ func _test_user_overlay() -> void:
 			_near(float(FoodProducts.product("5449000054227").get("price_usd", 0.0)), 1.5))
 	_check("shipped product count unchanged by the overlay round trip",
 			FoodProducts.all_products().size() >= 7)
+
+
+# --- OffService's pure parse wrappers (no network, no autoload names) -----------
+
+func _test_off_service_parsers() -> void:
+	var svc := load("res://core/food/off_service.gd")
+	var coke := _fixture("5449000054227")
+	var rec: Dictionary = svc.parse_product_json(coke)
+	_check("OffService.parse_product_json == FoodProducts.parse_off_product",
+			str(rec.get("id", "")) == "5449000054227"
+			and _near(float(rec.get("kcal_100g", -1.0)), 42.0))
+	# A v1 search reply is {products: [bare product dicts]}.
+	var search := {"products": [coke.get("product", {}), {}, _fixture("3017624010701").get("product", {})]}
+	var found: Array = svc.parse_search_json(search)
+	_check("search parse keeps the two real products", found.size() == 2, str(found.size()))
+	_check("search records are full product records",
+			str(found[0].get("id", "")) == "5449000054227"
+			and str(found[1].get("id", "")) == "3017624010701")
+	_check("empty search reply -> []", (svc.parse_search_json({}) as Array).is_empty())
