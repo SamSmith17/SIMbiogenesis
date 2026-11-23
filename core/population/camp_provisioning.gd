@@ -50,6 +50,21 @@ const WATER_WINDOW_H := 1.0
 const PEAK_FACTOR := 1.3
 
 
+## The calorie content behind the 1.5 kg/person/day food rate (food/waste
+## realism plan Phase 6): people EAT ~2000 kcal (NpcMetabolism's baseline)
+## and the engine returns 20 % of the drawn mass as scraps, so the DRAW is
+## 2500 kcal/day — which at the generic density (food ≈ 6.97 MJ/kg ≈ 1666
+## kcal/kg) is the 1.5 kg above. A pantry of real products changes the kg
+## (denser food = fewer kg), never the kcal.
+static func kcal_per_person_day() -> float:
+	return NpcMetabolism.DAILY_BASELINE_KCAL
+
+
+## The kcal a day's pantry draw must carry (eaten + the scrap share).
+static func draw_kcal_per_person_day() -> float:
+	return NpcAgent.SITTING_DRAW_KCAL * 3.0
+
+
 static func preset(id: String) -> Dictionary:
 	return (PRESETS.get(id, PRESETS["weekend"]) as Dictionary).duplicate()
 

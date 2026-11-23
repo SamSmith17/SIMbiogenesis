@@ -116,6 +116,31 @@ static func _normalize_steps(raw: Variant) -> Array:
 	return out
 
 
+## kcal one of this recipe's meals carries: the food energy of the batch's
+## inputs (CompositionCatalog food_mj_per_kg — water and electricity carry 0)
+## over the meals it serves (food/waste realism plan Phase 6, decision D6).
+## 0 when the recipe serves no meals or its inputs carry no food energy —
+## the eaters then treat the meal as a full one, today's behaviour exactly.
+const KCAL_PER_MJ := 1.0 / 0.004184
+
+
+static func kcal_per_meal(recipe: Dictionary) -> float:
+	var servings := 0.0
+	for outp: Variant in recipe.get("outputs", []) as Array:
+		if str((outp as Dictionary).get("kind", "")) == "meal":
+			servings += float((outp as Dictionary).get("qty", (outp as Dictionary).get("rate", 0.0)))
+	if servings <= 0.0:
+		return 0.0
+	var mj := 0.0
+	for inp: Variant in recipe.get("inputs", []) as Array:
+		var d := inp as Dictionary
+		var kind := str(d.get("kind", ""))
+		if kind == "electric" or kind == "part":
+			continue
+		mj += float(d.get("qty", d.get("rate", 0.0))) * CompositionCatalog.food_mj_per_kg(kind)
+	return mj * KCAL_PER_MJ / servings
+
+
 static func is_valid(recipe: Dictionary) -> bool:
 	if recipe.is_empty():
 		return false

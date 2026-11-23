@@ -15,7 +15,7 @@ extends SceneTree
 ## Carries EXPECTED_CHECKS: a Godot runtime error aborts the enclosing test
 ## function while the suite still prints PASS.
 
-const EXPECTED_CHECKS := 88
+const EXPECTED_CHECKS := 90
 
 var _checks := 0
 var _fails := 0
@@ -225,6 +225,13 @@ func _test_hand_numbers() -> void:
 	_check("plastic waste carries PVC's chlorine", pvc_cl > 0.01 and pvc_cl < 0.03, "%.4f" % pvc_cl)
 	_check("flake is the waste it was shredded from", _near(float(CompositionCatalog.elements_of("plastic_flake").get("C", 0.0)),
 		float(CompositionCatalog.elements_of("plastic_waste").get("C", 0.0)), 1e-9))
+	# food_mj inherits through a "kinds" composition weighted by fraction
+	# (packaged_food = 0.88 food), so a Supply Store's food energy is not 0.
+	_check("packaged food carries 0.88 x food's energy", _near(
+		CompositionCatalog.food_mj_per_kg("packaged_food"), 0.88 * 6.97, 1e-9),
+		"%.4f" % CompositionCatalog.food_mj_per_kg("packaged_food"))
+	_check("a meal's own food_mj figure still wins", _near(
+		CompositionCatalog.food_mj_per_kg("meal"), 6.97, 1e-9))
 
 
 func _test_grades() -> void:

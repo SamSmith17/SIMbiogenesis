@@ -406,6 +406,13 @@ func tick_at(model, flow_engine, main: Node, abs_h: float) -> void:
 			"meal_available": flow_engine != null
 				and flow_engine.has_method("habitat_kind_supplied")
 				and flow_engine.habitat_kind_supplied(iid, "meal"),
+			# Calorie-driven eating (Phase 6): the pantry's kcal density (the
+			# item ledger's stamp) and the meal counter's kcal per meal. 0 =
+			# unknown -> the agents fall back to the long-standing rates.
+			"food_kcal_kg": flow_engine.habitat_food_kcal_kg(iid)
+				if flow_engine != null and flow_engine.has_method("habitat_food_kcal_kg") else 0.0,
+			"meal_kcal": flow_engine.habitat_meal_kcal(iid)
+				if flow_engine != null and flow_engine.has_method("habitat_meal_kcal") else 0.0,
 			"registry": registry,
 			"pos_of": func(space: Dictionary) -> Variant:
 				return registry.resolve_position(space, main) if registry != null else null,
@@ -869,6 +876,10 @@ func _tick_light(iid: String, specs: Dictionary, main: Node, flow_engine, model,
 		"weather": _sample_weather(main, hour_of_day),
 		"meal_available": flow_engine != null and flow_engine.has_method("habitat_kind_supplied")
 			and flow_engine.habitat_kind_supplied(iid, "meal"),
+		"food_kcal_kg": flow_engine.habitat_food_kcal_kg(iid)
+			if flow_engine != null and flow_engine.has_method("habitat_food_kcal_kg") else 0.0,
+		"meal_kcal": flow_engine.habitat_meal_kcal(iid)
+			if flow_engine != null and flow_engine.has_method("habitat_meal_kcal") else 0.0,
 		"routine": cohort.routine,
 		"venue_state_of": func(space: Dictionary) -> Dictionary:
 			return _venue_states.get(str(space.get("id", "")), {}),

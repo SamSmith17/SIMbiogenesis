@@ -802,6 +802,32 @@ func _test_meal_first_eating() -> void:
 	_check("a dry meal counter blocks the sitting (no invented mass)",
 		is_zero_approx(float(dry["meal"])), str(dry))
 
+	# --- Calorie-driven eating (food/waste realism plan Phase 6) -------------
+	# At the fallback density the kcal formula IS the long-standing table rate.
+	_check("fallback density reproduces the 1.0 kg/h table rate",
+		absf(NpcAgent.food_draw_rate({}) - 1.0) < 1e-9,
+		"%.6f" % NpcAgent.food_draw_rate({}))
+	# A denser pantry (real products, 2500 kcal/kg) draws proportionally less:
+	# 833.33 kcal per sitting / 2500 / 0.5 h = 0.6667 kg/h.
+	_check("a 2500 kcal/kg pantry draws 2/3 the kg",
+		absf(NpcAgent.food_draw_rate({"food_kcal_kg": 2500.0}) - 2.0 / 3.0) < 1e-6,
+		"%.4f" % NpcAgent.food_draw_rate({"food_kcal_kg": 2500.0}))
+	# The day's draw covers the eaten baseline plus the 20 % scrap share.
+	_check("three sittings draw 2500 kcal (2000 eaten + scraps)",
+		absf(NpcAgent.SITTING_DRAW_KCAL * 3.0 - 2500.0) < 1e-6)
+	_check("daily_kcal = baseline + net walking",
+		absf(NpcMetabolism.daily_kcal(350.0) - 2350.0) < 1e-9
+		and absf(NpcMetabolism.daily_kcal() - 2000.0) < 1e-9)
+	# D6 meal satisfaction: a 400 kcal meal on a 667 kcal need leaves 40 %
+	# of the hunger unmet; unknown kcal (0) leaves none — today's behaviour.
+	var thin := NpcAgent.meal_residual({"meal_available": true, "meal_kcal": 400.0})
+	_check("a thin meal leaves hunger partly unmet",
+		absf(thin - (1.0 - 400.0 / (2000.0 / 3.0))) < 1e-9, "%.4f" % thin)
+	_check("unknown meal kcal satisfies in full (byte-identical fallback)",
+		is_zero_approx(NpcAgent.meal_residual({"meal_available": true}))
+		and is_zero_approx(NpcAgent.meal_residual({"meal_available": true, "meal_kcal": 900.0}))
+		and is_zero_approx(NpcAgent.meal_residual({})))
+
 
 func _test_starvation_block() -> void:
 	var site := _make_test_site()

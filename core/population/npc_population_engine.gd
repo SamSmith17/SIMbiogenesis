@@ -669,6 +669,9 @@ func _make_ctx(ctx_in: Dictionary) -> Dictionary:
 		# wired" once per tick; agents read the flag (same forward-or-it-
 		# never-arrives rule as everything else here).
 		"meal_available": bool(ctx_in.get("meal_available", false)),
+		# Calorie-driven eating (Phase 6): pantry kcal density + meal kcal.
+		"food_kcal_kg": float(ctx_in.get("food_kcal_kg", 0.0)),
+		"meal_kcal": float(ctx_in.get("meal_kcal", 0.0)),
 		# Team-lift gather gate: how many of a chore's claimed workers stand
 		# within `r` of `p`. The agent at a multi-worker pickup polls this so
 		# the whole crew leaves with the load together.

@@ -106,6 +106,16 @@ func _test_catalog() -> void:
 		if bool((st as Dictionary).get("require_confirm", false)):
 			any_confirm = true
 	_check("meal_prep steps are crew work, not Confirm gates", not any_confirm)
+	# Calorie-driven eating (Phase 6): one meal_prep meal carries 4.8 kg of
+	# food's energy over 8 servings — 4.8 x 6.97 MJ / 0.004184 / 8 = 999.5
+	# kcal, a hearty meal (over the 666.7 kcal sitting -> full satisfaction).
+	var kpm := ProcessRecipe.kcal_per_meal(meal)
+	_check("meal_prep serves ~1000 kcal a meal", _approx(kpm, 999.0, 1000.0), "%.1f" % kpm)
+	_check("a recipe with no meal output carries no meal kcal",
+		is_zero_approx(ProcessRecipe.kcal_per_meal(ProcessRecipe.normalize({
+			"id": "x", "batch_time_hrs": 1.0,
+			"inputs": [{"kind": "food", "qty": 2.0}],
+			"outputs": [{"kind": "biomass", "qty": 2.0}]}))))
 
 
 func _test_legacy_migration() -> void:

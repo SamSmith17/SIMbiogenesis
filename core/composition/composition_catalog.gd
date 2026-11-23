@@ -302,9 +302,25 @@ static func sensible_mj_per_kg(kind: String) -> float:
 	return float(row(kind).get("sensible_mj_kg", 0.0))
 
 
-## Metabolisable food energy, MJ per kg (food, meals).
+## Metabolisable food energy, MJ per kg (food, meals). A kind composed of
+## other KINDS (packaged_food) with no figure of its own inherits the
+## weighted mean of its sub-kinds' — before this, a Supply Store's food
+## energy read 0 in the element ledger.
 static func food_mj_per_kg(kind: String) -> float:
-	return float(row(kind).get("food_mj_kg", 0.0))
+	return _food_mj_per_kg(canonical(kind), [])
+
+
+static func _food_mj_per_kg(kind: String, seen: Array) -> float:
+	var r := row(kind)
+	if r.has("food_mj_kg"):
+		return float(r["food_mj_kg"])
+	if r.has("kinds") and not seen.has(kind):
+		seen.append(kind)
+		var total := 0.0
+		for sub in (r["kinds"] as Dictionary).keys():
+			total += float(r["kinds"][sub]) * _food_mj_per_kg(canonical(str(sub)), seen)
+		return total
+	return 0.0
 
 
 ## What `qty` of the kind's unit holds. known = false: the composition is

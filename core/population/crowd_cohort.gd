@@ -2080,8 +2080,11 @@ func _consumes(name: String, stype: String, ctx: Dictionary) -> Dictionary:
 	var base: Dictionary = (NpcAgent.ACTIVITIES.get(name, {}) as Dictionary).get("consumes", {})
 	if name == "enrichment":
 		return {"biomass": NpcAgent.FIRE_BIOMASS_KG_H} if stype == "fire_circle" else {}
-	if name == "hunger" and bool(ctx.get("meal_available", false)):
-		return {"meal": NpcAgent.MEAL_PER_H, "water": float(base.get("water", 8.0))}
+	if name == "hunger":
+		if bool(ctx.get("meal_available", false)):
+			return {"meal": NpcAgent.MEAL_PER_H, "water": float(base.get("water", 8.0))}
+		# Raw food by CALORIES — NpcAgent's own formula, so the tiers agree.
+		return {"food": NpcAgent.food_draw_rate(ctx), "water": float(base.get("water", 8.0))}
 	return base
 
 
@@ -2092,6 +2095,10 @@ func _finish_activity(i: int, t: float, ctx: Dictionary) -> void:
 		_set_need(i, "enrichment", NpcSocial.relieved_enrichment(_need(i, "enrichment")))
 	if ACT_OF_NEED.has(name):
 		_set_need(i, name, _rand(i) * 0.08)
+		if name == "hunger":
+			# A thin meal leaves part of the hunger unmet (D6) — the SAME
+			# residual the full tier adds after its _satisfy.
+			_set_need(i, "hunger", _need(i, "hunger") + NpcAgent.meal_residual(ctx))
 		_clear_blocked(i, name)
 		if name == "bladder":
 			poop_now[i] = 0

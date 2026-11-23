@@ -82,6 +82,16 @@ static func net_walk_kcal(dist_m: float, climb_m: float, speed_mps: float,
 			- resting_kcal(minutes, mass_kg), 0.0)
 
 
+## A person's whole day in kcal: the baseline plus what their walking cost
+## above resting (food/waste realism plan Phase 6). The REPORTS use the full
+## figure; the two population tiers DRAW food against the baseline alone —
+## the light tier has no metabolism ledger, and a tier-only walking term is
+## exactly the kind of asymmetry that breaks the equivalence pins.
+static func daily_kcal(net_walk_kcal_day: float = 0.0,
+		baseline_kcal: float = DAILY_BASELINE_KCAL) -> float:
+	return baseline_kcal + maxf(net_walk_kcal_day, 0.0)
+
+
 ## Walking as a share of a day's energy budget — the spatial-efficiency
 ## headline. A camp costing 8% of everyone's day just getting to water is a
 ## bad plan, and this is what says so.

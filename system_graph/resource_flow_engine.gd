@@ -4712,6 +4712,8 @@ func _process_processor_batch(item: Dictionary, specs: Dictionary, net_rates: Di
 							push_ok = true
 					if push_ok:
 						frame_pushes[tank_ido] = float(frame_pushes.get(tank_ido, 0.0)) + qty_per_hr_o
+						if str(outp.get("kind", "")) == "meal":
+							_stamp_meal_kcal(tank_ido, recipe)
 						for conn_o: Dictionary in _connections_from_handle(item_id, "res_out_%d" % i):
 							_cache_conn_flow(str(conn_o.get("id", "")), qty_per_hr_o, str(outp.get("kind", "")))
 						if i == 0 and outputs.size() == 1:
@@ -4742,6 +4744,8 @@ func _process_processor_batch(item: Dictionary, specs: Dictionary, net_rates: Di
 						if push_oke:
 							var qty_per_hr_e := qty_e / dt_hours
 							net_rates[tank_ide] = float(net_rates.get(tank_ide, 0.0)) + qty_per_hr_e
+							if str(outp2.get("kind", "")) == "meal":
+								_stamp_meal_kcal(tank_ide, recipe)
 							for conn_e: Dictionary in _connections_from_handle(item_id, "res_out_%d" % i):
 								_cache_conn_flow(str(conn_e.get("id", "")), qty_per_hr_e, str(outp2.get("kind", "")))
 							if i == 0 and outputs.size() == 1:
@@ -5145,6 +5149,64 @@ func habitat_kind_supplied(item_id: String, kind: String) -> bool:
 		var tl: ResourceTimeline = _timelines.get(tank_id) as ResourceTimeline
 		return tl != null and tl.level_at(maxf(_last_abs_hours, 0.0)) > 0.001
 	return false
+
+
+## The wired tank behind a habitat's input channel for `kind` ("" = none).
+func _habitat_supply_tank(item_id: String, kind: String) -> String:
+	var item := _model.get_item(item_id)
+	if item.is_empty():
+		return ""
+	var specs: Dictionary = item.get("specs", {})
+	var want := ResourceKinds.normalize_kind(kind)
+	var inputs: Array = specs.get("inputs", []) as Array
+	for i: int in inputs.size():
+		if ResourceKinds.normalize_kind(
+				str((inputs[i] as Dictionary).get("kind", ""))) != want:
+			continue
+		var tank_id := _tank_at_port(item_id, "res_in_%d" % i, true)
+		if tank_id.is_empty():
+			tank_id = _tank_at_port(item_id, "input", true)
+		return tank_id
+	return ""
+
+
+## The kcal density of the habitat's wired FOOD store (the item ledger's
+## `kcal_per_kg` stamp — Phase 5 writes it from the real products in the
+## store). 0 = unknown: the eaters then use the generic figure (food's
+## 6.97 MJ/kg), which reproduces the long-standing 1.5 kg/person/day draw.
+func habitat_food_kcal_kg(item_id: String) -> float:
+	var tank_id := _habitat_supply_tank(item_id, "food")
+	if tank_id.is_empty():
+		return 0.0
+	var t := _model.get_item(tank_id)
+	return float((t.get("specs", {}) as Dictionary).get("kcal_per_kg", 0.0))
+
+
+## kcal one meal from the habitat's wired meal counter carries (the kitchen's
+## recipe stamps `kcal_per_meal` on the counter as it serves). 0 = unknown:
+## a meal then satisfies hunger fully, today's behaviour exactly.
+func habitat_meal_kcal(item_id: String) -> float:
+	var tank_id := _habitat_supply_tank(item_id, "meal")
+	if tank_id.is_empty():
+		return 0.0
+	var t := _model.get_item(tank_id)
+	return float((t.get("specs", {}) as Dictionary).get("kcal_per_meal", 0.0))
+
+
+## Change-gated `kcal_per_meal` stamp on the meal counter a kitchen's batch
+## is serving into (sim write: the engine runs inside the view's bracket).
+func _stamp_meal_kcal(tank_id: String, recipe: Dictionary) -> void:
+	var kcal := ProcessRecipe.kcal_per_meal(recipe)
+	if kcal <= 0.0:
+		return
+	var t := _model.get_item(tank_id)
+	if t.is_empty():
+		return
+	var tspecs: Dictionary = t.get("specs", {})
+	if absf(float(tspecs.get("kcal_per_meal", 0.0)) - kcal) < 0.5:
+		return
+	tspecs["kcal_per_meal"] = kcal
+	_model.update_item(tank_id, {"specs": tspecs})
 
 
 ## The ideal-supply ledger on the habitat (what a perfect infrastructure

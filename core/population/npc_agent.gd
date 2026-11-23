@@ -708,7 +708,12 @@ func _step_doing(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dictiona
 	var doing_h := maxf(minf(activity_ends_h, abs_hours) - (abs_hours - dt_hours), 0.0)
 	if abs_hours >= activity_ends_h:
 		var billed := _scaled(consumes, doing_h, dt_hours)
+		var was_hunger := activity == "hunger"
 		_satisfy(activity)
+		if was_hunger:
+			# A thin meal leaves part of the hunger unmet (D6): they eat
+			# again sooner, drawing more meals — calories close the loop.
+			needs["hunger"] = clampf(float(needs.get("hunger", 0.0)) + meal_residual(ctx), 0.0, 1.0)
 		_finish(ctx, true)
 		return billed
 	# Interrupt for a different, desperate need.
@@ -949,7 +954,12 @@ func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dict
 	var doing_h := maxf(minf(activity_ends_h, abs_hours) - arrive_abs, 0.0)
 	if abs_hours >= activity_ends_h:
 		var billed := _scaled(consumes, doing_h, dt_hours)
+		var was_hunger := activity == "hunger"
 		_satisfy(activity)
+		if was_hunger:
+			# A thin meal leaves part of the hunger unmet (D6): they eat
+			# again sooner, drawing more meals — calories close the loop.
+			needs["hunger"] = clampf(float(needs.get("hunger", 0.0)) + meal_residual(ctx), 0.0, 1.0)
 		_finish(ctx, true)
 		return billed
 	return _scaled(consumes, doing_h, dt_hours)
@@ -958,6 +968,43 @@ func _step_traveling(abs_hours: float, dt_hours: float, ctx: Dictionary) -> Dict
 ## Meal-first draw rate: 2 meals/h over the same 0.5 h sitting = 1 meal
 ## (~0.5 kg raw-food equivalent — the same mass the raw path bills).
 const MEAL_PER_H := 2.0
+
+## Calorie-driven raw-food draw (food/waste realism plan Phase 6). A sitting
+## must cover a third of the 2000 kcal day, grossed up for the 20 % the
+## engine returns as scraps (ResourceFlowEngine.HABITAT_FOOD_SCRAP_YIELD) —
+## so a day's three sittings DRAW 2500 kcal and 2000 are eaten. kg drawn =
+## that ÷ the pantry's kcal density (ctx.food_kcal_kg, the store's item-
+## ledger stamp). The fallback density is chosen so an unstamped pantry
+## reproduces the long-standing 1.0 kg/h table rate EXACTLY (1.5 kg/day);
+## it sits within 0.05 % of composition_data's food at 6.97 MJ/kg.
+const FOOD_SCRAP_SHARE := 0.20
+const SITTING_DRAW_KCAL := 2000.0 / 3.0 / (1.0 - FOOD_SCRAP_SHARE)   # 833.33
+const HUNGER_SITTING_H := 0.5   # ACTIVITIES.hunger duration_h
+const FALLBACK_FOOD_KCAL_KG := SITTING_DRAW_KCAL / HUNGER_SITTING_H  # 1666.67
+
+
+## kg/h a raw-food sitting draws at the supplying store's kcal density.
+## IDENTICAL in both tiers (CrowdCohort._consumes calls this): a tier-only
+## difference here is what breaks the equivalence pins.
+static func food_draw_rate(ctx: Dictionary) -> float:
+	var d := float(ctx.get("food_kcal_kg", 0.0))
+	if d <= 0.0:
+		d = FALLBACK_FOOD_KCAL_KG
+	return SITTING_DRAW_KCAL / HUNGER_SITTING_H / d
+
+
+## How much hunger a finished MEAL sitting leaves unmet (decision D6): a
+## meal satisfies kcal_per_meal / (a third of the 2000 kcal day), clamped to
+## 1. The kitchen's recipe stamps ctx.meal_kcal; unknown (<= 0) -> 0 residual,
+## today's behaviour byte for byte. Raw-food sittings draw their kcal by
+## mass above, so they always satisfy in full.
+static func meal_residual(ctx: Dictionary) -> float:
+	if not bool(ctx.get("meal_available", false)):
+		return 0.0
+	var kcal := float(ctx.get("meal_kcal", 0.0))
+	if kcal <= 0.0:
+		return 0.0
+	return 1.0 - clampf(kcal / (NpcMetabolism.DAILY_BASELINE_KCAL / 3.0), 0.0, 1.0)
 
 
 ## What an activity consumes right now. Enrichment is normally free, but a
@@ -974,8 +1021,11 @@ func _consumes_for(act: String, ctx: Dictionary = {}) -> Dictionary:
 		return {"water": flush / visit_len_h} if flush > 0.0 else {}
 	if act == "enrichment" and target_space_type == "fire_circle":
 		return {"biomass": FIRE_BIOMASS_KG_H}
-	if act == "hunger" and bool(ctx.get("meal_available", false)):
-		return {"meal": MEAL_PER_H, "water": float(base.get("water", 8.0))}
+	if act == "hunger":
+		if bool(ctx.get("meal_available", false)):
+			return {"meal": MEAL_PER_H, "water": float(base.get("water", 8.0))}
+		# Raw food by CALORIES: the sitting's kcal at the pantry's density.
+		return {"food": food_draw_rate(ctx), "water": float(base.get("water", 8.0))}
 	return base
 
 
