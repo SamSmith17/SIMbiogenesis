@@ -23644,6 +23644,49 @@ func provision_habitat(iid: String, preset: String = "") -> Dictionary:
 	_sim_bulk_update = true
 	_history_suppress = true
 	var col := 0
+	for i in (specs.get("inputs", []) as Array).size():
+		var inp: Dictionary = (specs["inputs"] as Array)[i]
+		var kind := ResourceKinds.normalize_kind(str(inp.get("kind", "")))
+		if not sup.has(kind) or not CampProvisioning.SUPPLY_KINDS.has(kind):
+			continue
+		var want: Dictionary = sup[kind]
+		var tank_id := _resource_tank_wired(iid, "res_in_%d" % i, true)
+		if tank_id.is_empty():
+			tank_id = _add_provision_tank(kind, want, scope, Vector2(bx - 220.0 + 150.0 * float(col), by - 200.0), 1.0)
+			model.add_connection({"polarity": "resource", "resource_type": kind,
+				"source_item_id": tank_id, "source_handle_id": "output",
+				"target_item_id": iid, "target_handle_id": "res_in_%d" % i})
+			(out["added"] as Array).append(tank_id)
+		else:
+			_restock_tank(tank_id, float(want["capacity"]), 1.0)
+			(out["restocked"] as Array).append(tank_id)
+		col += 1
+	col = 0
+	for i in (specs.get("outputs", []) as Array).size():
+		var outp: Dictionary = (specs["outputs"] as Array)[i]
+		var kind := ResourceKinds.normalize_kind(str(outp.get("kind", "")))
+		if not sup.has(kind) or not CampProvisioning.WASTE_KINDS.has(kind):
+			continue
+		var want: Dictionary = sup[kind]
+		var tank_id := _resource_tank_wired(iid, "res_out_%d" % i, false)
+		if tank_id.is_empty():
+			tank_id = _add_provision_tank(kind, want, scope, Vector2(bx - 120.0 + 150.0 * float(col), by + 220.0), 0.0)
+			model.add_connection({"polarity": "resource", "resource_type": kind,
+				"source_item_id": iid, "source_handle_id": "res_out_%d" % i,
+				"target_item_id": tank_id, "target_handle_id": "input"})
+			(out["added"] as Array).append(tank_id)
+		else:
+			_restock_tank(tank_id, float(want["capacity"]), -1.0)
+			(out["restocked"] as Array).append(tank_id)
+		col += 1
+	_history_suppress = false
+	_sim_bulk_update = false
+	if _resource_flow != null and _resource_flow.has_method("clear_timelines"):
+		_resource_flow.call("clear_timelines")
+	_mark_dirty_for_autosave()
+	return out
+
+
 ## Order a shopping list into a packaged-food store (food/waste realism
 ## plan Phase 7): the items land in its ITEM LEDGER (ledger_add_items
 ## force-stamps the kcal density), the kg on its level, and the cost on
@@ -23715,49 +23758,6 @@ func food_order_targets() -> Array:
 			"name": str(sp.get("name", item.get("name", "Supply Store"))),
 			"stock_kg": clampf(float(sp.get("level", 0.0)), 0.0, 1.0)
 				* maxf(float(sp.get("capacity_qty", 0.0)), 0.0)})
-	return out
-
-
-	for i in (specs.get("inputs", []) as Array).size():
-		var inp: Dictionary = (specs["inputs"] as Array)[i]
-		var kind := ResourceKinds.normalize_kind(str(inp.get("kind", "")))
-		if not sup.has(kind) or not CampProvisioning.SUPPLY_KINDS.has(kind):
-			continue
-		var want: Dictionary = sup[kind]
-		var tank_id := _resource_tank_wired(iid, "res_in_%d" % i, true)
-		if tank_id.is_empty():
-			tank_id = _add_provision_tank(kind, want, scope, Vector2(bx - 220.0 + 150.0 * float(col), by - 200.0), 1.0)
-			model.add_connection({"polarity": "resource", "resource_type": kind,
-				"source_item_id": tank_id, "source_handle_id": "output",
-				"target_item_id": iid, "target_handle_id": "res_in_%d" % i})
-			(out["added"] as Array).append(tank_id)
-		else:
-			_restock_tank(tank_id, float(want["capacity"]), 1.0)
-			(out["restocked"] as Array).append(tank_id)
-		col += 1
-	col = 0
-	for i in (specs.get("outputs", []) as Array).size():
-		var outp: Dictionary = (specs["outputs"] as Array)[i]
-		var kind := ResourceKinds.normalize_kind(str(outp.get("kind", "")))
-		if not sup.has(kind) or not CampProvisioning.WASTE_KINDS.has(kind):
-			continue
-		var want: Dictionary = sup[kind]
-		var tank_id := _resource_tank_wired(iid, "res_out_%d" % i, false)
-		if tank_id.is_empty():
-			tank_id = _add_provision_tank(kind, want, scope, Vector2(bx - 120.0 + 150.0 * float(col), by + 220.0), 0.0)
-			model.add_connection({"polarity": "resource", "resource_type": kind,
-				"source_item_id": iid, "source_handle_id": "res_out_%d" % i,
-				"target_item_id": tank_id, "target_handle_id": "input"})
-			(out["added"] as Array).append(tank_id)
-		else:
-			_restock_tank(tank_id, float(want["capacity"]), -1.0)
-			(out["restocked"] as Array).append(tank_id)
-		col += 1
-	_history_suppress = false
-	_sim_bulk_update = false
-	if _resource_flow != null and _resource_flow.has_method("clear_timelines"):
-		_resource_flow.call("clear_timelines")
-	_mark_dirty_for_autosave()
 	return out
 
 

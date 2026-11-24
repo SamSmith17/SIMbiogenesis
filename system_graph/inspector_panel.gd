@@ -6039,14 +6039,6 @@ func _type_icon(itype: String) -> String:
 ## infrastructure is delivering right now.
 func _build_provision_row(specs: Dictionary) -> void:
 	var n := maxi(int(specs.get("occupants", 1)), 1)
-	var shop := Button.new()
-	shop.text = "Shopping list…"
-	shop.tooltip_text = "Plan a real shopping list for these people — products, cost, calories and the packaging waste it will leave"
-	shop.pressed.connect(func() -> void:
-		var v := _find_owner_graph_view()
-		if v != null and v.has_method("open_food_shopping"):
-			v.call("open_food_shopping"))
-	prow.add_child(shop)
 	var prow := HBoxContainer.new()
 	prow.add_theme_constant_override("separation", 8)
 	var plbl := Label.new()
@@ -6076,6 +6068,14 @@ func _build_provision_row(specs: Dictionary) -> void:
 		_rebuild_current_item()
 	)
 	prow.add_child(btn)
+	var shop := Button.new()
+	shop.text = "Shopping list…"
+	shop.tooltip_text = "Plan a real shopping list for these people — products, cost, calories and the packaging waste it will leave"
+	shop.pressed.connect(func() -> void:
+		var v := _find_owner_graph_view()
+		if v != null and v.has_method("open_food_shopping"):
+			v.call("open_food_shopping"))
+	prow.add_child(shop)
 	_form_vbox.add_child(prow)
 	var req := CampProvisioning.requirements(n)
 	_readonly_field("Needs (%s)" % UiText.count(n, "person"), "%.0f L water · %.1f kg food per day · %s · %s · %s" % [
