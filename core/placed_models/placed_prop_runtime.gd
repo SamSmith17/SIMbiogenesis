@@ -252,6 +252,7 @@ static func _build_prop(rec: Dictionary, ground_y_at: Callable) -> PlacedProp:
 		_maybe_attach_toilet_bank(prop, rec)
 		_maybe_attach_shower_house(prop, rec)
 		KitchenSite.attach(prop, rec)
+		WasteBinRuntime.attach(prop, rec)
 		_maybe_attach_vehicle(prop, model, rec)
 		VehicleDriveRuntime.attach(prop, model, rec)
 		VehicleWalkIn.attach(prop, model, rec)
@@ -943,8 +944,9 @@ static func model_extras(rec: Dictionary) -> Dictionary:
 	if rec.has("box_spec"):
 		extras["box_spec"] = rec.get("box_spec", {})
 	# Without these a placed 8-stall toilet bank (or a festival's shower
-	# house) built the default four.
-	for key in ["toilet_spec", "shower_spec", "kitchen_spec"]:
+	# house) built the default four — and a typed waste bin the default PET
+	# wheelie (the Phase 8 silent-default trap, named in the plan).
+	for key in ["toilet_spec", "shower_spec", "kitchen_spec", "bin_spec"]:
 		if rec.has(key):
 			extras[key] = rec.get(key, {})
 	if rec.has("tank_spec"):

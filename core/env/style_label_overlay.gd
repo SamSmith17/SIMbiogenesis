@@ -98,8 +98,11 @@ func _on_node_added(n: Node) -> void:
 		_adopt_later.call_deferred(n)
 
 
-func _adopt_later(n: Node) -> void:
-	if _active and is_instance_valid(n) and n.is_inside_tree():
+func _adopt_later(n: Variant) -> void:
+	# Untyped on purpose: the deferred call can land AFTER the label's prop
+	# was deleted, and a freed object fails a typed-Node parameter's
+	# conversion before the body ever runs (an engine error per label).
+	if _active and is_instance_valid(n) and n is Label3D and (n as Node).is_inside_tree():
 		_adopt(n as Label3D)
 
 

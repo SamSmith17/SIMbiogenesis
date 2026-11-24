@@ -107,6 +107,10 @@ const CURATED_MODELS := {
 	# flatbed; the curated envelope is the default four in a row.
 	"toilet_bank": {"w_m": 4.9, "d_m": 1.22, "h_m": 2.3, "mass_kg": 300.0,
 		"form": "crate", "this_side_up": true, "source": "estimated"},
+	# Waste bin: a 360 L wheelie-class bin, ~20 kg empty (est), nested and
+	# shipped standing.
+	"waste_bin": {"w_m": 0.72, "d_m": 0.84, "h_m": 1.05, "mass_kg": 20.0,
+		"form": "crate", "this_side_up": true, "source": "estimated"},
 	# Shower house: a timber kit (deck, frames, partitions, a tin roof), the
 	# fittings and a 500 L poly tank, ~420 kg for the default four stalls
 	# (est), shipped as a bundle.

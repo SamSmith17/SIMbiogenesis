@@ -63,6 +63,7 @@ const MODEL_MATERIALS := {
 	"ali_pelton": {"aluminium": 0.50, "steel": 0.50},
 	"site_gate": {"lumber": 0.90, "steel": 0.10},
 	"firepit": {"steel": 1.0},
+	"waste_bin": {"hdpe": 1.0},
 	"stream_intake": {"hdpe": 0.80, "steel": 0.20},
 	"heliostat": {"steel": 0.70, "glass": 0.30},
 	"home_biogas_2": {"hdpe": 0.90, "steel": 0.10},

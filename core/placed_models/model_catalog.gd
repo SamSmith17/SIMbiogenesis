@@ -259,6 +259,8 @@ static func instantiate(model_id: String, extras: Dictionary = {}) -> Node3D:
 		return ToiletBankBuilder.build_node(extras.get("toilet_spec", extras) as Dictionary)
 	if model_id == ShowerHouseBuilder.MODEL_ID:
 		return ShowerHouseBuilder.build_node(extras.get("shower_spec", {}) as Dictionary)
+	if model_id == WasteBinBuilder.MODEL_ID:
+		return WasteBinBuilder.build_node(extras.get("bin_spec", {}) as Dictionary)
 	if model_id == CampKitchenBuilder.MODEL_ID:
 		return CampKitchenBuilder.build_node(extras.get("kitchen_spec", {}) as Dictionary)
 	if model_id == SiteGateBuilder.MODEL_ID:
@@ -597,6 +599,13 @@ static func _shipped_models() -> Array[Dictionary]:
 		{"id": "shower_house", "label": "Shower house",
 			"procedural": true, "preserve_scale": true, "category": "structures",
 			"target_height_m": 2.9},
+		# Procedural WASTE BIN: an open-top typed-waste bin whose pile of
+		# real bottles / cans / boxes tracks the bound store's item ledger
+		# (WasteBinBuilder + WasteBinRuntime). bin_spec {style bin|bay,
+		# kind, capacity_l}; placing one binds or makes its typed store.
+		{"id": "waste_bin", "label": "Waste bin (typed)",
+			"procedural": true, "preserve_scale": true, "category": "structures",
+			"target_height_m": 1.0},
 		# Procedural CAMP KITCHEN: the stations a meal is cooked at (store,
 		# prep, stove, wash, serving table; CampKitchenBuilder) under a
 		# shade. Placing one tags a kitchen space; cooks work the meal there

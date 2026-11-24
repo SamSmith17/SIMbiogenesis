@@ -101,6 +101,8 @@ static func place_model_at_xz(main: Node, model_id: String, x: float, z: float,
 		_auto_tag_shower_house(main, prop_id)
 	elif model_id == CampKitchenBuilder.MODEL_ID:
 		_auto_tag_space(main, prop_id, "kitchen", SpaceRegistry.CAPACITY_AUTO, "Camp kitchen")
+	elif model_id == WasteBinBuilder.MODEL_ID:
+		Callable(PlacedPropService, "seed_waste_bin").call_deferred(main, prop_id)
 	elif model_id == DomeLabBuilder.MODEL_ID:
 		_auto_tag_dome_space(main, prop_id)
 	elif TcBuilder.handles(model_id):
@@ -783,6 +785,8 @@ static func _commit_prepped(main: Node, model_id: String, prep: Dictionary,
 		_auto_tag_toilet_bank(main, prop_id)
 	elif model_id == ShowerHouseBuilder.MODEL_ID:
 		_auto_tag_shower_house(main, prop_id)
+	elif model_id == WasteBinBuilder.MODEL_ID:
+		Callable(PlacedPropService, "seed_waste_bin").call_deferred(main, prop_id)
 	elif model_id == CampKitchenBuilder.MODEL_ID:
 		_auto_tag_space(main, prop_id, "kitchen", SpaceRegistry.CAPACITY_AUTO, "Camp kitchen")
 	elif model_id == DomeLabBuilder.MODEL_ID:
@@ -1357,6 +1361,36 @@ static func seed_esplab(main: Node, prop_id: String) -> String:
 
 ## A placed battery bank (Battery Lab) is one graph battery bound to the
 ## prop: the bank's voltage, Ah, kWh and its BMS limits (max charge /
+## A placed waste bin is one TYPED WASTE STORE on the graph, bound to the
+## prop (food/waste realism plan Phase 8) — WasteBinRuntime then draws the
+## store's item ledger as the visible pile of bottles and cans. A record
+## that already names a store binds that one (the bin was placed FOR it);
+## otherwise a new store of the bin's kind is made at the Phase 4 bin
+## presets' capacity, empty.
+static func seed_waste_bin(main: Node, prop_id: String) -> String:
+	if main == null or prop_id.is_empty():
+		return ""
+	var rec := get_prop_record(main, prop_id)
+	if rec.is_empty():
+		return ""
+	var r := WasteBinBuilder.resolve(rec.get("bin_spec", {}) as Dictionary if rec.get("bin_spec") is Dictionary else {})
+	var kind := str(r["kind"])
+	var gid := str(rec.get("graph_item_id", ""))
+	var sgv := _system_graph_view(main)
+	var gmodel: Variant = sgv.get("model") if sgv != null else null
+	if not gid.is_empty() and gmodel != null and not (gmodel.call("get_item", gid) as Dictionary).is_empty():
+		return gid
+	var node_id := _create_bound_graph_node(main, prop_id, {
+		"node_type": "resource", "width": 90.0, "height": 100.0, "specs": {
+			"name": "%s Bin" % ResourceKinds.display_name(kind),
+			"resource_kind": kind, "level": 0.0,
+			"capacity_qty": float(WasteBinBuilder.KIND_CAPACITY_KG.get(kind, 50.0)),
+			"capacity_unit": "kg", "model_id": WasteBinBuilder.MODEL_ID}})
+	if not node_id.is_empty():
+		update_prop_record(main, prop_id, {"graph_item_id": node_id}, false)
+	return node_id
+
+
 ## discharge current, coldest charging temperature), which SolarUI and the
 ## bake honour. Re-applying keeps the battery's state of charge.
 static func seed_battery_bank(main: Node, prop_id: String) -> String:
